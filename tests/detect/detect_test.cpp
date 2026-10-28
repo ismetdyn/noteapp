@@ -161,23 +161,3 @@ TEST_CASE("max_scan_bytes never splits a UTF-8 sequence or crashes") {
         CHECK(s.ranked.size() == 8);
     }
 }
-
-TEST_CASE("perf: 64 KB input is classified within 5 ms") {
-    const std::string unit = read_file(fs::path(NOTEAPP_DETECT_SAMPLES_DIR) / "cpp" / "02_class.txt");
-    std::string big;
-    while (big.size() < 64 * 1024)
-        big += unit;
-    double best = 1e9;
-    for (int i = 0; i < 5; ++i) {
-        const auto t0 = std::chrono::steady_clock::now();
-        const auto s = suggest(big, kOpts);
-        const auto ms =
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-        best = std::min(best, ms);
-        CHECK(s.type == "cpp");
-    }
-    MESSAGE("best of 5: " << best << " ms");
-#ifdef NDEBUG
-    CHECK(best <= 5.0);
-#endif
-}

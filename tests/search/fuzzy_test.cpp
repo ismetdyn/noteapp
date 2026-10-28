@@ -143,32 +143,3 @@ TEST_CASE("rank_notes: empty query breaks mtime ties by path") {
     REQUIRE(r.size() == 2);
     CHECK(r[0].index == 1);
 }
-
-TEST_CASE("rank_notes: 5000 realistic paths in <= 20 ms (Release only)") {
-    static const char* const kFolders[] = {"work",    "personal",       "ideas",
-                                           "journal", "projects/alpha", "projects/beta"};
-    static const char* const kWords[] = {"meeting", "notes",  "shopping", "list", "design",
-                                         "review",  "budget", "travel",   "plan", "retro",
-                                         "idea",    "draft",  "summary",  "todo"};
-    std::vector<core::NoteInfo> notes;
-    notes.reserve(5000);
-    unsigned state = 12345;  // deterministik LCG; testte rastgelelik istemiyoruz
-    auto next = [&state](unsigned mod) {
-        state = state * 1664525u + 1013904223u;
-        return (state >> 8) % mod;
-    };
-    for (int i = 0; i < 5000; ++i) {
-        std::string p = std::string(kFolders[next(6)]) + "/" + kWords[next(14)] + "-" + kWords[next(14)] +
-                        "-" + std::to_string(i) + ".md";
-        notes.push_back(note(p, static_cast<int>(next(100000))));
-    }
-
-    auto t0 = std::chrono::steady_clock::now();
-    auto r = rank_notes("wmn", notes);
-    auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    MESSAGE("rank_notes(5000 paths) = " << ms << " ms, " << r.size() << " matches");
-    CHECK_FALSE(r.empty());
-#ifdef NDEBUG
-    CHECK(ms <= 20.0);
-#endif
-}

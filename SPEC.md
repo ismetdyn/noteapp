@@ -218,7 +218,12 @@ private:
 
 1. Temiz klonda §4 komutlarıyla Windows 11 (MSVC) ve Fedora (GCC) üzerinde derlenir, tüm testler geçer.
 2. `note "merhaba"` notu ≤ 200 ms içinde diske yazar (senkron arka planda, bu süreye dahil değil).
+   (ölçüm: 7 koşu medyanı 40–50 ms, kabuksuz süreç açılışı dahil; yeni derlenmiş ikilinin ilk koşusu virüs
+   taraması yüzünden ~850 ms olabilir — Release, bu makinede, `ctest -R perf`)
 3. `notes` 5.000 notla ≤ 500 ms'de açılır; her tuş vuruşunda filtre ≤ 50 ms; sıcak içerik araması ≤ 100 ms.
+   (ölçüm: açılış vekili taze süreçte medyan 60–75 ms, süreç içi config+list+ilk çizim 15–23 ms; tuş başına
+   filtre+çizim 8 ms, GUI model 6–7 ms; sıcak arama 28–41 ms — Release, bu makinede; gerçek soğuk disk
+   önbelleği testte üretilemez)
 4. Tip önerisi örnek korpusta ilk-tahmin doğruluğu ≥ %90; TUI ve GUI kaydet diyaloğunda tip değiştirilebilir.
 5. Senkron varsayılan kapalı; açılınca HTTPS+token **veya** SSH ile Windows ↔ Fedora arasında private repo
    üzerinden notlar eşitlenir; aynı notun iki cihazda değişmesi çakışma kopyası üretir, hiçbir içerik kaybolmaz.

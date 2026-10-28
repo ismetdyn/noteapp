@@ -334,20 +334,22 @@
   **Dosyalar:** `CMakeLists.txt`, `src/{cli,tui,gui}/CMakeLists.txt`, `README.md` · **Boyut:** S
 
 ### T35: Performans doğrulaması
-- [ ] **Kabul:** 5.000 üretilmiş notla (Release) SPEC.md §10/2–3 ölçülür ve tutar; tutmayan için profil + düzeltme.
+- [x] **Kabul:** 5.000 üretilmiş notla (Release) SPEC.md §10/2–3 ölçülür ve tutar; tutmayan için profil + düzeltme.
   Modül testlerindeki 5.000 notluk perf vakaları (`search` Debug'da ~12 sn sürüyor) `tests/perf/`'e taşınır; günlük
   `ctest` hızlı kalır, perf yalnız Release'te koşar.
-  **Bilinen açık (T16c ölçümü):** soğuk `list()` 295–917 ms (TUI açılışı ≤ 500 ms hedefi bu makinede güvenilir değil);
-  maliyet 5.000 dosyanın `binary` koklaması için açılması. Önerilen hamle: `NoteInfo.binary`'yi `list()`'ten kaldır,
-  ikili tespitini dosyayı zaten okuyan yerlere (önizleme, `ContentIndex::refresh`, CLI `show`) taşı.
-- **Doğrulama:** `ctest --preset windows-mingw-release -R perf` · **Bağımlılık:** T34 · **Dosyalar:** `tests/perf/perf_test.cpp` · **Boyut:** S
+  **Kapandı:** soğuk `list()` 295–917 ms'nin (T16c) nedeni 5.000 dosyanın `binary` koklaması için açılmasıydı.
+  `NoteInfo.binary` kaldırıldı; `core::looks_binary` dosyayı zaten okuyan yerlerde uygulanır (TUI önizlemesi,
+  `ContentIndex::refresh`, GUI editörü, CLI `show`/`export`). Ölçüm (Release, bu makine, medyan): hızlı ekleme 40–50 ms,
+  TUI açılış vekili taze süreçte 60–75 ms (süreç içi 15–23 ms), tuş başına filtre+çizim 8 ms, GUI 6–7 ms, sıcak arama
+  28–41 ms. Sınır: dosya sistemi önbelleği testte hep ılık; yeniden başlatma sonrası soğuk açılış elle ölçülmedi.
+- **Doğrulama:** `ctest --preset windows-mingw-release -R perf` · **Bağımlılık:** T34 · **Dosyalar:** `tests/perf/` · **Boyut:** S
 
 ### T36: Son review
 - [ ] **Kabul:** tüm dal için `/code-review` + `security-review`; bulgular düzeltildi ya da gerekçesiyle yazıldı ·
   SPEC'ler gerçekleşen kararlarla güncel.
 - **Biriken borç (yol boyunca not edildi):** `first_non_empty_line` kuralı `core/note_store.cpp` ve `tui/save_dialog.cpp`'de
-  iki kopya → core'dan dışa aç, TUI kullansın · `NoteStore::list()` önbelleği thread-safe değil (TUI mutex'le koruyor;
-  GUI tek iş parçacığı) — sözleşmeyi başlıkta belgele.
+  iki kopya → core'dan dışa aç, TUI kullansın · ~~`NoteStore::list()` önbelleği thread-safe değil~~ (T35'te önbellek
+  kalktı; TUI'nin `list_mutex`'i artık yalnız store'un yeniden kurulmasını korur).
 - **Doğrulama:** tüm testler Windows + `F` · **Bağımlılık:** T35 · **Model:** opus · **Boyut:** M
 
 ### ✅ Son kontrol noktası

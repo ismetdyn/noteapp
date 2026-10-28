@@ -145,34 +145,3 @@ TEST_CASE("same_listing compares path, mtime and size") {
     b[0].size = 11;
     CHECK_FALSE(noteapp::gui::same_listing(a, b));
 }
-
-#ifdef NDEBUG
-#include "core/note_store.hpp"
-
-#include <cstdio>
-
-// SPEC-gui kabul 7: 5.000 notla tuş başına model güncellemesi <= 50 ms (yalnız Release'te zorlanır).
-TEST_CASE("per-keystroke update with 5000 notes stays within 50 ms") {
-    std::vector<NoteInfo> notes;
-    for (int i = 0; i < 5000; ++i)
-        notes.push_back(
-            make_note("folder" + std::to_string(i % 40) + "/meeting-notes-" + std::to_string(i) + ".md", i));
-    NoteListModel model;
-    model.set_notes(std::move(notes));
-
-    std::string query;
-    double worst_ms = 0;
-    for (const char c : std::string("meetingnotes12")) {
-        query.push_back(c);
-        const auto start = std::chrono::steady_clock::now();
-        model.set_query(query);
-        // Görünür satırlar kadar data() çağrısı da bütçeye dahil (liste çizimi).
-        for (int row = 0; row < std::min(model.rowCount(), 40); ++row)
-            (void)model.index(row).data(NoteListModel::HighlightRole);
-        const std::chrono::duration<double, std::milli> elapsed = std::chrono::steady_clock::now() - start;
-        worst_ms = std::max(worst_ms, elapsed.count());
-    }
-    std::printf("[perf] worst per-keystroke model update (5000 notes): %.2f ms\n", worst_ms);
-    CHECK(worst_ms <= 50.0);
-}
-#endif
