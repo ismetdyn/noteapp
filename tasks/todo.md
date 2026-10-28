@@ -312,11 +312,11 @@
   `tests/gui/settings_test.cpp` · **Boyut:** M
 
 ### T33: PDF dışa aktarma (GUI + başsız + CLI)
-- [ ] **Kabul:** SPEC-gui kabul 5 · Ctrl+E · `note export --pdf` (`notes-gui` yoksa çıkış 3, SPEC-cli kabul 10) ·
+- [x] **Kabul:** SPEC-gui kabul 5 · Ctrl+E · `note export --pdf` (`notes-gui` yoksa çıkış 3, SPEC-cli kabul 10) ·
   md → `setMarkdown`, diğerleri eş aralıklı düz metin.
 - **Doğrulama:** `B && T(gui) && T(cli)`, `F`, elle PDF'te Türkçe · **Bağımlılık:** T32 · **Dosyalar:** `src/gui/{pdf_export.hpp,pdf_export.cpp,main.cpp}`,
   `src/cli/commands.cpp`, `tests/gui/pdf_test.cpp` · **Boyut:** M
-- [x] GUI kısmı tamam; CLI 'note export' T27 sonrası
+- [x] GUI kısmı tamam; CLI `note export --pdf` tamam (`commands_export.cpp`, `tests/cli/cli_export_test.cpp`)
 
 ### ✅ Kontrol noktası 5
 - [ ] Tüm testler Windows + `F` yeşil

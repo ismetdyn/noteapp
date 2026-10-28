@@ -2,8 +2,11 @@
 
 #include "cli/args.hpp"
 #include "core/config.hpp"
+#include "core/note_store.hpp"
 
+#include <expected>
 #include <optional>
+#include <string>
 
 namespace noteapp::cli {
 
@@ -27,11 +30,16 @@ int run_edit(const ParsedArgs& args, const core::Config& config);  // args.rest:
 int run_find(const ParsedArgs& args, const core::Config& config);  // args.rest: TERİM… [--limit N]
 // args.rest: [] | status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST] | --background
 int run_sync(const ParsedArgs& args, const core::Config& config);
+int run_export(const ParsedArgs& args, const core::Config& config);  // args.rest: --pdf SORGU|YOL [-o ÇIKTI]
 // Alt komut dağıtıcısı; gerçeklenmemiş olanlar "henüz kullanılamıyor" (çıkış 2) verir.
 int run_reserved(const ParsedArgs& args, const core::Config& config);
 int run_invalid(const ParsedArgs& args);
 
 // Ortak yardımcılar (commands.cpp / sync_commands.cpp).
+
+// show/edit/export'un ortak "en iyi eşleşme" kuralı (commands.cpp); eşleşme yoksa mesajı yazıp çıkış kodunu
+// döner.
+std::expected<core::NoteInfo, int> pick_best_note(const core::NoteStore& store, const std::string& query);
 
 // stdin gerçek bir terminal mi (Windows'ta NUL aygıtı TTY sayılmaz).
 bool stdin_is_tty();

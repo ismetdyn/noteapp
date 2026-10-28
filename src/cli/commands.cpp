@@ -215,8 +215,10 @@ std::expected<BrowseArgs, int> parse_browse_args(const std::vector<std::string>&
     return parsed;
 }
 
+}  // namespace
+
 // "En iyi eşleşme" (SPEC-cli): tam yol varsa o; yoksa rank_notes ilk sonucu ve seçilen yol stderr'e yazılır.
-// Eşleşme yoksa mesajı yazar ve 1 döner. Tek kaynak: show/edit aynı kuralı kullanır.
+// Eşleşme yoksa mesajı yazar ve 1 döner. Tek kaynak: show/edit/export aynı kuralı kullanır.
 std::expected<core::NoteInfo, int> pick_best_note(const core::NoteStore& store, const std::string& query) {
     const std::vector<core::NoteInfo> notes = store.list();
     if (const auto exact = core::NotePath::parse(query)) {
@@ -233,8 +235,6 @@ std::expected<core::NoteInfo, int> pick_best_note(const core::NoteStore& store, 
     std::cerr << core::tr("cli.chosen", {{"path", best.path.string()}}) << '\n';
     return best;
 }
-
-}  // namespace
 
 int run_add(const ParsedArgs& args, const core::Config& config) {
     std::string content;
@@ -564,6 +564,8 @@ int run_reserved(const ParsedArgs& args, const core::Config& config) {
         return run_edit(args, config);
     if (args.command == "sync")
         return run_sync(args, config);
+    if (args.command == "export")
+        return run_export(args, config);
     std::cerr << core::tr("cli.not_implemented", {{"command", args.command}}) << '\n';
     return kExitUsage;
 }

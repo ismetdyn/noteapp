@@ -91,16 +91,6 @@ TEST_CASE("double dash lets a command name be note text") {
     CHECK(slurp(box.notes() / "ls.md") == "ls");
 }
 
-TEST_CASE("reserved commands exit 2 until implemented") {
-    const Sandbox box;
-    for (const char* command : {"export"}) {
-        const auto result = box.run({command});
-        CHECK(result.exit_code == 2);
-        CHECK(result.err.find(command) != std::string::npos);
-    }
-    CHECK_FALSE(box.has_any_note());
-}
-
 TEST_CASE("usage errors exit 2") {
     const Sandbox box;
     CHECK(box.run({"--bilinmeyen"}).exit_code == 2);
@@ -138,5 +128,5 @@ TEST_CASE("language comes from the config") {
     const auto result = box.run({"hello"});
     CHECK(result.exit_code == 0);
     CHECK(result.out == "Saved: hello.md (md, suggested)\n");
-    CHECK(box.run({"export"}).err.find("not available yet") != std::string::npos);
+    CHECK(box.run({"export"}).err.find("Usage: note export") != std::string::npos);
 }
