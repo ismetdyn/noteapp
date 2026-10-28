@@ -58,8 +58,9 @@ SQLite FTS5'e geçiş gerekirse dikiş yeri `ContentIndex`'tir (şimdiden soyut 
 
 ## Kabul kriterleri
 
-1. `fuzzy_match("wmn", "work/meeting-notes.md")` eşleşir; `"mtg"` sorgusunda `meeting.md`,
-   `my-long-text-generator.md`'den yüksek puan alır (kelime başı bonusu).
+1. `fuzzy_match("wmn", "work/meeting-notes.md")` eşleşir (konumlar 0, 5, 13); fzf/fzy gibi, `"mtg"` sorgusunda
+   kelime başlarına düşen `my-long-text-generator.md`, kelime içi eşleşen `meeting.md`'den yüksek puan alır
+   (puanlama sabitleri fzy'den sapmasız; 2026-10-28 düzeltmesi — önceki örnek fzf davranışıyla çelişiyordu).
 2. `/` sonrası eşleşme ortadaki eşleşmeden yüksek puanlıdır; alt dizi olmayan sorgu `nullopt` döner.
 3. Katlama: `ogrenci`→`Öğrenci.md`, `ISIK`→`ışık.txt`, `şehir`→`SEHIR.md` eşleşir; vurgu ofsetleri doğru karakteri gösterir.
 4. İçerik: `"proje bütçe"` iki kelimeyi farklı satırlarda içeren notu bulur; yalnız birini içereni bulmaz;

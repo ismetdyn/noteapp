@@ -31,8 +31,9 @@ TEST_CASE("fuzzy: subsequence matches with word-boundary positions") {
     CHECK(m->positions == Positions{0, 5, 13});
 }
 
-TEST_CASE("fuzzy: word-start bonus ranks meeting.md above my-long-text-generator.md") {
-    CHECK(score_of("mtg", "meeting.md") > score_of("mtg", "my-long-text-generator.md"));
+// fzf/fzy davranışı: kelime başlarına düşen kısaltma eşleşmesi, kelime içindeki sıkı eşleşmeden önce gelir.
+TEST_CASE("fuzzy: word-start acronym ranks above mid-word match like fzf") {
+    CHECK(score_of("mtg", "my-long-text-generator.md") > score_of("mtg", "meeting.md"));
 }
 
 TEST_CASE("fuzzy: match after slash beats mid-word match") {
@@ -100,8 +101,8 @@ TEST_CASE("rank_notes: orders by score, then shorter path, then newer mtime") {
     };
     auto r = rank_notes("mtg", notes);
     REQUIRE(r.size() == 2);
-    CHECK(r[0].index == 1);
-    CHECK(r[1].index == 0);
+    CHECK(r[0].index == 0);
+    CHECK(r[1].index == 1);
 
     // Aynı puan, aynı uzunluk -> mtime azalan
     std::vector<core::NoteInfo> ties{note("a/x.md", 1), note("b/x.md", 5), note("c/x.md", 3)};

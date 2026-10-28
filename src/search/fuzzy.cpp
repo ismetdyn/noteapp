@@ -11,12 +11,11 @@
 namespace noteapp::search {
 namespace {
 
-// fzy sabitleri; tek sapma kGapInner: fzy'nin -0.01'i ile "mtg", "my-long-text-generator.md"yi (üç kelime
-// başı) "meeting.md"den yüksek puanlar; oysa SPEC-search kabul 1 tersini ister. Aralardaki boşluk karakter
-// başına -0.25 olunca sıkı eşleşme kelime başı bonuslarını yener (fzf'in boşluk cezası/bonus oranına yakın).
+// fzy sabitleri, sapmasız: kullanıcı fzf davranışı istiyor; kelime başlarına düşen kısaltma eşleşmesi ("mtg"
+// → my-long-text-generator.md) kelime içindeki sıkı eşleşmeden (meeting.md) önce gelir.
 constexpr double kGapLeading = -0.005;
 constexpr double kGapTrailing = -0.005;
-constexpr double kGapInner = -0.25;
+constexpr double kGapInner = -0.01;
 constexpr double kConsecutive = 1.0;
 constexpr double kBonusSlash = 0.9;
 constexpr double kBonusWord = 0.8;
