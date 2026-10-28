@@ -9,6 +9,19 @@
 #include <fstream>
 #include <iterator>
 #include <system_error>
+#include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <cerrno>
+#include <cstdio>
+#include <fcntl.h>
+#endif
 
 namespace noteapp::core {
 
@@ -35,6 +48,54 @@ Error invalid_path(std::string_view reason, std::string_view path) {
     return Error{Error::Code::InvalidPath,
                  "error.invalid_path",
                  {{"reason", std::string(reason)}, {"path", std::string(path)}}};
+}
+
+Error already_exists(std::string_view path) {
+    return Error{Error::Code::AlreadyExists, "error.already_exists", {{"path", std::string(path)}}};
+}
+
+constexpr const char* kKeepFileName = ".keep";  // boş klasörü senkronda (git) ayakta tutan gizli dosya
+
+// Hedef varsa ezmeyen taşıma. Windows: MOVEFILE_REPLACE_EXISTING verilmez. Linux: renameat2
+// (RENAME_NOREPLACE). Diğerleri: dosyada link+unlink, dizinde var-mı denetimi + rename.
+// ponytail: link+unlink çökme anında iki ad bırakabilir; dizin yolundaki denetim-rename arası dar bir
+// yarış penceresi var. Yalnız renameat2'siz çekirdek/dosya sisteminde devreye girer.
+std::error_code move_no_replace(const fs::path& from, const fs::path& to) {
+#ifdef _WIN32
+    if (MoveFileExW(from.c_str(), to.c_str(), 0) != 0)
+        return {};
+    return {static_cast<int>(GetLastError()), std::system_category()};
+#else
+#if defined(__linux__) && defined(RENAME_NOREPLACE)
+    if (renameat2(AT_FDCWD, from.c_str(), AT_FDCWD, to.c_str(), RENAME_NOREPLACE) == 0)
+        return {};
+    if (errno != EINVAL && errno != ENOSYS)
+        return {errno, std::generic_category()};
+#endif
+    std::error_code ec;
+    if (fs::is_directory(from, ec)) {
+        if (fs::exists(to, ec))
+            return std::make_error_code(std::errc::file_exists);
+        fs::rename(from, to, ec);
+        return ec;
+    }
+    fs::create_hard_link(from, to, ec);
+    if (ec)
+        return ec;
+    fs::remove(from, ec);
+    return ec;
+#endif
+}
+
+// Taşıma/silme yalnız gerçek dosyaya dokunur: sembolik bağ listelenmez, hedefi de silinmemeli.
+std::expected<void, Error> require_regular_note(const fs::path& root, const NotePath& path,
+                                                const fs::path& resolved) {
+    std::error_code ec;
+    if (!fs::exists(resolved, ec))
+        return std::unexpected(not_found(path.string()));
+    if (fs::is_symlink(root / path.value(), ec) || !fs::is_regular_file(resolved, ec))
+        return std::unexpected(io_error(path.string(), "not a regular file"));
+    return {};
 }
 
 std::string to_utf8(const fs::path& p) {
@@ -268,6 +329,162 @@ std::expected<fs::file_time_type, Error> NoteStore::write(const NotePath& path, 
     if (ec)
         return std::unexpected(io_error(path.string(), ec));
     return new_mtime;
+}
+
+std::expected<NotePath, Error> NoteStore::move(const NotePath& from, const NotePath& to) {
+    const auto source = resolve(from);
+    if (!source)
+        return std::unexpected(source.error());
+    const auto target = resolve(to);
+    if (!target)
+        return std::unexpected(target.error());
+    if (auto ok = require_regular_note(root_, from, *source); !ok)
+        return std::unexpected(ok.error());
+
+    std::error_code ec;
+    if (fs::exists(*target, ec))
+        return std::unexpected(already_exists(to.string()));
+    fs::create_directories(target->parent_path(), ec);
+    if (ec)
+        return std::unexpected(io_error(to.string(), ec));
+    if (const std::error_code moved = move_no_replace(*source, *target)) {
+        // Denetim ile taşıma arasında hedef oluştuysa (yarış) ezmek yerine AlreadyExists.
+        if (fs::exists(*target, ec))
+            return std::unexpected(already_exists(to.string()));
+        return std::unexpected(io_error(from.string(), moved));
+    }
+
+    binary_cache_.erase(to.string());
+    if (auto node = binary_cache_.extract(from.string())) {
+        node.key() = to.string();
+        binary_cache_.insert(std::move(node));
+    }
+    return to;
+}
+
+std::expected<void, Error> NoteStore::remove(const NotePath& path) {
+    const auto target = resolve(path);
+    if (!target)
+        return std::unexpected(target.error());
+    if (auto ok = require_regular_note(root_, path, *target); !ok)
+        return std::unexpected(ok.error());
+    std::error_code ec;
+    if (!fs::remove(*target, ec) || ec)
+        return std::unexpected(io_error(path.string(), ec));
+    binary_cache_.erase(path.string());
+    return {};
+}
+
+std::expected<void, Error> NoteStore::create_folder(std::string_view folder) {
+    const auto parsed = NotePath::parse(folder);
+    if (!parsed)
+        return std::unexpected(parsed.error());
+    const auto target = resolve(*parsed);
+    if (!target)
+        return std::unexpected(target.error());
+    std::error_code ec;
+    if (fs::exists(*target, ec) && !fs::is_directory(*target, ec))
+        return std::unexpected(already_exists(parsed->string()));
+    fs::create_directories(*target, ec);
+    if (ec)
+        return std::unexpected(io_error(parsed->string(), ec));
+    // .keep zaten varsa (already_exists) sorun yok: çağrı yinelenebilir.
+    if (const FileWriteResult kept = write_new_file(*target / kKeepFileName, "");
+        kept.ec && !kept.already_exists)
+        return std::unexpected(io_error(parsed->string(), kept.ec));
+    return {};
+}
+
+std::expected<void, Error> NoteStore::rename_folder(std::string_view from, std::string_view to) {
+    const auto from_path = NotePath::parse(from);
+    if (!from_path)
+        return std::unexpected(from_path.error());
+    const auto to_path = NotePath::parse(to);
+    if (!to_path)
+        return std::unexpected(to_path.error());
+    const auto source = resolve(*from_path);
+    if (!source)
+        return std::unexpected(source.error());
+    const auto target = resolve(*to_path);
+    if (!target)
+        return std::unexpected(target.error());
+
+    std::error_code ec;
+    if (!fs::exists(*source, ec))
+        return std::unexpected(not_found(from_path->string()));
+    if (fs::is_symlink(root_ / from_path->value(), ec) || !fs::is_directory(*source, ec))
+        return std::unexpected(io_error(from_path->string(), "not a directory"));
+    const std::string old_prefix = from_path->string() + "/";
+    const std::string new_prefix = to_path->string() + "/";
+    // Kendi içine taşıma, hedef klasörleri oluşturmadan önce reddedilir (artık dizin bırakmasın).
+    if (new_prefix.starts_with(old_prefix))
+        return std::unexpected(invalid_path("into_itself", to_path->string()));
+    if (fs::exists(*target, ec))
+        return std::unexpected(already_exists(to_path->string()));
+    fs::create_directories(target->parent_path(), ec);
+    if (ec)
+        return std::unexpected(io_error(to_path->string(), ec));
+    if (const std::error_code moved = move_no_replace(*source, *target)) {
+        if (fs::exists(*target, ec))
+            return std::unexpected(already_exists(to_path->string()));
+        return std::unexpected(io_error(from_path->string(), moved));
+    }
+
+    // Klasörün altındaki önbellek kayıtları yeni yola taşınır (dosyaların başı yeniden okunmasın).
+    using Node = decltype(binary_cache_)::node_type;
+    std::vector<Node> moved_entries;
+    for (auto it = binary_cache_.begin(); it != binary_cache_.end();) {
+        auto next = std::next(it);
+        if (it->first.starts_with(old_prefix))
+            moved_entries.push_back(binary_cache_.extract(it));
+        it = next;
+    }
+    for (Node& node : moved_entries) {
+        node.key() = new_prefix + node.key().substr(old_prefix.size());
+        binary_cache_.insert(std::move(node));
+    }
+    return {};
+}
+
+std::expected<void, Error> NoteStore::remove_folder(std::string_view folder, bool force) {
+    const auto parsed = NotePath::parse(folder);
+    if (!parsed)
+        return std::unexpected(parsed.error());
+    const auto target = resolve(*parsed);
+    if (!target)
+        return std::unexpected(target.error());
+    std::error_code ec;
+    if (!fs::exists(*target, ec))
+        return std::unexpected(not_found(parsed->string()));
+    // Bağ yoluyla kök içindeki başka bir klasörün silinmesine izin verilmez.
+    if (fs::is_symlink(root_ / parsed->value(), ec) || !fs::is_directory(*target, ec))
+        return std::unexpected(io_error(parsed->string(), "not a directory"));
+
+    if (!force) {
+        // Dizinler ve .keep dışındaki her şey (gizli/bilinmeyen dosyalar, bağlar dahil) "dolu" sayılır;
+        // tarama belirsizse (hata) silinmez.
+        std::size_t count = 0;
+        fs::recursive_directory_iterator it(*target, fs::directory_options::none, ec);
+        for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            std::error_code entry_ec;
+            const bool is_dir = it->symlink_status(entry_ec).type() == fs::file_type::directory;
+            if (!is_dir && it->path().filename() != kKeepFileName)
+                ++count;
+        }
+        if (ec)
+            return std::unexpected(io_error(parsed->string(), ec));
+        if (count > 0)
+            return std::unexpected(Error{Error::Code::NotEmpty,
+                                         "error.not_empty",
+                                         {{"path", parsed->string()}, {"count", std::to_string(count)}}});
+    }
+
+    fs::remove_all(*target, ec);
+    if (ec)
+        return std::unexpected(io_error(parsed->string(), ec));
+    const std::string prefix = parsed->string() + "/";
+    std::erase_if(binary_cache_, [&](const auto& entry) { return entry.first.starts_with(prefix); });
+    return {};
 }
 
 }  // namespace noteapp::core

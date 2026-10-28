@@ -57,6 +57,19 @@ public:
     std::expected<std::filesystem::file_time_type, Error>
     write(const NotePath& path, std::string_view content, std::filesystem::file_time_type expected_mtime);
 
+    // Taşı/yeniden adlandır; hedef klasörler oluşur, uzantı değişimi tip değişimidir. Hedef varsa
+    // AlreadyExists (asla ezilmez). Başarıda hedef yolu döner.
+    std::expected<NotePath, Error> move(const NotePath& from, const NotePath& to);
+    // Notu kalıcı siler (çöp kutusu yok); onay ön yüzün işidir.
+    std::expected<void, Error> remove(const NotePath& path);
+
+    // Klasör adları NotePath kurallarıyla doğrulanır. create_folder boş klasöre gizli .keep koyar.
+    std::expected<void, Error> create_folder(std::string_view folder);
+    std::expected<void, Error> rename_folder(std::string_view from, std::string_view to);
+    // Not (ya da bilinmeyen dosya) içeren klasör force olmadan NotEmpty ({count} = dosya sayısı) verir
+    // ve hiçbir şey silinmez; force özyinelemeli siler (.keep dahil).
+    std::expected<void, Error> remove_folder(std::string_view folder, bool force);
+
 private:
     std::expected<std::filesystem::path, Error> resolve(const NotePath& path) const;
 

@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
         code = cli::run_version();
         break;
     case cli::ParsedArgs::Kind::Reserved:
-        code = cli::run_reserved(args);
+        code = cli::run_reserved(args, loaded.config);
         break;
     case cli::ParsedArgs::Kind::Invalid:
         code = cli::run_invalid(args);

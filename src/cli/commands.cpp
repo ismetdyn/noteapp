@@ -1,5 +1,6 @@
 #include "cli/commands.hpp"
 
+#include "cli/confirm.hpp"
 #include "core/editor.hpp"
 #include "core/error.hpp"
 #include "core/i18n.hpp"
@@ -15,6 +16,7 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <io.h>
@@ -175,7 +177,80 @@ int run_version() {
     return kExitOk;
 }
 
-int run_reserved(const ParsedArgs& args) {
+int run_rm(const ParsedArgs& args, const core::Config& config) {
+    bool yes = false;
+    std::vector<std::string> paths;
+    for (const std::string& arg : args.rest) {
+        if (arg == "-y") {
+            yes = true;
+        } else if (arg.size() > 1 && arg[0] == '-') {
+            std::cerr << core::tr("cli.unknown_option", {{"option", arg}}) << '\n';
+            return kExitUsage;
+        } else {
+            paths.push_back(arg);
+        }
+    }
+    if (paths.size() != 1) {
+        std::cerr << core::tr("cli.rm_usage") << '\n';
+        return kExitUsage;
+    }
+
+    // Yalnız tam yol: fuzzy eşleşme yok. Silmeden önce yolun var olduğu doğrulanır (onay boşuna sorulmasın).
+    const auto path = core::NotePath::parse(paths.front());
+    if (!path)
+        return fail(path.error());
+    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    if (const auto found = store.read(*path); !found)
+        return fail(found.error());
+
+    if (!yes) {
+        if (!stdin_is_tty()) {
+            std::cerr << core::tr("cli.rm_needs_yes", {{"path", path->string()}}) << '\n';
+            return kExitUser;
+        }
+        std::cerr << core::tr("cli.confirm_delete", {{"path", path->string()}}) << std::flush;
+        std::string answer;
+        if (!std::getline(std::cin, answer) || !is_delete_confirmed(answer)) {
+            std::cerr << core::tr("cli.delete_not_confirmed") << '\n';
+            return kExitUser;
+        }
+    }
+    if (const auto removed = store.remove(*path); !removed)
+        return fail(removed.error());
+    std::cout << core::tr("cli.removed", {{"path", path->string()}}) << '\n';
+    return kExitOk;
+}
+
+int run_mv(const ParsedArgs& args, const core::Config& config) {
+    for (const std::string& arg : args.rest) {
+        if (arg.size() > 1 && arg[0] == '-') {
+            std::cerr << core::tr("cli.unknown_option", {{"option", arg}}) << '\n';
+            return kExitUsage;
+        }
+    }
+    if (args.rest.size() != 2) {
+        std::cerr << core::tr("cli.mv_usage") << '\n';
+        return kExitUsage;
+    }
+    const auto from = core::NotePath::parse(args.rest[0]);
+    if (!from)
+        return fail(from.error());
+    const auto to = core::NotePath::parse(args.rest[1]);
+    if (!to)
+        return fail(to.error());
+
+    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    if (const auto moved = store.move(*from, *to); !moved)
+        return fail(moved.error());
+    std::cout << core::tr("cli.moved", {{"from", from->string()}, {"to", to->string()}}) << '\n';
+    return kExitOk;
+}
+
+int run_reserved(const ParsedArgs& args, const core::Config& config) {
+    if (args.command == "rm")
+        return run_rm(args, config);
+    if (args.command == "mv")
+        return run_mv(args, config);
     std::cerr << core::tr("cli.not_implemented", {{"command", args.command}}) << '\n';
     return kExitUsage;
 }

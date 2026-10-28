@@ -128,7 +128,7 @@
   **Dosyalar:** `src/cli/main.cpp`, `src/cli/commands.cpp`, `tests/cli/cli_editor_test.cpp` · **Boyut:** S
 
 ### T14: 🔴 Taşı/sil/klasör + `note rm`/`note mv`
-- [ ] **Kabul:** SPEC-core kabul 8 · `.keep` ile boş klasör · SPEC-cli kabul 5 ve 7 (fuzzy ile silme yok, TTY'siz `-y` şart,
+- [x] **Kabul:** SPEC-core kabul 8 · `.keep` ile boş klasör · SPEC-cli kabul 5 ve 7 (fuzzy ile silme yok, TTY'siz `-y` şart,
   hedef varsa ezmez).
 - **Doğrulama:** `B && T(core) && T(cli)` · **Bağımlılık:** T13 · **Dosyalar:** `src/core/note_store.{hpp,cpp}`,
   `tests/core/note_store_ops_test.cpp`, `src/cli/commands.cpp`, `tests/cli/cli_manage_test.cpp` · **Boyut:** M

@@ -4,6 +4,7 @@ noteapp_add_test(core
     i18n_test.cpp
     log_test.cpp
     note_path_test.cpp
+    note_store_ops_test.cpp
     note_store_test.cpp
     process_test.cpp
     smoke_test.cpp
