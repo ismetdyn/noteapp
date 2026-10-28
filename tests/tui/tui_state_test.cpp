@@ -159,6 +159,103 @@ TEST_CASE("PageUp/PageDown scroll the preview within bounds and reset on selecti
     CHECK(s.preview_scroll() == 0);
 }
 
+namespace {
+
+// Sahte içerik araması: sorgu ne olursa olsun todo.md (3 eşleşme, ilk satır 12) sonra sort.java (1) döner.
+tui::ContentSearcher fake_searcher(std::vector<std::string>* seen_queries = nullptr) {
+    return [seen_queries](std::string_view query) {
+        if (seen_queries)
+            seen_queries->emplace_back(query);
+        std::vector<search::ContentResult> results;
+        results.push_back({core::NotePath::parse("personal/todo.md").value(),
+                           3,
+                           {search::Hit{12, "buy milk", {{4, 8}}}, search::Hit{20, "milk again", {{0, 4}}}}});
+        results.push_back({core::NotePath::parse("snippets/sort.java").value(),
+                           1,
+                           {search::Hit{1, "milk sort", {{0, 4}}}}});
+        return results;
+    };
+}
+
+}  // namespace
+
+TEST_CASE("Tab toggles name and content mode") {
+    tui::TuiState s;
+    s.set_notes(sample());
+    s.set_content_searcher(fake_searcher());
+    CHECK(s.mode() == Mode::Name);
+    CHECK(s.handle(Key::Tab) == Intent::None);
+    CHECK(s.mode() == Mode::Content);
+    s.handle(Key::Tab);
+    CHECK(s.mode() == Mode::Name);
+}
+
+TEST_CASE("content mode rows come from the searcher with hit counts, only for a non-empty query") {
+    tui::TuiState s;
+    s.set_notes(sample());
+    std::vector<std::string> seen;
+    s.set_content_searcher(fake_searcher(&seen));
+    s.handle(Key::Tab);
+    CHECK(s.rows().size() == 3);  // boş sorgu: tüm notlar, arama çağrılmaz
+    CHECK(seen.empty());
+    type(s, "milk");
+    REQUIRE(s.rows().size() == 2);
+    CHECK(s.rows()[0].path.string() == "personal/todo.md");
+    CHECK(s.rows()[0].hit_count == 3);
+    CHECK(s.rows()[1].hit_count == 1);
+    CHECK_FALSE(seen.empty());
+    CHECK(seen.back() == "milk");
+    CHECK(s.total() == 3);
+}
+
+TEST_CASE("content mode scrolls the preview to the first hit and follows the selection") {
+    tui::TuiState s;
+    s.set_notes(sample());
+    s.set_content_searcher(fake_searcher());
+    s.handle(Key::Tab);
+    type(s, "milk");
+    // 12. satır, 2 satır bağlamla: 0 tabanlı 11 - 2
+    CHECK(s.preview_scroll() == 9);
+    s.handle(Key::Down);  // hit satırı 1: bağlam sıfırın altına inmez
+    CHECK(s.preview_scroll() == 0);
+    s.handle(Key::Up);
+    CHECK(s.preview_scroll() == 9);
+}
+
+TEST_CASE("switching back to name mode restores the fuzzy list and resets the scroll") {
+    tui::TuiState s;
+    s.set_notes(sample());
+    s.set_content_searcher(fake_searcher());
+    s.handle(Key::Tab);
+    type(s, "tod");
+    s.handle(Key::Tab);
+    CHECK(s.mode() == Mode::Name);
+    REQUIRE(s.rows().size() == 1);
+    CHECK(s.rows()[0].hit_count == 0);
+    CHECK(s.rows()[0].positions.size() == 3);
+    CHECK(s.preview_scroll() == 0);
+}
+
+TEST_CASE("set_notes re-runs the content search in content mode") {
+    tui::TuiState s;
+    s.set_notes(sample());
+    std::vector<std::string> seen;
+    s.set_content_searcher(fake_searcher(&seen));
+    s.handle(Key::Tab);
+    type(s, "milk");
+    const auto before = seen.size();
+    s.set_notes(sample());
+    CHECK(seen.size() == before + 1);
+}
+
+TEST_CASE("content mode without a searcher yields no matches instead of crashing") {
+    tui::TuiState s;
+    s.set_notes(sample());
+    s.handle(Key::Tab);
+    type(s, "milk");
+    CHECK(s.rows().empty());
+}
+
 TEST_CASE("same_listing detects added, changed and reordered notes") {
     const auto a = sample();
     auto b = sample();

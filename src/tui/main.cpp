@@ -3,11 +3,13 @@
 #include "core/i18n.hpp"
 #include "core/log.hpp"
 #include "core/note_store.hpp"
+#include "search/content_index.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
 
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <ftxui/component/app.hpp>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
@@ -21,6 +23,9 @@
 namespace {
 
 using noteapp::tui::Key;
+
+// İçerik aramasında listelenecek en çok not; ekran bundan fazlasını zaten gösteremez.
+constexpr std::size_t kContentResultLimit = 1000;
 
 // FTXUI olayını modelin tuşuna çevirir; tanınmayan olay (fare, boyut vb.) nullopt.
 std::optional<Key> to_key(const ftxui::Event& event, std::string& text) {
@@ -76,6 +81,17 @@ int main() {
     auto listing = store.list();
     state.set_notes(listing);
 
+    // İçerik indeksi ilk Tab'da kurulur: ad modunda kalan kullanıcı tüm notları okumanın bedelini ödemez.
+    // Yalnız UI iş parçacığından dokunulur (ContentIndex tek iş parçacıklıdır).
+    std::optional<noteapp::search::ContentIndex> content_index;
+    state.set_content_searcher([&](std::string_view query) {
+        if (!content_index) {
+            content_index.emplace(store, config.tuning.max_note_bytes);
+            content_index->refresh();
+        }
+        return content_index->search(query, kContentResultLimit);
+    });
+
     auto app = ftxui::App::Fullscreen();
 
     // Önizleme satır sayısı modele bildirilir ki PgDn son satırı aşmasın.
@@ -127,8 +143,10 @@ int main() {
             if (tui::same_listing(listing, latest))
                 continue;
             listing = latest;  // yalnız bu iş parçacığı okur/yazar
-            app.Post([&state, &preview, &sync_preview, latest = std::move(latest)]() mutable {
+            app.Post([&state, &preview, &content_index, &sync_preview, latest = std::move(latest)]() mutable {
                 preview.invalidate();
+                if (content_index)
+                    content_index->refresh();  // yalnız mtime/boyutu değişenler yeniden okunur
                 state.set_notes(std::move(latest));
                 sync_preview();
             });

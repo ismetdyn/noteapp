@@ -182,7 +182,7 @@
   `tests/tui/render_test.cpp` · **Boyut:** M
 
 ### T20: İçerik modu
-- [ ] **Kabul:** Tab ile içerik araması, eşleşme sayıları listede, önizleme ilk eşleşmeye kayar ve vurgular (render testi).
+- [x] **Kabul:** Tab ile içerik araması, eşleşme sayıları listede, önizleme ilk eşleşmeye kayar ve vurgular (render testi).
 - **Doğrulama:** `B && T(tui)` · **Bağımlılık:** T19 · **Dosyalar:** `src/tui/{tui_state.cpp,view.cpp}`, testler · **Boyut:** S
 
 ### T21: Editör entegrasyonu + kaydet diyaloğu

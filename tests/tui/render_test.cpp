@@ -1,4 +1,5 @@
 #include "core/i18n.hpp"
+#include "search/content_index.hpp"
 #include "support/test_support.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
@@ -192,6 +193,46 @@ TEST_CASE("preview scrolls and the list follows a selection below the fold") {
     CHECK_FALSE(contains(screen, "n100.md"));
     CHECK(contains(screen, "line1010"));
     CHECK_FALSE(contains(screen, "line1009"));
+}
+
+TEST_CASE("content mode lists hit counts and the preview highlights the first hit") {
+    test::TempDir dir;
+    std::string long_note;
+    for (int i = 1; i <= 30; ++i)
+        long_note += (i == 20 ? "the needle is here\n" : "filler " + std::to_string(1000 + i) + "\n");
+    std::ofstream(dir.path() / "long.md", std::ios::binary) << long_note;
+    std::ofstream(dir.path() / "few.md", std::ios::binary) << "one needle\nsecond needle\n";
+    std::ofstream(dir.path() / "none.md", std::ios::binary) << "nothing\n";
+    const core::NoteStore store(dir.path());
+    search::ContentIndex index(store, 1024 * 1024);
+    index.refresh();
+
+    tui::TuiState state;
+    state.set_notes(store.list());
+    state.set_content_searcher([&index](std::string_view query) { return index.search(query, 100); });
+    state.handle(Key::Tab);
+    for (const char c : std::string("needle"))
+        state.handle(Key::Char, std::string(1, c));
+
+    tui::PreviewCache cache;
+    // Eşleşme sayısı çoksa önce o gelir: few.md (2 satır) > long.md (1 satır)
+    REQUIRE(state.rows().size() == 2);
+    CHECK(state.rows()[0].path.string() == "few.md");
+    state.handle(Key::Down);  // long.md: ilk eşleşme 20. satır
+    const auto& preview = cache.get(store, state.selected_row());
+    state.set_preview_line_count(preview.lines.size());
+    const auto screen = render_screen(state, preview);
+
+    CHECK(contains(screen, "[content] 2/3"));
+    CHECK(contains(screen, "few.md  (2)"));
+    CHECK(contains(screen, "long.md  (1)"));
+    CHECK_FALSE(contains(screen, "none.md"));
+    CHECK(contains(screen, "the needle is here"));
+    CHECK_FALSE(contains(screen, "filler 1001"));  // eşleşmeye kaydırıldı
+    CHECK(bold_at(screen, "needle is here", 0));
+    CHECK(bold_at(screen, "needle is here", 5));
+    CHECK_FALSE(bold_at(screen, "needle is here", 7));  // "is" vurgusuz
+    CHECK_FALSE(bold_at(screen, "the needle", 0));
 }
 
 TEST_CASE("PreviewCache reads text, flags binary notes and reports unreadable ones") {

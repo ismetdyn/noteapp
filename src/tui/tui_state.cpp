@@ -19,6 +19,16 @@ bool is_printable(std::string_view text) {
     return !text.empty() && static_cast<unsigned char>(text.front()) >= 0x20;
 }
 
+// İçerik modunda önizleme ilk eşleşmeye kayar; üstte birkaç satır bağlam kalır.
+constexpr std::size_t kHitContextLines = 2;
+
+std::size_t initial_scroll(const Row& row) {
+    if (row.hits.empty() || row.hits.front().line == 0)
+        return 0;
+    const std::size_t line_index = row.hits.front().line - 1;  // Hit::line 1 tabanlı
+    return line_index > kHitContextLines ? line_index - kHitContextLines : 0;
+}
+
 }  // namespace
 
 bool same_listing(std::span<const core::NoteInfo> a, std::span<const core::NoteInfo> b) {
@@ -43,9 +53,18 @@ void TuiState::refilter(bool query_changed) {
         previous_path = row->path;
 
     std::vector<Row> rows;
-    for (auto& ranked : search::rank_notes(query_, notes_)) {
-        const core::NoteInfo& info = notes_[ranked.index];
-        rows.push_back({info.path, std::move(ranked.match.positions), 0, {}, info.binary});
+    if (mode_ == Mode::Content && !query_.empty()) {
+        // Arayıcı yoksa (henüz bağlanmadı) eşleşme yok sayılır; çökmek yerine boş liste.
+        if (content_searcher_)
+            for (auto& result : content_searcher_(query_))
+                rows.push_back(
+                    {std::move(result.path), {}, result.hit_count, std::move(result.first_hits), false});
+    } else {
+        // Ad modu ve içerik modunda boş sorgu: tüm notlar mtime sırasıyla.
+        for (auto& ranked : search::rank_notes(query_, notes_)) {
+            const core::NoteInfo& info = notes_[ranked.index];
+            rows.push_back({info.path, std::move(ranked.match.positions), 0, {}, info.binary});
+        }
     }
     rows_ = std::move(rows);
 
@@ -57,7 +76,7 @@ void TuiState::refilter(bool query_changed) {
     }
     const bool same_note = previous_path && selected_row() && selected_row()->path == *previous_path;
     if (!same_note || query_changed)
-        preview_scroll_ = 0;
+        preview_scroll_ = selected_row() ? initial_scroll(*selected_row()) : 0;
 }
 
 void TuiState::move_selection(int delta) {
@@ -67,7 +86,7 @@ void TuiState::move_selection(int delta) {
     const int next = std::clamp(static_cast<int>(selected_) + delta, 0, last);
     if (static_cast<std::size_t>(next) != selected_) {
         selected_ = static_cast<std::size_t>(next);
-        preview_scroll_ = 0;
+        preview_scroll_ = initial_scroll(rows_[selected_]);
     }
 }
 
@@ -110,6 +129,8 @@ Intent TuiState::handle(Key key, std::string_view text) {
         scroll_preview(static_cast<int>(kPreviewPageLines));
         return Intent::None;
     case Key::Tab:
+        mode_ = mode_ == Mode::Name ? Mode::Content : Mode::Name;
+        refilter(true);
         return Intent::None;
     case Key::Enter:
         if (selected_row())
