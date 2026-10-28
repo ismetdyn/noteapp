@@ -7,6 +7,7 @@
 #include <fstream>
 
 using namespace noteapp::core;
+using noteapp::test::make_dir_link;
 using noteapp::test::slurp;
 using noteapp::test::TempDir;
 namespace fs = std::filesystem;
@@ -48,18 +49,6 @@ template <typename T> std::string refusal(const std::expected<T, Error>& result)
         return "ok";
     return result.error().code == Error::Code::InvalidPath ? arg(result.error(), "reason")
                                                            : result.error().message_key;
-}
-
-// Dizin bağı: Windows'ta yetki istemeyen junction, POSIX'te sembolik bağ (note_store_test.cpp ile aynı).
-bool make_dir_link(const fs::path& target, const fs::path& link) {
-#ifdef _WIN32
-    const std::wstring command = L"mklink /J \"" + link.wstring() + L"\" \"" + target.wstring() + L"\" >NUL";
-    return _wsystem(command.c_str()) == 0;
-#else
-    std::error_code ec;
-    fs::create_directory_symlink(target, link, ec);
-    return !ec;
-#endif
 }
 
 }  // namespace

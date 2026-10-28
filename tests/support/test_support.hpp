@@ -118,4 +118,17 @@ inline std::string utf8(const fs::path& p) {
     return std::string(u.begin(), u.end());
 }
 
+// Dizin bağı: Windows'ta yetki istemeyen junction (MinGW libstdc++ create_directory_symlink desteklemez),
+// POSIX'te sembolik bağ. Oluşturulamazsa false.
+inline bool make_dir_link(const fs::path& target, const fs::path& link) {
+#ifdef _WIN32
+    const std::wstring command = L"mklink /J \"" + link.wstring() + L"\" \"" + target.wstring() + L"\" >NUL";
+    return _wsystem(command.c_str()) == 0;
+#else
+    std::error_code ec;
+    fs::create_directory_symlink(target, link, ec);
+    return !ec;
+#endif
+}
+
 }  // namespace noteapp::test

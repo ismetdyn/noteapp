@@ -1,5 +1,6 @@
 #include "core/file_stat.hpp"
 #include "core/note_store.hpp"
+#include "support/test_support.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -20,6 +21,7 @@
 #endif
 
 using namespace noteapp::core;
+using noteapp::test::make_dir_link;
 namespace fs = std::filesystem;
 using namespace std::chrono_literals;
 
@@ -81,19 +83,6 @@ const auto kNow = std::chrono::system_clock::time_point{} + std::chrono::hours(2
 void wait_for_second_start() {
     while (std::chrono::system_clock::now().time_since_epoch() % 1s > 300ms)
         std::this_thread::sleep_for(5ms);
-}
-
-// Dizin bağı: Windows'ta yetki istemeyen junction (MinGW libstdc++ create_directory_symlink desteklemez),
-// POSIX'te sembolik bağ. Oluşturulamazsa false.
-bool make_dir_link(const fs::path& target, const fs::path& link) {
-#ifdef _WIN32
-    const std::wstring command = L"mklink /J \"" + link.wstring() + L"\" \"" + target.wstring() + L"\" >NUL";
-    return _wsystem(command.c_str()) == 0;
-#else
-    std::error_code ec;
-    fs::create_directory_symlink(target, link, ec);
-    return !ec;
-#endif
 }
 
 }  // namespace
