@@ -3,6 +3,7 @@ add_library(noteapp_core
     i18n.cpp
     log.cpp
     config.cpp
+    console.cpp
     editor.cpp
     note_path.cpp
     note_store.cpp
