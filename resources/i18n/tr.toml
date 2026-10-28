@@ -68,3 +68,33 @@ usage_export_pdf = "kullanım: notes-gui --export-pdf <girdi> <çıktı>"
 export_input_unreadable = "girdi okunamadı: {path}: {detail}"
 export_output_unopenable = "çıktı açılamadı: {path}: {detail}"
 export_output_unwritable = "çıktı yazılamadı: {path}: {detail}"
+
+[cli]
+saved = "Kaydedildi: {path} ({type}, {how})"
+how_detected = "önerilen"
+how_chosen = "seçilen"
+empty_input = "Kaydedilecek bir şey yok: not boş"
+unknown_option = "Bilinmeyen seçenek: {option}"
+missing_value = "{option} seçeneği bir değer ister"
+not_implemented = "'{command}' komutu henüz kullanılamıyor"
+help = """
+Kullanım:
+  note [-t TİP] [-f KLASÖR] [-n AD] [--no-sync] METİN...   Argümanlardan not ekler
+  ... | note [bayraklar]                                    stdin'den not ekler
+  note [bayraklar]                                          Editörde not ekler
+  note ls [SORGU] [-f KLASÖR]                               Notları listeler
+  note find TERİM...                                        Not içeriklerinde arar
+  note show SORGU                                           En iyi eşleşmeyi yazdırır
+  note edit SORGU                                           En iyi eşleşmeyi editörde açar
+  note rm YOL [-y]                                          Notu siler (yalnız tam yol)
+  note mv KAYNAK HEDEF                                      Notu taşır veya yeniden adlandırır
+  note export --pdf YOL [-o ÇIKTI]                          Notu PDF olarak dışa aktarır
+  note sync [status | on | off | init REMOTE | login [HOST] | logout [HOST]]
+                                                            Senkronu yönetir
+  note config path | list | get ANAHTAR | set ANAHTAR DEĞER Ayarları yönetir
+  note --help | help KOMUT | --version                      Yardımı veya sürümü gösterir
+
+Komut adıyla aynı metni not etmek için: 'note -- ls'.
+
+Çıkış kodları: 0 başarı, 1 kullanıcı kaynaklı, 2 kullanım hatası, 3 G/Ç veya iç hata, 4 senkron hatası.
+"""

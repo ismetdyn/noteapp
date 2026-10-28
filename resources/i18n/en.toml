@@ -68,3 +68,33 @@ usage_export_pdf = "usage: notes-gui --export-pdf <input> <output>"
 export_input_unreadable = "cannot read input: {path}: {detail}"
 export_output_unopenable = "cannot open output: {path}: {detail}"
 export_output_unwritable = "cannot write output: {path}: {detail}"
+
+[cli]
+saved = "Saved: {path} ({type}, {how})"
+how_detected = "suggested"
+how_chosen = "chosen"
+empty_input = "Nothing to save: the note is empty"
+unknown_option = "Unknown option: {option}"
+missing_value = "Option {option} needs a value"
+not_implemented = "Command '{command}' is not available yet"
+help = """
+Usage:
+  note [-t TYPE] [-f FOLDER] [-n NAME] [--no-sync] TEXT...   Add a note from the arguments
+  ... | note [flags]                                          Add a note from stdin
+  note [flags]                                                Add a note in your editor
+  note ls [QUERY] [-f FOLDER]                                 List notes
+  note find TERM...                                           Search note contents
+  note show QUERY                                             Print the best match
+  note edit QUERY                                             Open the best match in your editor
+  note rm PATH [-y]                                           Delete a note (exact path only)
+  note mv SOURCE TARGET                                       Move or rename a note
+  note export --pdf PATH [-o OUTPUT]                          Export a note as PDF
+  note sync [status | on | off | init REMOTE | login [HOST] | logout [HOST]]
+                                                              Manage synchronization
+  note config path | list | get KEY | set KEY VALUE           Manage the configuration
+  note --help | help COMMAND | --version                      Show help or the version
+
+Use 'note -- ls' to add a note whose text is a command name.
+
+Exit codes: 0 ok, 1 user error, 2 usage error, 3 I/O or internal error, 4 sync error.
+"""

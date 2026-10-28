@@ -1,0 +1,10 @@
+add_executable(note
+    main.cpp
+    args.cpp
+    commands.cpp)
+target_include_directories(note PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(note PRIVATE noteapp_core noteapp_detect)
+if(WIN32)
+    target_link_libraries(note PRIVATE shell32)  # CommandLineToArgvW
+endif()
+noteapp_target_defaults(note)

@@ -93,7 +93,7 @@
   `src/core/{i18n.hpp,i18n.cpp,log.hpp,log.cpp}`, `tests/core/i18n_test.cpp` · **Boyut:** M
 
 ### T10: CLI hızlı ekleme dilimi
-- [ ] **Açıklama:** `note METİN…`, stdin, `-t/-f/-n`, `--no-sync` (şimdilik no-op), `--`, `--help`, `--version`,
+- [x] **Açıklama:** `note METİN…`, stdin, `-t/-f/-n`, `--no-sync` (şimdilik no-op), `--`, `--help`, `--version`,
   çıkış kodları, `wmain` + UTF-8 konsol. Test yardımcısı: ikiliyi `NOTEAPP_HOME` ile alt süreçte çalıştırma.
 - **Kabul:** SPEC-cli kabul 1 ve 3 · `note -- ls` "ls" notu ekler · Türkçe argüman bozulmaz · çıktı i18n.
 - **Doğrulama:** `B && T(cli)`, `F` · **Bağımlılık:** T09 · **Dosyalar:** `src/cli/{CMakeLists.txt,main.cpp,args.hpp,args.cpp}`,
@@ -109,7 +109,7 @@
 ## Faz 2 — CLI'nin geri kalanı
 
 ### T11: detect modülü + korpus + CLI'ye bağlama
-- [ ] **Kabul:** SPEC-detect kabul 1–5 (korpusta ≥ %90, zorunlu örnekler, tek satır → varsayılan, 64 KB ≤ 5 ms Release) ·
+- [x] **Kabul:** SPEC-detect kabul 1–5 (korpusta ≥ %90, zorunlu örnekler, tek satır → varsayılan, 64 KB ≤ 5 ms Release) ·
   CLI çok satırlı girdide öneriyi kullanır, `-t` öneriyi ezer, çıktıda "önerilen/seçilen".
 - [x] modül + korpus tamam; CLI bağlantısı T10 sonrası
 - **Doğrulama:** `B && T(detect) && T(cli)` · **Bağımlılık:** T10 · **Dosyalar:** `src/detect/{CMakeLists.txt,detect.hpp,detect.cpp}`,

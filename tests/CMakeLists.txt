@@ -1,7 +1,11 @@
 # Modül başına tek test ikilisi; ctest adı modül adıdır (ctest -R <modül>).
 function(noteapp_add_test module)
     add_executable(${module}_tests ${ARGN})
-    target_link_libraries(${module}_tests PRIVATE doctest::doctest_with_main noteapp_${module})
+    target_link_libraries(${module}_tests PRIVATE doctest::doctest_with_main)
+    # cli gibi kütüphanesiz modüller yalnız ikiliyi dışarıdan çalıştırır.
+    if(TARGET noteapp_${module})
+        target_link_libraries(${module}_tests PRIVATE noteapp_${module})
+    endif()
     # "support/test_support.hpp" gibi ortak yardımcılar tests/ köküne göre eklenir.
     target_include_directories(${module}_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/tests)
     noteapp_target_defaults(${module}_tests)
@@ -19,6 +23,7 @@ add_subdirectory(core)
 add_subdirectory(detect)
 add_subdirectory(search)
 add_subdirectory(sync)
+add_subdirectory(cli)
 add_subdirectory(tui)
 if(NOTEAPP_BUILD_GUI)
     add_subdirectory(gui)
