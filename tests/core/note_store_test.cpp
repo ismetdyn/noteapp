@@ -572,6 +572,25 @@ TEST_CASE("8.3 short names of hidden entries are refused like the hidden names t
 }
 #endif
 
+// Dosyayı kendisi açan çağıranlar (editör, PDF dışa aktarma) yolu kökle elle birleştirmez: aynı kapıdan
+// geçer.
+TEST_CASE("absolute_path applies the same checks as read: absolute inside the root, refused through a link") {
+    TempDir tmp;
+    const fs::path root = tmp.path() / "notes";
+    const fs::path outside = tmp.path() / "outside";
+    put(outside / "secret.md", "gizli");
+    put(root / "a" / "n.md", "n");
+    REQUIRE(make_dir_link(outside, root / "link"));
+    NoteStore store(root);
+
+    const auto inside = store.absolute_path(np("a/n.md"));
+    REQUIRE(inside.has_value());
+    CHECK(inside->is_absolute());
+    CHECK(slurp(*inside) == "n");
+    CHECK(store.absolute_path(np("yeni/yok.md")).has_value());  // create gibi: var olması gerekmez
+    CHECK(refusal(store.absolute_path(np("link/secret.md"))) == "link");
+}
+
 TEST_CASE("a link to a folder inside the root is refused too: notes never live behind a link") {
     TempDir tmp;
     put(tmp.path() / "real" / "n.md", "n");

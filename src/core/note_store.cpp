@@ -256,6 +256,18 @@ std::vector<std::string> NoteStore::folders() const {
     return result;
 }
 
+std::expected<fs::path, Error> NoteStore::absolute_path(const NotePath& path) const {
+    auto target = resolve(path);
+    if (!target)
+        return target;
+    std::error_code ec;
+    fs::path absolute =
+        fs::absolute(*target, ec);  // kökün hiçbir parçası yokken weakly_canonical göreli kalır
+    if (ec)
+        return std::unexpected(io_error(path.string(), ec));
+    return absolute;
+}
+
 std::expected<NoteContent, Error> NoteStore::read(const NotePath& path) const {
     const auto target = resolve(path);
     if (!target)

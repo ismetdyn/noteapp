@@ -83,11 +83,18 @@ int run_export(const ParsedArgs& args, const core::Config& config) {
     const auto note = pick_best_note(store, parsed->positional.front());
     if (!note)
         return note.error();
-    // Okunamayan not burada elenmez: hatayı dışa aktaran süreç bildirir (önceki davranış).
-    if (const auto content = store.read(note->path); content && core::looks_binary(content->text)) {
+    // Okunamayan (bağ ardındaki dahil) not notes-gui'ye hiç verilmez: GUI yolu kendisi açar, NoteStore'un
+    // denetimlerinden geçmezdi.
+    const auto content = store.read(note->path);
+    if (!content)
+        return fail(content.error());
+    if (core::looks_binary(content->text)) {
         std::cerr << core::tr("cli.binary_note", {{"path", note->path.string()}}) << '\n';
         return kExitUser;
     }
+    const auto input = store.absolute_path(note->path);
+    if (!input)
+        return fail(input.error());
 
     const fs::path gui = locate_gui();
     std::error_code ec;
@@ -96,14 +103,13 @@ int run_export(const ParsedArgs& args, const core::Config& config) {
         return kExitInternal;
     }
 
-    const fs::path input = fs::absolute(config.notes_dir / note->path.value());
     // Varsayılan çıktı geçerli dizindedir (not klasörüne değil); `-o` göreli ise yine geçerli dizine göredir.
     fs::path default_name = note->path.value().stem();
     default_name += ".pdf";  // replace_extension "a.b.md" -> "a.pdf" yapardı
     const fs::path output = fs::absolute(parsed->output ? from_utf8(*parsed->output) : default_name);
 
     // Çocuğun stderr'i devralınır: yerelleştirilmiş hata satırı doğrudan kullanıcıya ulaşır.
-    const auto code = core::run_and_wait({to_utf8(gui), "--export-pdf", to_utf8(input), to_utf8(output)},
+    const auto code = core::run_and_wait({to_utf8(gui), "--export-pdf", to_utf8(*input), to_utf8(output)},
                                          {{"QT_QPA_PLATFORM", "offscreen"}});
     if (!code) {
         std::cerr << core::format_error(code.error()) << '\n';

@@ -483,13 +483,16 @@ int run_edit(const ParsedArgs& args, const core::Config& config) {
     const auto note = pick_best_note(store, parsed->positional.front());
     if (!note)
         return note.error();
-    const fs::path file = config.notes_dir / note->path.value();
+    // Yol kökle elle birleştirilmez: listelemeyle editör arasında araya bağ girdiyse de reddedilir.
+    const auto file = store.absolute_path(note->path);
+    if (!file)
+        return fail(file.error());
     std::error_code ec;
-    const auto before = fs::last_write_time(file, ec);
-    if (const auto edited = core::run_editor(config, file); !edited)
+    const auto before = fs::last_write_time(*file, ec);
+    if (const auto edited = core::run_editor(config, *file); !edited)
         return fail(edited.error());
     // Kaydetmeden kapatılan editör için ağa çıkılmaz.
-    if (const auto after = fs::last_write_time(file, ec); ec || after != before)
+    if (const auto after = fs::last_write_time(*file, ec); ec || after != before)
         start_background_sync(config, no_sync);
     return kExitOk;
 }

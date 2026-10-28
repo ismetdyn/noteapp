@@ -164,6 +164,19 @@ TEST_CASE("edit maps editor failures to exit 3 and leaves the note alone") {
     CHECK(slurp(box.notes() / "a.md") == "a");
 }
 
+TEST_CASE("edit never opens a note through a directory link") {
+    const Sandbox box;
+    const EditorEnv env;
+    const ScopedEnv content("FAKE_EDITOR_CONTENT", "ezildi");
+    const TempDir outside;
+    put(outside.path() / "secret.md", "gizli");
+    fs::create_directories(box.notes());
+    REQUIRE(make_dir_link(outside.path(), box.notes() / "link"));
+
+    CHECK(box.run({"edit", "link/secret.md"}).exit_code != 0);
+    CHECK(slurp(outside.path() / "secret.md") == "gizli");
+}
+
 TEST_CASE("ls and show messages follow the language") {
     const Sandbox box("en");
     put(box.notes() / "a.md", "a");

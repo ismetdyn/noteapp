@@ -51,6 +51,10 @@ public:
     std::vector<std::string> folders() const;  // göreli, '/' ayırıcılı, sıralı
 
     std::expected<NoteContent, Error> read(const NotePath& path) const;
+    // Notun diskteki mutlak yolu; read() ile aynı denetimlerden (bağ, kök dışı, 8.3 gizli ad) geçer, dosyanın
+    // var olması gerekmez. Dosyayı kendisi açan çağıranlar (editör, PDF dışa aktarma) yolu kökle elle
+    // birleştirmez, bunu kullanır.
+    std::expected<std::filesystem::path, Error> absolute_path(const NotePath& path) const;
     std::expected<NotePath, Error>
     create(const NewNote& note, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
     // Başarıda dosyanın yeni mtime'ını döner. Diskteki mtime expected_mtime'dan farklıysa

@@ -64,7 +64,9 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 `note` kendi dizinindeki `notes-gui`'yi `--export-pdf <mutlak-girdi> <çıktı>` argümanlarıyla ve
 `QT_QPA_PLATFORM=offscreen` ortamıyla çağırır (link bağımlılığı yok). Bulunamazsa `cli.gui_not_installed`.
 Varsayılan çıktı: geçerli dizinde `<ad>.pdf`; `-o` geçerli dizine göredir. `--pdf` zorunludur. Çocuğun çıkışı
-0 değilse `note` 3 ile çıkar (GUI'nin yerelleştirilmiş hata satırı stderr'e ulaşır).
+0 değilse `note` 3 ile çıkar (GUI'nin yerelleştirilmiş hata satırı stderr'e ulaşır). Not önce `NoteStore::read`
+ile okunur ve girdi yolu `NoteStore::absolute_path`'ten gelir: okuma/yol hatasında (bağ ardında, okunamayan)
+`notes-gui` hiç başlatılmaz, hata türüne göre çıkılır (T36). `note edit` de editöre `absolute_path`'i verir.
 **Test dikişi:** `NOTEAPP_GUI_EXE` ortam değişkeni `notes-gui` yolunu geçersiz kılar (derleme ağacında `note` ve
 `notes-gui` yan yana değildir; var olmayan yol "GUI kurulu değil" durumunu simüle eder). Kullanıcı arayüzü değildir.
 

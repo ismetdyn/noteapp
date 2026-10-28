@@ -25,6 +25,7 @@ class NoteStore {                     // kök: config.notes_dir
     std::vector<NoteInfo> list() const;                       // tüm notlar, mtime azalan
     std::vector<std::string> folders() const;                 // tüm klasörler (göreli)
     std::expected<NoteContent, Error> read(const NotePath&) const;
+    std::expected<path, Error> absolute_path(const NotePath&) const;  // read() ile aynı kapı; dosyayı kendisi açanlar için
     std::expected<NotePath, Error> create(const NewNote&, system_clock::time_point now = now());  // ad boşsa içerikten slug
     std::expected<file_time_type, Error> write(const NotePath&, std::string_view content, file_time_type expected_mtime);  // yeni mtime döner
     std::expected<NotePath, Error> move(const NotePath& from, const NotePath& to);  // uzantı değişimi = tip değişimi
