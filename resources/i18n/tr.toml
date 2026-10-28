@@ -56,8 +56,13 @@ defaults_unusable = "Yerleşik varsayılanlar kullanılamıyor"
 
 [tui]
 query_placeholder = "sorgu"
-status = "[ad] 3/3   senkron kapalı"
-key_hints = "q/Esc çık  Ctrl-C çık"
+mode_name = "[ad]"
+mode_content = "[içerik]"
+sync_off = "senkron kapalı"
+key_hints = "Enter aç  Tab içerik  ^O yeni  ^R taşı  ^D sil  ^S senkron  F1 yardım  F2 ayar  Esc çık"
+too_small = "Pencere çok küçük (en az 60x15)"
+binary_preview = "(ikili dosya - önizleme yok)"
+not_yet = "Henüz kullanılamıyor"
 
 [gui]
 tab_notes = "Notlar"

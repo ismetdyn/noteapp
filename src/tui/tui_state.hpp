@@ -60,6 +60,7 @@ struct Row {
     std::vector<std::size_t> positions;
     std::size_t hit_count = 0;
     std::vector<search::Hit> hits;
+    bool binary = false;  // ikili not: önizleme yerine bilgi satırı
 };
 
 // İçerik araması modele dışarıdan verilir: ContentIndex'in G/Ç'si ve tembel kurulumu modelin işi değil.

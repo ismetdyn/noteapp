@@ -1,6 +1,6 @@
 # Görünüm kütüphanede: ekranı metne render eden testler (SPEC-tui kabul 1) terminal açmadan aynı kodu çağırır.
 add_library(noteapp_tui
-    main_view.cpp
+    view.cpp
     tui_state.cpp)
 target_include_directories(noteapp_tui PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(noteapp_tui PUBLIC noteapp_core noteapp_search ftxui::dom)

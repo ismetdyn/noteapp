@@ -56,8 +56,13 @@ defaults_unusable = "Built-in defaults are unusable"
 
 [tui]
 query_placeholder = "query"
-status = "[name] 3/3   sync off"
-key_hints = "q/Esc quit  Ctrl-C quit"
+mode_name = "[name]"
+mode_content = "[content]"
+sync_off = "sync off"
+key_hints = "Enter open  Tab content  ^O new  ^R move  ^D del  ^S sync  F1 help  F2 config  Esc quit"
+too_small = "Window too small (minimum 60x15)"
+binary_preview = "(binary file - no preview)"
+not_yet = "Not available yet"
 
 [gui]
 tab_notes = "Notes"

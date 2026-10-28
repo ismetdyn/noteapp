@@ -43,8 +43,10 @@ void TuiState::refilter(bool query_changed) {
         previous_path = row->path;
 
     std::vector<Row> rows;
-    for (auto& ranked : search::rank_notes(query_, notes_))
-        rows.push_back({notes_[ranked.index].path, std::move(ranked.match.positions), 0, {}});
+    for (auto& ranked : search::rank_notes(query_, notes_)) {
+        const core::NoteInfo& info = notes_[ranked.index];
+        rows.push_back({info.path, std::move(ranked.match.positions), 0, {}, info.binary});
+    }
     rows_ = std::move(rows);
 
     selected_ = 0;

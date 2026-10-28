@@ -176,7 +176,7 @@
   `tests/tui/tui_state_test.cpp` · **Boyut:** S
 
 ### T19: FTXUI görünümü
-- [ ] **Kabul:** iki panel + üst sorgu/durum + alt kısayol çubuğu · eşleşme vurgusu · önizleme kaydırma · 60×15 altı
+- [x] **Kabul:** iki panel + üst sorgu/durum + alt kısayol çubuğu · eşleşme vurgusu · önizleme kaydırma · 60×15 altı
   mesajı · metne render testleri (ilk liste, filtre, küçük pencere) · 5.000 notla açılış ≤ 500 ms.
 - **Doğrulama:** `B && T(tui)`, elle `notes` · **Bağımlılık:** T18 · **Dosyalar:** `src/tui/{CMakeLists.txt,main.cpp,view.hpp,view.cpp}`,
   `tests/tui/render_test.cpp` · **Boyut:** M
