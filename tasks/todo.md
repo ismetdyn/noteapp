@@ -264,10 +264,13 @@
   `tests/sync/fake_ssh_keygen.cpp` · **Boyut:** M
 
 ### T27: `AutoSync` + `note sync …` + arka plan senkronu
-- [ ] **Kabul:** SPEC-sync kabul 9 · `sync`, `status`, `on/off`, `init`, `login/logout` (ekosuz giriş) · hızlı eklemede
+- [x] **Kabul:** SPEC-sync kabul 9 · `sync`, `status`, `on/off`, `init`, `login/logout` (ekosuz giriş) · hızlı eklemede
   ayrık `note sync --background` (komut ağ beklemez) · SPEC-cli kabul 8.
 - **Doğrulama:** `B && T(sync) && T(cli)` · **Bağımlılık:** T26 · **Dosyalar:** `src/sync/{auto_sync.hpp,auto_sync.cpp}`,
-  `src/core/process.cpp` (ayrık başlatma), `src/cli/commands.cpp`, `tests/cli/cli_sync_test.cpp` · **Boyut:** M
+  `src/core/process.cpp` (ayrık başlatma), `src/cli/{commands.cpp,sync_commands.cpp}`, `tests/cli/cli_sync_test.cpp`,
+  `tests/sync/{auto_sync_test.cpp,recovery_test.cpp}` · **Boyut:** M
+- **Not (T27):** SPEC-cli kabul 8'in gerçek kasa kısmı `doctest::skip()` (elle koşuldu, geçti); otomatik testler
+  stdin/boş token/host yolunu sınar. Kararlar: SPEC-sync karar 9.
 
 ### T28: TUI senkron entegrasyonu
 - [ ] **Kabul:** açılışta/kayıtta/çıkışta `AutoSync` · durum çubuğu (kapalı/✓/⟳/⚠) · Ctrl-S · ayarlarda token alanı

@@ -86,10 +86,11 @@ std::expected<SyncLock, core::Error> SyncLock::acquire(const fs::path& file,
         "{}\n{:%FT%TZ}\n{:08x}\n", current_pid(),
         std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()), std::random_device{}());
     // İkinci tur yalnız bayat kilit silindikten sonra; yine varsa başkası araya girmiştir.
+    bool took_over = false;
     for (int attempt = 0; attempt < 2; ++attempt) {
         const core::FileWriteResult written = core::write_new_file(file, content);
         if (!written.already_exists && !written.ec)
-            return SyncLock(file, content);
+            return SyncLock(file, content, took_over);
         if (!written.already_exists) {
             fs::remove(file, ec);  // yarım yazılmış kendi dosyamız
             return std::unexpected(io_error(file, written.ec));
@@ -110,12 +111,13 @@ std::expected<SyncLock, core::Error> SyncLock::acquire(const fs::path& file,
         // pencere milisaniyeler, libgit2'nin kendi index/ref kilitleri ikinci yazanı yine durdurur.
         core::log_warn("sync: stale lock taken over (pid " + std::to_string(pid) + ")");
         fs::remove(file, ec);
+        took_over = true;
     }
     return std::unexpected(core::Error{core::Error::Code::Io, "sync.busy", {{"pid", "0"}}});
 }
 
 SyncLock::SyncLock(SyncLock&& other) noexcept
-    : file_(std::move(other.file_)), content_(std::move(other.content_)) {
+    : file_(std::move(other.file_)), content_(std::move(other.content_)), took_over_(other.took_over_) {
     other.file_.clear();
 }
 

@@ -71,6 +71,7 @@ TEST_CASE("parse_config with empty input yields the embedded defaults") {
     CHECK(c.tuning.exit_timeout_seconds == 10);
     CHECK(c.tuning.log_max_bytes == 1048576);
     CHECK(c.tuning.sync_stale_lock_minutes == 10);
+    CHECK(c.tuning.sync_timeout_seconds == 120);
 }
 
 TEST_CASE("parse_config applies user overrides") {
@@ -142,6 +143,7 @@ TEST_CASE("parse_config falls back to the default and warns on each invalid valu
         {"[tuning]\nmin_confidence = 1.5", "tuning.min_confidence"},
         {"[tuning]\nautosave_ms = -1", "tuning.autosave_ms"},
         {"[tuning]\nsync_stale_lock_minutes = 0", "tuning.sync_stale_lock_minutes"},
+        {"[tuning]\nsync_timeout_seconds = 0", "tuning.sync_timeout_seconds"},
     };
     for (const Case& tc : cases) {
         CAPTURE(tc.toml);

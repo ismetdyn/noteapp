@@ -224,7 +224,7 @@ help_edit = "note edit SORGU   En iyi eşleşmeyi editörde açar"
 help_rm = "note rm YOL [-y]   Notu siler (yalnız tam yol); onay ister, terminal dışında -y gerekir"
 help_mv = "note mv KAYNAK HEDEF   Notu taşır veya yeniden adlandırır; uzantı değişimi tip değişimidir; klasörler oluşur"
 help_export = "note export --pdf YOL [-o ÇIKTI]   Notu PDF olarak dışa aktarır"
-help_sync = "note sync [status | on | off | init REMOTE | login [HOST] | logout [HOST]]   Senkronu yönetir"
+help_sync = "note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]   Hemen senkronlar ya da senkronu yönetir; login erişim token'ını stdin'den ekosuz okuyup sistem anahtar kasasına yazar"
 help_config = "note config path | list | get ANAHTAR | set ANAHTAR DEĞER   Ayarları yönetir (types virgülle ayrılmış liste alır)"
 help = """
 Kullanım:
@@ -239,8 +239,8 @@ Kullanım:
   note rm YOL [-y]                                          Notu siler (yalnız tam yol)
   note mv KAYNAK HEDEF                                      Notu taşır veya yeniden adlandırır
   note export --pdf YOL [-o ÇIKTI]                          Notu PDF olarak dışa aktarır
-  note sync [status | on | off | init REMOTE | login [HOST] | logout [HOST]]
-                                                            Senkronu yönetir
+  note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]
+                                                            Hemen senkronlar ya da senkronu yönetir
   note config path | list | get ANAHTAR | set ANAHTAR DEĞER Ayarları yönetir
   note --help | help KOMUT | --version                      Yardımı veya sürümü gösterir
 
@@ -248,6 +248,29 @@ Komut adıyla aynı metni not etmek için: 'note -- ls'.
 
 Çıkış kodları: 0 başarı, 1 kullanıcı kaynaklı, 2 kullanım hatası, 3 G/Ç veya iç hata, 4 senkron hatası.
 """
+sync_usage = "Kullanım: note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]"
+sync_done = "Senkron tamam: {committed} commit'lendi, {pulled} çekildi, {pushed}, {conflicts} çakışma kopyası"
+sync_pushed = "gönderildi"
+sync_not_pushed = "gönderilecek bir şey yok"
+sync_conflict_copy = "Çakışma: uzak sürüm {path} olarak saklandı"
+sync_status_on = "Senkron: açık"
+sync_status_off = "Senkron: kapalı"
+sync_status_remote = "Uzak depo: {remote}"
+sync_status_no_remote = "Uzak depo: ayarlanmamış ('note sync init REMOTE' kullanın)"
+sync_status_last_success = "Son başarılı senkron: {time}"
+sync_status_never = "Son başarılı senkron: hiç"
+sync_status_last_error = "Son hata: {error}"
+sync_turned_on = "Senkron açık"
+sync_turned_off = "Senkron kapalı; depo ve geçmişi olduğu gibi kalır"
+sync_needs_init = "Uzak depo ayarlanmamış; önce 'note sync init REMOTE' çalıştırın"
+sync_init_done = "Senkron {remote} ile kuruldu ve açıldı"
+sync_replace_hint = "Değiştirmek için: note sync init {remote} --replace"
+sync_confirm_replace = "origin '{remote}' ile değiştirilsin mi? [e/H] "
+sync_not_replaced = "Hiçbir şey değiştirilmedi."
+sync_login_no_host = "Host verilmedi ve uzak depo ayarlanmamış: 'note sync login HOST' kullanın"
+sync_token_prompt = "{host} için erişim token'ı (yazılanlar görünmez): "
+sync_login_done = "{host} token'ı sistem anahtar kasasına kaydedildi"
+sync_logout_done = "{host} token'ı silindi"
 
 [sync]
 commit_message = "{host} cihazından senkron, {time} (değişen dosya: {count})"
@@ -269,3 +292,4 @@ token_missing = "{host} için erişim token'ı yok: ayarlardan kaydedin ya da NO
 ssh_host_unknown = "{host} sunucusunun SSH host anahtarı henüz tanınmıyor; onaylamak için bir terminalde bir kez 'ssh -T git@{host}' çalıştırın, ardından yeniden senkronlayın"
 ssh_unavailable = "SSH kullanılamıyor: 'ssh-keygen' bulunamadı. OpenSSH'ı kurun ya da erişim token'lı bir HTTPS adresi kullanın"
 keychain_unavailable = "Sistem anahtar kasası kullanılamıyor ({detail}); token hiçbir zaman düz dosyaya yazılmaz. Bunun yerine NOTEAPP_GIT_TOKEN ortam değişkenini tanımlayın"
+timeout = "Senkron {seconds} saniye içinde bitmedi ve durduruldu; bir sonraki senkronda yeniden denenecek"

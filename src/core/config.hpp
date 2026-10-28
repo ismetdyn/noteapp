@@ -35,6 +35,7 @@ struct Tuning {
     int exit_timeout_seconds;
     std::uintmax_t log_max_bytes;  // log.txt bu boyutu aşınca log.1.txt'ye döner
     int sync_stale_lock_minutes;   // bundan eski senkron kilidi, sahibi yaşasa bile bayattır
+    int sync_timeout_seconds;      // AutoSync bir senkron sürecini bu kadar bekler, sonra sonlandırır
 
     bool operator==(const Tuning&) const = default;
 };

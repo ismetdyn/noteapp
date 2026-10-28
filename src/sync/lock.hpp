@@ -25,11 +25,16 @@ public:
     SyncLock& operator=(const SyncLock&) = delete;
     ~SyncLock();
 
+    // Bayat bir kilit devralındı: önceki sahip yarıda kalmış (öldürülmüş/çökmüş/asılı) olabilir; çağıran
+    // onun artıklarını (libgit2 kilitleri, yarım merge) temizler.
+    bool took_over() const { return took_over_; }
+
 private:
-    SyncLock(std::filesystem::path file, std::string content)
-        : file_(std::move(file)), content_(std::move(content)) {}
+    SyncLock(std::filesystem::path file, std::string content, bool took_over)
+        : file_(std::move(file)), content_(std::move(content)), took_over_(took_over) {}
     std::filesystem::path file_;  // boş: taşınmış, bırakılacak kilit yok
     std::string content_;         // dosya hâlâ bunu içeriyorsa kilit bizimdir
+    bool took_over_ = false;
 };
 
 }  // namespace noteapp::sync

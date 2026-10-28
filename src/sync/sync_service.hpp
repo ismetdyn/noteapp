@@ -72,6 +72,10 @@ public:
     // state_dir()/sync-status.toml; dosya yoksa ya da bozuksa boş durum.
     SyncStatus status() const;
 
+    // Senkron sürecinin kendisi yazamadığı hatayı durum dosyasına (ve loga) yazar: AutoSync'in sonlandırdığı
+    // süreç ("sync.timeout") ya da hiç başlatılamayan `note`. Önceki başarı zamanı korunur.
+    void record_failure(const core::Error& error) const;
+
 private:
     std::expected<SyncResult, core::Error> run_cycle(const std::function<void()>& before_push);
     void record(const std::expected<SyncResult, core::Error>& outcome) const;

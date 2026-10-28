@@ -182,6 +182,8 @@ void apply_tuning(Section& s, Tuning& tuning) {
         tuning.log_max_bytes = static_cast<std::uintmax_t>(*v);
     if (auto v = s.positive_integer("sync_stale_lock_minutes", INT_MAX))
         tuning.sync_stale_lock_minutes = static_cast<int>(*v);
+    if (auto v = s.positive_integer("sync_timeout_seconds", INT_MAX))
+        tuning.sync_timeout_seconds = static_cast<int>(*v);
     s.warn_unknown();
 }
 

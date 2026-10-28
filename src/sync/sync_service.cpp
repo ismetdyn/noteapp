@@ -578,14 +578,46 @@ std::expected<void, core::Error> ensure_gitignore(const fs::path& notes_dir) {
     return core::write_file_atomically(file, text + missing);
 }
 
-// Elle yazılmış origin'de kimlik olabilir: hata argümanına (oradan log/durum dosyasına) kullanıcı bilgisi
-// girmez.
-std::string without_userinfo(std::string url) {
-    const RemoteEndpoint endpoint = parse_remote(url);
-    if (endpoint.auth == Auth::Ssh || endpoint.userinfo.empty())
-        return url;
-    // ssh dışında kullanıcı bilgisi yalnız "://"den hemen sonra gelir (scp biçimi hep ssh'tır).
-    return url.erase(url.find("://") + 3, endpoint.userinfo.size() + 1);
+// Bayat kilit devralındı: önceki senkron yarıda öldürülmüş olabilir (AutoSync zaman aşımı, çökme; SPEC-sync
+// karar 3). Kilit artık bizde ve notlar reposuna noteapp'ten yazan başka süreç yok: libgit2'nin bıraktığı
+// `*.lock` dosyaları ölü sürecindir, kalırsa her senkron "index is locked" ile düşer. Yarım merge yalnız
+// index'te çakışma yoksa kapatılır (çözümler sahnelenmiş, sonraki commit içeriği korur); çakışma varsa
+// dokunulmaz, döngü "sync.repo_busy_state" verir — hiçbir içerik atılmaz.
+// ponytail: o an elle çalışan bir git komutunun kilidi de silinebilir (pencere milisaniyeler; git ikinci
+// yazanı yine durdurur).
+void recover_interrupted_sync(const fs::path& notes_dir) {
+    const fs::path git_dir = notes_dir / ".git";
+    std::vector<fs::path> locks;
+    std::error_code ec;
+    for (fs::directory_iterator it(git_dir, ec), end; !ec && it != end; it.increment(ec))
+        if (it->path().extension() == ".lock")
+            locks.push_back(it->path());
+    for (fs::recursive_directory_iterator it(git_dir / "refs", ec), end; !ec && it != end; it.increment(ec))
+        if (it->path().extension() == ".lock")
+            locks.push_back(it->path());
+    for (const fs::path& lock : locks) {
+        if (fs::remove(lock, ec))
+            core::log_warn("sync: removed lock left by an interrupted sync: " + utf8(lock));
+        else if (ec)
+            core::log_error("sync: cannot remove " + utf8(lock) + ": " + ec.message());
+    }
+
+    git_repository* raw = nullptr;
+    if (git_repository_open(&raw, utf8(notes_dir).c_str()) < 0)
+        return;  // depo yok ya da açılamıyor: döngü kendisi raporlar
+    const Repository repo(raw);
+    if (git_repository_state(repo.get()) != GIT_REPOSITORY_STATE_MERGE)
+        return;
+    git_index* index_raw = nullptr;
+    if (git_repository_index(&index_raw, repo.get()) < 0)
+        return;
+    const Index index(index_raw);
+    if (git_index_has_conflicts(index.get())) {
+        core::log_warn("sync: an interrupted merge still has conflicts; left for the user");
+        return;
+    }
+    if (git_repository_state_cleanup(repo.get()) == 0)
+        core::log_warn("sync: closed a merge left by an interrupted sync");
 }
 
 // libgit2 nesne dosyalarını salt-okunur yazar; Windows salt-okunur dosyayı silmez.
@@ -765,6 +797,8 @@ std::expected<void, core::Error> SyncService::enable(std::string_view remote, bo
         SyncLock::acquire(lock_file(), std::chrono::minutes(config_.tuning.sync_stale_lock_minutes));
     if (!lock)
         return std::unexpected(lock.error());
+    if (lock->took_over())
+        recover_interrupted_sync(config_.notes_dir);
     auto outcome = enable_locked(config_, remote, replace_origin);
     if (outcome)
         core::log_info("sync: enabled with origin " + std::string(remote));  // doğrulandı: kimlik içermez
@@ -782,9 +816,17 @@ std::expected<SyncResult, core::Error> SyncService::sync_now(const std::function
         log("sync: " + core::format_error(lock.error()));
         return std::unexpected(lock.error());
     }
+    if (lock->took_over())
+        recover_interrupted_sync(config_.notes_dir);
     auto outcome = run_cycle(before_push);
     record(outcome);
     return outcome;
+}
+
+void SyncService::record_failure(const core::Error& error) const {
+    std::error_code ec;
+    fs::create_directories(core::state_dir(), ec);  // senkron süreci hiç başlayamadıysa dizin yoktur
+    record(std::unexpected(error));
 }
 
 std::expected<SyncResult, core::Error> SyncService::run_cycle(const std::function<void()>& before_push) {

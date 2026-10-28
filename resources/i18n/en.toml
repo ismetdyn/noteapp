@@ -224,7 +224,7 @@ help_edit = "note edit QUERY   Open the best match in your editor"
 help_rm = "note rm PATH [-y]   Delete a note (exact path only); asks for confirmation, -y is required outside a terminal"
 help_mv = "note mv SOURCE TARGET   Move or rename a note; a changed extension changes the type; folders are created"
 help_export = "note export --pdf PATH [-o OUTPUT]   Export a note as PDF"
-help_sync = "note sync [status | on | off | init REMOTE | login [HOST] | logout [HOST]]   Manage synchronization"
+help_sync = "note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]   Sync now, or manage synchronization; login reads the access token from stdin without echo and saves it in the system keychain"
 help_config = "note config path | list | get KEY | set KEY VALUE   Manage the configuration (types takes a comma-separated list)"
 help = """
 Usage:
@@ -239,8 +239,8 @@ Usage:
   note rm PATH [-y]                                           Delete a note (exact path only)
   note mv SOURCE TARGET                                       Move or rename a note
   note export --pdf PATH [-o OUTPUT]                          Export a note as PDF
-  note sync [status | on | off | init REMOTE | login [HOST] | logout [HOST]]
-                                                              Manage synchronization
+  note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]
+                                                              Sync now, or manage synchronization
   note config path | list | get KEY | set KEY VALUE           Manage the configuration
   note --help | help COMMAND | --version                      Show help or the version
 
@@ -248,6 +248,29 @@ Use 'note -- ls' to add a note whose text is a command name.
 
 Exit codes: 0 ok, 1 user error, 2 usage error, 3 I/O or internal error, 4 sync error.
 """
+sync_usage = "Usage: note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]"
+sync_done = "Sync done: {committed} committed, {pulled} pulled, {pushed}, {conflicts} conflict copies"
+sync_pushed = "pushed"
+sync_not_pushed = "nothing to push"
+sync_conflict_copy = "Conflict: the remote version was kept as {path}"
+sync_status_on = "Sync: on"
+sync_status_off = "Sync: off"
+sync_status_remote = "Remote: {remote}"
+sync_status_no_remote = "Remote: not set (use 'note sync init REMOTE')"
+sync_status_last_success = "Last successful sync: {time}"
+sync_status_never = "Last successful sync: never"
+sync_status_last_error = "Last error: {error}"
+sync_turned_on = "Sync is on"
+sync_turned_off = "Sync is off; the repository and its history stay as they are"
+sync_needs_init = "No remote is set; run 'note sync init REMOTE' first"
+sync_init_done = "Sync is set up with {remote} and turned on"
+sync_replace_hint = "To replace it, run: note sync init {remote} --replace"
+sync_confirm_replace = "Replace the origin with '{remote}'? [y/N] "
+sync_not_replaced = "Nothing was changed."
+sync_login_no_host = "No host given and no remote set: use 'note sync login HOST'"
+sync_token_prompt = "Access token for {host} (input is hidden): "
+sync_login_done = "The token for {host} was saved in the system keychain"
+sync_logout_done = "The token for {host} was removed"
 
 [sync]
 commit_message = "Sync from {host} at {time} (changed files: {count})"
@@ -269,3 +292,4 @@ token_missing = "No access token for {host}: save one in the settings or set NOT
 ssh_host_unknown = "The SSH host key of {host} is not known yet; run 'ssh -T git@{host}' once in a terminal to confirm it, then sync again"
 ssh_unavailable = "SSH is not available: 'ssh-keygen' was not found. Install OpenSSH or use an HTTPS remote with an access token"
 keychain_unavailable = "The system keychain is not available ({detail}); the token is never stored in a plain file. Set NOTEAPP_GIT_TOKEN instead"
+timeout = "The sync did not finish within {seconds} seconds and was stopped; it will be retried on the next sync"

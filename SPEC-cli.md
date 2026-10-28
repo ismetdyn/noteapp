@@ -21,7 +21,7 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `note rm YOL [-y]` | **Yalnız tam yol**; onay ister (TTY değilse `-y` zorunlu) |
 | `note mv KAYNAK HEDEF` | Taşı/yeniden adlandır; uzantı değişimi = tip değişimi; klasörler oluşur |
 | `note export --pdf YOL [-o ÇIKTI]` | PDF dışa aktar (aşağıda) |
-| `note sync` · `sync status` · `sync on\|off` · `sync init REMOTE` | Senkron yönetimi |
+| `note sync` · `sync status` · `sync on\|off` · `sync init REMOTE [--replace]` | Senkron yönetimi (aşağıda) |
 | `note sync login [HOST]` · `sync logout [HOST]` | Token'ı ekosuz stdin'den okuyup kasaya yazar / siler |
 | `note config path\|list\|get ANAHTAR\|set ANAHTAR DEĞER` | Config yönetimi |
 | `note --help` · `note help KOMUT` · `note --version` | Yardım (i18n) |
@@ -41,6 +41,23 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 - Çıktı tek satır: `Kaydedildi: work/plan.md (md, önerilen)` / `(java, seçilen)`.
 - **Senkron:** `sync.enabled` ve `--no-sync` yoksa, yazmadan sonra ayrık arka plan süreci
   `note sync --background` başlatılır (çıktısı yok, sonucu log + sync-status'a). Komut ağ beklemez.
+  `rm`, `mv` ve `edit` (dosya değiştiyse) de aynısını yapar; `--no-sync` bunlarda her konumda kabul edilir.
+
+## Senkron komutları (T27; ayrıntı SPEC-sync karar 9)
+
+- `note sync`: ön planda, süreç içinde tek döngü; özet satırı + her çakışma kopyasının yolu. Hata (`sync.busy`
+  dahil) → çıkış 4.
+- `note sync status`: açık/kapalı, `sync.remote` (ssh dışında kullanıcı bilgisi çıkarılmış), son başarı (yerel
+  saat) ve son hata (`sync-status.toml`).
+- `note sync on|off`: `sync.enabled`'ı yazar (bozuk config'te `config set` gibi reddeder, çıkış 1). `on`, remote
+  yoksa `sync init` yönlendirmesiyle çıkış 1; varsa önce `enable(remote)` (kurulu depoda no-op).
+- `note sync init REMOTE [--replace]`: `enable`; başarıda `sync.remote` + `sync.enabled = true` kaydedilir.
+  Farklı origin (`sync.remote_mismatch`): TTY'de yerelleştirilmiş evet harfiyle onay, değilse çıkış 1 +
+  `--replace` yönlendirmesi; `--replace` sormadan değiştirir.
+- `note sync login [HOST]` / `logout [HOST]`: HOST yoksa `sync.remote`'un host'u, o da yoksa çıkış 2. Token
+  TTY'de ekosuz (Windows `ENABLE_ECHO_INPUT`, POSIX `ECHO` kapalı; Ctrl-C dahil her çıkışta geri yüklenir), boruda
+  ilk satırdan okunur; hiçbir yere yazdırılmaz.
+- `note sync --background`: iç kullanım (yukarıdaki ayrık süreç ve TUI/GUI `AutoSync`).
 
 ## PDF dışa aktarma
 

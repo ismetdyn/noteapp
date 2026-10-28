@@ -27,6 +27,10 @@ struct RemoteEndpoint {
 // file://, http:// (token düz metin gitmesin) ve diğerleri → None.
 RemoteEndpoint parse_remote(std::string_view url);
 
+// Elle yazılmış adreste kimlik olabilir: gösterilen/loglanan adresten (ssh dışında) "kullanıcı[:parola]@"
+// çıkarılır. ssh'ta kullanıcı adı (git@) sır değildir, olduğu gibi kalır.
+std::string without_userinfo(std::string url);
+
 // Remote adresi sınırda bir kez doğrulanır: ssh dışında URL'ye gömülü kullanıcı bilgisi (token sızıntısı)
 // "sync.remote_has_credentials" — adres hata argümanına bile girmez; boş adres, boş/'-' ile başlayan host
 // (ssh'a seçenek enjeksiyonu) ya da var olmayan yerel klasör "sync.remote_invalid" {remote}.

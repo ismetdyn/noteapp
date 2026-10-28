@@ -75,6 +75,14 @@ RemoteEndpoint parse_remote(std::string_view url) {
     return endpoint;
 }
 
+std::string without_userinfo(std::string url) {
+    const RemoteEndpoint endpoint = parse_remote(url);
+    if (endpoint.auth == Auth::Ssh || endpoint.userinfo.empty())
+        return url;
+    // ssh dışında kullanıcı bilgisi yalnız "://"den hemen sonra gelir (scp biçimi hep ssh'tır).
+    return url.erase(url.find("://") + 3, endpoint.userinfo.size() + 1);
+}
+
 std::expected<RemoteEndpoint, core::Error> validate_remote(std::string_view url) {
     const RemoteEndpoint endpoint = parse_remote(url);
     // Önce bu: adres, içindeki kimlikle birlikte hata argümanına (oradan log/durum dosyasına) girmesin.
@@ -147,10 +155,9 @@ std::expected<void, core::Error> check_ssh_host_known(const RemoteEndpoint& endp
     const std::string name = endpoint.port.empty() || endpoint.port == "22"
                                  ? endpoint.host
                                  : std::format("[{}]:{}", endpoint.host, endpoint.port);
-    // ponytail: ssh-keygen bulduğu satırı (açık host anahtarı, sır değil) stdout'a yazar ve run_and_wait
-    // çıktıyı devreder; ~/.ssh/config takma adları (Host … HostName) da görülmez. Sessiz çalıştırma gerekirse
-    // core'a çıktı yönlendirmesi eklenince.
-    const auto exit_code = core::run_and_wait({"ssh-keygen", "-F", name});
+    // ssh-keygen bulduğu satırı (açık host anahtarı) stdout'a yazar: TUI ekranını bozmasın diye çıktı atılır.
+    // ponytail: ~/.ssh/config takma adları (Host … HostName) görülmez.
+    const auto exit_code = core::run_and_wait({"ssh-keygen", "-F", name}, {}, true);
     if (!exit_code) {
         if (exit_code.error().message_key == "error.process_not_found")
             return std::unexpected(sync_error("sync.ssh_unavailable"));

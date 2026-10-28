@@ -46,6 +46,8 @@ bool is_console(DWORD std_handle) {
 }
 #endif
 
+}  // namespace
+
 bool stdin_is_tty() {
 #ifdef _WIN32
     return is_console(STD_INPUT_HANDLE);
@@ -53,6 +55,8 @@ bool stdin_is_tty() {
     return isatty(STDIN_FILENO) != 0;
 #endif
 }
+
+namespace {
 
 bool stdout_is_tty() {
 #ifdef _WIN32
@@ -130,12 +134,24 @@ std::optional<core::Error> save_note(const ParsedArgs& args, const core::Config&
     if (!created)
         return created.error();
 
-    // --no-sync: T27'de arka plan senkronu bağlanınca anlam kazanır; şimdilik kabul edilir, etkisizdir.
     std::cout << core::tr("cli.saved", {{"path", created->string()},
                                         {"type", type},
                                         {"how", core::tr(chosen ? "cli.how_chosen" : "cli.how_detected")}})
               << '\n';
+    start_background_sync(config, args.no_sync);
     return std::nullopt;
+}
+
+// Değiştiren komutlar (rm/mv/edit) `--no-sync`'i her konumda kabul eder; kalan argümanlar döner.
+std::vector<std::string> take_no_sync(const std::vector<std::string>& rest, bool& no_sync) {
+    std::vector<std::string> kept;
+    for (const std::string& arg : rest) {
+        if (arg == "--no-sync")
+            no_sync = true;
+        else
+            kept.push_back(arg);
+    }
+    return kept;
 }
 
 // Editör akışı (SPEC-cli "Hızlı ekleme kuralları"): geçici dosya yalnız veri kaybı riski yoksa silinir.
@@ -261,6 +277,17 @@ bool is_token_key(std::string_view key) {
 
 }  // namespace
 
+std::optional<core::Config> load_config_for_update() {
+    core::LoadedConfig fresh = core::load_config();
+    for (const core::Error& warning : fresh.warnings) {
+        if (warning.message_key == "config.syntax_error" || warning.message_key == "config.unreadable") {
+            std::cerr << core::format_error(warning) << '\n' << core::tr("cli.config_not_saved") << '\n';
+            return std::nullopt;
+        }
+    }
+    return std::move(fresh.config);
+}
+
 int run_config(const ParsedArgs& args, const core::Config& config) {
     const std::vector<std::string>& rest = args.rest;
     const std::string verb = rest.empty() ? "" : rest.front();
@@ -292,23 +319,17 @@ int run_config(const ParsedArgs& args, const core::Config& config) {
             return kExitOk;
         }
 
-        // Bozuk (sözdizimi hatalı) dosya varsayılanlarla okunur; üzerine yazmak elle yazılmış ayarları yok
-        // ederdi. Bu yüzden kaydetmeden önce dosyanın gerçekten okunabildiği doğrulanır.
-        core::LoadedConfig fresh = core::load_config();
-        for (const core::Error& warning : fresh.warnings) {
-            if (warning.message_key == "config.syntax_error" || warning.message_key == "config.unreadable") {
-                std::cerr << core::format_error(warning) << '\n' << core::tr("cli.config_not_saved") << '\n';
-                return kExitUser;
-            }
-        }
-        if (const auto set = core::set_config_value(fresh.config, key, rest[2]); !set) {
+        std::optional<core::Config> fresh = load_config_for_update();
+        if (!fresh)
+            return kExitUser;
+        if (const auto set = core::set_config_value(*fresh, key, rest[2]); !set) {
             std::cerr << core::format_error(set.error()) << '\n' << core::tr("cli.config_not_saved") << '\n';
             return kExitUsage;
         }
-        if (const auto saved = core::save_config(fresh.config); !saved)
+        if (const auto saved = core::save_config(*fresh); !saved)
             return fail(saved.error());
         // Normalleşmiş değeri yazdır (ör. "md, py ,rs" → "md, py, rs"): kaydedilen budur.
-        for (const auto& [saved_key, saved_value] : core::config_entries(fresh.config))
+        for (const auto& [saved_key, saved_value] : core::config_entries(*fresh))
             if (saved_key == key)
                 std::cout << saved_key << " = " << saved_value << '\n';
         return kExitOk;
@@ -324,8 +345,9 @@ int run_version() {
 
 int run_rm(const ParsedArgs& args, const core::Config& config) {
     bool yes = false;
+    bool no_sync = false;
     std::vector<std::string> paths;
-    for (const std::string& arg : args.rest) {
+    for (const std::string& arg : take_no_sync(args.rest, no_sync)) {
         if (arg == "-y") {
             yes = true;
         } else if (arg.size() > 1 && arg[0] == '-') {
@@ -363,24 +385,27 @@ int run_rm(const ParsedArgs& args, const core::Config& config) {
     if (const auto removed = store.remove(*path); !removed)
         return fail(removed.error());
     std::cout << core::tr("cli.removed", {{"path", path->string()}}) << '\n';
+    start_background_sync(config, no_sync);
     return kExitOk;
 }
 
 int run_mv(const ParsedArgs& args, const core::Config& config) {
-    for (const std::string& arg : args.rest) {
+    bool no_sync = false;
+    const std::vector<std::string> rest = take_no_sync(args.rest, no_sync);
+    for (const std::string& arg : rest) {
         if (arg.size() > 1 && arg[0] == '-') {
             std::cerr << core::tr("cli.unknown_option", {{"option", arg}}) << '\n';
             return kExitUsage;
         }
     }
-    if (args.rest.size() != 2) {
+    if (rest.size() != 2) {
         std::cerr << core::tr("cli.mv_usage") << '\n';
         return kExitUsage;
     }
-    const auto from = core::NotePath::parse(args.rest[0]);
+    const auto from = core::NotePath::parse(rest[0]);
     if (!from)
         return fail(from.error());
-    const auto to = core::NotePath::parse(args.rest[1]);
+    const auto to = core::NotePath::parse(rest[1]);
     if (!to)
         return fail(to.error());
 
@@ -388,6 +413,7 @@ int run_mv(const ParsedArgs& args, const core::Config& config) {
     if (const auto moved = store.move(*from, *to); !moved)
         return fail(moved.error());
     std::cout << core::tr("cli.moved", {{"from", from->string()}, {"to", to->string()}}) << '\n';
+    start_background_sync(config, no_sync);
     return kExitOk;
 }
 
@@ -441,7 +467,8 @@ int run_show(const ParsedArgs& args, const core::Config& config) {
 }
 
 int run_edit(const ParsedArgs& args, const core::Config& config) {
-    const auto parsed = parse_browse_args(args.rest, false);
+    bool no_sync = false;
+    const auto parsed = parse_browse_args(take_no_sync(args.rest, no_sync), false);
     if (!parsed)
         return parsed.error();
     if (parsed->positional.size() != 1) {
@@ -452,8 +479,14 @@ int run_edit(const ParsedArgs& args, const core::Config& config) {
     const auto note = pick_best_note(store, parsed->positional.front());
     if (!note)
         return note.error();
-    if (const auto edited = core::run_editor(config, config.notes_dir / note->path.value()); !edited)
+    const fs::path file = config.notes_dir / note->path.value();
+    std::error_code ec;
+    const auto before = fs::last_write_time(file, ec);
+    if (const auto edited = core::run_editor(config, file); !edited)
         return fail(edited.error());
+    // Kaydetmeden kapatılan editör için ağa çıkılmaz.
+    if (const auto after = fs::last_write_time(file, ec); ec || after != before)
+        start_background_sync(config, no_sync);
     return kExitOk;
 }
 
@@ -529,6 +562,8 @@ int run_reserved(const ParsedArgs& args, const core::Config& config) {
         return run_show(args, config);
     if (args.command == "edit")
         return run_edit(args, config);
+    if (args.command == "sync")
+        return run_sync(args, config);
     std::cerr << core::tr("cli.not_implemented", {{"command", args.command}}) << '\n';
     return kExitUsage;
 }

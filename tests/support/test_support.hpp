@@ -86,8 +86,12 @@ public:
     }
 
     ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path_, ec);
+        // Senkron testlerinde libgit2 nesne dosyalarını salt-okunur yazar; Windows salt-okunur dosyayı
+        // silmez.
+        std::error_code ec, ignored;
+        for (fs::recursive_directory_iterator it(path_, ec), end; !ec && it != end; it.increment(ec))
+            fs::permissions(it->path(), fs::perms::owner_write, fs::perm_options::add, ignored);
+        fs::remove_all(path_, ignored);
     }
     TempDir(const TempDir&) = delete;
     TempDir& operator=(const TempDir&) = delete;

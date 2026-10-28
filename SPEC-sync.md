@@ -32,13 +32,15 @@ public:
     SyncStatus status() const;                                          // <durum>/sync-status.toml
 };
 
-class AutoSync {                                        // tui/gui için arka plan iş parçacığı
+std::filesystem::path note_executable_beside_self();    // ön yüzün yanındaki `note` (auto_sync.hpp)
+class AutoSync {                                        // tui/gui için arka plan iş parçacığı (T27, karar 9)
 public:
-    AutoSync(SyncService&, std::chrono::seconds idle, std::function<void(const SyncStatus&)> on_status);
+    using StatusCallback = std::function<void(const SyncStatus&, bool running)>;  // işçi iş parçacığından
+    AutoSync(const core::Config&, std::filesystem::path note_exe, StatusCallback on_status);
     void start();                                       // açılışta bir sync
     void notify_changed();                              // idle süre dolunca sync (debounce)
     void request_now();
-    void stop(std::chrono::seconds timeout);            // çıkışta son sync, süre aşılırsa bırakır
+    void stop(std::chrono::seconds timeout);            // çıkışta son sync, süre aşılırsa sonlandırır
 };
 
 std::expected<void, core::Error> store_token(std::string_view host, std::string_view token);
@@ -169,6 +171,34 @@ açmak `enable`'ı çağırır (repo varsa no-op).
    - `replace_origin`: origin silinip yeniden oluşturulur; eski `origin/*` takip dalları da gider (yoksa boş yeni
      remote'a push "güncel" sanılıp yapılmazdı). `remote_mismatch`'teki `current` adresinden kimlik ayıklanır.
    - Var olan `.gitignore`'a yalnız eksik satırlar eklenir (CRLF korunur); okunamıyorsa üzerine yazılmaz.
+9. **Arka plan senkronu ve AutoSync (T27):**
+   - `note sync --background` = ayrık süreç (`core::spawn_detached`: stdio boş aygıt, yalnız NUL tutamacı
+     devredilir; Windows `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`, POSIX `setsid`).
+     Hiç çıktı yazmaz; sonuç log + `sync-status.toml`, çıkış 0/4. `sync.enabled` kapalıysa hiçbir şey yapmaz.
+     `sync.busy`'de 500 ms aralıkla `tuning.sync_timeout_seconds`'a kadar yeniden dener: ayrık sürecin "sonra
+     deneyen" çağıranı yok, yoksa arka arkaya iki hızlı eklemenin ikincisi senkronlanmadan kalırdı.
+   - CLI'de notu değiştiren her komut (hızlı ekleme/editör akışı, `rm`, `mv`, `edit` — mtime değiştiyse)
+     `sync.enabled` ve `--no-sync` yokken `note sync --background`'u başlatır, beklemez. Kendi yolu
+     `core::current_executable()` (Windows `GetModuleFileNameW`, Linux `/proc/self/exe`; diğerlerinde PATH'teki
+     `note`). Ön plandaki `note sync` ise süreç içinde koşar: kullanıcı başında, asılı ssh'ı Ctrl-C ile keser.
+   - `AutoSync(config, note_exe, on_status)`: tek işçi iş parçacığı; her senkron `note_exe sync --background`
+     ayrık sürecidir, 50 ms yoklamayla beklenir; `tuning.sync_timeout_seconds` (120) aşılırsa sonlandırılır ve
+     durum dosyasına `sync.timeout` {seconds} yazılır (`SyncService::record_failure`); `note` başlatılamazsa o
+     hata yazılır. Callback `(SyncStatus, running)`: başlarken `true` (önceki durum, ⟳), bitince `false` (yeni
+     durum); **işçi iş parçacığından** çağrılır, ön yüz kendi UI iş parçacığına aktarır. Debounce: her
+     `notify_changed` zamanı "son bildirim + idle"a iter, sıradaki "hemen" isteğini geciktirmez. `stop(t)`: yalnız
+     son senkron başladıktan sonra değişiklik varsa son bir senkron; toplam `t`'yi aşarsa süren süreç
+     sonlandırılır; yıkıcı = `stop(0)`. Sonlandırma yalnız doğrudan çocuğu öldürür (ssh torunu kalabilir;
+     gerekirse Windows'ta job object, POSIX'te süreç grubu).
+   - **Bayat kilit kurtarma:** `sync_now`/`enable` bayat `sync.lock`'u devraldıysa (`SyncLock::took_over`)
+     `.git/*.lock` ve `.git/refs/**/*.lock` **yaşına bakılmadan** silinir. Yalnız "bayat yaştan eski" libgit2
+     kilitleri silinseydi zaman aşımıyla öldürülen sürecin saniyelik `index.lock`'u hiç temizlenmezdi: sonraki
+     senkron artık kilit devralmaz, her senkron "index is locked" ile düşerdi. Kilit bizde, noteapp'ten yazan
+     başka süreç yok; o an elle çalışan bir git komutunun kilidi silinebilir (milisaniyelik pencere, bilinen
+     sınır). Depo MERGE durumundaysa ve index'te çakışma yoksa `git_repository_state_cleanup` (çözülmüş içerik
+     sonraki commit'e girer, kayıp yok); çakışma varsa dokunulmaz → `sync.repo_busy_state`. Kilit devralınmadıysa
+     hiçbir libgit2 kilidine ya da merge durumuna dokunulmaz (elle başlatılmış merge'ler korunur).
+   - `ssh-keygen -F` ön kontrolü çıktısı atılarak çalışır (`run_and_wait(…, discard_output = true)`).
 
 ## Kapsam dışı
 Rebase, seçmeli (dosya bazlı) senkron, GitHub dışı sağlayıcılara özel destek (genel git remote zaten çalışır),

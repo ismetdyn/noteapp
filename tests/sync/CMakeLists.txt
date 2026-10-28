@@ -4,7 +4,14 @@ noteapp_add_test(sync
     sync_basic_test.cpp
     sync_conflict_test.cpp
     enable_test.cpp
-    auth_test.cpp)
+    auth_test.cpp
+    recovery_test.cpp
+    auto_sync_test.cpp)
+
+# AutoSync testleri `note` yerine fake_editor'ı (uyuyan/çıkan çocuk) ve uçtan uca gerçek `note`'u başlatır.
+add_dependencies(sync_tests note fake_editor)
+target_compile_definitions(sync_tests PRIVATE NOTEAPP_NOTE_EXE="$<TARGET_FILE:note>"
+                                              NOTEAPP_FAKE_EDITOR="$<TARGET_FILE:fake_editor>")
 
 # SSH ön kontrolü testleri PATH'i sahte ssh-keygen'in dizinine çevirir: ikilinin adı gerçeğininki olmalı ve ayrı
 # dizinde durur. MinGW'de statik: PATH yalnız bu dizine indirildiğinde de çalışma zamanı DLL'i aranmasın.
