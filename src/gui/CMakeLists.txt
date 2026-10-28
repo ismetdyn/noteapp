@@ -3,9 +3,11 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Gui)
 
 # PDF dışa aktarma kütüphanede: hem başsız `--export-pdf` modu hem offscreen testler aynı kodu çağırır.
 add_library(noteapp_gui
-    pdf_export.cpp)
+    pdf_export.cpp
+    note_list_model.cpp
+    main_window.cpp)
 target_include_directories(noteapp_gui PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(noteapp_gui PUBLIC noteapp_core Qt6::Gui)
+target_link_libraries(noteapp_gui PUBLIC noteapp_core noteapp_search Qt6::Widgets Qt6::Gui)
 noteapp_target_defaults(noteapp_gui)
 
 add_executable(notes-gui WIN32

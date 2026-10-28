@@ -253,7 +253,7 @@
 ## Faz 5 — GUI
 
 ### T29: GUI iskeleti
-- [ ] **Kabul:** Notlar/Ayarlar sekmeleri · arama kutusu + fuzzy liste + klasör ağacı filtresi · not görüntüleme ·
+- [x] **Kabul:** Notlar/Ayarlar sekmeleri · arama kutusu + fuzzy liste + klasör ağacı filtresi · not görüntüleme ·
   Ctrl+K/↑↓/Enter · 5.000 notla tuş başına ≤ 50 ms · offscreen model testi.
 - **Doğrulama:** `B && T(gui)`, elle `notes-gui` · **Bağımlılık:** T16 · **Dosyalar:** `src/gui/{main.cpp,main_window.hpp,main_window.cpp,note_list_model.hpp,note_list_model.cpp}`,
   `tests/gui/note_list_test.cpp` · **Boyut:** M

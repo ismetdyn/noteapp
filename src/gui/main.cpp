@@ -1,13 +1,11 @@
 #include "core/config.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
+#include "gui/main_window.hpp"
 #include "gui/pdf_export.hpp"
 
 #include <QApplication>
-#include <QLabel>
-#include <QMainWindow>
 #include <QStringList>
-#include <QTabWidget>
 #include <cstdio>
 
 namespace {
@@ -43,14 +41,7 @@ int main(int argc, char* argv[]) {
         return run_pdf_export(args);
     }
 
-    const auto text = [](const char* key) { return QString::fromUtf8(noteapp::core::tr(key)); };
-    QMainWindow window;
-    auto* tabs = new QTabWidget(&window);
-    tabs->addTab(new QLabel(text("gui.notes_placeholder")), text("gui.tab_notes"));
-    tabs->addTab(new QLabel(text("gui.settings_placeholder")), text("gui.tab_settings"));
-    window.setCentralWidget(tabs);
-    window.setWindowTitle(QStringLiteral("noteapp"));
-    window.resize(900, 600);
+    noteapp::gui::MainWindow window(loaded.config);
     window.show();
     return QApplication::exec();
 }
