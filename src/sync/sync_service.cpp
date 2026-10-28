@@ -60,6 +60,7 @@ using Diff = std::unique_ptr<git_diff, GitFree<git_diff_free>>;
 using Signature = std::unique_ptr<git_signature, GitFree<git_signature_free>>;
 using GitConfig = std::unique_ptr<git_config, GitFree<git_config_free>>;
 using Blob = std::unique_ptr<git_blob, GitFree<git_blob_free>>;
+using Object = std::unique_ptr<git_object, GitFree<git_object_free>>;
 using ConflictIterator =
     std::unique_ptr<git_index_conflict_iterator, GitFree<git_index_conflict_iterator_free>>;
 
@@ -295,6 +296,12 @@ std::expected<void, core::Error> fetch(git_remote* remote, const std::string& br
     return {};
 }
 
+// Bu birleştirme denemesinin yazdığı çakışma kopyası: deneme geri alınırsa (bkz. abort_merge) silinir.
+struct CreatedCopy {
+    std::string path;  // depo-göreli
+    git_oid blob;      // yazılan içerik
+};
+
 // Onların sürümü `<ad> (conflict YYYY-MM-DD HHMM).<uzantı>` olarak yanına yazılır; ad doluysa uzantıdan önce
 // " 2", " 3" … eklenir. Dosya yalnız yoksa oluşturulur (O_EXCL): var olan hiçbir şeyin üzerine yazılmaz.
 // Dönüş: depo-göreli, '/' ayırıcılı UTF-8 yol.
@@ -332,9 +339,12 @@ std::expected<std::string, core::Error> write_conflict_copy(git_repository* repo
 //    yeni bir "(conflict …)" kopyasında;
 //  - silme/değiştirme (iki yönde de): değiştirilmiş sürüm yolunda (checkout tek kalan tarafı yazdı);
 //  - iki tarafta aynı içerik çakışma değildir: kopya yok.
-// Her yol ve kopya diskten sahnelenir; sahneleme çakışma kaydını kapatır. Dönüş: oluşturulan kopyalar.
+// Her yol ve kopya diskten sahnelenir; sahneleme çakışma kaydını kapatır. Dönüş: oluşturulan kopyalar (not
+// olanlar); yazılan her kopya, hata olsa da, `created`'a eklenir.
 std::expected<std::vector<core::NotePath>, core::Error> resolve_conflicts(git_repository* repo,
-                                                                          git_index* index) {
+                                                                          git_index* index,
+                                                                          std::vector<CreatedCopy>& created,
+                                                                          const SyncTestHooks& hooks) {
     struct Conflict {
         std::string path;
         std::optional<git_oid> theirs_to_copy;
@@ -365,6 +375,10 @@ std::expected<std::vector<core::NotePath>, core::Error> resolve_conflicts(git_re
                 write_conflict_copy(repo, workdir, conflict.path, *conflict.theirs_to_copy, stamp);
             if (!copy)
                 return std::unexpected(copy.error());
+            created.push_back({*copy, *conflict.theirs_to_copy});
+            if (hooks.after_conflict_copy)
+                if (auto injected = hooks.after_conflict_copy(*copy); !injected)
+                    return std::unexpected(injected.error());
             TRY_GIT(git_index_add_bypath(index, copy->c_str()));
             core::log_warn(
                 std::format("sync: conflict in {}; remote version kept as {}", conflict.path, *copy));
@@ -377,12 +391,98 @@ std::expected<std::vector<core::NotePath>, core::Error> resolve_conflicts(git_re
     return copies;
 }
 
+// Merge'ün ikinci yarısı (git_merge'den sonra): çakışma çözümü → iki ebeveynli commit → durum temizliği.
+// Dönüş: `ours_tree`'ye göre değişen dosya sayısı.
+std::expected<int, core::Error> commit_merge(git_repository* repo, const git_commit* ours,
+                                             git_tree* ours_tree, const git_oid* their_id,
+                                             const core::SyncConfig& sync,
+                                             std::vector<core::NotePath>& copies,
+                                             std::vector<CreatedCopy>& created, const SyncTestHooks& hooks) {
+    git_index* index_raw = nullptr;
+    TRY_GIT(git_repository_index(&index_raw, repo));
+    const Index index(index_raw);
+    auto resolved = resolve_conflicts(repo, index.get(), created, hooks);
+    if (!resolved)
+        return std::unexpected(resolved.error());
+    TRY_GIT(git_index_write(index.get()));
+    git_oid tree_id;
+    TRY_GIT(git_index_write_tree(&tree_id, index.get()));  // çözülmemiş çakışma kalırsa GIT_EUNMERGED
+    git_tree* tree_raw = nullptr;
+    TRY_GIT(git_tree_lookup(&tree_raw, repo, &tree_id));
+    const Tree tree(tree_raw);
+    git_commit* their_raw = nullptr;
+    TRY_GIT(git_commit_lookup(&their_raw, repo, their_id));
+    const Commit their_commit(their_raw);
+
+    const auto signature = signature_now(sync);
+    if (!signature)
+        return std::unexpected(signature.error());
+    const std::string message =
+        core::tr("sync.merge_message", {{"host", host_name()},
+                                        {"time", iso_utc(std::chrono::system_clock::now())},
+                                        {"conflicts", std::to_string(resolved->size())}});
+    const git_commit* parents[] = {ours, their_commit.get()};
+    git_oid commit_id;
+    TRY_GIT(git_commit_create(&commit_id, repo, "HEAD", signature->get(), signature->get(), nullptr,
+                              message.c_str(), tree.get(), 2, parents));
+    created.clear();  // kopyalar artık HEAD'de: bundan sonraki bir hatanın geri alması onları silmesin
+    TRY_GIT(git_repository_state_cleanup(repo));
+
+    copies.insert(copies.end(), resolved->begin(), resolved->end());
+    return count_changes(repo, ours_tree, tree.get());
+}
+
+// Yarım kalmış merge'ü geri alır. Hiçbir içerik kaybolmaz: merge'e başlamadan önce tüm yerel değişiklikler
+// commit'lendi, HEAD ve uzak dal her baytı tutar. Asla HARD reset ya da FORCE checkout yok:
+//  1. index diskteki merge index'idir (bellekteki yarım çözüm atılır); çakışma kayıtları çıkarılır — libgit2
+//     çakışmalı index'le SAFE checkout yapmaz;
+//  2. HEAD'e SAFE checkout, taban bu index: içeriği hâlâ merge'ün yazdığı gibi olan dosya HEAD'e döner
+//     (merge'ün eklediği silinir, sildiği geri gelir). Kullanıcının arada düzenlediği dosya çakışma sayılıp
+//     atlanır (ALLOW_CONFLICTS): olduğu gibi kalır, sonraki senkron commit'ler;
+//  3. index HEAD'e (MIXED; libgit2 merge durum dosyalarını da siler);
+//  4. bu denemenin yazdığı kopyalar, içerikleri hâlâ yazıldığı gibiyse silinir.
+std::expected<void, core::Error> abort_merge(git_repository* repo, const std::vector<CreatedCopy>& created) {
+    git_index* index_raw = nullptr;
+    TRY_GIT(git_repository_index(&index_raw, repo));
+    const Index index(index_raw);
+    TRY_GIT(git_index_read(index.get(), true));
+    TRY_GIT(git_index_conflict_cleanup(index.get()));
+    TRY_GIT(git_index_write(index.get()));
+
+    git_checkout_options checkout;
+    TRY_GIT(git_checkout_options_init(&checkout, GIT_CHECKOUT_OPTIONS_VERSION));
+    checkout.checkout_strategy =
+        GIT_CHECKOUT_SAFE | GIT_CHECKOUT_ALLOW_CONFLICTS | GIT_CHECKOUT_DONT_OVERWRITE_IGNORED;
+    checkout.baseline_index = index.get();
+    TRY_GIT(git_checkout_head(repo, &checkout));
+
+    git_object* head_raw = nullptr;
+    TRY_GIT(git_revparse_single(&head_raw, repo, "HEAD"));
+    const Object head(head_raw);
+    TRY_GIT(git_reset(repo, head.get(), GIT_RESET_MIXED, nullptr));
+
+    const fs::path workdir = path_from_utf8(git_repository_workdir(repo));
+    for (const CreatedCopy& copy : created) {
+        const fs::path file = workdir / path_from_utf8(copy.path);
+        git_oid on_disk;
+        if (git_odb_hashfile(&on_disk, utf8(file).c_str(), GIT_OBJECT_BLOB) < 0)
+            continue;  // yok (checkout sildi) ya da okunamıyor: dokunulmaz
+        std::error_code ec;
+        if (!git_oid_equal(&on_disk, &copy.blob))
+            core::log_warn("sync: conflict copy changed meanwhile, kept: " + copy.path);
+        else if (!fs::remove(file, ec) && ec)
+            core::log_error("sync: cannot remove " + copy.path + ": " + ec.message());
+    }
+    return {};
+}
+
 // Ayrışmış geçmiş: üç yollu merge → çakışma çözümü → iki ebeveynli commit. Ortak ata yoksa (ilgisiz geçmiş)
 // hiçbir şeye dokunmadan hata: ilk kurulum enable'ın işi. Dönüş: değişen dosya sayısı.
 std::expected<int, core::Error> merge_diverged(git_repository* repo, const std::string& branch,
                                                const git_annotated_commit* their,
                                                const core::SyncConfig& sync,
-                                               std::vector<core::NotePath>& copies) {
+                                               std::vector<core::NotePath>& copies,
+                                               const SyncTestHooks& hooks) {
     const auto ours = branch_tip(repo, local_ref(branch));
     if (!ours)
         return std::unexpected(ours.error());
@@ -408,47 +508,28 @@ std::expected<int, core::Error> merge_diverged(git_repository* repo, const std::
     checkout.checkout_strategy =
         GIT_CHECKOUT_SAFE | GIT_CHECKOUT_USE_OURS | GIT_CHECKOUT_DONT_OVERWRITE_IGNORED;
     const git_annotated_commit* heads[] = {their};
-    TRY_GIT(git_merge(repo, heads, 1, &merge_options, &checkout));
+    TRY_GIT(git_merge(repo, heads, 1, &merge_options, &checkout));  // hata verirse kendi durumunu temizler
 
-    // Bundan sonraki bir hata depoyu MERGE durumunda bırakır: sonraki senkron repo_busy_state ile durur,
-    // iki tarafın içeriği HEAD'de ve uzak dalda durduğu için kayıp yoktur.
-    git_index* index_raw = nullptr;
-    TRY_GIT(git_repository_index(&index_raw, repo));
-    const Index index(index_raw);
-    auto resolved = resolve_conflicts(repo, index.get());
-    if (!resolved)
-        return std::unexpected(resolved.error());
-    TRY_GIT(git_index_write(index.get()));
-    git_oid tree_id;
-    TRY_GIT(git_index_write_tree(&tree_id, index.get()));  // çözülmemiş çakışma kalırsa GIT_EUNMERGED
-    git_tree* tree_raw = nullptr;
-    TRY_GIT(git_tree_lookup(&tree_raw, repo, &tree_id));
-    const Tree tree(tree_raw);
-    git_commit* their_raw = nullptr;
-    TRY_GIT(git_commit_lookup(&their_raw, repo, their_id));
-    const Commit their_commit(their_raw);
-
-    const auto signature = signature_now(sync);
-    if (!signature)
-        return std::unexpected(signature.error());
-    const std::string message =
-        core::tr("sync.merge_message", {{"host", host_name()},
-                                        {"time", iso_utc(std::chrono::system_clock::now())},
-                                        {"conflicts", std::to_string(resolved->size())}});
-    const git_commit* parents[] = {ours->first.get(), their_commit.get()};
-    git_oid commit_id;
-    TRY_GIT(git_commit_create(&commit_id, repo, "HEAD", signature->get(), signature->get(), nullptr,
-                              message.c_str(), tree.get(), 2, parents));
-    TRY_GIT(git_repository_state_cleanup(repo));
-
-    copies.insert(copies.end(), resolved->begin(), resolved->end());
-    return count_changes(repo, ours->second.get(), tree.get());
+    // Bundan sonraki bir hata merge'ü geri alır: depo MERGE durumunda kalsaydı her senkron repo_busy_state
+    // ile dururdu.
+    std::vector<CreatedCopy> created;
+    auto merged =
+        commit_merge(repo, ours->first.get(), ours->second.get(), their_id, sync, copies, created, hooks);
+    if (!merged) {
+        if (auto aborted = abort_merge(repo, created); aborted)
+            core::log_warn("sync: merge undone after an error, nothing lost: " +
+                           core::format_error(merged.error()));
+        else
+            core::log_error("sync: merge could not be undone: " + core::format_error(aborted.error()));
+    }
+    return merged;
 }
 
 // Döngü 4: güncel → 0; hızlı ileri (doğmamış yerel dal dahil) → checkout + dal ref'i; ayrışmış →
 // merge_diverged. Dönüş: değişen dosya sayısı; çakışma kopyaları `copies`'e eklenir.
 std::expected<int, core::Error> integrate(git_repository* repo, const std::string& branch,
-                                          const core::SyncConfig& sync, std::vector<core::NotePath>& copies) {
+                                          const core::SyncConfig& sync, std::vector<core::NotePath>& copies,
+                                          const SyncTestHooks& hooks = {}) {
     git_reference* their_ref_raw = nullptr;
     if (const int rc = git_reference_lookup(&their_ref_raw, repo, tracking_ref(branch).c_str());
         rc == GIT_ENOTFOUND)
@@ -467,7 +548,7 @@ std::expected<int, core::Error> integrate(git_repository* repo, const std::strin
     if (analysis & GIT_MERGE_ANALYSIS_UP_TO_DATE)
         return 0;
     if (!(analysis & (GIT_MERGE_ANALYSIS_FASTFORWARD | GIT_MERGE_ANALYSIS_UNBORN)))
-        return merge_diverged(repo, branch, their.get(), sync, copies);
+        return merge_diverged(repo, branch, their.get(), sync, copies, hooks);
 
     const std::string local = local_ref(branch);
     const auto old_tip = branch_tip(repo, local);
@@ -635,9 +716,9 @@ std::expected<void, core::Error> ensure_gitignore(const fs::path& notes_dir) {
 
 // Bayat kilit devralındı: önceki senkron yarıda öldürülmüş olabilir (AutoSync zaman aşımı, çökme; SPEC-sync
 // karar 3). Kilit artık bizde ve notlar reposuna noteapp'ten yazan başka süreç yok: libgit2'nin bıraktığı
-// `*.lock` dosyaları ölü sürecindir, kalırsa her senkron "index is locked" ile düşer. Yarım merge yalnız
-// index'te çakışma yoksa kapatılır (çözümler sahnelenmiş, sonraki commit içeriği korur); çakışma varsa
-// dokunulmaz, döngü "sync.repo_busy_state" verir — hiçbir içerik atılmaz.
+// `*.lock` dosyaları ölü sürecindir, kalırsa her senkron "index is locked" ile düşer. Yarım merge (çakışmalı
+// olsa da) abort_merge ile geri alınır; döngü merge'ü yeniden yapar. Kalsaydı her senkron
+// "sync.repo_busy_state" ile dururdu.
 // ponytail: o an elle çalışan bir git komutunun kilidi de silinebilir (pencere milisaniyeler; git ikinci
 // yazanı yine durdurur).
 void recover_interrupted_sync(const fs::path& notes_dir) {
@@ -663,16 +744,17 @@ void recover_interrupted_sync(const fs::path& notes_dir) {
     const Repository repo(raw);
     if (git_repository_state(repo.get()) != GIT_REPOSITORY_STATE_MERGE)
         return;
-    git_index* index_raw = nullptr;
-    if (git_repository_index(&index_raw, repo.get()) < 0)
-        return;
-    const Index index(index_raw);
-    if (git_index_has_conflicts(index.get())) {
-        core::log_warn("sync: an interrupted merge still has conflicts; left for the user");
-        return;
-    }
-    if (git_repository_state_cleanup(repo.get()) == 0)
-        core::log_warn("sync: closed a merge left by an interrupted sync");
+    // Geri alma checkout'u HEAD'deki bağları da yazar: önce kapatılır.
+    // ponytail: öldürülen denemenin yazdığı kopyalar izlenemez; kalır, sonraki commit'e fazlalık olarak
+    // girer.
+    auto aborted = disable_symlinks(repo.get());
+    if (aborted)
+        aborted = abort_merge(repo.get(), {});
+    if (aborted)
+        core::log_warn("sync: undid a merge left by an interrupted sync");
+    else
+        core::log_error("sync: cannot undo a merge left by an interrupted sync: " +
+                        core::format_error(aborted.error()));
 }
 
 // libgit2 nesne dosyalarını salt-okunur yazar; Windows salt-okunur dosyayı silmez.
@@ -866,7 +948,7 @@ std::expected<void, core::Error> SyncService::enable(std::string_view remote, bo
     return outcome;
 }
 
-std::expected<SyncResult, core::Error> SyncService::sync_now(const std::function<void()>& before_push) {
+std::expected<SyncResult, core::Error> SyncService::sync_now(const SyncTestHooks& hooks) {
     const auto lock =
         SyncLock::acquire(lock_file(), std::chrono::minutes(config_.tuning.sync_stale_lock_minutes));
     if (!lock) {
@@ -877,7 +959,7 @@ std::expected<SyncResult, core::Error> SyncService::sync_now(const std::function
     }
     if (lock->took_over())
         recover_interrupted_sync(config_.notes_dir);
-    auto outcome = run_cycle(before_push);
+    auto outcome = run_cycle(hooks);
     record(outcome);
     return outcome;
 }
@@ -888,7 +970,7 @@ void SyncService::record_failure(const core::Error& error) const {
     record(std::unexpected(error));
 }
 
-std::expected<SyncResult, core::Error> SyncService::run_cycle(const std::function<void()>& before_push) {
+std::expected<SyncResult, core::Error> SyncService::run_cycle(const SyncTestHooks& hooks) {
     const std::string notes_dir = utf8(config_.notes_dir);
     const core::Error not_initialized{
         core::Error::Code::NotFound, "sync.not_initialized", {{"path", notes_dir}}};
@@ -929,12 +1011,12 @@ std::expected<SyncResult, core::Error> SyncService::run_cycle(const std::functio
     const auto pushed = retry_rejected_push([&]() -> std::expected<bool, core::Error> {
         if (auto fetched = fetch(remote.get(), branch, *credentials); !fetched)
             return std::unexpected(fetched.error());
-        const auto pulled = integrate(repo.get(), branch, config_.sync, result.conflict_copies);
+        const auto pulled = integrate(repo.get(), branch, config_.sync, result.conflict_copies, hooks);
         if (!pulled)
             return std::unexpected(pulled.error());
         result.pulled += *pulled;
-        if (before_push)
-            before_push();
+        if (hooks.before_push)
+            hooks.before_push();
         return push_if_ahead(repo.get(), remote.get(), branch, *credentials);
     });
     if (!pushed)

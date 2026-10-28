@@ -145,9 +145,10 @@ açmak `enable`'ı çağırır (repo varsa no-op).
    checkout tek kalan sürümü yazar). Uygulama yalnız yeni kopya dosyası oluşturur, hiçbir dosyanın üzerine yazmaz.
    **Yeniden adlandırma tespiti kapalı:** açıkken libgit2 farklı yollardaki girdileri tek çakışmada birleştiriyor
    ve checkout bir tarafı yazmıyor; kapalıyken bir tarafta adlandırma + diğerinde düzenleme iki dosya bırakır
-   (fazlalık, kayıp değil). Merge başladıktan sonraki bir hata (ör. dosya/klasör ad çakışması) depoyu MERGE
-   durumunda bırakır → sonraki senkron `sync.repo_busy_state`; iki tarafın içeriği HEAD'de ve uzak dalda durur.
-   Push yarışı: ret → fetch → yeniden merge → push (bir kez); testte `sync_now(before_push)` dikiş noktasıyla.
+   (fazlalık, kayıp değil). `git_merge` kendi hatasında durumunu temizler; ondan sonraki bir hata (kopya
+   yazılamadı, index'e eklenemedi …) merge'ü **geri alır** (karar 9, `abort_merge`), depo MERGE durumunda kalmaz.
+   Push yarışı: ret → fetch → yeniden merge → push (bir kez); testte `sync_now(SyncTestHooks)` dikiş noktasıyla
+   (`before_push`; kopya yazımına hata enjeksiyonu `after_conflict_copy`).
 8. **Kurulum ve kimlik (T26):**
    - `enable` senkron kilidi altında koşar (arka plan senkronu yarım depoda commit atmasın). `enable` kodu
      `sync_service.cpp`'de (plandaki `enable.cpp` değil): commit/fetch/integrate/push yardımcılarını paylaşır.
@@ -203,9 +204,18 @@ açmak `enable`'ı çağırır (repo varsa no-op).
      kilitleri silinseydi zaman aşımıyla öldürülen sürecin saniyelik `index.lock`'u hiç temizlenmezdi: sonraki
      senkron artık kilit devralmaz, her senkron "index is locked" ile düşerdi. Kilit bizde, noteapp'ten yazan
      başka süreç yok; o an elle çalışan bir git komutunun kilidi silinebilir (milisaniyelik pencere, bilinen
-     sınır). Depo MERGE durumundaysa ve index'te çakışma yoksa `git_repository_state_cleanup` (çözülmüş içerik
-     sonraki commit'e girer, kayıp yok); çakışma varsa dokunulmaz → `sync.repo_busy_state`. Kilit devralınmadıysa
-     hiçbir libgit2 kilidine ya da merge durumuna dokunulmaz (elle başlatılmış merge'ler korunur).
+     sınır). Depo MERGE durumundaysa — index'te çakışma olsun olmasın — merge geri alınır, döngü onu yeniden
+     yapar. Kilit devralınmadıysa hiçbir libgit2 kilidine ya da merge durumuna dokunulmaz (elle başlatılmış
+     merge'ler korunur → `sync.repo_busy_state`).
+   - **Merge'ü geri alma (T36, `abort_merge`):** merge'e başlamadan önce tüm yerel değişiklikler commit'lendi;
+     HEAD + uzak dal her baytı tutar, geri almak hiçbir şey kaybettirmez. Eski kural ("çakışma varsa bırak")
+     depoyu kalıcı `sync.repo_busy_state`'te bırakıyordu. Adımlar, asla HARD reset ya da FORCE checkout olmadan:
+     diskteki merge index'i okunur ve çakışma kayıtları çıkarılır; HEAD'e `GIT_CHECKOUT_SAFE |
+     ALLOW_CONFLICTS` checkout, taban = o index: içeriği hâlâ merge'ün yazdığı gibi olan dosyalar HEAD'e döner,
+     kullanıcının arada düzenlediği dosya olduğu gibi kalır (sonraki senkron commit'ler); index `git_reset`
+     MIXED ile HEAD'e (merge durum dosyalarını da siler); bu denemenin yazdığı kopyalar, içerikleri hâlâ
+     yazıldığı gibiyse silinir. Merge commit'i atıldıktan sonraki bir hatada kopyalar HEAD'dedir, silinmez.
+     Bilinen sınır: öldürülmüş denemenin kopyaları izlenemez; kalır ve fazlalık olarak commit'lenir.
    - `ssh-keygen -F` ön kontrolü çıktısı atılarak çalışır (`run_and_wait(…, discard_output = true)`).
 
 ## Kapsam dışı

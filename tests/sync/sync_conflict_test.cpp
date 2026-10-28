@@ -6,12 +6,14 @@
 #include <chrono>
 #include <ctime>
 #include <doctest/doctest.h>
+#include <expected>
 #include <filesystem>
 #include <format>
 #include <git2.h>
 #include <initializer_list>
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -20,6 +22,7 @@ namespace fs = std::filesystem;
 using noteapp::core::Error;
 using noteapp::sync::SyncResult;
 using noteapp::sync::SyncService;
+using noteapp::sync::SyncTestHooks;
 using namespace noteapp::sync_test;
 using namespace std::string_literals;
 using Clock = std::chrono::system_clock;
@@ -146,6 +149,22 @@ std::string stamp(Clock::time_point when) {
 std::string copy_name(std::string_view stem, std::string_view ext, Clock::time_point when,
                       std::string_view number = "") {
     return std::format("{} (conflict {}){}{}", stem, stamp(when), number, ext);
+}
+
+// Diskteki (.git hariç) "(conflict …)" kopyalarının adları.
+std::set<std::string> copies_on_disk(const fs::path& dir) {
+    std::set<std::string> names;
+    for (auto it = fs::recursive_directory_iterator(dir); it != fs::recursive_directory_iterator(); ++it) {
+        if (it->path().filename() == ".git")
+            it.disable_recursion_pending();
+        else if (utf8(it->path().filename()).find(" (conflict ") != std::string::npos)
+            names.insert(utf8(it->path().filename()));
+    }
+    return names;
+}
+
+Error injected_failure() {
+    return Error{Error::Code::Io, "error.io", {{"path", "enjekte"}, {"detail", "disk dolu"}}};
 }
 
 // Senkron sırasında dakika dönebilir: damga başlangıç ya da bitiş dakikasından biri.
@@ -429,7 +448,8 @@ TEST_CASE("acceptance 5: the remote advancing between fetch and push is merged a
     const World w = start(fx, {{"ortak.md", "ortak\n"}});
     write_file(w.a / "a.md", "A\n");
     int calls = 0;
-    const auto result = SyncService(SyncFixture::config_for(w.a)).sync_now([&] {
+    SyncTestHooks hooks;
+    hooks.before_push = [&] {
         if (++calls > 1)
             return;
         // A fetch'ledi ama henüz push'lamadı: B tam şimdi kendi commit'ini gönderir. Ayrı NOTEAPP_HOME:
@@ -437,7 +457,8 @@ TEST_CASE("acceptance 5: the remote advancing between fetch and push is merged a
         const EnvGuard other_machine("NOTEAPP_HOME", fx.root() / "app-b");
         write_file(w.b / "b.md", "B\n");
         sync_ok(w.b);
-    });
+    };
+    const auto result = SyncService(SyncFixture::config_for(w.a)).sync_now(hooks);
     REQUIRE_MESSAGE(result.has_value(), describe(result));
     CHECK(calls == 2);  // ilk push reddedildi, ikinci tur birleştirip gönderdi
     CHECK(result->pushed);
@@ -487,4 +508,97 @@ TEST_CASE("unrelated histories are sync.unrelated_histories and nothing is merge
     CHECK(commit_count(b) == 1);
     CHECK(repository_state(b) == GIT_REPOSITORY_STATE_NONE);
     CHECK(ref_id(fx.remote(), "refs/heads/main") == remote_head);
+}
+
+// Merge başladıktan sonraki bir hata merge'ü geri alır (SPEC-sync karar 9): merge'den önce tüm yerel
+// değişiklikler commit'lendi, HEAD ve uzak dal her baytı tutar. Depo MERGE durumunda kalsaydı her senkron
+// sync.repo_busy_state ile dururdu.
+TEST_CASE("a failure while writing conflict copies undoes the merge; the next sync makes the copies") {
+    const SyncFixture fx;
+    const World w = start(fx, {{"bir.md", "1 ortak\n"}, {"iki.md", "2 ortak\n"}, {"uc.md", "3 ortak\n"}});
+    write_file(w.b / "bir.md", "1 B\n");
+    write_file(w.b / "iki.md", "2 B\n");
+    write_file(w.b / "uc.md", "3 B\n");  // çakışmasız: merge yazar, geri alma HEAD'e döndürür
+    sync_ok(w.b);
+    write_file(w.a / "bir.md", "1 A\n");
+    write_file(w.a / "iki.md", "2 A\n");
+    const auto ours = working_contents(w.a);
+    const auto theirs = working_contents(w.b);
+
+    int written = 0;
+    SyncTestHooks hooks;
+    hooks.after_conflict_copy = [&](const std::string&) -> std::expected<void, Error> {
+        if (++written < 2)
+            return {};
+        return std::unexpected(injected_failure());
+    };
+    const auto failed = SyncService(SyncFixture::config_for(w.a)).sync_now(hooks);
+    REQUIRE_FALSE(failed.has_value());
+    CHECK(failed.error().message_key == "error.io");
+    CHECK(written == 2);
+    CHECK(repository_state(w.a) == GIT_REPOSITORY_STATE_NONE);
+    CHECK(head_commit(w.a).parents == 1);  // A'nın kendi commit'i; merge commit'i yok
+    CHECK(uncommitted_count(w.a) == 0);    // index ve çalışma ağacı HEAD'de
+    CHECK(copies_on_disk(w.a).empty());
+    CHECK(read_file(w.a / "bir.md") == "1 A\n");
+    CHECK(read_file(w.a / "uc.md") == "3 ortak\n");
+
+    const SyncResult retried = sync_ok(w.a);
+    CHECK(retried.conflict_copies.size() == 2);
+    CHECK(read_file(w.a / "uc.md") == "3 B\n");
+    CHECK(head_commit(w.a).parents == 2);
+    check_nothing_lost(w.a, w.base, ours, theirs);
+}
+
+TEST_CASE("a note the user edits while a merge fails is left as edited when the merge is undone") {
+    const SyncFixture fx;
+    const World w = start(fx, {{"not.md", "ortak\n"}, {"b.md", "b ortak\n"}});
+    write_file(w.b / "not.md", "B\n");
+    write_file(w.b / "b.md", "b B\n");
+    sync_ok(w.b);
+    write_file(w.a / "not.md", "A\n");
+    const auto theirs = working_contents(w.b);
+
+    SyncTestHooks hooks;
+    hooks.after_conflict_copy = [&](const std::string&) -> std::expected<void, Error> {
+        // Kullanıcı tam o an iki notu düzenler: merge'ün B sürümünü yazdığı b.md'yi ve çakışan not.md'yi.
+        write_file(w.a / "b.md", "kullanıcı arada yazdı\n");
+        write_file(w.a / "not.md", "A, arada düzenlendi\n");
+        return std::unexpected(injected_failure());
+    };
+    REQUIRE_FALSE(SyncService(SyncFixture::config_for(w.a)).sync_now(hooks).has_value());
+    CHECK(repository_state(w.a) == GIT_REPOSITORY_STATE_NONE);
+    CHECK(read_file(w.a / "b.md") == "kullanıcı arada yazdı\n");
+    CHECK(read_file(w.a / "not.md") == "A, arada düzenlendi\n");
+    CHECK(copies_on_disk(w.a).empty());
+
+    const auto ours = working_contents(w.a);
+    sync_ok(w.a);
+    check_nothing_lost(w.a, w.base, ours, theirs);
+}
+
+TEST_CASE(
+    "a sync killed in the middle of a conflicted merge is undone by the next sync, which merges again") {
+    const SyncFixture fx;
+    const World w = start(fx, {{"not.md", "ortak\n"}, {"b.md", "b ortak\n"}});
+    write_file(w.b / "not.md", "B\n");
+    write_file(w.b / "b.md", "b B\n");
+    sync_ok(w.b);
+    write_file(w.a / "not.md", "A\n");
+    const auto ours = working_contents(w.a);
+    const auto theirs = working_contents(w.b);
+
+    // Süreç ilk kopyayı yazdıktan hemen sonra öldürülür: geri alma çalışmaz, kilit sonra bayat kalır.
+    SyncTestHooks hooks;
+    hooks.after_conflict_copy = [](const std::string&) -> std::expected<void, Error> {
+        throw std::runtime_error("süreç öldürüldü");
+    };
+    CHECK_THROWS(SyncService(SyncFixture::config_for(w.a)).sync_now(hooks));
+    REQUIRE(repository_state(w.a) == GIT_REPOSITORY_STATE_MERGE);
+    write_file(noteapp::core::state_dir() / "sync.lock", "999999999\n2026-10-28T00:00:00Z\n00000000\n");
+
+    const SyncResult recovered = sync_ok(w.a);
+    CHECK_FALSE(recovered.conflict_copies.empty());
+    CHECK(head_commit(w.a).parents == 2);
+    check_nothing_lost(w.a, w.base, ours, theirs);
 }

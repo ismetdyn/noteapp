@@ -1,5 +1,5 @@
 // Sonlandırılmış (AutoSync zaman aşımı, çökme) bir senkronun artıkları: SPEC-sync karar 3. Sonraki senkron
-// bayat kilidi devralınca libgit2 kilitlerini temizler; yarım merge'i yalnız index çakışmasızsa kapatır.
+// bayat kilidi devralınca libgit2 kilitlerini temizler ve yarım merge'i geri alır (karar 9).
 #include "core/config.hpp"
 #include "core/paths.hpp"
 #include "sync/sync_service.hpp"
@@ -83,7 +83,7 @@ TEST_CASE("a merge a killed sync left without conflicts in the index is closed a
     CHECK(ref_id(fx.remote(), "refs/heads/main") == ref_id(a, "HEAD"));
 }
 
-TEST_CASE("a merge with unresolved conflicts is never closed: sync.repo_busy_state, nothing touched") {
+TEST_CASE("an interrupted merge with conflicts in the index is undone; the note keeps its content") {
     const SyncFixture fx;
     const fs::path a = synced_clone(fx);
     {
@@ -105,9 +105,8 @@ TEST_CASE("a merge with unresolved conflicts is never closed: sync.repo_busy_sta
     const auto head = ref_id(a, "HEAD");
 
     const auto result = SyncService(SyncFixture::config_for(a)).sync_now();
-    REQUIRE_FALSE(result.has_value());
-    CHECK(result.error().message_key == "sync.repo_busy_state");
-    CHECK(fs::exists(a / ".git" / "MERGE_HEAD"));
+    REQUIRE_MESSAGE(result.has_value(), describe(result));
+    CHECK_FALSE(fs::exists(a / ".git" / "MERGE_HEAD"));
     CHECK(ref_id(a, "HEAD") == head);
     CHECK(read_file(a / "not.md") == "ortak\n");
 }

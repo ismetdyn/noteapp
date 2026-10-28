@@ -37,6 +37,16 @@ struct Author {
 // <kullanıcı>@<makine>. Git dosyaları açıkça okunur; libgit2'nin (izole edilmiş) arama yollarına bağlı değil.
 Author resolve_author(const core::SyncConfig& sync);
 
+// Yalnız test dikiş noktaları; üretim kodu vermez.
+struct SyncTestHooks {
+    // Her turda birleştirmeden sonra, push'tan hemen önce: uzak deponun fetch ile push arasında ilerlediği
+    // gerçek yarışı kurar.
+    std::function<void()> before_push;
+    // Her çakışma kopyası diske yazıldıktan hemen sonra (depo-göreli yol). Hata dönerse birleştirme o hatayla
+    // düşer: yarıda kalan merge'ün geri alınması sınanır.
+    std::function<std::expected<void, core::Error>(const std::string& copy)> after_conflict_copy;
+};
+
 // Döngünün 3–5. adımları (`exchange`: fetch → birleştir → push; push yapıldıysa true) "sync.push_rejected"
 // ile dönerse bir kez daha koşar. Ayrı fonksiyon: yeniden deneme kuralı enjekte adımla da sınanır.
 std::expected<bool, core::Error>
@@ -64,10 +74,7 @@ public:
     // kalır, uzak sürüm "(conflict …)" kopyasına yazılır (SPEC-sync döngü 4). Yarım kalmış elle git
     // işleminde "sync.repo_busy_state", ortak geçmiş yoksa "sync.unrelated_histories" — ikisinde de
     // birleştirmeye dokunulmaz.
-    //
-    // `before_push` yalnız test dikiş noktasıdır (üretim kodu vermez): her turda birleştirmeden sonra,
-    // push'tan hemen önce çağrılır; uzak deponun fetch ile push arasında ilerlediği gerçek yarışı kurar.
-    std::expected<SyncResult, core::Error> sync_now(const std::function<void()>& before_push = {});
+    std::expected<SyncResult, core::Error> sync_now(const SyncTestHooks& hooks = {});
 
     // state_dir()/sync-status.toml; dosya yoksa ya da bozuksa boş durum.
     SyncStatus status() const;
@@ -77,7 +84,7 @@ public:
     void record_failure(const core::Error& error) const;
 
 private:
-    std::expected<SyncResult, core::Error> run_cycle(const std::function<void()>& before_push);
+    std::expected<SyncResult, core::Error> run_cycle(const SyncTestHooks& hooks);
     void record(const std::expected<SyncResult, core::Error>& outcome) const;
 
     GitRuntime runtime_;

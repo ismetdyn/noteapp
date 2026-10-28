@@ -357,6 +357,7 @@
 - **Sync review bulguları:**
   - [x] Uzak bağlar düz dosya olarak çıkar (`core.symlinks=false`); bağ olan `.gitignore` okunmaz
   - [x] `NOTEAPP_GIT_TOKEN` yalnız `NOTEAPP_GIT_TOKEN_HOST`'a (varsayılan `github.com`) verilir
+  - [x] Merge başladıktan sonraki hata ve yarıda öldürülen merge güvenle geri alınır (kalıcı MERGE durumu yok)
 - **Doğrulama:** tüm testler Windows + `F` · **Bağımlılık:** T35 · **Model:** opus · **Boyut:** M
 
 ### ✅ Son kontrol noktası
