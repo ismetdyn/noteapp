@@ -11,8 +11,11 @@
 #include <stdlib.h>  // _wgetenv, _wcsicmp
 #include <windows.h>
 #else
+#include <csignal>
+#include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 
 extern char** environ;
@@ -48,6 +51,13 @@ Error not_found(const std::string& program) {
 
 Error spawn_failed(const std::string& program, const std::string& reason) {
     return Error{Error::Code::Io, "error.process_spawn_failed", {{"program", program}, {"reason", reason}}};
+}
+
+// Bekleme hatası pratikte olmaz (geçersiz tutamaç); ayrı katalog metni yerine genel G/Ç hatası.
+Error wait_failed(long long pid, unsigned long code) {
+    return Error{Error::Code::Io,
+                 "error.io",
+                 {{"path", "pid " + std::to_string(pid)}, {"detail", std::to_string(code)}}};
 }
 
 #ifdef _WIN32
@@ -140,7 +150,59 @@ bool has_cmd_metacharacter(const std::string& text) {
     return text.find_first_of("\"%!^&|<>") != std::string::npos;
 }
 
+struct Command {
+    std::wstring application;
+    std::wstring command_line;
+};
+
+std::expected<Command, Error> prepare_command(const std::vector<std::string>& argv) {
+    const std::string& program_name = argv.front();
+    const auto program = find_program(program_name);
+    if (!program)
+        return std::unexpected(not_found(program_name));
+
+    Command command{program->wstring(), {}};
+    if (is_batch_file(*program)) {
+        std::vector<std::string> checked(argv.begin() + 1, argv.end());
+        checked.push_back(to_utf8(*program));
+        for (const std::string& text : checked)
+            if (has_cmd_metacharacter(text))
+                return std::unexpected(
+                    Error{Error::Code::InvalidPath, "error.process_unsafe_argument", {{"argument", text}}});
+        const auto cmd = find_program("cmd.exe");
+        if (!cmd)
+            return std::unexpected(not_found("cmd.exe"));
+        // /s ile dıştaki tırnak çifti soyulur; içte program ve argümanlar ayrı ayrı tırnaklıdır.
+        command.command_line = quote_arg(cmd->wstring()) + L" /d /s /c \"" + quote_arg(command.application);
+        for (std::size_t i = 1; i < argv.size(); ++i)
+            command.command_line += L" " + quote_arg(to_wide(argv[i]));
+        command.command_line += L"\"";
+        command.application = cmd->wstring();
+    } else {
+        command.command_line = quote_arg(to_wide(program_name));
+        for (std::size_t i = 1; i < argv.size(); ++i)
+            command.command_line += L" " + quote_arg(to_wide(argv[i]));
+    }
+    return command;
+}
+
+// Devredilebilir boş aygıt (NUL) tutamacı; çağıran kapatır.
+HANDLE open_null_device() {
+    SECURITY_ATTRIBUTES inheritable{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    return CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable,
+                       OPEN_EXISTING, 0, nullptr);
+}
+
 #else
+
+// posix_spawn'ın istediği NULL sonlu dizi; işaretçiler `strings`in ömrüne bağlıdır.
+std::vector<char*> c_strings(const std::vector<std::string>& strings) {
+    std::vector<char*> out;
+    for (const std::string& s : strings)
+        out.push_back(const_cast<char*>(s.c_str()));
+    out.push_back(nullptr);
+    return out;
+}
 
 std::vector<std::string>
 build_environment(const std::vector<std::pair<std::string, std::string>>& overrides) {
@@ -156,6 +218,29 @@ build_environment(const std::vector<std::pair<std::string, std::string>>& overri
             entries.push_back(prefix + value);
     }
     return entries;
+}
+
+// `actions`/`attributes` boş olabilir (devralınan stdio, varsayılan öznitelikler).
+std::expected<pid_t, Error> spawn_posix(const std::vector<std::string>& argv,
+                                        const EnvOverrides& env_overrides,
+                                        const posix_spawn_file_actions_t* actions,
+                                        const posix_spawnattr_t* attributes) {
+    const std::vector<std::string> env_strings = build_environment(env_overrides);
+    std::vector<char*> args = c_strings(argv);
+    std::vector<char*> envp = c_strings(env_strings);
+    pid_t pid = 0;
+    const int rc = posix_spawnp(&pid, argv.front().c_str(), actions, attributes, args.data(), envp.data());
+    if (rc == ENOENT)
+        return std::unexpected(not_found(argv.front()));
+    if (rc != 0)
+        return std::unexpected(spawn_failed(argv.front(), std::to_string(rc)));
+    return pid;
+}
+
+int exit_status(int status) {
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    return 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);  // sinyalle ölüm: kabuk geleneği
 }
 
 #endif
@@ -228,58 +313,65 @@ std::optional<fs::path> find_program(std::string_view name) {
 #endif
 }
 
-std::expected<int, Error>
-run_and_wait(const std::vector<std::string>& argv,
-             const std::vector<std::pair<std::string, std::string>>& env_overrides) {
+fs::path current_executable() {
+#ifdef _WIN32
+    std::wstring buffer(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD size = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (size == 0)
+            return {};
+        if (size < buffer.size())
+            return fs::path(buffer.substr(0, size));
+        buffer.resize(buffer.size() * 2);  // uzun yol: kesildi, büyütüp yeniden dene
+    }
+#elif defined(__linux__)
+    std::error_code ec;
+    return fs::read_symlink("/proc/self/exe", ec);
+#else
+    // ponytail: macOS/BSD'de kendi yolu yok; PATH'teki `note` (ön yüzler kendi dizinlerine bakar).
+    return find_program("note").value_or(fs::path());
+#endif
+}
+
+std::expected<int, Error> run_and_wait(const std::vector<std::string>& argv,
+                                       const EnvOverrides& env_overrides, bool discard_output) {
     if (argv.empty())
         return std::unexpected(Error{Error::Code::InvalidPath, "error.process_empty_command", {}});
     const std::string& program_name = argv.front();
 
 #ifdef _WIN32
-    const auto program = find_program(program_name);
-    if (!program)
-        return std::unexpected(not_found(program_name));
-
-    std::wstring application = program->wstring();
-    std::wstring command_line;
-    if (is_batch_file(*program)) {
-        std::vector<std::string> checked(argv.begin() + 1, argv.end());
-        checked.push_back(to_utf8(*program));
-        for (const std::string& text : checked)
-            if (has_cmd_metacharacter(text))
-                return std::unexpected(
-                    Error{Error::Code::InvalidPath, "error.process_unsafe_argument", {{"argument", text}}});
-        const auto cmd = find_program("cmd.exe");
-        if (!cmd)
-            return std::unexpected(not_found("cmd.exe"));
-        // /s ile dıştaki tırnak çifti soyulur; içte program ve argümanlar ayrı ayrı tırnaklıdır.
-        command_line = quote_arg(cmd->wstring()) + L" /d /s /c \"" + quote_arg(application);
-        for (std::size_t i = 1; i < argv.size(); ++i)
-            command_line += L" " + quote_arg(to_wide(argv[i]));
-        command_line += L"\"";
-        application = cmd->wstring();
-    } else {
-        command_line = quote_arg(to_wide(program_name));
-        for (std::size_t i = 1; i < argv.size(); ++i)
-            command_line += L" " + quote_arg(to_wide(argv[i]));
-    }
+    const auto command = prepare_command(argv);
+    if (!command)
+        return std::unexpected(command.error());
+    std::wstring application = command->application;
+    std::wstring command_line = command->command_line;
 
     std::wstring environment;
     if (!env_overrides.empty())
         environment = build_environment_block(env_overrides);
 
+    HANDLE null_device = INVALID_HANDLE_VALUE;
+    if (discard_output) {
+        null_device = open_null_device();
+        if (null_device == INVALID_HANDLE_VALUE)
+            return std::unexpected(spawn_failed(program_name, std::to_string(GetLastError())));
+    }
     // Standart tutamaçlar açıkça devredilir: stdout bir boruya yönlendirilmişse de çocuk aynısını görür.
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESTDHANDLES;
     startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-    startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-    startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    startup.hStdOutput = discard_output ? null_device : GetStdHandle(STD_OUTPUT_HANDLE);
+    startup.hStdError = discard_output ? null_device : GetStdHandle(STD_ERROR_HANDLE);
     PROCESS_INFORMATION info{};
-    if (!CreateProcessW(application.c_str(), command_line.data(), nullptr, nullptr, TRUE,
-                        CREATE_UNICODE_ENVIRONMENT, env_overrides.empty() ? nullptr : environment.data(),
-                        nullptr, &startup, &info))
-        return std::unexpected(spawn_failed(program_name, std::to_string(GetLastError())));
+    const BOOL started = CreateProcessW(
+        application.c_str(), command_line.data(), nullptr, nullptr, TRUE, CREATE_UNICODE_ENVIRONMENT,
+        env_overrides.empty() ? nullptr : environment.data(), nullptr, &startup, &info);
+    const DWORD spawn_error = GetLastError();
+    if (null_device != INVALID_HANDLE_VALUE)
+        CloseHandle(null_device);
+    if (!started)
+        return std::unexpected(spawn_failed(program_name, std::to_string(spawn_error)));
 
     WaitForSingleObject(info.hProcess, INFINITE);
     DWORD exit_code = 1;
@@ -288,31 +380,170 @@ run_and_wait(const std::vector<std::string>& argv,
     CloseHandle(info.hThread);
     return static_cast<int>(exit_code);
 #else
-    const std::vector<std::string> env_strings = build_environment(env_overrides);
-    std::vector<char*> args;
-    for (const std::string& a : argv)
-        args.push_back(const_cast<char*>(a.c_str()));
-    args.push_back(nullptr);
-    std::vector<char*> envp;
-    for (const std::string& e : env_strings)
-        envp.push_back(const_cast<char*>(e.c_str()));
-    envp.push_back(nullptr);
-
-    pid_t pid = 0;
-    const int rc = posix_spawnp(&pid, program_name.c_str(), nullptr, nullptr, args.data(), envp.data());
-    if (rc == ENOENT)
-        return std::unexpected(not_found(program_name));
-    if (rc != 0)
-        return std::unexpected(spawn_failed(program_name, std::to_string(rc)));
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    if (discard_output) {
+        posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+        posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDERR_FILENO);
+    }
+    const auto pid = spawn_posix(argv, env_overrides, &actions, nullptr);
+    posix_spawn_file_actions_destroy(&actions);
+    if (!pid)
+        return std::unexpected(pid.error());
 
     int status = 0;
-    while (waitpid(pid, &status, 0) < 0) {
+    while (waitpid(*pid, &status, 0) < 0) {
         if (errno != EINTR)
             return std::unexpected(spawn_failed(program_name, std::to_string(errno)));
     }
-    if (WIFEXITED(status))
-        return WEXITSTATUS(status);
-    return 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);  // sinyalle ölüm: kabuk geleneği
+    return exit_status(status);
+#endif
+}
+
+std::expected<ProcessHandle, Error> spawn_detached(const std::vector<std::string>& argv,
+                                                   const EnvOverrides& env_overrides) {
+    if (argv.empty())
+        return std::unexpected(Error{Error::Code::InvalidPath, "error.process_empty_command", {}});
+    const std::string& program_name = argv.front();
+
+#ifdef _WIN32
+    const auto command = prepare_command(argv);
+    if (!command)
+        return std::unexpected(command.error());
+    std::wstring command_line = command->command_line;
+    std::wstring environment;
+    if (!env_overrides.empty())
+        environment = build_environment_block(env_overrides);
+
+    HANDLE null_device = open_null_device();
+    if (null_device == INVALID_HANDLE_VALUE)
+        return std::unexpected(spawn_failed(program_name, std::to_string(GetLastError())));
+    // Yalnız NUL tutamacı devredilir (PROC_THREAD_ATTRIBUTE_HANDLE_LIST): bInheritHandles=TRUE tek başına
+    // ebeveynin devredilebilir her tutamacını (ör. stdout'un yönlendirildiği dosya) uzun ömürlü çocuğa verir.
+    SIZE_T list_size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &list_size);
+    std::vector<char> list_buffer(list_size);
+    auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(list_buffer.data());
+    BOOL ok = InitializeProcThreadAttributeList(attributes, 1, 0, &list_size);
+    if (ok)
+        ok = UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &null_device,
+                                       sizeof(HANDLE), nullptr, nullptr);
+    STARTUPINFOEXW startup{};
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = null_device;
+    startup.StartupInfo.hStdOutput = null_device;
+    startup.StartupInfo.hStdError = null_device;
+    startup.lpAttributeList = attributes;
+    PROCESS_INFORMATION info{};
+    if (ok)
+        ok = CreateProcessW(command->application.c_str(), command_line.data(), nullptr, nullptr, TRUE,
+                            CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | DETACHED_PROCESS |
+                                CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+                            env_overrides.empty() ? nullptr : environment.data(), nullptr,
+                            &startup.StartupInfo, &info);
+    const DWORD spawn_error = GetLastError();
+    if (list_size > 0)
+        DeleteProcThreadAttributeList(attributes);
+    CloseHandle(null_device);
+    if (!ok)
+        return std::unexpected(spawn_failed(program_name, std::to_string(spawn_error)));
+    CloseHandle(info.hThread);
+    return ProcessHandle(info.dwProcessId, info.hProcess);
+#else
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDERR_FILENO);
+    posix_spawnattr_t attributes;
+    posix_spawnattr_init(&attributes);
+    // Yeni oturum: terminal kapanınca (SIGHUP) ya da ön plandaki Ctrl-C ile senkron yarıda ölmesin.
+#ifdef POSIX_SPAWN_SETSID
+    posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
+#else
+    posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP);  // en azından ayrı süreç grubu
+#endif
+    // ponytail: CLOEXEC olmayan diğer fd'ler devredilir; gerekirse posix_spawn_file_actions_addclosefrom_np.
+    const auto pid = spawn_posix(argv, env_overrides, &actions, &attributes);
+    posix_spawnattr_destroy(&attributes);
+    posix_spawn_file_actions_destroy(&actions);
+    if (!pid)
+        return std::unexpected(pid.error());
+    return ProcessHandle(*pid, nullptr);
+#endif
+}
+
+std::expected<std::optional<int>, Error> wait_with_timeout(ProcessHandle& process,
+                                                           std::chrono::milliseconds timeout) {
+    if (process.exit_code_)
+        return process.exit_code_;
+#ifdef _WIN32
+    const auto handle = static_cast<HANDLE>(process.handle_);
+    const DWORD waited =
+        WaitForSingleObject(handle, static_cast<DWORD>(std::max<long long>(timeout.count(), 0)));
+    if (waited == WAIT_TIMEOUT)
+        return std::optional<int>();
+    DWORD exit_code = 1;
+    if (waited != WAIT_OBJECT_0 || !GetExitCodeProcess(handle, &exit_code))
+        return std::unexpected(wait_failed(process.pid_, GetLastError()));
+    process.exit_code_ = static_cast<int>(exit_code);
+#else
+    // ponytail: waitpid'in zaman aşımı yok; 10 ms aralıkla yoklanır (senkron saniyeler sürer).
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    for (;;) {
+        int status = 0;
+        const pid_t done = waitpid(static_cast<pid_t>(process.pid_), &status, WNOHANG);
+        if (done == static_cast<pid_t>(process.pid_)) {
+            process.exit_code_ = exit_status(status);
+            break;
+        }
+        if (done < 0 && errno != EINTR)
+            return std::unexpected(wait_failed(process.pid_, errno));
+        if (std::chrono::steady_clock::now() >= deadline)
+            return std::optional<int>();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+#endif
+    return process.exit_code_;
+}
+
+void terminate(ProcessHandle& process) {
+    if (process.exit_code_)
+        return;
+#ifdef _WIN32
+    const auto handle = static_cast<HANDLE>(process.handle_);
+    TerminateProcess(handle, 1);  // zaten bittiyse başarısız olur; bekleme yine de kodu toplar
+    WaitForSingleObject(handle, INFINITE);
+    DWORD exit_code = 1;
+    GetExitCodeProcess(handle, &exit_code);
+    process.exit_code_ = static_cast<int>(exit_code);
+#else
+    kill(static_cast<pid_t>(process.pid_), SIGKILL);
+    int status = 0;
+    while (waitpid(static_cast<pid_t>(process.pid_), &status, 0) < 0 && errno == EINTR) {
+    }
+    process.exit_code_ = exit_status(status);
+#endif
+}
+
+ProcessHandle::ProcessHandle(ProcessHandle&& other) noexcept
+    : pid_(other.pid_), handle_(std::exchange(other.handle_, nullptr)), exit_code_(other.exit_code_) {}
+
+ProcessHandle& ProcessHandle::operator=(ProcessHandle&& other) noexcept {
+    if (this != &other) {
+        ProcessHandle old(std::move(*this));  // eski tutamaç yıkıcısında kapanır
+        pid_ = other.pid_;
+        handle_ = std::exchange(other.handle_, nullptr);
+        exit_code_ = other.exit_code_;
+    }
+    return *this;
+}
+
+ProcessHandle::~ProcessHandle() {
+#ifdef _WIN32
+    if (handle_ != nullptr)
+        CloseHandle(static_cast<HANDLE>(handle_));
 #endif
 }
 

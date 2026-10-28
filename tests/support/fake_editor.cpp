@@ -2,11 +2,17 @@
 //   FAKE_EDITOR_CONTENT   -> dosyaya ikili olarak yazılır
 //   FAKE_EDITOR_ARGS_OUT  -> alınan tüm argümanlar (satır başına bir, UTF-8) bu dosyaya yazılır
 //   FAKE_EDITOR_EXIT      -> çıkış kodu (varsayılan 0)
+//   FAKE_EDITOR_STDOUT    -> bu metin + satır sonu stdout'a ve stderr'e yazılır (çıktı devralma testleri)
+//   FAKE_EDITOR_PID_OUT   -> sürecin PID'i bu dosyaya yazılır (sonlandırma testleri)
+//   FAKE_EDITOR_SLEEP_MS  -> çıkmadan önce bu kadar milisaniye uyur (zaman aşımı testleri)
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -14,6 +20,8 @@
 #include <windows.h>
 // windows.h'den sonra gelmeli
 #include <shellapi.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -76,6 +84,21 @@ int main(int argc, char** argv) {
         std::ofstream out(path_from_utf8(received.back()), std::ios::binary);
         out.write(content->data(), static_cast<std::streamsize>(content->size()));
     }
+    if (const auto text = env("FAKE_EDITOR_STDOUT")) {
+        std::printf("%s\n", text->c_str());
+        std::fprintf(stderr, "%s\n", text->c_str());
+        std::fflush(stdout);
+    }
+    if (const auto pid_path = env("FAKE_EDITOR_PID_OUT")) {
+#ifdef _WIN32
+        const long long pid = GetCurrentProcessId();
+#else
+        const long long pid = getpid();
+#endif
+        std::ofstream(path_from_utf8(*pid_path), std::ios::binary) << pid;
+    }
+    if (const auto sleep_ms = env("FAKE_EDITOR_SLEEP_MS"))
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::atoll(sleep_ms->c_str())));
     if (const auto code = env("FAKE_EDITOR_EXIT"))
         return std::atoi(code->c_str());
     return 0;
