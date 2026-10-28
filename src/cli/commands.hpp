@@ -37,6 +37,9 @@ int run_invalid(const ParsedArgs& args);
 
 // Ortak yardımcılar (commands.cpp / sync_commands.cpp).
 
+// Hatayı stderr'e yazar ve türünden çıkış kodunu döner: geçersiz yol/ad 2, bulunamadı/çakışma 1, kalanı 3.
+int fail(const core::Error& error);
+
 // show/edit/export'un ortak "en iyi eşleşme" kuralı (commands.cpp); eşleşme yoksa mesajı yazıp çıkış kodunu
 // döner.
 std::expected<core::NoteInfo, int> pick_best_note(const core::NoteStore& store, const std::string& query);

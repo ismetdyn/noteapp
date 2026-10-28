@@ -98,10 +98,14 @@ int exit_code_for(const core::Error& error) {
     }
 }
 
+}  // namespace
+
 int fail(const core::Error& error) {
     std::cerr << core::format_error(error) << '\n';
     return exit_code_for(error);
 }
+
+namespace {
 
 namespace fs = std::filesystem;
 
