@@ -20,6 +20,10 @@ bool is_valid_utf8(std::string_view utf8);
 // Geçersiz UTF-8 girdisi değiştirilmeden döner.
 std::string transliterate_turkish(std::string_view utf8);
 
+// İlk dolu (yalnız boşluk olmayan) satır, olduğu gibi; yoksa boş. Not adı bundan türetilir — CLI, TUI ve GUI
+// aynı kuralı kullansın diye tek kaynak burasıdır.
+std::string first_non_empty_line(std::string_view content);
+
 // Not adı için slug üretir (SPEC-core "Slug"). Geçersiz UTF-8 girdisi çökertmez: ASCII olmayan
 // baytlar harf/rakam sayılmadığından ayırıcı olur; sonuç boşsa zaman damgalı ad döner.
 // `now` parametre olması testleri deterministik yapar.

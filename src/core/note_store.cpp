@@ -127,21 +127,6 @@ bool is_hidden(const fs::path& p) {
     return !name.empty() && name.front() == u8'.';
 }
 
-// İlk dolu (yalnız boşluk olmayan) satır; slug bundan türetilir.
-std::string first_non_empty_line(std::string_view content) {
-    std::size_t start = 0;
-    while (start <= content.size()) {
-        std::size_t end = content.find('\n', start);
-        if (end == std::string_view::npos)
-            end = content.size();
-        const std::string_view line = content.substr(start, end - start);
-        if (line.find_first_not_of(" \t\r") != std::string_view::npos)
-            return std::string(line);
-        start = end + 1;
-    }
-    return {};
-}
-
 std::string normalize_line_endings(std::string_view text) {
     std::string out;
     out.reserve(text.size());

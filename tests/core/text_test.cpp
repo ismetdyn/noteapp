@@ -79,3 +79,12 @@ TEST_CASE("slugify does not crash on invalid UTF-8") {
     CHECK(slugify("\xFF\xFE", kNow) == kStamp);
     CHECK(slugify("ab\xC3 cd", kNow) == "ab-cd");
 }
+
+// Not adının kaynağı: CLI, TUI ve GUI aynı kuralı kullanır (önceden üç kopyaydı).
+TEST_CASE("first_non_empty_line skips blank and whitespace-only lines") {
+    CHECK(first_non_empty_line("") == "");
+    CHECK(first_non_empty_line("\n \t\r\n") == "");
+    CHECK(first_non_empty_line("\n\n  # Başlık\nikinci") == "  # Başlık");
+    CHECK(first_non_empty_line("satır\r\nsonraki") == "satır\r");
+    CHECK(first_non_empty_line("tek") == "tek");
+}

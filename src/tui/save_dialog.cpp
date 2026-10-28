@@ -33,21 +33,6 @@ bool is_printable(std::string_view text) {
     return !text.empty() && static_cast<unsigned char>(text.front()) >= 0x20 && text.front() != kDelete;
 }
 
-// İlk dolu satır; slug bundan türetilir (NoteStore::create ile aynı kural).
-std::string first_non_blank_line(std::string_view content) {
-    std::size_t start = 0;
-    while (start <= content.size()) {
-        std::size_t end = content.find('\n', start);
-        if (end == std::string_view::npos)
-            end = content.size();
-        const std::string_view line = content.substr(start, end - start);
-        if (line.find_first_not_of(" \t\r") != std::string_view::npos)
-            return std::string(line);
-        start = end + 1;
-    }
-    return {};
-}
-
 // NotePath'in hata biçimiyle aynı: satır içi hata mesajı format_error ile üretilir.
 core::Error invalid(std::string_view reason, std::string_view value) {
     return core::Error{core::Error::Code::InvalidPath,
@@ -86,7 +71,7 @@ SaveDialogState::SaveDialogState(SaveDialogInit init)
     : init_(std::move(init)),
       name_(init_.move
                 ? init_.name
-                : core::slugify(first_non_blank_line(init_.content), init_.now, init_.slug_max_length)),
+                : core::slugify(core::first_non_empty_line(init_.content), init_.now, init_.slug_max_length)),
       folder_(init_.folder), type_(init_.move ? init_.type : init_.suggestion.type) {
     refresh_suggestions();
 }

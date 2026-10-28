@@ -572,20 +572,6 @@ PathParts split(const core::NotePath& path) {
             dot == std::string::npos ? "" : file.substr(dot + 1)};
 }
 
-std::string first_content_line(const std::string& content) {
-    std::size_t begin = 0;
-    while (begin < content.size()) {
-        std::size_t end = content.find('\n', begin);
-        if (end == std::string::npos)
-            end = content.size();
-        const std::string line = content.substr(begin, end - begin);
-        if (line.find_first_not_of(" \t\r") != std::string::npos)
-            return line;
-        begin = end + 1;
-    }
-    return {};
-}
-
 }  // namespace
 
 void MainWindow::update_header() {
@@ -748,7 +734,7 @@ bool MainWindow::save_new() {
     const detect::Suggestion suggestion = detect::suggest(content, options);
 
     SaveDialogRequest request;
-    request.initial = {core::slugify(first_content_line(content), std::chrono::system_clock::now(),
+    request.initial = {core::slugify(core::first_non_empty_line(content), std::chrono::system_clock::now(),
                                      config_.tuning.slug_max_length),
                        current_folder_, suggestion.type};
     request.folders = folders_;
