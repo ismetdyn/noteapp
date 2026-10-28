@@ -74,7 +74,7 @@ cmake --build --preset windows-mingw-debug
 ctest --preset windows-mingw-debug --output-on-failure
 ctest --preset windows-mingw-debug -R "core"          # tek modül testleri
 cmake --build --preset windows-mingw-release
-cmake --install build/windows-mingw-release --prefix "$env:LOCALAPPDATA\Programs\noteapp"   # + windeployqt
+cmake --install build/windows-mingw-release --prefix "$LOCALAPPDATA/Programs/noteapp"   # + windeployqt
 ```
 
 ```bash
