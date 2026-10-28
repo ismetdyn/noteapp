@@ -296,7 +296,7 @@
   `tests/gui/save_test.cpp` · **Boyut:** M
 
 ### T31: Klasör işlemleri + içerik araması
-- [ ] **Kabul:** SPEC-gui kabul 4 · yeni/yeniden adlandır/sil (dolu → sayıyla onay) · Ctrl+M taşı · içerik modunda
+- [x] **Kabul:** SPEC-gui kabul 4 · yeni/yeniden adlandır/sil (dolu → sayıyla onay) · Ctrl+M taşı · içerik modunda
   eşleşme sayıları ve editörde vurgu · `QFileSystemWatcher` + yedek tarama.
 - **Doğrulama:** `B && T(gui)` · **Bağımlılık:** T30 · **Dosyalar:** `src/gui/{main_window.cpp,folder_actions.cpp}`, testler · **Boyut:** M
 

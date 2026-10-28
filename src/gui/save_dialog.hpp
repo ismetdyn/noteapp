@@ -27,7 +27,8 @@ struct SaveDialogRequest {
     SaveDetails initial;
     std::vector<std::string> folders;
     std::vector<std::string> types;
-    QString hint;  // "öneri: java %82"; taşıma kipinde boş
+    QString hint;              // "öneri: java %82"; taşıma kipinde boş
+    bool folder_only = false;  // Ctrl+M: ad ve tip kilitli, yalnız klasör seçilir
 };
 
 enum class ConflictChoice { Reload, Overwrite, SaveCopy, Cancel };
@@ -55,5 +56,9 @@ std::optional<SaveDetails> run_save_dialog(const SaveDialogRequest& request, QWi
 std::unique_ptr<QMessageBox> make_conflict_box(QWidget* parent, const std::string& path);
 ConflictChoice ask_conflict(QWidget* parent, const std::string& path);
 CloseChoice ask_close_unsaved(QWidget* parent);
+// Silme onayı: varsayılan ve Esc düğmesi "Vazgeç" (geri alınamaz işlem; Enter'a basmak silmesin).
+std::unique_ptr<QMessageBox> make_delete_box(QWidget* parent, const QString& message);
+bool ask_confirm_delete(QWidget* parent, const QString& message);
+std::optional<std::string> ask_folder_name(QWidget* parent, const QString& title, const QString& initial);
 
 }  // namespace noteapp::gui

@@ -6,6 +6,7 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -95,8 +96,14 @@ SaveDialog::SaveDialog(const SaveDialogRequest& request, QWidget* parent) : QDia
     layout->addWidget(error_);
     layout->addWidget(buttons);
     setMinimumWidth(420);
-    name_->setFocus();
-    name_->selectAll();
+    if (request.folder_only) {
+        name_->setEnabled(false);
+        type_->setEnabled(false);
+        folder_->setFocus();
+    } else {
+        name_->setFocus();
+        name_->selectAll();
+    }
 }
 
 SaveDetails SaveDialog::details() const {
@@ -159,6 +166,32 @@ CloseChoice ask_close_unsaved(QWidget* parent) {
     if (box.clickedButton() == save)
         return CloseChoice::Save;
     return box.clickedButton() == discard ? CloseChoice::Discard : CloseChoice::Cancel;
+}
+
+std::unique_ptr<QMessageBox> make_delete_box(QWidget* parent, const QString& message) {
+    auto box = std::make_unique<QMessageBox>(QMessageBox::Warning, text("gui.confirm_delete_title"), message,
+                                             QMessageBox::NoButton, parent);
+    box->addButton(text("gui.delete"), QMessageBox::DestructiveRole)->setObjectName("delete");
+    QPushButton* cancel = box->addButton(text("gui.cancel"), QMessageBox::RejectRole);
+    box->setDefaultButton(cancel);  // geri alınamaz işlem: Enter silmesin
+    box->setEscapeButton(cancel);
+    return box;
+}
+
+bool ask_confirm_delete(QWidget* parent, const QString& message) {
+    const auto box = make_delete_box(parent, message);
+    box->exec();
+    return box->clickedButton() && box->clickedButton()->objectName() == "delete";
+}
+
+std::optional<std::string> ask_folder_name(QWidget* parent, const QString& title, const QString& initial) {
+    bool accepted = false;
+    const QString name =
+        QInputDialog::getText(parent, title, text("gui.folder_name"), QLineEdit::Normal, initial, &accepted)
+            .trimmed();
+    if (!accepted || name.isEmpty())
+        return std::nullopt;
+    return name.toStdString();
 }
 
 }  // namespace noteapp::gui

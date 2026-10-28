@@ -5,6 +5,7 @@
 #include "core/note_store.hpp"
 #include "gui/note_list_model.hpp"
 #include "gui/save_dialog.hpp"
+#include "search/content_index.hpp"
 
 #include <QFileSystemWatcher>
 #include <QMainWindow>
@@ -13,12 +14,14 @@
 #include <cstddef>
 #include <expected>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 class QComboBox;
 class QLabel;
+class QPushButton;
 class QLineEdit;
 class QListView;
 class QPlainTextEdit;
@@ -36,6 +39,10 @@ struct Deciders {
     std::function<std::optional<SaveDetails>(const SaveDialogRequest&)> save_dialog;
     std::function<ConflictChoice(const std::string& path)> conflict;
     std::function<CloseChoice()> close_unsaved;
+    // Klasör adı istemi: (başlık, başlangıç metni) -> girilen ad; nullopt = vazgeçti
+    std::function<std::optional<std::string>(const QString& title, const QString& initial)> folder_name;
+    // Silme onayı (not ve klasör): true = sil. Üretimde varsayılan düğme Vazgeç.
+    std::function<bool(const QString& message)> confirm_delete;
 };
 
 // Ana pencere: Notlar (arama + klasör ağacı + liste | düzenlenebilir not görünümü) ve Ayarlar sekmeleri.
@@ -54,6 +61,13 @@ public:
     void new_note(const QString& first_line = {});  // Ctrl+N; nvALT: arama kutusunda Enter
     void save_now();                                // Ctrl+S
     void save_as();                                 // Ctrl+Shift+S: ad/klasör/tip taşıma diyaloğu
+    // Klasör ağacı bağlam menüsü eylemleri; yollar '/' ayırıcılı göreli klasör yolu ("" = kök).
+    void new_folder(const std::string& parent);
+    void rename_folder(const std::string& folder);
+    void delete_folder(const std::string& folder);
+    void delete_note();         // Del (listede): onaylı
+    void move_note();           // Ctrl+M: yalnız klasör seçilir
+    void toggle_search_mode();  // Ad <-> İçerik
     // Test kancası: başarılı NoteStore::write sayısı (autosave birleşmesini ölçer).
     std::size_t write_count() const { return writes_; }
 
@@ -70,7 +84,18 @@ private:
     std::optional<core::NotePath> current_path() const;
     void move_selection(int delta);
     void show_current();
+    void show_selected();
     void update_status();
+    // İçerik modunda sorguya göre model sonuçlarını ayarlar (ad modunda temizler); apply_filter içinden
+    // çağrılır.
+    void update_content_results();
+    void apply_query();  // süzgeci güncel sorgu + moda göre yeniden uygular
+    void set_content_mode(bool on);
+    void update_highlights();
+    void show_folder_menu(const QPoint& pos);
+    void show_note_menu(const QPoint& pos);
+    void fail(const core::Error& error);
+    bool shown_in(const std::string& folder) const;
     void restore_state();
     void save_state() const;
 
@@ -108,10 +133,14 @@ private:
     bool in_show_ = false;   // show_current yeniden girişini engeller (kayıt akışı listeyi tazeler)
     bool crlf_ = false;      // dosya CRLF'liydi: kayıtta korunur
     std::size_t writes_ = 0;
-    QString type_box_for_;  // tip kutusunun son doldurulduğu yol (gereksiz yeniden doldurmayı önler)
+    bool content_mode_ = false;
+    std::unique_ptr<search::ContentIndex> content_index_;  // ilk içerik aramasında kurulur
+    QString highlight_key_;  // vurgunun uygulandığı (yol, sorgu); aynıysa yeniden kaydırılmaz
+    QString type_box_for_;   // tip kutusunun son doldurulduğu yol (gereksiz yeniden doldurmayı önler)
 
     QTabWidget* tabs_ = nullptr;
     QLineEdit* search_ = nullptr;
+    QPushButton* mode_button_ = nullptr;
     QTreeView* folder_tree_ = nullptr;
     QListView* note_list_ = nullptr;
     QLabel* header_ = nullptr;

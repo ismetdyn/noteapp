@@ -6,6 +6,7 @@
 #include <QVariant>
 #include <algorithm>
 #include <iterator>
+#include <map>
 
 namespace noteapp::gui {
 
@@ -59,8 +60,27 @@ void NoteListModel::rebuild_scope() {
 
 void NoteListModel::refilter() {
     rows_.clear();
+    if (content_) {
+        // Sıralamayı ContentIndex verdi; yalnız klasör kapsamındaki (ve hâlâ listede olan) notlar kalır.
+        std::map<core::NotePath, std::size_t> in_scope;
+        for (std::size_t i = 0; i < scope_.size(); ++i)
+            in_scope.emplace(scope_[i].path, i);
+        for (const auto& result : *content_)
+            if (const auto found = in_scope.find(result.path); found != in_scope.end())
+                rows_.push_back({found->second, {}, result.hit_count});
+        return;
+    }
     for (auto& ranked : search::rank_notes(query_, scope_))
-        rows_.push_back({ranked.index, std::move(ranked.match.positions)});
+        rows_.push_back({ranked.index, std::move(ranked.match.positions), 0});
+}
+
+void NoteListModel::set_content_results(std::optional<std::vector<search::ContentResult>> results) {
+    if (!content_ && !results)  // ad modunda tuş başına gereksiz ikinci fuzzy sıralama olmasın
+        return;
+    beginResetModel();
+    content_ = std::move(results);
+    refilter();
+    endResetModel();
 }
 
 QModelIndex NoteListModel::index_of(const core::NotePath& path) const {
@@ -81,6 +101,10 @@ QVariant NoteListModel::data(const QModelIndex& index, int role) const {
     const std::string path = scope_[row.scope_index].path.string();
     switch (role) {
     case Qt::DisplayRole:
+        if (content_)  // "yol  (N)": N = eşleşen satır sayısı
+            return QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size())) +
+                   QStringLiteral("  (%1)").arg(row.hits);
+        return QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size()));
     case PathRole:
         return QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size()));
     case HighlightRole: {

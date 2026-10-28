@@ -48,6 +48,12 @@ Eşleşme yokken arama kutusunda `Enter` → sorgu ilk satır olacak şekilde ye
 ## Klasörler
 Ağaç bağlam menüsü: Yeni klasör, Yeniden adlandır, Sil (doluysa not sayısıyla onay; kalıcı silme uyarısı).
 Not taşıma `Ctrl+M` diyaloğuyla (sürükle-bırak v1'de yok).
+- **Uygulama notları (T31):** klasör adı istemi ve silme onayı `deciders` üzerinden geçer; silme onayında varsayılan
+  düğme *Vazgeç*. Klasör silmede sayım not sayısıdır; notsuz görünen klasörde not olmayan dosya çıkarsa dosya
+  sayısıyla ikinci onay istenir. Gösterilen not etkilenen klasördeyse önce `flush()`, vazgeçilirse hiçbir şey
+  kaydedilmez. `Ctrl+M` yalnız klasörü seçtirir (ad/tip kilitli). Arama modu düğmesi mevcut modu gösterir; arama
+  kutusunda `Tab` modu çevirir. İçerik modunda boş sorgu tüm notları listeler; editör vurgusu düzenlemede,
+  sorgu/mod değişiminde silinir ve aynı (not, sorgu) için yedek taramada yeniden kaydırılmaz.
 
 ## Dosya izleme
 `QFileSystemWatcher` (notes_dir dizinleri) + `rescan_seconds` aralıklı yedek tarama; senkron çekmesi sonrası yenileme.

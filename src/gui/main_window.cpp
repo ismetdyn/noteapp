@@ -4,6 +4,7 @@
 #include "core/paths.hpp"
 #include "core/text.hpp"
 #include "detect/detect.hpp"
+#include "search/fold.hpp"
 
 #include <QApplication>
 #include <QCloseEvent>
@@ -14,8 +15,10 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
+#include <QMenu>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QSettings>
 #include <QShortcut>
 #include <QSplitter>
@@ -23,6 +26,7 @@
 #include <QStatusBar>
 #include <QStyledItemDelegate>
 #include <QTabWidget>
+#include <QTextEdit>
 #include <QTextLayout>
 #include <QTreeView>
 #include <QVBoxLayout>
@@ -41,6 +45,8 @@ constexpr int kDefaultWindowHeight = 650;
 constexpr int kDefaultLeftPaneWidth = 320;
 constexpr int kMillisPerSecond = 1000;
 const char kStateFileName[] = "gui-state.ini";
+constexpr std::size_t kContentResultLimit = 1000;
+constexpr int kHighlightAlpha = 110;  // palet vurgu rengi yarı saydam: açık ve koyu temada metin okunur kalır
 
 QString text(const char* key, const core::Args& args = {}) {
     return QString::fromStdString(core::tr(key, args));
@@ -49,6 +55,63 @@ QString text(const char* key, const core::Args& args = {}) {
 // Yollar UTF-8/UTF-16 arasında kayıpsız taşınsın diye std::filesystem::path'ten u16string üzerinden.
 QString to_qstring(const std::filesystem::path& path) {
     return QString::fromStdU16String(path.u16string());
+}
+
+bool is_inside(const std::string& path, const std::string& folder) {
+    return path.starts_with(folder + '/');
+}
+
+std::string join_folder(const std::string& parent, const std::string& name) {
+    return parent.empty() ? name : parent + '/' + name;
+}
+
+// Sorgu terimleri (katlanmış): boşlukla ayrılır, "..." arası tek ifade. search::ContentIndex'teki
+// ayrıştırıcıyla aynı kural; o iç ayrıntı olduğundan burada yinelenir (değişirse ikisi birlikte
+// güncellenmeli).
+std::vector<std::u32string> query_terms(const std::string& query) {
+    std::vector<std::u32string> terms;
+    auto push = [&terms](const std::string& raw) {
+        if (auto folded = search::fold(raw).text; !folded.empty())
+            terms.push_back(std::move(folded));
+    };
+    const auto is_space = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
+    std::size_t i = 0;
+    while (i < query.size()) {
+        if (is_space(query[i])) {
+            ++i;
+        } else if (query[i] == '"') {
+            const auto end = std::min(query.find('"', i + 1), query.size());
+            push(query.substr(i + 1, end - i - 1));
+            i = end + 1;
+        } else {
+            auto end = i;
+            while (end < query.size() && !is_space(query[end]) && query[end] != '"')
+                ++end;
+            push(query.substr(i, end - i));
+            i = end;
+        }
+    }
+    return terms;
+}
+
+// Editör metninde terimlerin tüm geçişleri: (UTF-16 başlangıcı, uzunluğu). fold kod noktası başına 1:1
+// olduğundan katlanmış indeks -> UTF-16 konumu, özgün kod noktasının 1 ya da 2 birim olmasından hesaplanır.
+std::vector<std::pair<int, int>> find_terms(const QString& content, const std::string& query) {
+    const auto terms = query_terms(query);
+    const QByteArray utf8 = content.toUtf8();
+    const search::Folded folded =
+        search::fold(std::string_view(utf8.constData(), static_cast<std::size_t>(utf8.size())));
+    std::vector<int> unit(folded.original.size() + 1, 0);
+    for (std::size_t i = 0; i < folded.original.size(); ++i)
+        unit[i + 1] = unit[i] + (folded.original[i] > 0xFFFF ? 2 : 1);
+
+    std::vector<std::pair<int, int>> found;
+    for (const auto& term : terms)
+        for (auto at = folded.text.find(term); at != std::u32string::npos;
+             at = folded.text.find(term, at + 1))
+            found.emplace_back(unit[at], unit[at + term.size()] - unit[at]);
+    std::ranges::sort(found);
+    return found;
 }
 
 // Eşleşen karakterleri kalın çizen liste temsilcisi. Vurgu konumları model tarafından UTF-16 birimi olarak
@@ -104,6 +167,10 @@ MainWindow::MainWindow(core::Config config)
     };
     deciders.conflict = [this](const std::string& path) { return ask_conflict(this, path); };
     deciders.close_unsaved = [this] { return ask_close_unsaved(this); };
+    deciders.folder_name = [this](const QString& title, const QString& initial) {
+        return ask_folder_name(this, title, initial);
+    };
+    deciders.confirm_delete = [this](const QString& message) { return ask_confirm_delete(this, message); };
 
     build_ui();
     restore_state();
@@ -164,7 +231,18 @@ void MainWindow::build_ui() {
     note_list_->setAccessibleName(text("gui.a11y_notes"));
 
     left_splitter_ = new QSplitter(Qt::Vertical);
-    left_splitter_->addWidget(search_);
+    mode_button_ = new QPushButton(text("gui.mode_name"));
+    mode_button_->setObjectName("modeButton");
+    mode_button_->setCheckable(true);
+    mode_button_->setFocusPolicy(Qt::NoFocus);  // Tab arama kutusunda modu çevirir, odak zincirini bozmaz
+    mode_button_->setAccessibleName(text("gui.a11y_mode"));
+    auto* search_row = new QWidget;
+    auto* search_layout = new QHBoxLayout(search_row);
+    search_layout->setContentsMargins(0, 0, 0, 0);
+    search_layout->addWidget(search_, 1);
+    search_layout->addWidget(mode_button_);
+
+    left_splitter_->addWidget(search_row);
     left_splitter_->addWidget(folder_tree_);
     left_splitter_->addWidget(note_list_);
     left_splitter_->setChildrenCollapsible(false);
@@ -208,8 +286,14 @@ void MainWindow::build_ui() {
     statusBar()->addWidget(count_label_, 1);
     statusBar()->addPermanentWidget(new QLabel(text("gui.sync_off")));  // T32 gerçek durumu bağlar
 
-    connect(search_, &QLineEdit::textChanged, this,
-            [this](const QString& query) { apply_filter([&] { model_.set_query(query.toStdString()); }); });
+    connect(search_, &QLineEdit::textChanged, this, [this] { apply_query(); });
+    connect(mode_button_, &QPushButton::toggled, this, [this](bool on) { set_content_mode(on); });
+    folder_tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(folder_tree_, &QWidget::customContextMenuRequested, this,
+            [this](const QPoint& pos) { show_folder_menu(pos); });
+    note_list_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(note_list_, &QWidget::customContextMenuRequested, this,
+            [this](const QPoint& pos) { show_note_menu(pos); });
     connect(folder_tree_->selectionModel(), &QItemSelectionModel::currentChanged, this,
             [this](const QModelIndex& current) {
                 if (suppress_ || !current.isValid())
@@ -228,6 +312,7 @@ void MainWindow::build_ui() {
     connect(editor_, &QPlainTextEdit::textChanged, this, [this] {
         if (loading_ || !(shown_ || new_note_))
             return;
+        editor_->setExtraSelections({});  // düzenleme vurguları eskitir (konumlar kayar)
         dirty_ = true;
         update_header();
         if (!new_note_)  // yeni not ilk kayıtta diyalog ister: autosave yok
@@ -240,6 +325,9 @@ void MainWindow::build_ui() {
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_N), this, [this] { new_note(); });
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_S), this, [this] { save_now(); });
     new QShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S), this, [this] { save_as(); });
+    new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_M), this, [this] { move_note(); });
+    // Del yalnız liste odaktayken: editörde/arama kutusunda karakter silmeyi ezmesin.
+    new QShortcut(QKeySequence(Qt::Key_Delete), note_list_, [this] { delete_note(); }, Qt::WidgetShortcut);
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_K), this, [this] { focus_search(); });
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_P), this, [this] { focus_search(); });
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma), this, [this] { show_settings_tab(); });
@@ -265,6 +353,9 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
             return true;
         case Qt::Key_Down:
             move_selection(1);
+            return true;
+        case Qt::Key_Tab:
+            toggle_search_mode();
             return true;
         case Qt::Key_Return:
         case Qt::Key_Enter:
@@ -349,7 +440,11 @@ void MainWindow::show_current() {
         bool& flag;
         ~Reset() { flag = false; }
     } reset{in_show_};
+    show_selected();
+    update_highlights();
+}
 
+void MainWindow::show_selected() {
     QModelIndex index = note_list_->currentIndex();
     const auto target = index.isValid() ? std::optional(model_.note_at(index.row()).path) : std::nullopt;
     const bool same = shown_ && target && shown_->path == *target;
@@ -396,6 +491,8 @@ void MainWindow::show_current() {
 // geri yazılırsa bozuk baytlar sessizce değişirdi.
 void MainWindow::set_editor(const QString& content, bool editable) {
     autosave_timer_.stop();
+    highlight_key_.clear();
+    editor_->setExtraSelections({});
     loading_ = true;
     editor_->setPlainText(content);
     editor_->setReadOnly(!editable);
@@ -788,6 +885,8 @@ void MainWindow::watch_directories() {
 }
 
 void MainWindow::rescan() {
+    if (content_index_ && content_mode_)
+        content_index_->refresh();
     if (auto folders = store_.folders(); folders != folders_ || watcher_.directories().isEmpty()) {
         const bool changed = folders != folders_;
         folders_ = std::move(folders);
@@ -799,7 +898,254 @@ void MainWindow::rescan() {
     apply_filter([&] {
         model_.set_folder(current_folder_);
         model_.set_notes(std::move(notes));
+        update_content_results();
     });
+}
+
+void MainWindow::apply_query() {
+    apply_filter([this] {
+        update_content_results();
+        model_.set_query(search_->text().toStdString());
+    });
+}
+
+void MainWindow::toggle_search_mode() {
+    mode_button_->toggle();  // toggled -> set_content_mode
+}
+
+void MainWindow::set_content_mode(bool on) {
+    content_mode_ = on;
+    mode_button_->setText(text(on ? "gui.mode_content" : "gui.mode_name"));
+    if (on && content_index_)
+        content_index_->refresh();  // kapalıyken rescan indeksi tazelemedi
+    apply_query();
+}
+
+// İçerik modunda sonuçları ContentIndex'ten alır; ad modunda ya da boş sorguda model fuzzy/tüm liste olur.
+void MainWindow::update_content_results() {
+    const std::string query = search_->text().toStdString();
+    if (!content_mode_ || query.empty()) {
+        model_.set_content_results(std::nullopt);
+        return;
+    }
+    if (!content_index_) {
+        // ponytail: ilk içerik aramasında tüm notlar bir kez okunur (UI'yi kısa süre tutar); sorun olursa
+        // arka plan iş parçacığına alınır.
+        content_index_ = std::make_unique<search::ContentIndex>(
+            store_, static_cast<std::size_t>(config_.tuning.max_note_bytes));
+        content_index_->refresh();
+    }
+    model_.set_content_results(content_index_->search(query, kContentResultLimit));
+}
+
+// Gösterilen notta sorgu terimlerinin her geçişini vurgular, ilk eşleşmeye kaydırır. Aynı (not, sorgu)
+// için yeniden çalışmaz: yedek tarama kullanıcının kaydırmasını ezmesin.
+void MainWindow::update_highlights() {
+    const std::string query = search_->text().toStdString();
+    if (!content_mode_ || query.empty() || !shown_ || new_note_ || shown_->binary) {
+        if (!highlight_key_.isEmpty()) {
+            highlight_key_.clear();
+            editor_->setExtraSelections({});
+        }
+        return;
+    }
+    const QString key = QString::fromStdString(shown_->path.string()) + QLatin1Char('\n') + search_->text();
+    if (key == highlight_key_)
+        return;
+    highlight_key_ = key;
+
+    QColor color = editor_->palette().highlight().color();
+    color.setAlpha(kHighlightAlpha);
+    QList<QTextEdit::ExtraSelection> selections;
+    for (const auto& [start, length] : find_terms(editor_->toPlainText(), query)) {
+        QTextEdit::ExtraSelection selection;
+        selection.cursor = QTextCursor(editor_->document());
+        selection.cursor.setPosition(start);
+        selection.cursor.setPosition(start + length, QTextCursor::KeepAnchor);
+        selection.format.setBackground(color);
+        selections.append(selection);
+    }
+    editor_->setExtraSelections(selections);
+    if (!selections.isEmpty()) {
+        QTextCursor first(editor_->document());
+        first.setPosition(selections.front().cursor.selectionStart());
+        editor_->setTextCursor(first);
+        editor_->ensureCursorVisible();
+    }
+}
+
+void MainWindow::fail(const core::Error& error) {
+    statusBar()->showMessage(text("gui.op_failed", {{"detail", core::format_error(error)}}));
+}
+
+bool MainWindow::shown_in(const std::string& folder) const {
+    return shown_ && is_inside(shown_->path.string(), folder);
+}
+
+void MainWindow::show_folder_menu(const QPoint& pos) {
+    const QModelIndex index = folder_tree_->indexAt(pos);
+    const std::string folder = index.isValid() ? index.data(kFolderPathRole).toString().toStdString() : "";
+    QMenu menu(this);
+    menu.addAction(text("gui.new_folder"), this, [this, folder] { new_folder(folder); });
+    if (!folder.empty()) {  // kök "Tümü" yeniden adlandırılamaz/silinemez
+        menu.addAction(text("gui.rename_folder"), this, [this, folder] { rename_folder(folder); });
+        menu.addAction(text("gui.delete_folder"), this, [this, folder] { delete_folder(folder); });
+    }
+    menu.exec(folder_tree_->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::show_note_menu(const QPoint& pos) {
+    const QModelIndex index = note_list_->indexAt(pos);
+    if (!index.isValid())
+        return;
+    note_list_->setCurrentIndex(index);
+    QMenu menu(this);
+    menu.addAction(text("gui.move_note"), this, [this] { move_note(); });
+    menu.addAction(text("gui.delete_note"), this, [this] { delete_note(); });
+    menu.exec(note_list_->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::new_folder(const std::string& parent) {
+    const auto name = deciders.folder_name(text("gui.new_folder_title"), {});
+    if (!name)
+        return;
+    const std::string folder = join_folder(parent, *name);
+    // create_folder yinelenebilir (idempotent) olduğundan var olan klasör çakışması burada yakalanır.
+    if (std::ranges::find(folders_, folder) != folders_.end()) {
+        fail(core::Error{core::Error::Code::AlreadyExists, "error.already_exists", {{"path", folder}}});
+        return;
+    }
+    if (const auto created = store_.create_folder(folder); !created) {
+        fail(created.error());
+        return;
+    }
+    statusBar()->clearMessage();
+    rescan();
+}
+
+void MainWindow::rename_folder(const std::string& folder) {
+    if (folder.empty())
+        return;
+    const auto slash = folder.rfind('/');
+    const std::string parent = slash == std::string::npos ? "" : folder.substr(0, slash);
+    const std::string leaf = slash == std::string::npos ? folder : folder.substr(slash + 1);
+    const auto name = deciders.folder_name(text("gui.rename_folder_title"), QString::fromStdString(leaf));
+    if (!name || *name == leaf)
+        return;
+    const std::string target = join_folder(parent, *name);
+
+    const bool affected = shown_in(folder);
+    if (affected && !flush())  // kirli tampon yeni yola değil, taşınmadan önce kaydedilir
+        return;
+    // Windows'ta izlenen dizin yeniden adlandırılamaz/silinemez; rescan izleyiciyi yeniden kurar.
+    watcher_.removePaths(watcher_.directories());
+    if (const auto renamed = store_.rename_folder(folder, target); !renamed) {
+        fail(renamed.error());
+        rescan();
+        return;
+    }
+    statusBar()->clearMessage();
+    if (affected) {
+        if (const auto moved = core::NotePath::parse(target + shown_->path.string().substr(folder.size()))) {
+            shown_->path = *moved;
+            if (const auto fresh = store_.read(*moved))
+                shown_->mtime = fresh->mtime;
+        }
+        type_box_for_.clear();
+    }
+    if (current_folder_ == folder || is_inside(current_folder_, folder))
+        current_folder_ = target + current_folder_.substr(folder.size());
+    rescan();
+    update_header();
+}
+
+void MainWindow::delete_folder(const std::string& folder) {
+    if (folder.empty())
+        return;
+    std::size_t notes = 0;
+    for (const auto& info : store_.list())
+        notes += is_inside(info.path.string(), folder) ? 1 : 0;
+    const bool has_notes = notes > 0;
+    const QString message =
+        has_notes ? text("gui.confirm_delete_folder", {{"folder", folder}, {"count", std::to_string(notes)}})
+                  : text("gui.confirm_delete_empty_folder", {{"folder", folder}});
+    if (!deciders.confirm_delete(message))
+        return;
+
+    const bool affected = shown_in(folder);
+    if (affected && !flush())
+        return;
+    watcher_.removePaths(watcher_.directories());  // bkz. rename_folder
+    auto removed = store_.remove_folder(folder, has_notes);
+    if (!removed && removed.error().code == core::Error::Code::NotEmpty) {
+        // "Boş" görünen klasörde not olmayan dosyalar var: sayıyla ikinci, ayrı onay.
+        std::string count = "?";
+        for (const auto& [key, value] : removed.error().args)
+            if (key == "count")
+                count = value;
+        if (deciders.confirm_delete(
+                text("gui.confirm_delete_folder", {{"folder", folder}, {"count", count}})))
+            removed = store_.remove_folder(folder, true);
+        else {
+            rescan();
+            return;
+        }
+    }
+    if (!removed) {  // contains_link dahil: hiçbir şey silinmedi
+        fail(removed.error());
+        rescan();
+        return;
+    }
+    statusBar()->clearMessage();
+    if (affected) {
+        shown_.reset();
+        type_box_for_.clear();
+        set_editor({}, false);
+        update_header();
+    }
+    rescan();
+}
+
+void MainWindow::delete_note() {
+    const auto path = current_path();
+    if (!path)
+        return;
+    if (!deciders.confirm_delete(text("gui.confirm_delete_note", {{"path", path->string()}})))
+        return;
+    const bool shown = shown_ && shown_->path == *path;
+    if (shown && !flush())
+        return;
+    // flush mtime'ı değiştirip satırı yukarı taşımış olabilir: komşu satır silmeden önce çözülür.
+    const int row = std::max(0, model_.index_of(*path).row());
+    if (const auto removed = store_.remove(*path); !removed) {
+        fail(removed.error());
+        return;
+    }
+    statusBar()->clearMessage();
+    if (shown) {
+        shown_.reset();
+        type_box_for_.clear();
+        set_editor({}, false);
+        update_header();
+    }
+    rescan();
+    if (const int count = model_.rowCount(); count > 0)
+        note_list_->setCurrentIndex(model_.index(std::min(row, count - 1)));
+}
+
+void MainWindow::move_note() {
+    if (new_note_ || !shown_ || !flush())
+        return;
+    const PathParts parts = split(shown_->path);
+    SaveDialogRequest request;
+    request.mode = SaveDialogRequest::Mode::Move;
+    request.initial = {parts.stem, parts.folder, parts.type};
+    request.folders = folders_;
+    request.types = config_.types;
+    request.folder_only = true;
+    // Ad ve tip kilitli: karar ne dönerse dönsün yalnız klasör alınır.
+    if (const auto chosen = deciders.save_dialog(request))
+        move_current({parts.stem, chosen->folder, parts.type});
 }
 
 }  // namespace noteapp::gui

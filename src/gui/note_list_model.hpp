@@ -2,10 +2,12 @@
 
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
+#include "search/content_index.hpp"
 
 #include <QAbstractListModel>
 #include <QList>
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -32,6 +34,10 @@ public:
     // Göreli klasör yolu ('/' ayırıcılı); "" = tümü. Yalnız alt ağaçtaki notlar kalır.
     void set_folder(std::string folder);
 
+    // İçerik modu: sıralamayı ContentIndex yapar (MainWindow); model yalnız sırayı ve sayıları gösterir.
+    // nullopt = ad modu (fuzzy). Klasör kapsamı dışındaki sonuçlar düşer.
+    void set_content_results(std::optional<std::vector<search::ContentResult>> results);
+
     const core::NoteInfo& note_at(int row) const {
         return scope_[rows_[static_cast<std::size_t>(row)].scope_index];
     }
@@ -46,6 +52,7 @@ private:
     struct Row {
         std::size_t scope_index;
         std::vector<std::size_t> byte_positions;  // yol UTF-8'inde bayt ofseti
+        std::size_t hits = 0;                     // içerik modunda eşleşen satır sayısı
     };
 
     void rebuild_scope();
@@ -56,6 +63,7 @@ private:
     std::vector<Row> rows_;
     std::string query_;
     std::string folder_;
+    std::optional<std::vector<search::ContentResult>> content_;
 };
 
 }  // namespace noteapp::gui
