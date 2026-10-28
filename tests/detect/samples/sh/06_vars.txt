@@ -1,0 +1,5 @@
+# yedek al
+SRC=${1:-.}
+DST=/mnt/backup
+rsync -a "$SRC" "$DST"
+echo "bitti: $DST"

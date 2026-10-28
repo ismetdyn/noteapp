@@ -1,0 +1,13 @@
+# Python ile okuma
+
+```python
+import os
+
+def read_note(path):
+    with open(path) as f:
+        return f.read()
+
+print(read_note("a.txt"))
+```
+
+Bu kadar. **Basit** ve işe yarar.

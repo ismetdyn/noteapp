@@ -110,6 +110,7 @@
 ### T11: detect modülü + korpus + CLI'ye bağlama
 - [ ] **Kabul:** SPEC-detect kabul 1–5 (korpusta ≥ %90, zorunlu örnekler, tek satır → varsayılan, 64 KB ≤ 5 ms Release) ·
   CLI çok satırlı girdide öneriyi kullanır, `-t` öneriyi ezer, çıktıda "önerilen/seçilen".
+- [x] modül + korpus tamam; CLI bağlantısı T10 sonrası
 - **Doğrulama:** `B && T(detect) && T(cli)` · **Bağımlılık:** T10 · **Dosyalar:** `src/detect/{CMakeLists.txt,detect.hpp,detect.cpp}`,
   `tests/detect/detect_test.cpp`, `tests/detect/samples/**` (veri), `src/cli/main.cpp` · **Boyut:** M
 

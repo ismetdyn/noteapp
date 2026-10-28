@@ -1,0 +1,5 @@
+if [ -d "$DIR" ]; then
+  echo "var"
+else
+  mkdir -p "$DIR"
+fi

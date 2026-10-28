@@ -1,0 +1,8 @@
+# Haftalık plan
+
+- [x] Spec'i onayla
+- [x] Çekirdek modülü yaz
+- [ ] Arama modülünü bitir
+- [ ] CLI'yi bağla
+
+> Not: Cuma günü demo var.

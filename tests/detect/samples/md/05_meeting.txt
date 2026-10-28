@@ -1,0 +1,16 @@
+# Toplantı 28 Ekim
+
+Katılımcılar: Ayşe, Mehmet, Zeynep
+
+## Kararlar
+
+* Veritabanı yerine düz dosya kullanılacak
+* Senkronizasyon dışarıdan bir araçla yapılacak
+* Şifreleme v2'ye ertelendi
+
+## Aksiyonlar
+
+1. Ayşe: taslağı gönderir
+2. Mehmet: testleri yazar
+
+Ayrıntılar için [wiki](https://wiki.example.com/noteapp) sayfasına bakın.

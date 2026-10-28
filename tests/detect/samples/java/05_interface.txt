@@ -1,0 +1,6 @@
+package org.demo;
+
+public interface Repository<T> {
+    T save(T entity);
+    void delete(long id);
+}

@@ -1,0 +1,16 @@
+package com.example.notes;
+
+import java.util.List;
+import java.util.Optional;
+
+public class NoteService {
+    private final NoteRepository repository;
+
+    public NoteService(NoteRepository repository) {
+        this.repository = repository;
+    }
+
+    public Optional<Note> find(String title) {
+        return repository.findByTitle(title);
+    }
+}

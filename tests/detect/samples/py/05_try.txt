@@ -1,0 +1,6 @@
+def parse(line):
+    try:
+        key, value = line.split("=")
+    except ValueError:
+        return None
+    return key.strip(), value.strip()

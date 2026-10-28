@@ -1,0 +1,11 @@
+{
+  "editor": {
+    "command": "micro",
+    "args": ["-readonly", "false"]
+  },
+  "paths": {
+    "root": "C:\\Users\\ismet\\notes",
+    "trash": null
+  },
+  "limits": {"max": 100, "ratio": 0.75}
+}

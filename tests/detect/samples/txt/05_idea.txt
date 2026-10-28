@@ -1,0 +1,3 @@
+Fikir: notları klasör yerine etiketle gruplamak daha doğal olabilir.
+Ama klasör yapısı dosya sistemiyle birebir örtüştüğü için senkronizasyon çok
+daha basit kalıyor. Şimdilik klasörlerle devam, etiket düşüncesi v2 için bekler.

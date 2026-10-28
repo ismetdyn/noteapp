@@ -1,0 +1,5 @@
+{
+  "quote": "he said \"hi\" {not a brace}",
+  "line": "a\nb",
+  "list": [[1, 2], [3, 4]]
+}

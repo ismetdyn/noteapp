@@ -1,0 +1,16 @@
+## Lambda örneği
+
+Aşağıdaki kod bir lambda'yı `std::function` içinde saklar:
+
+```cpp
+#include <functional>
+#include <iostream>
+
+int main() {
+    std::function<int(int)> twice = [](int x) { return x * 2; };
+    std::cout << twice(21) << "\n";
+    return 0;
+}
+```
+
+Çıktı `42` olmalı.

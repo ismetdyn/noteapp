@@ -1,0 +1,4 @@
+tarih,açıklama,tutar
+2026-10-01,"Market, haftalık",250
+2026-10-03,Ulaşım,45
+2026-10-07,"Kitap, roman",120

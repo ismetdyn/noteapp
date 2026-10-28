@@ -1,0 +1,9 @@
+import sys
+from pathlib import Path
+
+for name in sys.argv[1:]:
+    p = Path(name)
+    if p.exists():
+        print(p.stat().st_size)
+    else:
+        print("yok:", name)

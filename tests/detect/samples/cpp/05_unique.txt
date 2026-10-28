@@ -1,0 +1,11 @@
+#include <memory>
+
+struct Widget {
+    int id;
+};
+
+std::unique_ptr<Widget> make_widget(int id) {
+    auto w = std::make_unique<Widget>();
+    w->id = id;
+    return w;
+}

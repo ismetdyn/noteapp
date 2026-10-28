@@ -1,0 +1,15 @@
+#pragma once
+
+#include <optional>
+
+namespace noteapp::core {
+
+template <typename T>
+std::optional<T> first_or_none(const std::vector<T>& items) {
+    if (items.empty()) {
+        return std::nullopt;
+    }
+    return items.front();
+}
+
+}  // namespace noteapp::core

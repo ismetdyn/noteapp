@@ -1,0 +1,5 @@
+auto* node = head;
+while (node != nullptr) {
+    visit(node->value);
+    node = node->next;
+}

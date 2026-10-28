@@ -1,0 +1,8 @@
+import os
+
+def list_notes(root):
+    result = []
+    for entry in os.listdir(root):
+        if entry.endswith(".md"):
+            result.append(entry)
+    return result

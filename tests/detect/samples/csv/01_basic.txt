@@ -1,0 +1,4 @@
+id,ad,şehir
+1,Ayşe,Ankara
+2,Mehmet,İzmir
+3,Zeynep,Bursa

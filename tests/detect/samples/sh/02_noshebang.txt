@@ -1,0 +1,4 @@
+export PATH="$HOME/bin:$PATH"
+for f in *.txt; do
+  echo "$f"
+done

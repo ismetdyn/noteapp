@@ -1,0 +1,8 @@
+#include <string>
+
+class Greeter {
+    std::string name;
+public:
+    Greeter(std::string n) : name(n) {}
+    std::string greet() { return "Merhaba " + name; }
+};

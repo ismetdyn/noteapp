@@ -1,0 +1,5 @@
+Bugün sabah erkenden kalktım ve uzun bir yürüyüşe çıktım. Hava serindi, ama
+güneş yavaş yavaş yükseliyordu. Eve dönerken fırından taze simit aldım.
+
+Öğleden sonra projeye döndüm. Arama modülünün sıralama mantığı hâlâ biraz
+karışık geliyor, yarın tekrar bakacağım.

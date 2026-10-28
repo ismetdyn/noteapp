@@ -1,0 +1,4 @@
+name	score	level
+ali	10	3
+veli	8	2
+selin	12	4

@@ -1,0 +1,3 @@
+anahtar,değer
+renk,mavi
+boyut,büyük

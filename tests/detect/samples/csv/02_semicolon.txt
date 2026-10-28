@@ -1,0 +1,4 @@
+ürün;adet;fiyat
+elma;3;12,50
+armut;2;9,75
+muz;6;30,00

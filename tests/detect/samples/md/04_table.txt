@@ -1,0 +1,8 @@
+# Karşılaştırma
+
+| Araç | Hız | Not |
+|------|-----|-----|
+| fzf  | çok hızlı | harici |
+| kendi | yeterli | bağımlılık yok |
+
+Sonuç olarak **kendi çözümümüz** yeterli.
