@@ -104,6 +104,7 @@ max_note_bytes = 10485760
 rescan_seconds = 5
 autosave_ms = 1000
 exit_timeout_seconds = 10
+log_max_bytes = 1048576   # log.txt bu boyutu aşınca log.1.txt'ye döner
 ```
 - Varsayılanlar `resources/defaults.toml`'dan (gömülü) gelir; dosya yoksa varsayılanlarla çalışılır, ilk
   kayıtta oluşturulur. Bilinmeyen anahtar → uyarı logu, yok sayılır. Geçersiz değer (yanlış tür, language ∉ {auto,tr,en}, boş/noktalı tip, idle_seconds ≤ 0, boş branch, ≤ 0 tuning) → o anahtar için varsayılan + uyarı; TOML sözdizimi hatası → tüm varsayılanlar + satır/sütunlu uyarı. `save_config` `[tuning]` yazmaz.
@@ -112,7 +113,7 @@ exit_timeout_seconds = 10
 
 ### i18n
 - Kataloglar `resources/i18n/{en,tr}.toml` (düz anahtarlar, `{ad}` yer tutucuları), derlemede gömülür.
-- Çözüm: seçili dil → `en` → anahtarın kendisi (+ uyarı logu). Çoğul formu gerektiren cümle kurulmaz.
+- Çözüm: seçili dil → `en` → anahtarın kendisi (+ uyarı logu).  `format_error`: `reason` argümanı `reason.<değer>` kataloğuyla çevrilir. `LoadedConfig::warnings` `Error` (ConfigInvalid) listesidir. Çoğul formu gerektiren cümle kurulmaz.
 
 ### Editör
 - Çözüm sırası: `config.editor` → `$VISUAL` → `$EDITOR` → Windows: PATH'te `edit` varsa o, yoksa `notepad`;
@@ -122,7 +123,7 @@ exit_timeout_seconds = 10
 
 ### Platform dizinleri ve log
 - Config / durum dizinleri SPEC.md §8'deki gibi; `NOTEAPP_HOME` ayarlıysa ikisi de onun altına.
-- Log: `<durum>/log.txt`, 1 MB'ta `log.1.txt`'ye döner; seviye info/warn/error; token asla yazılmaz.
+- Log: `<durum>/log.txt`, `tuning.log_max_bytes` (1 MiB) aşılınca `log.1.txt`'ye döner; satır: `YYYY-MM-DDTHH:MM:SS seviye pid mesaj` (yerel saat); G/Ç hatası uygulamayı düşürmez; seviye info/warn/error; token asla yazılmaz.
 - Windows'ta süreç başında konsol kod sayfası UTF-8'e ayarlanır (cli/tui ortak yardımcı).
 
 ## Kabul kriterleri

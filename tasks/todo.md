@@ -87,7 +87,7 @@
   `src/core/{config.hpp,config.cpp,paths.hpp,paths.cpp}`, `tests/core/config_test.cpp` · **Boyut:** M
 
 ### T09: i18n + log
-- [ ] **Kabul:** `tr("key", {args})` yer tutucuları doldurur · seçili dil → en → anahtar geri düşüşü · `en`/`tr` anahtar
+- [x] **Kabul:** `tr("key", {args})` yer tutucuları doldurur · seçili dil → en → anahtar geri düşüşü · `en`/`tr` anahtar
   eşliği testi · `language=auto` Windows UI dili / `LANG`'dan · log 1 MB'ta döner.
 - **Doğrulama:** `B && T(core)` · **Bağımlılık:** T08 · **Dosyalar:** `resources/i18n/{en,tr}.toml`,
   `src/core/{i18n.hpp,i18n.cpp,log.hpp,log.cpp}`, `tests/core/i18n_test.cpp` · **Boyut:** M

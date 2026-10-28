@@ -25,3 +25,4 @@ max_note_bytes = 10485760     # bundan büyük notlar düzenlenmez/aranmaz (10 M
 rescan_seconds = 5            # GUI/TUI dizin yeniden tarama aralığı
 autosave_ms = 1000            # GUI otomatik kayıt gecikmesi
 exit_timeout_seconds = 10     # çıkışta bekleyen senkron için üst sınır
+log_max_bytes = 1048576       # log.txt bu boyutu aşınca log.1.txt'ye döner (1 MiB)

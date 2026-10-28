@@ -1,5 +1,7 @@
 #include "gui/pdf_export.hpp"
 
+#include "core/i18n.hpp"
+
 #include <QAbstractTextDocumentLayout>
 #include <QFile>
 #include <QFileInfo>
@@ -17,14 +19,17 @@ namespace {
 
 constexpr qreal kPageMarginMm = 15.0;
 
+// Katalog metni {path} ve {detail} ile doldurulur; sonuç Qt arayüzü için QString'e çevrilir.
+QString qtr(const char* key, const QString& path, const QString& detail) {
+    return QString::fromUtf8(core::tr(key, {{"path", path.toStdString()}, {"detail", detail.toStdString()}}));
+}
+
 }  // namespace
 
 std::expected<void, QString> export_pdf(const QString& input_path, const QString& output_path) {
     QFile input(input_path);
     if (!input.open(QIODevice::ReadOnly)) {
-        // TODO(T09): i18n
-        return std::unexpected(
-            QStringLiteral("girdi okunamadı: %1: %2").arg(input_path, input.errorString()));
+        return std::unexpected(qtr("gui.export_input_unreadable", input_path, input.errorString()));
     }
     const QString text = QString::fromUtf8(input.readAll());
 
@@ -38,9 +43,7 @@ std::expected<void, QString> export_pdf(const QString& input_path, const QString
 
     QSaveFile output(output_path);
     if (!output.open(QIODevice::WriteOnly)) {
-        // TODO(T09): i18n
-        return std::unexpected(
-            QStringLiteral("çıktı açılamadı: %1: %2").arg(output_path, output.errorString()));
+        return std::unexpected(qtr("gui.export_output_unopenable", output_path, output.errorString()));
     }
     {
         QPdfWriter writer(&output);
@@ -55,9 +58,7 @@ std::expected<void, QString> export_pdf(const QString& input_path, const QString
         document.print(&writer);
     }
     if (!output.commit()) {
-        // TODO(T09): i18n
-        return std::unexpected(
-            QStringLiteral("çıktı yazılamadı: %1: %2").arg(output_path, output.errorString()));
+        return std::unexpected(qtr("gui.export_output_unwritable", output_path, output.errorString()));
     }
     return {};
 }

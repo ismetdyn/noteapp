@@ -1,3 +1,6 @@
+#include "core/config.hpp"
+#include "core/i18n.hpp"
+#include "core/log.hpp"
 #include "tui/main_view.hpp"
 
 #include <ftxui/component/app.hpp>
@@ -47,6 +50,12 @@ int main() {
 #ifdef _WIN32
     const ConsoleUtf8Scope utf8_console;
 #endif
+    // Dil ve log eşiği config'ten gelir; yükleme uyarıları log'a düşer (TUI ekranına yazılmaz).
+    const noteapp::core::LoadedConfig loaded = noteapp::core::load_config();
+    noteapp::core::init_i18n(loaded.config.language);
+    noteapp::core::init_log(loaded.config.tuning.log_max_bytes);
+    for (const auto& warning : loaded.warnings)
+        noteapp::core::log_warn(noteapp::core::format_error(warning));
     auto app = ftxui::App::Fullscreen();
     const auto view = ftxui::Renderer([] { return noteapp::tui::main_view(); });
     // Ctrl-C'yi de kendimiz işleriz: FTXUI'ye bırakılırsa döngüden sonra SIGINT'i yeniden yükseltir ve süreç

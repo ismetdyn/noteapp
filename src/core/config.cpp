@@ -8,7 +8,6 @@
 #include <array>
 #include <climits>
 #include <cstdint>
-#include <format>
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -31,11 +30,13 @@ bool is_valid_type(std::string_view type) {
 // Uygulanmayan alan çağıranın elindeki (önceki katmandan gelen) değeri korur → "varsayılana düş".
 class Section {
 public:
-    Section(const toml::table& table, std::string prefix, std::vector<std::string>& warnings)
+    Section(const toml::table& table, std::string prefix, std::vector<Error>& warnings)
         : table_(table), prefix_(std::move(prefix)), warnings_(warnings) {}
 
     void invalid(std::string_view key, std::string_view rule) {
-        warnings_.push_back(std::format("config: '{}{}' {}; using the default", prefix_, key, rule));
+        warnings_.push_back(Error{Error::Code::ConfigInvalid,
+                                  "config.invalid_value",
+                                  {{"key", prefix_ + std::string(key)}, {"reason", std::string(rule)}}});
     }
 
     std::optional<std::string> string(std::string_view key) {
@@ -44,7 +45,7 @@ public:
             return std::nullopt;
         if (const auto* value = node->as_string())
             return value->get();
-        invalid(key, "must be a string");
+        invalid(key, "must_be_string");
         return std::nullopt;
     }
 
@@ -54,7 +55,7 @@ public:
             return std::nullopt;
         if (const auto* value = node->as_boolean())
             return value->get();
-        invalid(key, "must be true or false");
+        invalid(key, "must_be_bool");
         return std::nullopt;
     }
 
@@ -65,7 +66,7 @@ public:
             return std::nullopt;
         const auto* value = node->as_integer();
         if (value == nullptr || value->get() <= 0 || value->get() > limit) {
-            invalid(key, "must be a positive integer");
+            invalid(key, "must_be_positive_integer");
             return std::nullopt;
         }
         return value->get();
@@ -81,7 +82,7 @@ public:
                                              : integer != nullptr ? std::optional<double>(integer->get())
                                                                   : std::nullopt;
         if (!number || *number < 0.0 || *number > 1.0) {
-            invalid(key, "must be a number between 0 and 1");
+            invalid(key, "must_be_fraction");
             return std::nullopt;
         }
         return number;
@@ -93,14 +94,14 @@ public:
             return std::nullopt;
         const auto* array = node->as_array();
         if (array == nullptr) {
-            invalid(key, "must be an array of strings");
+            invalid(key, "must_be_string_array");
             return std::nullopt;
         }
         std::vector<std::string> out;
         for (const toml::node& element : *array) {
             const auto* value = element.as_string();
             if (value == nullptr || !is_valid_type(value->get())) {
-                invalid(key, "must contain only non-empty names without dots");
+                invalid(key, "must_be_type_names");
                 return std::nullopt;
             }
             out.push_back(value->get());
@@ -115,7 +116,7 @@ public:
             return std::nullopt;
         if (const auto* table = node->as_table())
             return Section(*table, prefix_ + std::string(key) + ".", warnings_);
-        invalid(key, "must be a table");
+        invalid(key, "must_be_table");
         return std::nullopt;
     }
 
@@ -123,7 +124,9 @@ public:
     void warn_unknown() {
         for (const auto& [key, node] : table_) {
             if (std::find(known_.begin(), known_.end(), key.str()) == known_.end())
-                warnings_.push_back(std::format("config: unknown key '{}{}' ignored", prefix_, key.str()));
+                warnings_.push_back(Error{Error::Code::ConfigInvalid,
+                                          "config.unknown_key",
+                                          {{"key", prefix_ + std::string(key.str())}}});
         }
     }
 
@@ -135,7 +138,7 @@ private:
 
     const toml::table& table_;
     std::string prefix_;
-    std::vector<std::string>& warnings_;
+    std::vector<Error>& warnings_;
     std::vector<std::string_view> known_;
 };
 
@@ -146,7 +149,7 @@ void apply_sync(Section& s, SyncConfig& sync) {
         sync.remote = std::move(*v);
     if (auto v = s.string("branch")) {
         if (v->empty())
-            s.invalid("branch", "must not be empty");
+            s.invalid("branch", "must_not_be_empty");
         else
             sync.branch = std::move(*v);
     }
@@ -174,21 +177,23 @@ void apply_tuning(Section& s, Tuning& tuning) {
         tuning.autosave_ms = static_cast<int>(*v);
     if (auto v = s.positive_integer("exit_timeout_seconds", INT_MAX))
         tuning.exit_timeout_seconds = static_cast<int>(*v);
+    if (auto v = s.positive_integer("log_max_bytes"))
+        tuning.log_max_bytes = static_cast<std::uintmax_t>(*v);
     s.warn_unknown();
 }
 
 // `config` önceki katmanın değerlerini taşır; yalnız geçerli anahtarlar üzerine yazılır.
-void apply(const toml::table& root, Config& config, std::vector<std::string>& warnings) {
+void apply(const toml::table& root, Config& config, std::vector<Error>& warnings) {
     Section top(root, "", warnings);
     if (auto v = top.string("language")) {
         if (std::find(kLanguages.begin(), kLanguages.end(), *v) == kLanguages.end())
-            top.invalid("language", "must be one of auto, tr, en");
+            top.invalid("language", "must_be_language");
         else
             config.language = std::move(*v);
     }
     if (auto v = top.string("notes_dir")) {
         if (v->empty())
-            top.invalid("notes_dir", "must not be empty");
+            top.invalid("notes_dir", "must_not_be_empty");
         else
             config.notes_dir = expand_user_path(*v);
     }
@@ -196,7 +201,7 @@ void apply(const toml::table& root, Config& config, std::vector<std::string>& wa
         config.editor = std::move(*v);
     if (auto v = top.string("default_type")) {
         if (!is_valid_type(*v))
-            top.invalid("default_type", "must be a non-empty name without dots");
+            top.invalid("default_type", "must_be_type_name");
         else
             config.default_type = std::move(*v);
     }
@@ -212,12 +217,15 @@ void apply(const toml::table& root, Config& config, std::vector<std::string>& wa
 }
 
 // Ayrıştırma hatası: istisna yok (TOML_EXCEPTIONS=0), parse_result döner.
-std::optional<toml::table> parse_table(std::string_view text, std::string& error) {
+std::optional<toml::table> parse_table(std::string_view text, Error& error) {
     toml::parse_result result = toml::parse(text);
     if (!result) {
         const toml::parse_error& e = result.error();
-        error = std::format("syntax error at line {}, column {}: {}", e.source().begin.line,
-                            e.source().begin.column, e.description());
+        error = Error{Error::Code::ConfigInvalid,
+                      "config.syntax_error",
+                      {{"line", std::to_string(e.source().begin.line)},
+                       {"column", std::to_string(e.source().begin.column)},
+                       {"detail", std::string(e.description())}}};
         return std::nullopt;
     }
     return std::move(result).table();
@@ -242,13 +250,15 @@ Error io_error(const fs::path& path, std::string_view detail) {
 
 LoadedConfig parse_config(std::string_view user_toml) {
     LoadedConfig loaded{};
-    std::string error;
+    Error error{Error::Code::ConfigInvalid, "", {}};
 
     const auto defaults_text = embedded_resource("defaults.toml");
     const auto defaults = defaults_text ? parse_table(*defaults_text, error) : std::nullopt;
     if (!defaults) {
         // Derleme hatası sayılır (testler yakalar); yine de çökmeden uyarıyla sıfır değerler döner.
-        loaded.warnings.push_back("config: embedded defaults are unusable " + error);
+        // Ayrıştırma başarılıysa (resource yok) error boş kalır; ikisi de aynı uyarıya iner.
+        error.message_key = "config.defaults_unusable";
+        loaded.warnings.push_back(std::move(error));
         return loaded;
     }
     apply(*defaults, loaded.config, loaded.warnings);
@@ -257,7 +267,7 @@ LoadedConfig parse_config(std::string_view user_toml) {
     if (auto user = parse_table(user_toml, error))
         apply(*user, loaded.config, loaded.warnings);
     else
-        loaded.warnings.push_back("config: " + error + "; using all defaults");
+        loaded.warnings.push_back(std::move(error));
     return loaded;
 }
 
@@ -271,7 +281,8 @@ LoadedConfig load_config() {
     std::string text(std::istreambuf_iterator<char>(in), {});
     if (!in && !in.eof()) {
         LoadedConfig loaded = parse_config("");
-        loaded.warnings.push_back("config: cannot read " + to_utf8(file) + "; using all defaults");
+        loaded.warnings.push_back(
+            Error{Error::Code::ConfigInvalid, "config.unreadable", {{"path", to_utf8(file)}}});
         return loaded;
     }
     return parse_config(text);

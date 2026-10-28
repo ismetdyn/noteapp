@@ -32,6 +32,7 @@ struct Tuning {
     int rescan_seconds;
     int autosave_ms;
     int exit_timeout_seconds;
+    std::uintmax_t log_max_bytes;  // log.txt bu boyutu aşınca log.1.txt'ye döner
 
     bool operator==(const Tuning&) const = default;
 };
@@ -51,7 +52,7 @@ struct Config {
 
 struct LoadedConfig {
     Config config;
-    std::vector<std::string> warnings;  // TODO(T09): i18n + log
+    std::vector<Error> warnings;  // code=ConfigInvalid; metin format_error ile üretilir
 };
 
 // Gömülü varsayılanlar, üstüne kullanıcının config_file()'ı (yoksa yalnız varsayılan). Çökmez:

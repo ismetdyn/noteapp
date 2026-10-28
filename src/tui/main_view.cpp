@@ -1,5 +1,7 @@
 #include "tui/main_view.hpp"
 
+#include "core/i18n.hpp"
+
 namespace noteapp::tui {
 
 namespace {
@@ -12,9 +14,9 @@ constexpr int kNoteListWidth = 32;
 ftxui::Element main_view() {
     using namespace ftxui;
 
-    // TODO(T09): i18n — çubuk metinleri katalogdan gelecek; örnek notlar T18'de NoteStore'dan gelecek.
-    const Element query_bar =
-        hbox({text("> "), text("sorgu") | dim, filler(), text("[ad] 3/3   senkron kapalı")});
+    // Çubuk metinleri katalogdan gelir; örnek notlar T18'de NoteStore'dan gelecek.
+    const Element query_bar = hbox({text("> "), text(noteapp::core::tr("tui.query_placeholder")) | dim,
+                                    filler(), text(noteapp::core::tr("tui.status"))});
     const Element note_list = vbox({
         text("▸ iş/toplantı-notları.md") | inverted,
         text("  kişisel/yapılacaklar.md"),
@@ -25,7 +27,7 @@ ftxui::Element main_view() {
         text("- bütçe onayı"),
         text("çğıİöşü ÇĞIÖŞÜ"),
     });
-    const Element key_hints = text("q/Esc çık  Ctrl-C çık") | dim;
+    const Element key_hints = text(noteapp::core::tr("tui.key_hints")) | dim;
 
     return vbox({
                query_bar,

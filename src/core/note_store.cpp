@@ -1,6 +1,7 @@
 #include "core/note_store.hpp"
 
 #include "core/atomic_file.hpp"
+#include "core/log.hpp"
 #include "core/text.hpp"
 
 #include <algorithm>
@@ -115,13 +116,19 @@ std::vector<NoteInfo> NoteStore::list() const {
         std::error_code entry_ec;
         if (entry.is_symlink(entry_ec) || !entry.is_regular_file(entry_ec))
             continue;
-        auto parsed = NotePath::parse(to_utf8(entry.path().lexically_relative(root_)));
-        if (!parsed)
-            continue;  // TODO(T09): log uyarısı
+        const std::string relative = to_utf8(entry.path().lexically_relative(root_));
+        auto parsed = NotePath::parse(relative);
+        if (!parsed) {
+            log_warn("note list: skipped '" + relative + "': invalid path (" +
+                     (parsed.error().args.empty() ? "" : parsed.error().args.front().second) + ")");
+            continue;
+        }
         const auto mtime = entry.last_write_time(entry_ec);
         const auto size = entry.file_size(entry_ec);
-        if (entry_ec)
-            continue;  // TODO(T09): log uyarısı
+        if (entry_ec) {
+            log_warn("note list: skipped '" + relative + "': " + entry_ec.message());
+            continue;
+        }
         notes.push_back(NoteInfo{*parsed, mtime, size, has_nul_in_head(entry.path())});
     }
     std::sort(notes.begin(), notes.end(), [](const NoteInfo& a, const NoteInfo& b) {

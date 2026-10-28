@@ -1,6 +1,7 @@
 #include "core/config.hpp"
 #include "core/paths.hpp"
 #include "core/resources.hpp"
+#include "test_support.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -20,71 +21,22 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// Ortam değişkenini ayarlar ve çıkışta eski değeri geri yükler. Windows'ta geniş dizgeyle yazılır:
-// ANSI sürümü Türkçe karakterleri bozar (üretim kodu da _wgetenv ile okur).
-class ScopedEnv {
-public:
-    ScopedEnv(std::string name, const std::optional<std::u8string>& value) : name_(std::move(name)) {
-        if (const auto old = read(name_))
-            old_ = *old;
-        write(name_, value);
-    }
-    ~ScopedEnv() { write(name_, old_); }
-    ScopedEnv(const ScopedEnv&) = delete;
-    ScopedEnv& operator=(const ScopedEnv&) = delete;
+using namespace noteapp::test;
 
-private:
-    static std::optional<std::u8string> read(const std::string& name) {
-#ifdef _WIN32
-        const std::wstring wname(name.begin(), name.end());
-        const wchar_t* v = _wgetenv(wname.c_str());
-        if (v == nullptr)
-            return std::nullopt;
-        return fs::path(std::wstring(v)).u8string();
-#else
-        const char* v = std::getenv(name.c_str());
-        if (v == nullptr)
-            return std::nullopt;
-        return std::u8string(v, v + std::char_traits<char>::length(v));
-#endif
-    }
-    static void write(const std::string& name, const std::optional<std::u8string>& value) {
-#ifdef _WIN32
-        const std::wstring wname(name.begin(), name.end());
-        _wputenv_s(wname.c_str(), value ? fs::path(*value).wstring().c_str() : L"");  // boş = silinir
-#else
-        if (value)
-            setenv(name.c_str(), std::string(value->begin(), value->end()).c_str(), 1);
-        else
-            unsetenv(name.c_str());
-#endif
-    }
+std::string arg_of(const Error& e, std::string_view name) {
+    for (const auto& [k, v] : e.args)
+        if (k == name)
+            return v;
+    return {};
+}
 
-    std::string name_;
-    std::optional<std::u8string> old_;
-};
-
-// Türkçe karakterli geçici kök: yol/ortam dönüşümlerindeki UTF-8 hatalarını yakalar.
-class TempDir {
-public:
-    TempDir() {
-        std::random_device rd;
-        path_ = fs::temp_directory_path() / fs::path(u8"noteapp-İşğü-" + to_u8(std::to_string(rd())));
-    }
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path_, ec);
-    }
-    const fs::path& path() const { return path_; }
-
-private:
-    static std::u8string to_u8(const std::string& s) { return std::u8string(s.begin(), s.end()); }
-    fs::path path_;
-};
-
-bool has_warning_about(const LoadedConfig& loaded, std::string_view needle) {
-    return std::any_of(loaded.warnings.begin(), loaded.warnings.end(),
-                       [&](const std::string& w) { return w.find(needle) != std::string::npos; });
+// Uyarı, `message_key` ve `key` argümanıyla eşleşiyorsa true.
+bool has_warning_about(const LoadedConfig& loaded, std::string_view needle,
+                       std::string_view message_key = "") {
+    return std::any_of(loaded.warnings.begin(), loaded.warnings.end(), [&](const Error& w) {
+        return w.code == Error::Code::ConfigInvalid && arg_of(w, "key") == needle &&
+               (message_key.empty() || w.message_key == message_key);
+    });
 }
 
 }  // namespace
@@ -116,6 +68,7 @@ TEST_CASE("parse_config with empty input yields the embedded defaults") {
     CHECK(c.tuning.rescan_seconds == 5);
     CHECK(c.tuning.autosave_ms == 1000);
     CHECK(c.tuning.exit_timeout_seconds == 10);
+    CHECK(c.tuning.log_max_bytes == 1048576);
 }
 
 TEST_CASE("parse_config applies user overrides") {
@@ -207,10 +160,10 @@ TEST_CASE("parse_config reports unknown keys and ignores them") {
     const LoadedConfig loaded =
         parse_config("colour = \"red\"\n[sync]\nfoo = 1\n[tuning]\nbar = 2\n[extra]\nx = 1\n");
     CHECK(loaded.config == defaults);
-    CHECK(has_warning_about(loaded, "colour"));
-    CHECK(has_warning_about(loaded, "sync.foo"));
-    CHECK(has_warning_about(loaded, "tuning.bar"));
-    CHECK(has_warning_about(loaded, "extra"));
+    CHECK(has_warning_about(loaded, "colour", "config.unknown_key"));
+    CHECK(has_warning_about(loaded, "sync.foo", "config.unknown_key"));
+    CHECK(has_warning_about(loaded, "tuning.bar", "config.unknown_key"));
+    CHECK(has_warning_about(loaded, "extra", "config.unknown_key"));
 }
 
 TEST_CASE("parse_config survives a TOML syntax error with defaults and a positioned warning") {
@@ -218,7 +171,9 @@ TEST_CASE("parse_config survives a TOML syntax error with defaults and a positio
     const LoadedConfig loaded = parse_config("language = \"tr\"\neditor = = broken\n");
     CHECK(loaded.config == defaults);  // kısmi uygulama yok: dosya bütün olarak reddedilir
     REQUIRE(loaded.warnings.size() == 1);
-    CHECK(loaded.warnings[0].find("line 2") != std::string::npos);
+    CHECK(loaded.warnings[0].code == Error::Code::ConfigInvalid);
+    CHECK(loaded.warnings[0].message_key == "config.syntax_error");
+    CHECK(arg_of(loaded.warnings[0], "line") == "2");
 }
 
 TEST_CASE("parse_config expands ~ and environment variables in notes_dir") {

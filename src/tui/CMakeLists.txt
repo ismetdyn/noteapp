@@ -2,7 +2,7 @@
 add_library(noteapp_tui
     main_view.cpp)
 target_include_directories(noteapp_tui PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(noteapp_tui PUBLIC ftxui::dom)
+target_link_libraries(noteapp_tui PUBLIC noteapp_core ftxui::dom)
 noteapp_target_defaults(noteapp_tui)
 
 add_executable(notes
