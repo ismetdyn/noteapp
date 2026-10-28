@@ -27,6 +27,10 @@ struct ContentResult {
     std::vector<Hit> first_hits;  // ilk 3 eşleşen satır
 };
 
+// İçerik sorgusunun katlanmış terimleri: boşlukla ayrılır, "..." arası tek ifade. Arama ve arayüz vurgusu
+// aynı kuralı kullansın diye tek kaynak burasıdır.
+std::vector<std::u32string> parse_terms(std::string_view query);
+
 // Bellek içi tam metin önbelleği; G/Ç yalnız refresh'te. Tek iş parçacığından kullanılır (SPEC-search
 // "Eşzamanlılık").
 class ContentIndex {

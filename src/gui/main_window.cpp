@@ -65,39 +65,10 @@ std::string join_folder(const std::string& parent, const std::string& name) {
     return parent.empty() ? name : parent + '/' + name;
 }
 
-// Sorgu terimleri (katlanmış): boşlukla ayrılır, "..." arası tek ifade. search::ContentIndex'teki
-// ayrıştırıcıyla aynı kural; o iç ayrıntı olduğundan burada yinelenir (değişirse ikisi birlikte
-// güncellenmeli).
-std::vector<std::u32string> query_terms(const std::string& query) {
-    std::vector<std::u32string> terms;
-    auto push = [&terms](const std::string& raw) {
-        if (auto folded = search::fold(raw).text; !folded.empty())
-            terms.push_back(std::move(folded));
-    };
-    const auto is_space = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
-    std::size_t i = 0;
-    while (i < query.size()) {
-        if (is_space(query[i])) {
-            ++i;
-        } else if (query[i] == '"') {
-            const auto end = std::min(query.find('"', i + 1), query.size());
-            push(query.substr(i + 1, end - i - 1));
-            i = end + 1;
-        } else {
-            auto end = i;
-            while (end < query.size() && !is_space(query[end]) && query[end] != '"')
-                ++end;
-            push(query.substr(i, end - i));
-            i = end;
-        }
-    }
-    return terms;
-}
-
 // Editör metninde terimlerin tüm geçişleri: (UTF-16 başlangıcı, uzunluğu). fold kod noktası başına 1:1
 // olduğundan katlanmış indeks -> UTF-16 konumu, özgün kod noktasının 1 ya da 2 birim olmasından hesaplanır.
 std::vector<std::pair<int, int>> find_terms(const QString& content, const std::string& query) {
-    const auto terms = query_terms(query);
+    const auto terms = search::parse_terms(query);
     const QByteArray utf8 = content.toUtf8();
     const search::Folded folded =
         search::fold(std::string_view(utf8.constData(), static_cast<std::size_t>(utf8.size())));

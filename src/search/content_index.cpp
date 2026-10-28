@@ -17,6 +17,8 @@ bool is_space(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
+}  // namespace
+
 // Boşlukla ayrılmış terimler; "..." arası tek ifade. Kapanmamış tırnak sonuna kadar ifade sayılır.
 std::vector<std::u32string> parse_terms(std::string_view query) {
     std::vector<std::u32string> terms;
@@ -47,6 +49,8 @@ std::vector<std::u32string> parse_terms(std::string_view query) {
     }
     return terms;
 }
+
+namespace {
 
 struct Occurrence {
     std::size_t pos;
