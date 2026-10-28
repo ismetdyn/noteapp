@@ -74,6 +74,12 @@ sonda boşluk/nokta; 255 bayttan uzun bileşen. Ek olarak `NoteStore` her erişi
 
 ### Listeleme
 - `notes_dir` altında özyinelemeli; nokta ile başlayan dosya/dizinler atlanır.
+- Sembolik bağlar listelenmez, içlerine inilmez. Windows'ta bağ = ad vekili reparse point (sembolik bağ, junction);
+  OneDrive yer tutucusu gibi diğer reparse point'ler normal dosya/dizindir.
+- Tarama `core::scan_files`: Windows'ta `FindFirstFileExW` (`FindExInfoBasic`, `FIND_FIRST_EX_LARGE_FETCH`) — ad,
+  boyut ve mtime dizin girdisinden gelir, dosya başına stat yok; mtime `stat_file` ile aynı FILETIME dönüşümünden
+  geçer (Yazma › mtime kaynağı). POSIX'te `recursive_directory_iterator` + `stat_file`. Neden: kurumsal Windows'ta
+  dosya başına stat 5.000 notta ~170–290 ms tutuyordu; tarama ~15–45 ms (Release, T16c).
 - Her normal dosya bir nottur; ilk 8 KB'ta NUL baytı varsa `binary = true` (listede görünür, önizleme/arama yapılmaz).
 
 ### Klasörler

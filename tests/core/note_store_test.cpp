@@ -457,6 +457,22 @@ TEST_CASE("list refreshes the binary flag after a same-size edit within the same
     CHECK(store.list().front().binary);
 }
 
+TEST_CASE("list skips directory links and does not descend into them") {
+    TempDir tmp;
+    const fs::path root = tmp.path() / "notes";
+    put(root / "a.md", "a");
+    put(tmp.path() / "outside" / "secret.md", "gizli");
+    if (!make_dir_link(tmp.path() / "outside", root / "link")) {
+        MESSAGE("dizin bağı oluşturulamadı, atlandı");
+        return;
+    }
+    NoteStore store(root);
+    const auto listed = store.list();
+    REQUIRE(listed.size() == 1);
+    CHECK(listed.front().path.string() == "a.md");
+    CHECK(store.head_read_count() == 1);
+}
+
 TEST_CASE("list skips files whose names fail NotePath validation") {
     TempDir tmp;
     put(tmp.path() / "ok.md", "x");

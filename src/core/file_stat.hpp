@@ -29,7 +29,8 @@ struct ScannedFile {
 };
 
 // root altındaki normal dosyalar, özyinelemeli. '.' ile başlayan adlar ve bağlar atlanır, içlerine
-// inilmez; erişilemeyen dizin sessizce atlanır, root yoksa boş döner.
+// inilmez; erişilemeyen dizin sessizce atlanır, root yoksa boş döner. Windows'ta FindFirstFileExW: mtime
+// ve boyut dizin girdisinden gelir, dosya başına stat yok.
 std::vector<ScannedFile> scan_files(const std::filesystem::path& root);
 
 }  // namespace noteapp::core

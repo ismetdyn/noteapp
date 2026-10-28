@@ -153,10 +153,25 @@
   `refresh` bütçesi (yalnız ContentIndex payı) özgün kabule (toplam ≤ 100 ms) geri alınır.
   **Sonuç:** önbellek dosya açmayı kaldırdı (sıcak `list()` ~140–330 ms, soğuk ~540–750 ms; kurumsal Windows'ta dosya başına
   stat tabanı baskın, salt dizin gezintisi ~60–90 ms). ≤ 80 ms / toplam ≤ 100 ms için yerel dizin taraması gerekir → gevşetilmiş
-  bütçe `ponytail:` notuyla korundu.
+  bütçe `ponytail:` notuyla korundu. **T16c ile kabul tuttu:** sıcak `list()` ~15–45 ms, özgün bütçe testte geri alındı.
 - **Kabul:** değişiklik yokken `list()` 5.000 notta ≤ 80 ms (Release) · değişen dosyanın bayrağı güncellenir · testler yeşil.
 - **Doğrulama:** `B && T(core) && T(search)`, Release ölçümü · **Bağımlılık:** T10 · **Dosyalar:** `src/core/note_store.{hpp,cpp}`,
   `tests/core/note_store_test.cpp`, `tests/search/content_index_test.cpp` · **Boyut:** S
+
+### T16c: 🔴 Windows'ta hassas mtime + yerel dizin taraması (T16b'den sonra bulundu)
+- [x] **Açıklama:** MinGW libstdc++ `last_write_time` saniyeye keser: okumayla aynı saniyedeki aynı boyutlu dış düzenleme
+  `write()`'ta yakalanmıyor, üzerine yazılıyordu (veri kaybı); ikili bayrak önbelleği ve `ContentIndex::refresh` de kaçırıyordu.
+  `core::stat_file` (Windows `GetFileAttributesExW` / FILETIME 100 ns, POSIX `lstat` / `st_mtim`) tek mtime kaynağı; `list()`
+  Windows'ta `FindFirstFileExW` ile tarar (dosya başına stat yok, junction'a inilmez).
+  **Sonuç (Release, 5.000 not, gürültülü kurumsal makine):** sıcak `list()` ~170–840 → ~13–50 ms; değişiklik yokken `refresh`
+  ~175–1.000 → ~15–50 ms (özgün kabul testte geri alındı: toplam ≤ 100 ms, `list()` ≤ 80 ms). Soğuk `list()` (yeni süreç, ≈ TUI
+  açılışı) ~430–1.800 → ~300–900 ms: ≤ 500 ms her seferinde tutmuyor; tabanı ikili bayrak için 5.000 dosyayı açmak (stat değil).
+- **Kabul:** 50 ms arayla iki yazım `read()`/`list()`'te farklı mtime · aynı saniye + aynı boyut dış düzenlemede `write` →
+  `ModifiedExternally`, dış içerik korunur · ikili bayrak ve `refresh` bu değişikliği görür · `list()` = `read()` = `write()` =
+  `stat_file()` mtime · testler yeşil.
+- **Doğrulama:** `B && T(core) && T(search)`, Release ölçümü · **Bağımlılık:** T16b · **Dosyalar:**
+  `src/core/{file_stat.hpp,file_stat.cpp,note_store.cpp}`, `tests/core/note_store_test.cpp`, `tests/search/content_index_test.cpp` ·
+  **Boyut:** S
 
 ### T17: `note config` komutları
 - [x] **Kabul:** `path|list|get|set` çalışır · geçersiz anahtar/değer çıkış 2 · SPEC-cli kabul 9 (dil değişimi).

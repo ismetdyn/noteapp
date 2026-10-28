@@ -285,9 +285,7 @@ TEST_CASE("content: performance with 5000 notes of ~5 KB") {
     CHECK_FALSE(r.empty());
 #ifdef NDEBUG
     CHECK(ms(t2, t3) <= 100.0);
-    // ponytail: ikili bayrak önbelleği (T16b) dosya açmayı kaldırdı ama list() hâlâ dosya başına stat
-    // maliyetini öder (kurumsal Windows'ta ~200 ms/5.000 dosya); bütçe ContentIndex'in kendi payına
-    // uygulanır. Toplam ≤ 100 ms için yerel dizin taraması (FindFirstFileEx / getdents) gerekir.
-    CHECK(ms(t3, t4) - ms(t4, t5) <= 100.0);
+    CHECK(ms(t3, t4) <= 100.0);  // SPEC-search kabul 5: değişiklik yokken refresh (list() dahil)
+    CHECK(ms(t4, t5) <= 80.0);   // T16b: değişiklik yokken list()
 #endif
 }

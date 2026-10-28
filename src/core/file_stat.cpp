@@ -3,6 +3,7 @@
 #include "core/log.hpp"
 
 #include <chrono>
+#include <cwchar>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -52,6 +53,45 @@ bool is_link(const WIN32_FIND_DATAW& data) {
            IsReparseTagNameSurrogate(data.dwReserved0);
 }
 
+// Geçersiz UTF-16 (eşsiz vekil) → boş dizge: böyle ad geri dönüştürülemez, çağıran atlar.
+std::string to_utf8(const wchar_t* wide) {
+    const int length = static_cast<int>(wcslen(wide));
+    const int size =
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, length, nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<std::size_t>(size > 0 ? size : 0), '\0');
+    if (size > 0)
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, length, out.data(), size, nullptr, nullptr);
+    return out;
+}
+
+// FIND_FIRST_EX_LARGE_FETCH: dizin girdileri toplu gelir; ad, öznitelik, boyut ve mtime girdiden okunur.
+void scan_dir(const fs::path& dir, const std::string& prefix, std::vector<ScannedFile>& out) {
+    WIN32_FIND_DATAW data;
+    const HANDLE find = FindFirstFileExW((dir / L"*").c_str(), FindExInfoBasic, &data, FindExSearchNameMatch,
+                                         nullptr, FIND_FIRST_EX_LARGE_FETCH);
+    if (find == INVALID_HANDLE_VALUE)
+        return;  // kök yok ya da erişilemeyen dizin (skip_permission_denied gibi)
+    do {
+        if (data.cFileName[0] == L'.')
+            continue;  // gizli adlar (.git, .keep) ile . ve ..
+        const FileStat stat = make_stat(data.dwFileAttributes, is_link(data), data.ftLastWriteTime,
+                                        data.nFileSizeHigh, data.nFileSizeLow);
+        if (stat.symlink)
+            continue;  // bağlar listelenmez, içlerine inilmez: hedef kök dışına kaçabilir
+        std::string name = to_utf8(data.cFileName);
+        if (name.empty()) {
+            log_warn("note list: skipped an entry in '" + prefix + "': name is not valid UTF-16");
+            continue;
+        }
+        std::string relative = prefix.empty() ? std::move(name) : prefix + "/" + name;
+        if (stat.directory)
+            scan_dir(dir / data.cFileName, relative, out);
+        else
+            out.push_back(ScannedFile{std::move(relative), stat});
+    } while (FindNextFileW(find, &data));
+    FindClose(find);
+}
+
 #else
 
 fs::file_time_type from_timespec(const timespec& ts) {
@@ -59,12 +99,12 @@ fs::file_time_type from_timespec(const timespec& ts) {
     return file_clock::from_sys(sys_time<nanoseconds>(seconds(ts.tv_sec) + nanoseconds(ts.tv_nsec)));
 }
 
-#endif
-
 std::string to_utf8(const fs::path& p) {
     const std::u8string u = p.generic_u8string();
     return std::string(reinterpret_cast<const char*>(u.data()), u.size());
 }
+
+#endif
 
 }  // namespace
 
@@ -102,6 +142,9 @@ std::expected<FileStat, std::error_code> stat_file(const fs::path& path) {
 
 std::vector<ScannedFile> scan_files(const fs::path& root) {
     std::vector<ScannedFile> out;
+#ifdef _WIN32
+    scan_dir(root, "", out);
+#else
     std::error_code ec;
     fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
     for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
@@ -120,6 +163,7 @@ std::vector<ScannedFile> scan_files(const fs::path& root) {
         if (stat->regular)  // bağlar (lstat) ve özel dosyalar listelenmez
             out.push_back(ScannedFile{to_utf8(path.lexically_relative(root)), *stat});
     }
+#endif
     return out;
 }
 
