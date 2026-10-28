@@ -122,6 +122,18 @@ TEST_CASE("rejects Windows reserved device names, case-insensitive, with extensi
     }
 }
 
+// Windows COM0/LPT0'ı ve üst simge rakamlı (¹ ² ³; UTF-8'de iki bayt) biçimleri de aygıt sayar.
+TEST_CASE("rejects COM0/LPT0 and the superscript-digit device names") {
+    for (const char* bad : {"COM0", "lpt0.txt", "COM\xC2\xB9", "com\xC2\xB2.md", "Com\xC2\xB3", "LPT\xC2\xB9",
+                            "lpt\xC2\xB2", "LPT\xC2\xB3.tar.gz", "a/com\xC2\xB9 .md"}) {
+        check_rejected(bad, "reserved_name");
+    }
+    for (const char* ok : {"COM\xC2\xB4", "COM¹0", "LPT\xC2\xBC", "COMA.md"}) {
+        CAPTURE(ok);
+        CHECK(NotePath::parse(ok).has_value());
+    }
+}
+
 TEST_CASE("rejects trailing space or dot in a component") {
     check_rejected("a.md ", "trailing_space");
     check_rejected("a /b.md", "trailing_space");

@@ -2,6 +2,7 @@
 
 #include "core/text.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 
@@ -12,6 +13,7 @@ namespace {
 constexpr std::size_t kMaxComponentBytes = 255;  // NTFS/ext4 ortak bileşen sınırı
 constexpr std::string_view kReservedChars = "<>:\"|?*";
 constexpr std::array<std::string_view, 4> kReservedDevices = {"CON", "PRN", "AUX", "NUL"};
+constexpr std::array<std::string_view, 3> kSuperscriptDigits = {"\xC2\xB9", "\xC2\xB2", "\xC2\xB3"};  // ¹ ² ³
 
 Error invalid_path(std::string_view reason, std::string_view path) {
     return Error{Error::Code::InvalidPath,
@@ -27,8 +29,9 @@ bool is_control(char c) {
     return static_cast<unsigned char>(c) < 0x20 || c == 0x7F;
 }
 
-// "con", "CON.txt", "Lpt1.md": ilk noktaya kadarki gövde ayrılmış aygıt adıysa true.
-// Gövdedeki sondaki boşluk Windows'ta yok sayıldığından ("con .txt") onu da yakalar.
+// "con", "CON.txt", "Lpt1.md", "COM0", "lpt²": ilk noktaya kadarki gövde ayrılmış aygıt adıysa true.
+// Gövdedeki sondaki boşluk Windows'ta yok sayıldığından ("con .txt") onu da yakalar. Windows COM/LPT'nin
+// 0'ını ve üst simge ¹ ² ³ (U+00B9, U+00B2, U+00B3) biçimlerini de aygıt sayar.
 bool is_reserved_device(std::string_view component) {
     std::string stem(component.substr(0, component.find('.')));
     while (!stem.empty() && stem.back() == ' ')
@@ -39,8 +42,11 @@ bool is_reserved_device(std::string_view component) {
         if (stem == device)
             return true;
     }
-    const bool numbered = stem.size() == 4 && stem[3] >= '1' && stem[3] <= '9';
-    return numbered && (stem.starts_with("COM") || stem.starts_with("LPT"));
+    if (!stem.starts_with("COM") && !stem.starts_with("LPT"))
+        return false;
+    const std::string_view digit = std::string_view(stem).substr(3);
+    const bool ascii_digit = digit.size() == 1 && digit[0] >= '0' && digit[0] <= '9';
+    return ascii_digit || std::ranges::find(kSuperscriptDigits, digit) != kSuperscriptDigits.end();
 }
 
 // Tek bir bileşenin kuralları; ihlalde `reason` değerini, yoksa boş string_view döner.

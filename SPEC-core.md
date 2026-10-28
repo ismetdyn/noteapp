@@ -49,7 +49,8 @@ std::expected<int, Error> run_editor(const Config&, const std::filesystem::path&
 ### Yol güvenliği (`NotePath::parse`)
 Reddedilir: boş yol; mutlak yol / sürücü harfi / UNC; `.` veya `..` bileşeni; `.` ile başlayan bileşen
 (gizli adlar uygulamaya ayrılmış); `< > : " \ | ? *` ve kontrol karakterleri (ayırıcı yalnız `/`);
-Windows ayrılmış adları (`CON PRN AUX NUL COM1-9 LPT1-9`, uzantılı hâlleri dahil, büyük/küçük harf duyarsız);
+Windows ayrılmış adları (`CON PRN AUX NUL COM0-9 LPT0-9` ve üst simgeli `COM¹ COM² COM³ LPT¹ LPT² LPT³`,
+uzantılı hâlleri dahil, büyük/küçük harf duyarsız);
 sonda boşluk/nokta; 255 bayttan uzun bileşen. Ek olarak `NoteStore` her erişimde (okuma, yazma, oluşturma,
 taşıma, silme, klasör işlemleri) iki kural uygular:
 - **Not yolu hiçbir bileşeninde bağ içeremez; Windows junction'ları dahil.** Kökün altındaki var olan her
