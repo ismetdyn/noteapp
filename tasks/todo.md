@@ -16,11 +16,11 @@
 ## Faz 0 — Temel ve risk spike'ları
 
 ### T01: Derleme iskeleti
-- [ ] **Açıklama:** Kök CMake (C++23, `NOTEAPP_BUILD_GUI`/`NOTEAPP_BUILD_TESTS`, bizim hedeflere uyarı fonksiyonu),
+- [x] **Açıklama:** Kök CMake (C++23, `NOTEAPP_BUILD_GUI`/`NOTEAPP_BUILD_TESTS`, bizim hedeflere uyarı fonksiyonu),
   `CMakePresets.json` (windows-mingw, linux-gcc, macos-clang × debug/release + test preset'leri),
   `cmake/Dependencies.cmake` (doctest v2.5.3, toml++ v3.4.0), `.clang-format`, `noteapp_core` yer tutucu + ilk test.
 - **Kabul:** temiz dizinde configure + build + ctest yeşil · `std::expected` kullanan test GCC 13'te derlenir ·
-  üçüncü parti uyarıları build'i kırmaz · `CMakeUserPresets.json` örneği README taslağında.
+  üçüncü parti uyarıları build'i kırmaz · `scripts/dev-env.sh` Windows ortamını kurar.
 - **Doğrulama:** `cmake --preset windows-mingw-debug && B && T(core)`
 - **Bağımlılık:** yok · **Dosyalar:** `CMakeLists.txt`, `CMakePresets.json`, `cmake/Dependencies.cmake`,
   `.clang-format`, `src/core/CMakeLists.txt`, `tests/core/smoke_test.cpp` · **Boyut:** M

@@ -1,0 +1,10 @@
+# Modül başına tek test ikilisi; ctest adı modül adıdır (ctest -R <modül>).
+function(noteapp_add_test module)
+    add_executable(${module}_tests ${ARGN})
+    target_link_libraries(${module}_tests PRIVATE doctest::doctest_with_main noteapp_${module})
+    target_include_directories(${module}_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    noteapp_target_defaults(${module}_tests)
+    add_test(NAME ${module} COMMAND ${module}_tests)
+endfunction()
+
+add_subdirectory(core)

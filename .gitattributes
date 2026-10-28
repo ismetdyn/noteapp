@@ -1,0 +1,5 @@
+# Depoda ve çalışma kopyasında LF: Fedora konteyneri aynı kopyayı bağlar, CRLF betikleri bozar.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.png binary
+*.pdf binary

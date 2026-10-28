@@ -59,16 +59,16 @@ Bağımlılık yönü tek yönlü; döngü yok. `cli` → `gui` arasında **link
   uyumu). CLion'un GCC 15'i kullanılmaz: Qt'nin yanındaki eski `libstdc++-6.dll` ile çalışma zamanı çakışması riski.
   GCC 13 sınırı: `std::expected`/`std::format` var, `std::print` yok → kullanılmaz.
 - MSVC bu makinede kurulu değil (VS 2026'da C++ iş yükü yok); gerekirse ileride preset eklenir.
-- Makineye özel yollar (Qt, MinGW) commit'lenmez: `CMakeUserPresets.json` (gitignore'da) veya ortam değişkeni.
+- Makineye özel yollar preset'lere yazılmaz: Qt yolu `NOTEAPP_QT_DIR` ortam değişkeninden, araçlar PATH'ten
+  (`scripts/dev-env.sh`; CLion'da toolchain = Qt MinGW, CMake profili ortamında `NOTEAPP_QT_DIR`).
 - Fedora sistem paketleri: `gcc-c++ cmake ninja-build qt6-qtbase-devel libsecret-devel openssl-devel pkgconf-pkg-config`.
 - Listede olmayan her yeni bağımlılık **önce sorulur** (§9).
 
 ## 4. Komutlar
 
-```powershell
-# Windows — MinGW + Qt yolları CMakeUserPresets.json'dan (bkz. README) ya da:
-$env:PATH = "C:\Qt\Tools\mingw1310_64\bin;C:\Qt\Tools\Ninja;C:\Qt\6.12.0\mingw_64\bin;$env:PATH"
-$env:CMAKE_PREFIX_PATH = "C:\Qt\6.12.0\mingw_64"
+```bash
+# Windows (Git Bash) — MinGW, Ninja, CMake, clang-format ve NOTEAPP_QT_DIR ayarlanır
+source scripts/dev-env.sh            # yollar QT_ROOT/QT_VERSION/QT_MINGW ile ezilebilir
 cmake --preset windows-mingw-debug
 cmake --build --preset windows-mingw-debug
 ctest --preset windows-mingw-debug --output-on-failure

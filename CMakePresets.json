@@ -1,0 +1,54 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    { "name": "base", "hidden": true, "generator": "Ninja", "binaryDir": "${sourceDir}/build/${presetName}" },
+    { "name": "debug", "hidden": true, "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
+    { "name": "release", "hidden": true, "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+    {
+      "name": "windows",
+      "hidden": true,
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": { "CMAKE_CXX_COMPILER": "g++", "CMAKE_PREFIX_PATH": "$env{NOTEAPP_QT_DIR}" },
+      "environment": { "PATH": "$env{NOTEAPP_QT_DIR}/bin;$penv{PATH}" }
+    },
+    {
+      "name": "linux",
+      "hidden": true,
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": { "CMAKE_CXX_COMPILER": "g++" }
+    },
+    {
+      "name": "macos",
+      "hidden": true,
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "cacheVariables": { "CMAKE_CXX_COMPILER": "clang++" }
+    },
+    { "name": "windows-mingw-debug", "inherits": ["windows", "debug"] },
+    { "name": "windows-mingw-release", "inherits": ["windows", "release"] },
+    { "name": "linux-gcc-debug", "inherits": ["linux", "debug"] },
+    { "name": "linux-gcc-release", "inherits": ["linux", "release"] },
+    { "name": "macos-clang-debug", "inherits": ["macos", "debug"] },
+    { "name": "macos-clang-release", "inherits": ["macos", "release"] }
+  ],
+  "buildPresets": [
+    { "name": "windows-mingw-debug", "configurePreset": "windows-mingw-debug" },
+    { "name": "windows-mingw-release", "configurePreset": "windows-mingw-release" },
+    { "name": "linux-gcc-debug", "configurePreset": "linux-gcc-debug" },
+    { "name": "linux-gcc-release", "configurePreset": "linux-gcc-release" },
+    { "name": "macos-clang-debug", "configurePreset": "macos-clang-debug" },
+    { "name": "macos-clang-release", "configurePreset": "macos-clang-release" }
+  ],
+  "testPresets": [
+    { "name": "test-base", "hidden": true, "output": { "outputOnFailure": true } },
+    { "name": "windows-mingw-debug", "inherits": "test-base", "configurePreset": "windows-mingw-debug" },
+    { "name": "windows-mingw-release", "inherits": "test-base", "configurePreset": "windows-mingw-release" },
+    { "name": "linux-gcc-debug", "inherits": "test-base", "configurePreset": "linux-gcc-debug" },
+    { "name": "linux-gcc-release", "inherits": "test-base", "configurePreset": "linux-gcc-release" },
+    { "name": "macos-clang-debug", "inherits": "test-base", "configurePreset": "macos-clang-debug" },
+    { "name": "macos-clang-release", "inherits": "test-base", "configurePreset": "macos-clang-release" }
+  ]
+}
