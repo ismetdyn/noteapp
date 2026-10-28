@@ -19,6 +19,7 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #ifdef _WIN32
 #include <stdlib.h>  // _wputenv_s
@@ -169,6 +170,91 @@ struct CommitInfo {
     std::string author_email;
     unsigned parents;
 };
+
+// Git nesneleri zlib ile sıkıştırılmış durur: dosya taraması commit'e giren bir sırrı göremez, açılmış
+// içerik taranır.
+inline bool objects_contain(const fs::path& repo_dir, const std::string& needle) {
+    const Repository repo = open_repository(repo_dir);
+    git_odb* odb = nullptr;
+    REQUIRE_GIT(git_repository_odb(&odb, repo.get()));
+    struct Search {
+        git_odb* odb;
+        const std::string& needle;
+        bool found = false;
+    } search{odb, needle};
+    REQUIRE_GIT(git_odb_foreach(
+        odb,
+        [](const git_oid* id, void* payload) {
+            auto& search = *static_cast<Search*>(payload);
+            git_odb_object* object = nullptr;
+            if (git_odb_read(&object, search.odb, id) < 0)
+                return -1;
+            const std::string_view data(static_cast<const char*>(git_odb_object_data(object)),
+                                        git_odb_object_size(object));
+            search.found = search.found || data.find(search.needle) != std::string_view::npos;
+            git_odb_object_free(object);
+            return 0;
+        },
+        &search));
+    git_odb_free(odb);
+    return search.found;
+}
+
+struct TreeEntry {
+    std::string name;     // kök düzeyde ad
+    std::string content;  // bağda: hedef yolu
+    git_filemode_t mode = GIT_FILEMODE_BLOB;
+};
+
+// Uzak depoya (bare) diskten geçmeden, git API'siyle bir commit yazar: bu işletim sisteminde diske
+// yazılamayan girdiler (sembolik bağ, geçersiz ad) de böyle kurulur. Ağaç = `main`'in önceki ağacı +
+// girdiler.
+inline void commit_entries(const fs::path& repo_dir, const std::vector<TreeEntry>& entries) {
+    using Tree = std::unique_ptr<git_tree, GitFree<git_tree_free>>;
+    const Repository repo = open_repository(repo_dir);
+    git_oid parent_id;
+    const bool has_parent = git_reference_name_to_id(&parent_id, repo.get(), "refs/heads/main") == 0;
+    git_commit* parent_raw = nullptr;
+    git_tree* base_raw = nullptr;
+    if (has_parent) {
+        REQUIRE_GIT(git_commit_lookup(&parent_raw, repo.get(), &parent_id));
+        REQUIRE_GIT(git_commit_tree(&base_raw, parent_raw));
+    }
+    const Commit parent(parent_raw);
+    const Tree base(base_raw);
+    git_treebuilder* builder = nullptr;
+    REQUIRE_GIT(git_treebuilder_new(&builder, repo.get(), base.get()));
+    for (const TreeEntry& entry : entries) {
+        git_oid blob;
+        REQUIRE_GIT(
+            git_blob_create_from_buffer(&blob, repo.get(), entry.content.data(), entry.content.size()));
+        REQUIRE_GIT(git_treebuilder_insert(nullptr, builder, entry.name.c_str(), &blob, entry.mode));
+    }
+    git_oid tree_id;
+    REQUIRE_GIT(git_treebuilder_write(&tree_id, builder));
+    git_treebuilder_free(builder);
+    git_tree* tree_raw = nullptr;
+    REQUIRE_GIT(git_tree_lookup(&tree_raw, repo.get(), &tree_id));
+    const Tree tree(tree_raw);
+    git_signature* signature = nullptr;
+    REQUIRE_GIT(git_signature_now(&signature, "Uzak", "uzak@noteapp.invalid"));
+    const git_commit* parents[] = {parent.get()};
+    git_oid commit_id;
+    const int rc = git_commit_create(&commit_id, repo.get(), "refs/heads/main", signature, signature, nullptr,
+                                     "uzak commit", tree.get(), has_parent ? 1 : 0, parents);
+    git_signature_free(signature);
+    REQUIRE_GIT(rc);
+}
+
+inline std::optional<bool> config_bool(const fs::path& repo_dir, const char* key) {
+    const Repository repo = open_repository(repo_dir);
+    git_config* raw = nullptr;
+    REQUIRE_GIT(git_repository_config(&raw, repo.get()));
+    int value = 0;
+    const int rc = git_config_get_bool(&value, raw, key);
+    git_config_free(raw);
+    return rc == 0 ? std::optional(value != 0) : std::nullopt;
+}
 
 inline CommitInfo head_commit(const fs::path& repo_dir) {
     const Repository repo = open_repository(repo_dir);

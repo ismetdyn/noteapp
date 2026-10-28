@@ -1,6 +1,7 @@
 #include "sync/sync_service.hpp"
 
 #include "core/atomic_file.hpp"
+#include "core/file_stat.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
 #include "core/paths.hpp"
@@ -26,6 +27,8 @@
 #include <vector>
 
 #ifndef _WIN32
+#include <cerrno>
+#include <fcntl.h>
 #include <pwd.h>
 #include <unistd.h>
 #endif
@@ -554,15 +557,67 @@ bool has_visible_entries(const fs::path& dir) {
     return false;
 }
 
-// Eksik satırlar sona eklenir; var olan içerik (CRLF dahil) olduğu gibi kalır.
+// Bağlar düz dosya olarak (içinde hedef yolu) çıkarılır: notlar hiçbir bağın ardında yaşamaz (SPEC-core).
+// libgit2 Linux/macOS'ta init sırasında core.symlinks'i açık bırakır; uzak depodaki `.gitignore ->
+// ../.ssh/id_ed25519` gerçek bağ olarak yazılır, ensure_gitignore hedefi okuyup commit'e sokardı (sızıntı).
+// Elle ya da başka bir git'le kurulmuş depolar da kapsansın diye depo her açılışta denetlenir.
+std::expected<void, core::Error> disable_symlinks(git_repository* repo) {
+    git_config* raw = nullptr;
+    TRY_GIT(git_repository_config(&raw, repo));
+    const GitConfig config(raw);
+    if (int value = 1; git_config_get_bool(&value, config.get(), "core.symlinks") == 0 && value == 0)
+        return {};  // zaten kapalı: .git/config her senkronda yeniden yazılmasın
+    TRY_GIT(git_config_set_bool(config.get(), "core.symlinks", 0));
+    return {};
+}
+
+core::Error read_failure(const fs::path& file, const std::error_code& ec) {
+    return sync_error("error.io", {{"path", utf8(file)}, {"detail", ec.message()}});
+}
+
+// Düz dosyanın içeriği; yoksa nullopt. Bağ ya da düz olmayan girdi okunmaz (hedefi notes_dir dışında
+// olabilir): "sync.gitignore_not_regular". POSIX'te O_NOFOLLOW, denetim ile açma arasındaki yarışı da
+// kapatır.
+std::expected<std::optional<std::string>, core::Error> read_regular_file(const fs::path& file) {
+    const auto stat = core::stat_file(file);
+    if (!stat && stat.error() == std::errc::no_such_file_or_directory)
+        return std::nullopt;
+    if (!stat)
+        return std::unexpected(read_failure(file, stat.error()));
+    if (!stat->regular || stat->symlink)
+        return std::unexpected(sync_error("sync.gitignore_not_regular", {{"path", utf8(file)}}));
+#ifdef _WIN32
+    std::ifstream in(file, std::ios::binary);
+    if (!in)
+        return std::unexpected(read_failure(file, std::make_error_code(std::errc::io_error)));
+    return std::string{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+#else
+    const int fd = ::open(file.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0)
+        return std::unexpected(errno == ELOOP
+                                   ? sync_error("sync.gitignore_not_regular", {{"path", utf8(file)}})
+                                   : read_failure(file, {errno, std::generic_category()}));
+    std::string text;
+    char buffer[4096];
+    ssize_t count = 0;
+    while ((count = ::read(fd, buffer, sizeof buffer)) > 0)
+        text.append(buffer, static_cast<std::size_t>(count));
+    const std::error_code ec(count < 0 ? errno : 0, std::generic_category());
+    ::close(fd);
+    if (ec)
+        return std::unexpected(read_failure(file, ec));
+    return text;
+#endif
+}
+
+// Eksik satırlar sona eklenir; var olan içerik (CRLF dahil) olduğu gibi kalır. Okunamayan dosya boş sayılıp
+// üzerine yazılmaz: kullanıcının satırlarını silerdi.
 std::expected<void, core::Error> ensure_gitignore(const fs::path& notes_dir) {
     const fs::path file = notes_dir / ".gitignore";
-    std::error_code ec;
-    std::ifstream in(file, std::ios::binary);
-    if (!in && fs::exists(file, ec))  // okunamayanı boş sayıp üzerine yazmak kullanıcının satırlarını silerdi
-        return std::unexpected(sync_error("error.io", {{"path", utf8(file)}, {"detail", "cannot read"}}));
-    std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-    in.close();
+    auto existing = read_regular_file(file);
+    if (!existing)
+        return std::unexpected(existing.error());
+    std::string text = existing->value_or("");
     std::vector<std::string> present;
     std::istringstream lines(text);
     for (std::string line; std::getline(lines, line);)
@@ -637,6 +692,8 @@ std::expected<void, core::Error> adopt_repository(const fs::path& notes_dir, con
     git_repository* repo_raw = nullptr;
     TRY_GIT(git_repository_open(&repo_raw, utf8(notes_dir).c_str()));
     const Repository repo(repo_raw);
+    if (auto no_links = disable_symlinks(repo.get()); !no_links)
+        return std::unexpected(no_links.error());
     std::optional<std::string> current;
     git_remote* origin_raw = nullptr;
     if (const int rc = git_remote_lookup(&origin_raw, repo.get(), kRemoteName); rc == 0) {
@@ -698,6 +755,8 @@ std::expected<void, core::Error> initialize(const core::Config& config, const st
     TRY_GIT(git_repository_init_ext(&repo_raw, utf8(notes_dir).c_str(), &options));
     created = true;
     const Repository repo(repo_raw);
+    if (auto no_links = disable_symlinks(repo.get()); !no_links)
+        return std::unexpected(no_links.error());
     git_remote* remote_raw = nullptr;
     TRY_GIT(git_remote_create(&remote_raw, repo.get(), kRemoteName, remote_url.c_str()));
     const Remote remote(remote_raw);
@@ -848,6 +907,9 @@ std::expected<SyncResult, core::Error> SyncService::run_cycle(const std::functio
     // işaretli dosyalarla "çözerdi". Kullanıcı bitirene (ya da iptal edene) kadar hiçbir şeye dokunulmaz.
     if (git_repository_state(repo.get()) != GIT_REPOSITORY_STATE_NONE)
         return std::unexpected(sync_error("sync.repo_busy_state", {{"path", notes_dir}}));
+    // index ve checkout bu ayarı ilk kullanımda okur: hiçbir şeye dokunmadan önce.
+    if (auto no_links = disable_symlinks(repo.get()); !no_links)
+        return std::unexpected(no_links.error());
 
     const std::string& branch = config_.sync.branch;
     if (auto on_branch = check_head(repo.get(), branch); !on_branch)

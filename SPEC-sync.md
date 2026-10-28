@@ -171,6 +171,12 @@ açmak `enable`'ı çağırır (repo varsa no-op).
    - `replace_origin`: origin silinip yeniden oluşturulur; eski `origin/*` takip dalları da gider (yoksa boş yeni
      remote'a push "güncel" sanılıp yapılmazdı). `remote_mismatch`'teki `current` adresinden kimlik ayıklanır.
    - Var olan `.gitignore`'a yalnız eksik satırlar eklenir (CRLF korunur); okunamıyorsa üzerine yazılmaz.
+   - **Bağlar düz dosyadır (T36):** libgit2 Linux/macOS'ta init'te `core.symlinks`'i açık bırakır; uzaktaki
+     `.gitignore -> ../.ssh/id_ed25519` gerçek bağ olarak çıkar, `.gitignore` tamamlanırken hedef okunup commit'e
+     girerdi. Notlar deposunun yerel config'ine init'ten hemen sonra ve depo kurulumda/her senkronda açılırken
+     `core.symlinks=false` yazılır (zaten kapalıysa dokunulmaz): bağ, içinde hedef yolu olan düz dosya olarak
+     çıkar (SPEC-core "notlar bağın ardında yaşamaz"). Ayrıca `.gitignore` bağ ya da düz olmayan girdiyse hiç
+     okunmaz → `sync.gitignore_not_regular` (POSIX'te `O_NOFOLLOW`).
 9. **Arka plan senkronu ve AutoSync (T27):**
    - `note sync --background` = ayrık süreç (`core::spawn_detached`: stdio boş aygıt, yalnız NUL tutamacı
      devredilir; Windows `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`, POSIX `setsid`).

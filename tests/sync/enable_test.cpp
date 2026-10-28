@@ -1,4 +1,5 @@
 #include "core/error.hpp"
+#include "core/file_stat.hpp"
 #include "core/i18n.hpp"
 #include "core/paths.hpp"
 #include "sync/lock.hpp"
@@ -11,8 +12,10 @@
 #include <filesystem>
 #include <git2.h>
 #include <optional>
+#include <random>
 #include <set>
 #include <string>
+#include <system_error>
 
 namespace fs = std::filesystem;
 using noteapp::core::Error;
@@ -379,4 +382,90 @@ TEST_CASE("acceptance 8: A enables an empty remote, B enables against it, then s
     CHECK(read_file(b / u8"ilk not.md") == "A'nın notu, düzenlendi\n");
     CHECK(ref_id(a, "HEAD") == ref_id(b, "HEAD"));
     CHECK(result_b->conflict_copies.empty());
+}
+
+// Uzak depodaki bir bağ (120000) notes_dir dışını gösterebilir: gerçek bağ olarak çıkarılsaydı
+// `.gitignore -> ../gizli.txt`'nin hedefi okunup yeniden commit'lenirdi (sızıntı).
+namespace {
+
+bool is_plain_file(const fs::path& path) {
+    const auto stat = noteapp::core::stat_file(path);
+    return stat && stat->regular && !stat->symlink;
+}
+
+std::string secret_outside(const SyncFixture& fx) {
+    const std::string secret = "GIZLI-ANAHTAR-" + std::to_string(std::random_device{}());
+    write_file(fx.root() / "gizli.txt", secret);
+    return secret;
+}
+
+}  // namespace
+
+TEST_CASE("remote symlinks are checked out as plain files holding the link text; nothing outside is read") {
+    const SyncFixture fx;
+    const std::string secret = secret_outside(fx);
+    commit_entries(fx.remote(), {{"not.md", "not\n"},
+                                 {".gitignore", "../gizli.txt", GIT_FILEMODE_LINK},
+                                 {"bag.md", "../gizli.txt", GIT_FILEMODE_LINK}});
+    const fs::path b = fx.root() / u8"B notları";
+    SyncService sync_b(SyncFixture::config_for(b));
+    const auto enabled = sync_b.enable(utf8(fx.remote()));
+    REQUIRE_MESSAGE(enabled.has_value(), describe(enabled));
+    write_file(b / "yeni.md", "yeni\n");
+    const auto synced = sync_b.sync_now();
+    REQUIRE_MESSAGE(synced.has_value(), describe(synced));
+
+    CHECK(config_bool(b, "core.symlinks") == false);
+    for (const char* name : {".gitignore", "bag.md"}) {
+        CAPTURE(name);
+        CHECK(is_plain_file(b / name));
+        CHECK(read_file(b / name).starts_with("../gizli.txt"));
+    }
+    CHECK(read_file(fx.root() / "gizli.txt") == secret);
+    for (const fs::path& repo : {b, fx.remote()}) {
+        CAPTURE(utf8(repo));
+        CHECK_FALSE(objects_contain(repo, secret));
+    }
+}
+
+TEST_CASE("a repository opened for sync gets core.symlinks=false even if it was created with links on") {
+    const SyncFixture fx;
+    secret_outside(fx);
+    const fs::path a = fx.make_clone(u8"A notları");
+    {
+        const Repository repo = open_repository(a);
+        git_config* config = nullptr;
+        REQUIRE_GIT(git_repository_config(&config, repo.get()));
+        REQUIRE_GIT(git_config_set_bool(config, "core.symlinks", 1));  // ör. Linux'ta git ile kurulmuş
+        git_config_free(config);
+    }
+    write_file(a / "not.md", "x\n");
+    const auto first = SyncService(SyncFixture::config_for(a)).sync_now();
+    REQUIRE_MESSAGE(first.has_value(), describe(first));
+    commit_entries(fx.remote(), {{"bag.md", "../gizli.txt", GIT_FILEMODE_LINK}});
+
+    const auto pulled = SyncService(SyncFixture::config_for(a)).sync_now();
+    REQUIRE_MESSAGE(pulled.has_value(), describe(pulled));
+    CHECK(config_bool(a, "core.symlinks") == false);
+    CHECK(is_plain_file(a / "bag.md"));
+    CHECK(read_file(a / "bag.md") == "../gizli.txt");
+}
+
+TEST_CASE("a .gitignore that is a link is neither read nor replaced") {
+    const SyncFixture fx;
+    const std::string secret = secret_outside(fx);
+    const fs::path a = fx.root() / u8"A notları";
+    write_file(a / "not.md", "x\n");
+    std::error_code ec;
+    fs::create_symlink(fx.root() / "gizli.txt", a / ".gitignore", ec);
+    if (ec) {  // Windows'ta geliştirici kipi kapalıyken (MinGW libstdc++ de desteklemeyebilir)
+        MESSAGE("symbolic links cannot be created here, skipped: " << ec.message());
+        return;
+    }
+    const auto result = enable(a, utf8(fx.remote()));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message_key == "sync.gitignore_not_regular");
+    CHECK(read_file(fx.root() / "gizli.txt") == secret);
+    CHECK_FALSE(is_plain_file(a / ".gitignore"));  // bağ yerinde, üzerine yazılmadı
+    CHECK_FALSE(fs::exists(a / ".git"));
 }

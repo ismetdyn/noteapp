@@ -338,3 +338,4 @@ ssh_host_unknown = "{host} sunucusunun SSH host anahtarı henüz tanınmıyor; o
 ssh_unavailable = "SSH kullanılamıyor: 'ssh-keygen' bulunamadı. OpenSSH'ı kurun ya da erişim token'lı bir HTTPS adresi kullanın"
 keychain_unavailable = "Sistem anahtar kasası kullanılamıyor ({detail}); token hiçbir zaman düz dosyaya yazılmaz. Bunun yerine NOTEAPP_GIT_TOKEN ortam değişkenini tanımlayın"
 timeout = "Senkron {seconds} saniye içinde bitmedi ve durduruldu; bir sonraki senkronda yeniden denenecek"
+gitignore_not_regular = "'{path}' bir bağ ya da düz olmayan bir dosya; güvenlik için okunmaz ve değiştirilmez. Yerine düz bir dosya koyun, ardından yeniden deneyin"

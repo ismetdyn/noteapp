@@ -354,6 +354,8 @@
   (edit/export) · 8.3 kısa adlar · ayrılmış aygıt adları · terminal kaçış temizliği · süreç sertleştirme ·
   `sync.remote` kimlik bilgisi · `normalize_line_endings` dışa açıldı (POSIX dalları `F`'de doğrulanacak).
 - [ ] GUI/TUI takibi: `absolute_path` ve `normalize_line_endings` çağrı noktalarına geçiş.
+- **Sync review bulguları:**
+  - [x] Uzak bağlar düz dosya olarak çıkar (`core.symlinks=false`); bağ olan `.gitignore` okunmaz
 - **Doğrulama:** tüm testler Windows + `F` · **Bağımlılık:** T35 · **Model:** opus · **Boyut:** M
 
 ### ✅ Son kontrol noktası

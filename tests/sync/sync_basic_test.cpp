@@ -382,8 +382,9 @@ TEST_CASE("CRLF and LF files round-trip byte-exact A -> R -> B despite a global 
 
 TEST_CASE("every sync message key exists in the catalog") {
     noteapp::core::init_i18n("en");
-    for (const char* key : {"sync.commit_message", "sync.merge_message", "sync.not_initialized", "sync.busy",
-                            "sync.repo_busy_state", "sync.unrelated_histories", "sync.push_rejected",
-                            "sync.branch_mismatch", "sync.git_failed", "sync.timeout"})
+    for (const char* key :
+         {"sync.commit_message", "sync.merge_message", "sync.not_initialized", "sync.busy",
+          "sync.repo_busy_state", "sync.unrelated_histories", "sync.push_rejected", "sync.branch_mismatch",
+          "sync.git_failed", "sync.timeout", "sync.gitignore_not_regular"})
         CHECK_MESSAGE(noteapp::core::tr(key) != key, key);
 }

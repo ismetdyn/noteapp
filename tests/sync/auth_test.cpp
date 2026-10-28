@@ -57,35 +57,6 @@ std::vector<std::string> files_containing(const fs::path& root, std::string_view
     return hits;
 }
 
-// Git nesneleri zlib ile sıkıştırılmış durur: dosya taraması commit'e giren token'ı göremez, açılmış
-// içerik taranır.
-bool objects_contain(const fs::path& repo_dir, const std::string& needle) {
-    const Repository repo = open_repository(repo_dir);
-    git_odb* odb = nullptr;
-    REQUIRE_GIT(git_repository_odb(&odb, repo.get()));
-    struct Search {
-        git_odb* odb;
-        const std::string& needle;
-        bool found = false;
-    } search{odb, needle};
-    REQUIRE_GIT(git_odb_foreach(
-        odb,
-        [](const git_oid* id, void* payload) {
-            auto& search = *static_cast<Search*>(payload);
-            git_odb_object* object = nullptr;
-            if (git_odb_read(&object, search.odb, id) < 0)
-                return -1;
-            const std::string_view data(static_cast<const char*>(git_odb_object_data(object)),
-                                        git_odb_object_size(object));
-            search.found = search.found || data.find(search.needle) != std::string_view::npos;
-            git_odb_object_free(object);
-            return 0;
-        },
-        &search));
-    git_odb_free(odb);
-    return search.found;
-}
-
 }  // namespace
 
 TEST_CASE("parse_remote derives the auth kind and host from the URL scheme") {
