@@ -1,4 +1,5 @@
 add_library(noteapp_core
+    atomic_file.cpp
     note_path.cpp
     note_store.cpp
     text.cpp

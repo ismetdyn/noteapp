@@ -1,22 +1,13 @@
 #include "core/note_store.hpp"
 
+#include "core/atomic_file.hpp"
 #include "core/text.hpp"
 
 #include <algorithm>
 #include <array>
 #include <fstream>
 #include <iterator>
-#include <random>
 #include <system_error>
-
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#else
-#include <cerrno>
-#include <fcntl.h>
-#include <unistd.h>
-#endif
 
 namespace noteapp::core {
 
@@ -43,75 +34,6 @@ Error invalid_path(std::string_view reason, std::string_view path) {
     return Error{Error::Code::InvalidPath,
                  "error.invalid_path",
                  {{"reason", std::string(reason)}, {"path", std::string(path)}}};
-}
-
-struct FileWriteResult {
-    std::error_code ec;
-    bool already_exists = false;
-};
-
-// Dosyayı YALNIZ yoksa oluşturur (O_EXCL / CREATE_NEW: yarış olsa bile ezmez), içeriği yazar,
-// diske zorlar (fsync / FlushFileBuffers) ve kapatır. Hatada dosyayı silmek çağıranın işidir.
-FileWriteResult write_new_file(const fs::path& file, std::string_view content) {
-    FileWriteResult result;
-#ifdef _WIN32
-    const HANDLE h =
-        CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) {
-        const DWORD err = GetLastError();
-        result.already_exists = err == ERROR_FILE_EXISTS || err == ERROR_ALREADY_EXISTS;
-        result.ec = std::error_code(static_cast<int>(err), std::system_category());
-        return result;
-    }
-    std::size_t done = 0;
-    while (done < content.size()) {
-        const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(content.size() - done, 1U << 30));
-        DWORD written = 0;
-        if (!WriteFile(h, content.data() + done, chunk, &written, nullptr)) {
-            result.ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
-            break;
-        }
-        done += written;
-    }
-    if (!result.ec && !FlushFileBuffers(h))
-        result.ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
-    CloseHandle(h);
-#else
-    const int fd = ::open(file.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
-    if (fd < 0) {
-        result.already_exists = errno == EEXIST;
-        result.ec = std::error_code(errno, std::generic_category());
-        return result;
-    }
-    std::size_t done = 0;
-    while (done < content.size()) {
-        const ssize_t n = ::write(fd, content.data() + done, content.size() - done);
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            result.ec = std::error_code(errno, std::generic_category());
-            break;
-        }
-        done += static_cast<std::size_t>(n);
-    }
-    if (!result.ec && ::fsync(fd) != 0)
-        result.ec = std::error_code(errno, std::generic_category());
-    ::close(fd);
-#endif
-    return result;
-}
-
-std::string random_hex() {
-    std::random_device rd;
-    constexpr std::array<char, 16> digits = {'0', '1', '2', '3', '4', '5', '6', '7',
-                                             '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
-    std::string out;
-    for (int i = 0; i < 4; ++i) {
-        const unsigned byte = rd() & 0xFFU;
-        out += digits[byte >> 4];
-        out += digits[byte & 0xFU];
-    }
-    return out;
 }
 
 std::string to_utf8(const fs::path& p) {
@@ -310,23 +232,14 @@ std::expected<fs::file_time_type, Error> NoteStore::write(const NotePath& path, 
         return std::unexpected(
             Error{Error::Code::ModifiedExternally, "error.modified_externally", {{"path", path.string()}}});
 
-    // Aynı dizinde geçici dosya: rename aynı birimde kalır, yani atomik olur.
-    fs::path tmp = target->parent_path() / ".";
-    tmp += target->filename();
-    tmp += "." + random_hex() + ".tmp";
-
-    const FileWriteResult written = write_new_file(tmp, content);
-    if (written.ec) {
-        if (!written.already_exists)
-            fs::remove(tmp, ec);  // başkasının dosyasına dokunma
-        return std::unexpected(io_error(path.string(), written.ec));
-    }
-    // MinGW (GCC 13) ve POSIX'te std::filesystem::rename mevcut dosyanın üzerine yazar.
-    fs::rename(tmp, *target, ec);
-    if (ec) {
-        std::error_code ignored;
-        fs::remove(tmp, ignored);
-        return std::unexpected(io_error(path.string(), ec));
+    // Hata mesajında kullanıcının gördüğü göreli yol kalsın diye "path" argümanı burada yeniden yazılır.
+    if (auto written = write_file_atomically(*target, content); !written) {
+        Error error = std::move(written.error());
+        for (auto& [key, value] : error.args) {
+            if (key == "path")
+                value = path.string();
+        }
+        return std::unexpected(std::move(error));
     }
     const auto new_mtime = fs::last_write_time(*target, ec);
     if (ec)
