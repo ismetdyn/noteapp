@@ -6,9 +6,12 @@
 #include "core/note_store.hpp"
 #include "detect/detect.hpp"
 #include "search/content_index.hpp"
+#include "sync/auto_sync.hpp"
+#include "sync/sync_service.hpp"
 #include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
 #include "tui/settings.hpp"
+#include "tui/sync_indicator.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
 
@@ -22,12 +25,14 @@
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/screen/terminal.hpp>
+#include <iostream>
 #include <iterator>
 #include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace {
 
@@ -76,6 +81,15 @@ std::string read_file(const std::filesystem::path& file) {
     return std::string(std::istreambuf_iterator<char>(in), {});
 }
 
+// Editör dönüşünde "dosya değişti mi" kararı: içeriği okumadan mtime + boyut. Okunamazsa boş damga.
+using FileStamp = std::pair<std::filesystem::file_time_type, std::uintmax_t>;
+FileStamp stamp_of(const std::filesystem::path& file) {
+    std::error_code ec;
+    const auto time = std::filesystem::last_write_time(file, ec);
+    const auto size = std::filesystem::file_size(file, ec);
+    return ec ? FileStamp{} : FileStamp{time, size};
+}
+
 std::string to_utf8(const std::filesystem::path& p) {
     const std::u8string u = p.u8string();
     return std::string(u.begin(), u.end());
@@ -111,6 +125,7 @@ int main() {
     tui::TuiState state;
     tui::PreviewCache preview;
     tui::StatusLine status{core::tr("tui.sync_off"), ""};
+    tui::SyncIndicator sync_indicator;
     auto listing = list_notes();
     state.set_notes(listing);
 
@@ -126,6 +141,35 @@ int main() {
     });
 
     auto app = ftxui::App::Fullscreen();
+
+    // Arka plan senkronu yalnız sync.enabled iken vardır (kapatınca yıkılır; depo olduğu gibi kalır). app'ten
+    // sonra bildirildiği için ondan önce yıkılır. Yalnız UI iş parçacığı oluşturur/yıkar.
+    std::optional<noteapp::sync::AutoSync> auto_sync;
+    const auto show_sync = [&] { status.sync = sync_indicator.text(); };
+    const auto notify_changed = [&] {
+        if (auto_sync)
+            auto_sync->notify_changed();
+    };
+    // AutoSync geri çağrısı İŞÇİ iş parçacığından gelir: durum UI iş parçacığına Post edilir. Kapatıldıktan
+    // sonra gelen geç bildirim yok sayılır.
+    const auto start_auto_sync = [&] {
+        sync_indicator.set_status(noteapp::sync::SyncService(config).status(), false);
+        show_sync();
+        auto_sync.emplace(config, noteapp::sync::note_executable_beside_self(),
+                          [&](const noteapp::sync::SyncStatus& result, bool running) {
+                              app.Post([&, result, running] {
+                                  if (!auto_sync)
+                                      return;
+                                  sync_indicator.set_status(result, running);
+                                  show_sync();
+                                  if (sync_indicator.state() == tui::SyncIndicator::State::Failed)
+                                      status.message = sync_indicator.error_text();
+                              });
+                          });
+        auto_sync->start();
+    };
+    if (config.sync.enabled)
+        start_auto_sync();
 
     // Önizleme satır sayısı modele bildirilir ki PgDn son satırı aşmasın.
     const auto sync_preview = [&] {
@@ -173,8 +217,12 @@ int main() {
         const tui::Row* row = state.selected_row();
         if (!row)
             return;
-        const auto edited = edit_file(config.notes_dir / row->path.value());
+        const auto file = config.notes_dir / row->path.value();
+        const FileStamp before = stamp_of(file);
+        const auto edited = edit_file(file);
         refresh_notes();
+        if (stamp_of(file) != before)
+            notify_changed();
         if (!edited)
             show_error(edited.error());
     };
@@ -248,9 +296,10 @@ int main() {
         confirm.reset();
         refresh_notes();
         state.select_index(index);
-        if (removed)
+        if (removed) {
             status.message = core::tr("tui.deleted", {{"path", removed_path}});
-        else
+            notify_changed();
+        } else
             show_error(removed.error());
     };
 
@@ -285,6 +334,7 @@ int main() {
                 refresh_notes();
                 state.reveal(*moved);
                 status.message = core::tr("tui.moved", {{"from", from.string()}, {"to", moved->string()}});
+                notify_changed();
                 break;
             }
             const auto saved = tui::save_new_note(*store, draft_file, dialog->request(), draft_content);
@@ -297,6 +347,7 @@ int main() {
             refresh_notes();
             state.reveal(*saved);
             status.message = core::tr("tui.saved", {{"path", saved->string()}});
+            notify_changed();
             break;
         }
         }
@@ -307,6 +358,7 @@ int main() {
     // alanına dokunulmaz: yeniden tarama iş parçacığı onu okur ve ayar ekranından değişmez.
     const auto apply_settings = [&](const core::Config& next) {
         const bool dir_changed = next.notes_dir != config.notes_dir;
+        const core::SyncConfig old_sync = config.sync;
         config.language = next.language;
         config.notes_dir = next.notes_dir;
         config.editor = next.editor;
@@ -315,7 +367,16 @@ int main() {
         config.types = next.types;
         config.sync = next.sync;
         core::init_i18n(config.language);
-        status.sync = core::tr("tui.sync_off");  // T28 gerçek senkron durumunu yazana dek
+        // AutoSync süreleri ve depo yolu kurulurken okunur: ayar değiştiyse yeniden kurulur; kapandıysa
+        // yıkılır.
+        if (!config.sync.enabled) {
+            auto_sync.reset();
+            sync_indicator.disable();
+            show_sync();
+        } else if (!auto_sync || dir_changed || config.sync != old_sync) {
+            auto_sync.reset();
+            start_auto_sync();
+        }
         if (dir_changed) {
             {
                 const std::scoped_lock lock(list_mutex);
@@ -341,14 +402,18 @@ int main() {
                 if (!help->handle(*key, text))
                     help.reset();
             } else if (settings) {
-                switch (settings->handle(*key, text)) {
+                const auto outcome = settings->handle(*key, text);
+                switch (outcome) {
                 case tui::SettingsState::Outcome::Editing:
                     break;
                 case tui::SettingsState::Outcome::Cancel:
                     settings.reset();
                     break;
                 case tui::SettingsState::Outcome::Submit:
-                    if (const auto saved = settings->commit(config)) {  // hata formda satır içi gösterilir
+                case tui::SettingsState::Outcome::Replace:  // origin değiştirme onaylandı
+                    // Hata formda satır içi gösterilir; origin farklıysa form onay penceresini açar.
+                    if (const auto saved =
+                            settings->submit(config, outcome == tui::SettingsState::Outcome::Replace)) {
                         apply_settings(*saved);
                         settings.reset();
                         status.message = core::tr("tui.settings_saved");
@@ -399,9 +464,11 @@ int main() {
         case tui::Intent::ShowSettings:
             settings.emplace(config);
             break;
-        default:
-            // T28 (senkron) bağlanana dek yer tutucu.
-            status.message = core::tr("tui.not_yet");
+        case tui::Intent::SyncNow:
+            if (auto_sync)
+                auto_sync->request_now();
+            else
+                status.message = core::tr("tui.sync_disabled_hint");
             break;
         }
         sync_preview();
@@ -435,4 +502,11 @@ int main() {
     });
 
     app.Loop(ftxui::CatchEvent(view, on_event));
+
+    // Çıkış (Ctrl-C dahil, ikisi de app.Exit): bekleyen değişiklik için son bir senkron, en çok exit_timeout.
+    // Terminal artık normal kipte; kullanıcı bekleyişin nedenini görsün.
+    if (auto_sync) {
+        std::cerr << core::tr("tui.sync_exiting") << std::endl;
+        auto_sync->stop(std::chrono::seconds(config.tuning.exit_timeout_seconds));
+    }
 }

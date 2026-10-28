@@ -3,4 +3,6 @@ noteapp_add_test(tui
     render_test.cpp
     save_dialog_test.cpp
     modals_test.cpp
-    settings_test.cpp)
+    settings_test.cpp
+    settings_sync_test.cpp
+    sync_indicator_test.cpp)

@@ -60,7 +60,7 @@ senkron açık/kapalı, remote, dal, idle süresi, yazar adı/e-posta; remote ht
 "kasada kayıtlı ✓" göstergesi, Kaydet/Sil). Kaydet → doğrula → `config.toml` atomik yazılır → uygulanır
 (dil anında; notes_dir değişirse liste yeniden yüklenir; senkron açıldıysa `enable` akışı, hata satır içinde).
 Vazgeç → değişiklikler atılır.
-  - Sapma (T23): `Kaydet` düğme satırında `Enter` ile kaydedilir, `Esc` vazgeçer (değişiklik varsa "Değişiklikler atılsın mı?" onayı, varsayılan "Vazgeç"). Token alanı ve senkron `enable` akışı T28'dedir. Kullanıcı `config.toml`'u bozuksa kaydedilmez (`note config set` ile aynı kural).
+  - Sapma (T23): `Kaydet` düğme satırında `Enter` ile kaydedilir, `Esc` vazgeçer (değişiklik varsa "Değişiklikler atılsın mı?" onayı, varsayılan "Vazgeç"). Sapma (T28): token satırı 12 config satırının ardında (Kaydet düğmesinden önce) ve yalnız https remote iken görünür; `Enter` yazılan token'ı kasaya kaydeder, `Ctrl-D` siler, `Kaydet` yazılmış ama kaydedilmemiş token'ı da `enable`'dan önce kasaya yazar. `enable` akışı senkron açılırken ya da açıkken remote değişince çalışır; origin farklıysa "değiştirilsin mi?" onayı (varsayılan "Vazgeç"), hata formda satır içi. Kullanıcı `config.toml`'u bozuksa kaydedilmez (`note config set` ile aynı kural).
 
 ## Yenileme ve senkron
 - Liste: editör dönüşünde, senkron çekme sonrası ve `rescan_seconds` (defaults.toml, 5 sn) aralıkla

@@ -3,10 +3,11 @@ add_library(noteapp_tui
     view.cpp
     modals.cpp
     settings.cpp
+    sync_indicator.cpp
     save_dialog.cpp
     tui_state.cpp)
 target_include_directories(noteapp_tui PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(noteapp_tui PUBLIC noteapp_core noteapp_detect noteapp_search ftxui::dom)
+target_link_libraries(noteapp_tui PUBLIC noteapp_core noteapp_detect noteapp_search noteapp_sync ftxui::dom)
 noteapp_target_defaults(noteapp_tui)
 
 add_executable(notes

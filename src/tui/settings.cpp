@@ -2,6 +2,8 @@
 
 #include "core/i18n.hpp"
 #include "core/paths.hpp"
+#include "sync/auth.hpp"
+#include "sync/sync_service.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,6 +19,9 @@ constexpr std::string_view kLanguageKey = "language";
 constexpr std::string_view kDefaultTypeKey = "default_type";
 constexpr std::string_view kTypesKey = "types";
 constexpr std::string_view kToggleKey = "sync.enabled";
+constexpr std::string_view kRemoteKey = "sync.remote";
+constexpr std::string_view kTokenKey = "sync.token";  // config anahtarı DEĞİL: yalnız etiket için
+constexpr std::size_t kMaskCells = 10;
 constexpr char kDelete = 0x7f;
 
 SettingsState::Kind kind_of(std::string_view key) {
@@ -70,16 +75,30 @@ bool user_config_broken() {
 
 }  // namespace
 
-SettingsState::SettingsState(const core::Config& config) {
+TokenStore system_token_store() {
+    return {[](std::string_view host) { return sync::has_token(host); },
+            [](std::string_view host, std::string_view token) { return sync::store_token(host, token); },
+            [](std::string_view host) { return sync::clear_token(host); }};
+}
+
+SyncEnabler system_sync_enabler() {
+    return [](const core::Config& next, bool replace_origin) {
+        return sync::SyncService(next).enable(next.sync.remote, replace_origin);
+    };
+}
+
+SettingsState::SettingsState(const core::Config& config, SettingsServices services)
+    : services_(std::move(services)) {
     // Sıra, config_entries'in (şema) sırasıdır ve zaten istenen insan sırasıdır.
     for (auto& [key, value] : core::config_entries(config)) {
         const Kind kind = kind_of(key);
-        rows_.push_back({std::move(key), kind, value, value, {}});
+        rows_.push_back({std::move(key), kind, value, value, {}, {}});
     }
+    refresh_stored();
 }
 
 bool SettingsState::changed() const {
-    return std::ranges::any_of(rows_, [](const Row& r) { return r.value != r.original; });
+    return !token_.empty() || std::ranges::any_of(rows_, [](const Row& r) { return r.value != r.original; });
 }
 
 void SettingsState::cycle(int delta) {
@@ -107,7 +126,86 @@ void SettingsState::cycle(int delta) {
     row.value = options[static_cast<std::size_t>(next)];
 }
 
+std::optional<std::string> SettingsState::https_host() const {
+    const auto remote = std::ranges::find(rows_, kRemoteKey, &Row::key);
+    const sync::RemoteEndpoint endpoint = sync::parse_remote(remote->value);
+    if (endpoint.auth != sync::Auth::Https)
+        return std::nullopt;
+    return endpoint.host;
+}
+
+bool SettingsState::token_visible() const {
+    return https_host().has_value();
+}
+
+SettingsState::Row SettingsState::token_row() const {
+    // Maske sabit üst sınırlı: uzunluk dışarı ipucu vermesin, satır da taşmasın.
+    std::string mask;
+    for (std::size_t i = 0; i < std::min(token_.size(), kMaskCells); ++i)
+        mask += "•";
+    return {std::string(kTokenKey),
+            Kind::Token,
+            std::move(mask),
+            {},
+            {},
+            core::tr(stored_ ? "tui.token_stored" : "tui.token_none")};
+}
+
+// Kasa göstergesi yalnız host değişince yeniden sorulur (her tuşta/çizimde OS kasasına gidilmez).
+void SettingsState::refresh_stored() {
+    const std::string host = https_host().value_or("");
+    if (host == stored_host_)
+        return;
+    stored_host_ = host;
+    stored_ = !host.empty() && services_.tokens.has(host);
+}
+
+bool SettingsState::store_token() {
+    const std::string host = https_host().value_or("");
+    if (host.empty() || token_.empty())
+        return true;
+    if (const auto stored = services_.tokens.store(host, token_); !stored) {
+        error_ = core::format_error(stored.error());  // hata token'ı taşımaz (store_token sözleşmesi)
+        return false;
+    }
+    error_.clear();
+    token_.clear();
+    stored_ = true;
+    return true;
+}
+
+void SettingsState::clear_token() {
+    const std::string host = https_host().value_or("");
+    if (host.empty())
+        return;
+    if (const auto cleared = services_.tokens.clear(host); !cleared) {
+        error_ = core::format_error(cleared.error());
+        return;
+    }
+    error_.clear();
+    token_.clear();
+    stored_ = false;
+}
+
 SettingsState::Outcome SettingsState::handle(Key key, std::string_view text) {
+    const Outcome outcome = handle_key(key, text);
+    refresh_stored();
+    return outcome;
+}
+
+SettingsState::Outcome SettingsState::handle_key(Key key, std::string_view text) {
+    if (replace_) {
+        switch (replace_->handle(key, text)) {
+        case ConfirmState::Outcome::Pending:
+            return Outcome::Editing;
+        case ConfirmState::Outcome::Cancelled:
+            replace_.reset();
+            return Outcome::Editing;
+        case ConfirmState::Outcome::Confirmed:
+            replace_.reset();
+            return Outcome::Replace;
+        }
+    }
     if (discard_) {
         switch (discard_->handle(key, text)) {
         case ConfirmState::Outcome::Pending:
@@ -119,7 +217,7 @@ SettingsState::Outcome SettingsState::handle(Key key, std::string_view text) {
             return Outcome::Cancel;
         }
     }
-    const std::size_t slots = rows_.size() + 1;  // + düğme satırı
+    const std::size_t slots = slot_count();
     switch (key) {
     case Key::Up:
     case Key::ShiftTab:
@@ -132,6 +230,10 @@ SettingsState::Outcome SettingsState::handle(Key key, std::string_view text) {
     case Key::Enter:
         if (on_button())
             return Outcome::Submit;
+        if (on_token() && !token_.empty()) {
+            store_token();  // kasaya yazar, odak yerinde kalır
+            return Outcome::Editing;
+        }
         focus_ = (focus_ + 1) % slots;
         return Outcome::Editing;
     case Key::Escape:
@@ -144,6 +246,23 @@ SettingsState::Outcome SettingsState::handle(Key key, std::string_view text) {
     }
     if (on_button())
         return Outcome::Editing;
+    if (on_token()) {
+        switch (key) {
+        case Key::Char:
+            if (is_printable(text))
+                token_.append(text);
+            break;
+        case Key::Backspace:
+            pop_code_point(token_);
+            break;
+        case Key::CtrlD:
+            clear_token();
+            break;
+        default:
+            break;
+        }
+        return Outcome::Editing;
+    }
     Row& row = rows_[focus_];
     switch (key) {
     case Key::Left:
@@ -175,7 +294,7 @@ SettingsState::Outcome SettingsState::handle(Key key, std::string_view text) {
     return Outcome::Editing;
 }
 
-std::optional<core::Config> SettingsState::commit(const core::Config& base) {
+std::optional<core::Config> SettingsState::build(const core::Config& base) {
     error_.clear();
     for (Row& row : rows_)
         row.error.clear();
@@ -192,16 +311,62 @@ std::optional<core::Config> SettingsState::commit(const core::Config& base) {
             return std::nullopt;
         }
 
+    // Enable akışı depoyu kurmadan önce bakılır: yazılamayacak config için depo kurulmasın.
     if (user_config_broken()) {
         error_ = core::tr("tui.settings_config_broken", {{"path", to_utf8(core::config_file())}});
         return std::nullopt;
     }
-    if (const auto saved = core::save_config(next); !saved) {
+    return next;
+}
+
+std::expected<void, core::Error> SettingsState::persist(const core::Config& next) {
+    if (auto saved = core::save_config(next); !saved)
+        return saved;
+    for (Row& row : rows_)
+        row.original = row.value;
+    return {};
+}
+
+std::optional<core::Config> SettingsState::commit(const core::Config& base) {
+    const auto next = build(base);
+    if (!next)
+        return std::nullopt;
+    if (const auto saved = persist(*next); !saved) {
         error_ = core::format_error(saved.error());
         return std::nullopt;
     }
-    for (Row& row : rows_)
-        row.original = row.value;
+    return next;
+}
+
+std::optional<core::Config> SettingsState::submit(const core::Config& base, bool replace) {
+    auto next = build(base);
+    if (!next)
+        return std::nullopt;
+    // Yazılmış ama kasaya gitmemiş token enable'dan önce saklanır: enable onu kasadan okur.
+    if (token_visible() && !token_.empty() && !store_token())
+        return std::nullopt;
+    // Açılış ya da (açıkken) remote değişimi depoyu yeniden kurmayı gerektirir; diğer anahtarlar gerektirmez.
+    const bool needs_enable =
+        next->sync.enabled && (!base.sync.enabled || next->sync.remote != base.sync.remote);
+    if (needs_enable) {
+        if (const auto enabled = services_.enable(*next, replace); !enabled) {
+            const core::Error& error = enabled.error();
+            if (error.message_key != "sync.remote_mismatch" || replace) {
+                error_ = core::format_error(error);
+                return std::nullopt;
+            }
+            // Hata argümanları adresi taşır; kimlik sızmasın diye kullanıcı bilgisi atılır.
+            core::Args shown;
+            for (const auto& [name, value] : error.args)
+                shown.emplace_back(name, sync::without_userinfo(value));
+            replace_.emplace(core::tr("tui.settings_confirm_replace", shown));
+            return std::nullopt;
+        }
+    }
+    if (const auto saved = persist(*next); !saved) {
+        error_ = core::format_error(saved.error());
+        return std::nullopt;
+    }
     return next;
 }
 

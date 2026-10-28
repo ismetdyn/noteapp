@@ -270,14 +270,17 @@ ftxui::Element settings_row(const SettingsState::Row& row, bool focused) {
         shown = "‹ " + tail_code_points(row.value, kSettingsValueCells) + " ›";
         break;
     case SettingsState::Kind::Text:
+    case SettingsState::Kind::Token:  // değer modelde zaten maskelenmiş noktalardır
         shown = tail_code_points(row.value, kSettingsValueCells);
         break;
     }
-    if (focused && row.kind == SettingsState::Kind::Text)
+    if (focused && (row.kind == SettingsState::Kind::Text || row.kind == SettingsState::Kind::Token))
         shown += "▏";
     Element value = text(shown);
     if (!row.error.empty())
         value = value | color(Color::Red);
+    if (!row.note.empty())
+        value = hbox({std::move(value), text("  " + row.note) | dim});
     Element line =
         hbox({text(settings_label(row)) | size(WIDTH, EQUAL, kSettingsLabelWidth), std::move(value)});
     return focused ? line | inverted : line;
@@ -288,8 +291,13 @@ ftxui::Element settings_box(const SettingsState& settings, int window_height) {
     Elements body;
     if (const ConfirmState* confirm = settings.discard_confirm()) {
         body = confirm_body(confirm->message(), core::tr("tui.discard_yes"), confirm->yes_selected());
+    } else if (const ConfirmState* replace = settings.replace_confirm()) {
+        body = confirm_body(replace->message(), core::tr("tui.replace_yes"), replace->yes_selected());
     } else {
-        const auto& rows = settings.rows();
+        // Token satırı (varsa) 12 satırın ardındadır; odak/kaydırma aynı sıra numarasıyla yürür.
+        std::vector<SettingsState::Row> rows = settings.rows();
+        if (settings.token_visible())
+            rows.push_back(settings.token_row());
         const auto visible = static_cast<std::size_t>(std::max(window_height - kSettingsFixedLines, 1));
         const std::size_t focus_row = std::min(settings.focus(), rows.size() - 1);
         const std::size_t first = focus_row < visible ? 0 : focus_row + 1 - visible;
@@ -302,7 +310,8 @@ ftxui::Element settings_box(const SettingsState& settings, int window_height) {
         Element save = text("[ " + core::tr("tui.settings_save") + " ]");
         body.push_back((settings.on_button() ? save | inverted : save) | center);
         body.push_back(text(error) | color(Color::Red));
-        body.push_back(text(core::tr("tui.settings_hints")) | dim);
+        body.push_back(
+            text(core::tr(settings.on_token() ? "tui.settings_token_hints" : "tui.settings_hints")) | dim);
     }
     return window(text(" " + core::tr("tui.settings_title") + " ") | bold, vbox(std::move(body))) |
            size(WIDTH, EQUAL, kSettingsWidth) | clear_under;

@@ -275,7 +275,7 @@
   `tests/core/process_test.cpp`, `tests/support/fake_editor.cpp`.
 
 ### T28: TUI senkron entegrasyonu
-- [ ] **Kabul:** açılışta/kayıtta/çıkışta `AutoSync` · durum çubuğu (kapalı/✓/⟳/⚠) · Ctrl-S · ayarlarda token alanı
+- [x] **Kabul:** açılışta/kayıtta/çıkışta `AutoSync` · durum çubuğu (kapalı/✓/⟳/⚠) · Ctrl-S · ayarlarda token alanı
   (maskeli, kasada-kayıtlı göstergesi) ve `enable` akışı, hata satır içinde.
 - **Doğrulama:** `B && T(tui)` · **Bağımlılık:** T23, T27 · **Dosyalar:** `src/tui/{main.cpp,view.cpp,settings_view.cpp}`,
   testler · **Boyut:** M
