@@ -1,7 +1,7 @@
 #include "core/config.hpp"
 #include "core/paths.hpp"
 #include "core/resources.hpp"
-#include "test_support.hpp"
+#include "support/test_support.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -177,14 +177,14 @@ TEST_CASE("parse_config survives a TOML syntax error with defaults and a positio
 }
 
 TEST_CASE("parse_config expands ~ and environment variables in notes_dir") {
-    const TempDir tmp;
+    const TempDir tmp(kTurkishUncreated);
     const ScopedEnv env("NOTEAPP_TEST_DIR", tmp.path().u8string());
     CHECK(parse_config(R"(notes_dir = "~/n")").config.notes_dir == home_dir() / "n");
     CHECK(parse_config(R"(notes_dir = "$NOTEAPP_TEST_DIR/n")").config.notes_dir == tmp.path() / "n");
 }
 
 TEST_CASE("NOTEAPP_HOME overrides config and state dirs, including non-ASCII paths") {
-    const TempDir tmp;
+    const TempDir tmp(kTurkishUncreated);
     const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
     CHECK(config_dir() == tmp.path() / "config");
     CHECK(state_dir() == tmp.path() / "state");
@@ -237,7 +237,7 @@ TEST_CASE("expand_user_path handles ~, $VAR, ${VAR} and leaves unknowns alone") 
 }
 
 TEST_CASE("save_config then load_config round-trips under NOTEAPP_HOME") {
-    const TempDir tmp;
+    const TempDir tmp(kTurkishUncreated);
     const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
 
     // Dosya yokken: varsayılanlar, uyarısız.
@@ -268,7 +268,7 @@ TEST_CASE("save_config then load_config round-trips under NOTEAPP_HOME") {
 }
 
 TEST_CASE("load_config with a corrupt file returns defaults and a warning instead of failing") {
-    const TempDir tmp;
+    const TempDir tmp(kTurkishUncreated);
     const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
     fs::create_directories(config_dir());
     std::ofstream(config_file(), std::ios::binary) << "this is [not toml";

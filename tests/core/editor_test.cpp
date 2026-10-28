@@ -1,6 +1,7 @@
 #include "core/config.hpp"
 #include "core/editor.hpp"
-#include "test_env.hpp"
+#include "core/process.hpp"
+#include "support/test_support.hpp"
 
 #include <doctest/doctest.h>
 
@@ -38,8 +39,8 @@ TEST_CASE("split_command_line splits on whitespace and honours quotes") {
 }
 
 TEST_CASE("resolve_editor honours config, VISUAL, EDITOR in order") {
-    EnvGuard visual("VISUAL");
-    EnvGuard editor("EDITOR");
+    ScopedEnv visual("VISUAL");
+    ScopedEnv editor("EDITOR");
     visual.set("vis --wait");
     editor.set("ed");
 
@@ -51,8 +52,8 @@ TEST_CASE("resolve_editor honours config, VISUAL, EDITOR in order") {
 }
 
 TEST_CASE("resolve_editor falls back to a platform default found on PATH") {
-    EnvGuard visual("VISUAL");
-    EnvGuard editor("EDITOR");
+    ScopedEnv visual("VISUAL");
+    ScopedEnv editor("EDITOR");
     visual.unset();
     editor.unset();
     const auto result = resolve_editor(make_config());
@@ -65,12 +66,12 @@ TEST_CASE("resolve_editor falls back to a platform default found on PATH") {
 }
 
 TEST_CASE("resolve_editor lists the candidates when nothing can be found") {
-    EnvGuard visual("VISUAL");
-    EnvGuard editor("EDITOR");
+    ScopedEnv visual("VISUAL");
+    ScopedEnv editor("EDITOR");
     visual.unset();
     editor.unset();
     TempDir empty_dir;
-    EnvGuard path("PATH", utf8(empty_dir.path()));
+    ScopedEnv path("PATH", utf8(empty_dir.path()));
 
     const auto result = resolve_editor(make_config());
     REQUIRE_FALSE(result.has_value());
@@ -88,7 +89,7 @@ TEST_CASE("resolve_editor lists the candidates when nothing can be found") {
 TEST_CASE("run_editor lets the editor write into a path with Turkish characters and spaces") {
     TempDir dir(u8" ğüşıöç dizin");
     const auto file = dir.path() / u8"not ığ üş.md";
-    EnvGuard content("FAKE_EDITOR_CONTENT", "# Başlık\nçğüşıö\n");
+    ScopedEnv content("FAKE_EDITOR_CONTENT", "# Başlık\nçğüşıö\n");
 
     const auto result = run_editor(make_config(quoted_fake_editor()), file);
     REQUIRE(result.has_value());
@@ -99,7 +100,7 @@ TEST_CASE("run_editor passes configured arguments and appends the file last") {
     TempDir dir(u8" ğüş");
     const auto file = dir.path() / u8"n ö.md";
     const auto args_out = dir.path() / "args.txt";
-    EnvGuard out("FAKE_EDITOR_ARGS_OUT", utf8(args_out));
+    ScopedEnv out("FAKE_EDITOR_ARGS_OUT", utf8(args_out));
 
     REQUIRE(run_editor(make_config(quoted_fake_editor() + " --wait \"two words\""), file).has_value());
     CHECK(slurp(args_out) == "--wait\ntwo words\n" + utf8(file) + "\n");
@@ -107,7 +108,7 @@ TEST_CASE("run_editor passes configured arguments and appends the file last") {
 
 TEST_CASE("run_editor maps a non-zero exit to EditorFailed") {
     TempDir dir;
-    EnvGuard exit_code("FAKE_EDITOR_EXIT", "3");
+    ScopedEnv exit_code("FAKE_EDITOR_EXIT", "3");
     const auto result = run_editor(make_config(quoted_fake_editor()), dir.path() / "n.md");
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().code == Error::Code::EditorFailed);

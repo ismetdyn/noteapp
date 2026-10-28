@@ -1,6 +1,6 @@
 #include "core/log.hpp"
 #include "core/paths.hpp"
-#include "test_support.hpp"
+#include "support/test_support.hpp"
 
 #include <doctest/doctest.h>
 #include <fstream>
@@ -15,19 +15,12 @@ using namespace noteapp::test;
 
 namespace {
 
-std::string slurp(const fs::path& p) {
-    std::ifstream in(p, std::ios::binary);
-    std::ostringstream out;
-    out << in.rdbuf();
-    return out.str();
-}
-
 constexpr std::size_t kBig = 1 << 20;
 
 }  // namespace
 
 TEST_CASE("log line format: ISO timestamp, level, pid, message") {
-    const TempDir tmp;
+    const TempDir tmp(kTurkishUncreated);
     const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
     init_log(kBig);
     log_info("merhaba dünya çğıİöşü");
@@ -50,7 +43,7 @@ TEST_CASE("log line format: ISO timestamp, level, pid, message") {
 }
 
 TEST_CASE("log rotates to log.1.txt when the max size is exceeded and replaces the old rotation") {
-    const TempDir tmp;
+    const TempDir tmp(kTurkishUncreated);
     const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
     init_log(200);
     for (int i = 0; i < 40; ++i)
@@ -65,7 +58,7 @@ TEST_CASE("log rotates to log.1.txt when the max size is exceeded and replaces t
 }
 
 TEST_CASE("logging into an unusable location neither throws nor crashes") {
-    const TempDir tmp;
+    const TempDir tmp(kTurkishUncreated);
     fs::create_directories(tmp.path());
     // state dizini yerine aynı adlı bir dosya: create_directories başarısız olur.
     {
@@ -78,7 +71,7 @@ TEST_CASE("logging into an unusable location neither throws nor crashes") {
 }
 
 TEST_CASE("concurrent logging from several threads keeps every line intact") {
-    const TempDir tmp;
+    const TempDir tmp(kTurkishUncreated);
     const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
     init_log(kBig);
     std::vector<std::thread> threads;

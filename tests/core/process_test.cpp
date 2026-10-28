@@ -1,5 +1,5 @@
 #include "core/process.hpp"
-#include "test_env.hpp"
+#include "support/test_support.hpp"
 
 #include <doctest/doctest.h>
 
@@ -50,7 +50,7 @@ TEST_CASE("run_and_wait reports a missing program as NotFound with its name") {
 
 TEST_CASE("find_program locates a program on PATH and ignores the working directory") {
     TempDir dir;
-    EnvGuard path("PATH", utf8(dir.path()));
+    ScopedEnv path("PATH", utf8(dir.path()));
     CHECK_FALSE(find_program("fake_editor").has_value());
     CHECK(find_program(kFakeEditor).has_value());  // dizin içeren ad doğrudan denenir
 }

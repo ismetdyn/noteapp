@@ -1,7 +1,7 @@
 #include "core/error.hpp"
 #include "core/i18n.hpp"
 #include "core/resources.hpp"
-#include "test_support.hpp"
+#include "support/test_support.hpp"
 
 #include <algorithm>
 #include <doctest/doctest.h>
@@ -19,7 +19,7 @@ namespace {
 
 // Eksik anahtar uyarıları log'a yazar; testler gerçek kullanıcı dizinini kirletmesin.
 struct IsolatedHome {
-    TempDir dir;
+    TempDir dir{kTurkishUncreated};
     ScopedEnv env{"NOTEAPP_HOME", dir.path().u8string()};
 };
 

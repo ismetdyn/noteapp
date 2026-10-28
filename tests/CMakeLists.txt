@@ -2,7 +2,8 @@
 function(noteapp_add_test module)
     add_executable(${module}_tests ${ARGN})
     target_link_libraries(${module}_tests PRIVATE doctest::doctest_with_main noteapp_${module})
-    target_include_directories(${module}_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    # "support/test_support.hpp" gibi ortak yardımcılar tests/ köküne göre eklenir.
+    target_include_directories(${module}_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/tests)
     noteapp_target_defaults(${module}_tests)
     add_test(NAME ${module} COMMAND ${module}_tests)
 endfunction()
