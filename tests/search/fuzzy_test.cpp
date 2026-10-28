@@ -128,6 +128,22 @@ TEST_CASE("rank_notes: empty query returns all notes newest first, regardless of
     CHECK(rank_notes("", {}).empty());
 }
 
+// Boş sorguda yol uzunluğu sırayı etkilememeli (T29'da bulundu): daha yeni ama daha uzun yol önce gelir.
+TEST_CASE("rank_notes: empty query ignores path length, newer longer path comes first") {
+    std::vector<core::NoteInfo> notes{note("beta.md", 1), note("gamma-notes.md", 5)};
+    auto r = rank_notes("", notes);
+    REQUIRE(r.size() == 2);
+    CHECK(r[0].index == 1);
+    CHECK(r[1].index == 0);
+}
+
+TEST_CASE("rank_notes: empty query breaks mtime ties by path") {
+    std::vector<core::NoteInfo> notes{note("zeta.md", 3), note("alpha-long.md", 3)};
+    auto r = rank_notes("", notes);
+    REQUIRE(r.size() == 2);
+    CHECK(r[0].index == 1);
+}
+
 TEST_CASE("rank_notes: 5000 realistic paths in <= 20 ms (Release only)") {
     static const char* const kFolders[] = {"work",    "personal",       "ideas",
                                            "journal", "projects/alpha", "projects/beta"};

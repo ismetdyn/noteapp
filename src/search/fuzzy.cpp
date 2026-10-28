@@ -154,6 +154,16 @@ std::vector<Ranked> rank_notes(std::string_view query, std::span<const core::Not
         }
     }
 
+    // Boş sorguda puanlar hep eşit; SPEC-search "mtime azalan" der, yol uzunluğu sırayı etkilememeli.
+    if (q.text.empty()) {
+        std::ranges::sort(out, [&notes](const Ranked& a, const Ranked& b) {
+            const auto& na = notes[a.index];
+            const auto& nb = notes[b.index];
+            return na.mtime != nb.mtime ? na.mtime > nb.mtime : na.path < nb.path;
+        });
+        return out;
+    }
+
     // Eşitlikte index: girdi sırasından bağımsız, belirlenimci sonuç.
     std::ranges::sort(out, [&notes, &path_len](const Ranked& a, const Ranked& b) {
         if (a.match.score != b.match.score)
