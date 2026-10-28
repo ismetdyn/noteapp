@@ -6,7 +6,6 @@
 #include "core/text.hpp"
 
 #include <algorithm>
-#include <array>
 #include <fstream>
 #include <iterator>
 #include <system_error>
@@ -128,13 +127,6 @@ bool is_hidden(const fs::path& p) {
     return !name.empty() && name.front() == u8'.';
 }
 
-bool has_nul_in_head(const fs::path& file) {
-    std::ifstream in(file, std::ios::binary);
-    std::array<char, kBinarySniffBytes> head{};
-    in.read(head.data(), static_cast<std::streamsize>(head.size()));
-    return std::find(head.begin(), head.begin() + in.gcount(), '\0') != head.begin() + in.gcount();
-}
-
 // İlk dolu (yalnız boşluk olmayan) satır; slug bundan türetilir.
 std::string first_non_empty_line(std::string_view content) {
     std::size_t start = 0;
@@ -162,6 +154,10 @@ std::string normalize_line_endings(std::string_view text) {
 }
 
 }  // namespace
+
+bool looks_binary(std::string_view bytes) {
+    return bytes.substr(0, kBinarySniffBytes).find('\0') != std::string_view::npos;
+}
 
 NoteStore::NoteStore(fs::path root, std::size_t slug_max_length)
     : root_(std::move(root)), slug_max_length_(slug_max_length) {}
@@ -203,7 +199,6 @@ std::expected<fs::path, Error> NoteStore::resolve(const NotePath& path) const {
 
 std::vector<NoteInfo> NoteStore::list() const {
     std::vector<NoteInfo> notes;
-    std::unordered_map<std::string, BinaryCacheEntry> seen;  // silinen dosyaların kaydı düşsün
     // Sembolik bağlar listelenmez (scan_files atlar): hedefi kök dışına kaçabilir.
     for (const ScannedFile& file : scan_files(root_)) {
         auto parsed = NotePath::parse(file.relative);
@@ -212,22 +207,8 @@ std::vector<NoteInfo> NoteStore::list() const {
                      (parsed.error().args.empty() ? "" : parsed.error().args.front().second) + ")");
             continue;
         }
-        const auto mtime = file.stat.mtime;
-        const auto size = file.stat.size;
-        bool binary = false;
-        if (const auto cached = binary_cache_.find(file.relative);
-            cached != binary_cache_.end() && cached->second.mtime == mtime && cached->second.size == size) {
-            binary = cached->second.binary;
-        } else {
-            // ponytail: mtime saat tıkı (~1–16 ms) içinde aynı kalır; o pencerede aynı boyutla değişen dosya
-            // eski bayrakta kalır. Gerekirse anahtara içerik özeti eklenir.
-            ++head_reads_;
-            binary = has_nul_in_head(root_ / parsed->value());
-        }
-        seen.insert_or_assign(file.relative, BinaryCacheEntry{mtime, size, binary});
-        notes.push_back(NoteInfo{*parsed, mtime, size, binary});
+        notes.push_back(NoteInfo{*parsed, file.stat.mtime, file.stat.size});
     }
-    binary_cache_ = std::move(seen);
     std::sort(notes.begin(), notes.end(), [](const NoteInfo& a, const NoteInfo& b) {
         if (a.mtime != b.mtime)
             return a.mtime > b.mtime;
@@ -385,12 +366,6 @@ std::expected<NotePath, Error> NoteStore::move(const NotePath& from, const NoteP
             return std::unexpected(already_exists(to.string()));
         return std::unexpected(io_error(from.string(), moved));
     }
-
-    binary_cache_.erase(to.string());
-    if (auto node = binary_cache_.extract(from.string())) {
-        node.key() = to.string();
-        binary_cache_.insert(std::move(node));
-    }
     return to;
 }
 
@@ -403,7 +378,6 @@ std::expected<void, Error> NoteStore::remove(const NotePath& path) {
     std::error_code ec;
     if (!fs::remove(*target, ec) || ec)
         return std::unexpected(io_error(path.string(), ec));
-    binary_cache_.erase(path.string());
     return {};
 }
 
@@ -462,20 +436,6 @@ std::expected<void, Error> NoteStore::rename_folder(std::string_view from, std::
             return std::unexpected(already_exists(to_path->string()));
         return std::unexpected(io_error(from_path->string(), moved));
     }
-
-    // Klasörün altındaki önbellek kayıtları yeni yola taşınır (dosyaların başı yeniden okunmasın).
-    using Node = decltype(binary_cache_)::node_type;
-    std::vector<Node> moved_entries;
-    for (auto it = binary_cache_.begin(); it != binary_cache_.end();) {
-        auto next = std::next(it);
-        if (it->first.starts_with(old_prefix))
-            moved_entries.push_back(binary_cache_.extract(it));
-        it = next;
-    }
-    for (Node& node : moved_entries) {
-        node.key() = new_prefix + node.key().substr(old_prefix.size());
-        binary_cache_.insert(std::move(node));
-    }
     return {};
 }
 
@@ -525,8 +485,6 @@ std::expected<void, Error> NoteStore::remove_folder(std::string_view folder, boo
     fs::remove(*target, ec);
     if (ec)
         return std::unexpected(io_error(parsed->string(), ec));
-    const std::string prefix = parsed->string() + "/";
-    std::erase_if(binary_cache_, [&](const auto& entry) { return entry.first.starts_with(prefix); });
     return {};
 }
 

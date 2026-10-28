@@ -12,9 +12,9 @@ using noteapp::gui::NoteListModel;
 
 namespace {
 
-NoteInfo make_note(const std::string& path, int mtime_minutes = 0, bool binary = false) {
+NoteInfo make_note(const std::string& path, int mtime_minutes = 0) {
     return {*NotePath::parse(path), std::filesystem::file_time_type{} + std::chrono::minutes(mtime_minutes),
-            10, binary};
+            10};
 }
 
 QStringList displays(const NoteListModel& model) {
@@ -138,14 +138,7 @@ TEST_CASE("model resets only when the listing or filter actually changes") {
     CHECK(counter.resets == 3);
 }
 
-TEST_CASE("binary notes stay listed") {
-    NoteListModel model;
-    model.set_notes({make_note("img.bin", 0, true)});
-    CHECK(model.rowCount() == 1);
-    CHECK(model.note_at(0).binary);
-}
-
-TEST_CASE("same_listing compares path, mtime, size and binary flag") {
+TEST_CASE("same_listing compares path, mtime and size") {
     const auto a = std::vector{make_note("a.md", 1)};
     auto b = a;
     CHECK(noteapp::gui::same_listing(a, b));

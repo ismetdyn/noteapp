@@ -329,14 +329,14 @@ const Preview& PreviewCache::get(const core::NoteStore& store, const Row* row) {
         return preview_;
     path_ = row->path;
     preview_ = {};
-    if (row->binary) {
-        preview_.kind = Preview::Kind::Binary;
-        return preview_;
-    }
     const auto content = store.read(row->path);
     if (!content) {
         preview_.kind = Preview::Kind::Error;
         preview_.error = core::format_error(content.error());
+        return preview_;
+    }
+    if (core::looks_binary(content->text)) {
+        preview_.kind = Preview::Kind::Binary;
         return preview_;
     }
     preview_.kind = Preview::Kind::Text;

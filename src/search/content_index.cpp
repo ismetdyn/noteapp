@@ -79,7 +79,7 @@ ContentIndex::ContentIndex(const core::NoteStore& store, std::size_t max_note_by
 void ContentIndex::refresh() {
     std::map<core::NotePath, Entry> next;
     for (const auto& info : store_.list()) {
-        if (info.binary || info.size > max_note_bytes_)
+        if (info.size > max_note_bytes_)
             continue;
         auto old = entries_.find(info.path);
         if (old != entries_.end() && old->second.mtime == info.mtime && old->second.size == info.size) {
@@ -90,6 +90,11 @@ void ContentIndex::refresh() {
         ++read_count_;
         if (!content || content->text.size() > max_note_bytes_)
             continue;
+        // İkili not boş kayıtla tutulur: hiçbir terimle eşleşmez ve değişmedikçe yeniden okunmaz.
+        if (core::looks_binary(content->text)) {
+            next.emplace(info.path, Entry{info.mtime, info.size, {}, {}, {}, {}});
+            continue;
+        }
 
         Entry e{info.mtime, info.size, std::move(content->text), {}, {}, {}};
         auto folded = fold(e.text);

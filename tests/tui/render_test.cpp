@@ -23,10 +23,9 @@ namespace {
 constexpr int kWidth = 80;
 constexpr int kHeight = 15;
 
-core::NoteInfo note(const std::string& path, int age_hours = 0, bool binary = false) {
+core::NoteInfo note(const std::string& path, int age_hours = 0) {
     return core::NoteInfo{core::NotePath::parse(path).value(),
-                          std::filesystem::file_time_type{} + std::chrono::hours(100000 - age_hours), 1,
-                          binary};
+                          std::filesystem::file_time_type{} + std::chrono::hours(100000 - age_hours), 1};
 }
 
 tui::TuiState sample_state() {
@@ -244,17 +243,17 @@ TEST_CASE("PreviewCache reads text, flags binary notes and reports unreadable on
     const core::NoteStore store(dir.path());
     tui::PreviewCache cache;
 
-    tui::Row text_row{core::NotePath::parse("a.md").value(), {}, 0, {}, false};
+    tui::Row text_row{core::NotePath::parse("a.md").value(), {}, 0, {}};
     const auto& text = cache.get(store, &text_row);
     REQUIRE(text.kind == tui::Preview::Kind::Text);
     CHECK(text.lines == std::vector<std::string>{"first", "second\tline", "last"});
 
-    tui::Row binary_row{core::NotePath::parse("b.bin").value(), {}, 0, {}, true};
+    tui::Row binary_row{core::NotePath::parse("b.bin").value(), {}, 0, {}};
     CHECK(cache.get(store, &binary_row).kind == tui::Preview::Kind::Binary);
     const auto screen = render_screen(sample_state(), cache.get(store, &binary_row));
     CHECK(contains(screen, "binary file"));
 
-    tui::Row missing_row{core::NotePath::parse("gone.md").value(), {}, 0, {}, false};
+    tui::Row missing_row{core::NotePath::parse("gone.md").value(), {}, 0, {}};
     CHECK(cache.get(store, &missing_row).kind == tui::Preview::Kind::Error);
     CHECK(cache.get(store, nullptr).kind == tui::Preview::Kind::Empty);
 }
@@ -264,7 +263,7 @@ TEST_CASE("PreviewCache serves the cached note until invalidated") {
     std::ofstream(dir.path() / "a.md", std::ios::binary) << "old";
     const core::NoteStore store(dir.path());
     tui::PreviewCache cache;
-    tui::Row row{core::NotePath::parse("a.md").value(), {}, 0, {}, false};
+    tui::Row row{core::NotePath::parse("a.md").value(), {}, 0, {}};
     CHECK(cache.get(store, &row).lines.front() == "old");
     std::ofstream(dir.path() / "a.md", std::ios::binary | std::ios::trunc) << "new";
     CHECK(cache.get(store, &row).lines.front() == "old");

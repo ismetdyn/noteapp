@@ -12,7 +12,7 @@ namespace noteapp::gui {
 
 bool same_listing(std::span<const core::NoteInfo> a, std::span<const core::NoteInfo> b) {
     return std::ranges::equal(a, b, [](const core::NoteInfo& x, const core::NoteInfo& y) {
-        return x.path == y.path && x.mtime == y.mtime && x.size == y.size && x.binary == y.binary;
+        return x.path == y.path && x.mtime == y.mtime && x.size == y.size;
     });
 }
 

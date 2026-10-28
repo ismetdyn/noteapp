@@ -14,8 +14,8 @@
 
 namespace noteapp::gui {
 
-// İki listeleme aynı notları (yol, mtime, boyut, ikili) aynı sırada mı içeriyor? Yeniden tarama "değişti mi"
-// kararı için (TUI'deki same_listing ile aynı anlam; TUI kütüphanesine bağlanmamak için burada ayrı).
+// İki listeleme aynı notları (yol, mtime, boyut) aynı sırada mı içeriyor? Yeniden tarama "değişti mi" kararı
+// için (TUI'deki same_listing ile aynı anlam; TUI kütüphanesine bağlanmamak için burada ayrı).
 bool same_listing(std::span<const core::NoteInfo> a, std::span<const core::NoteInfo> b);
 
 // Süzülmüş not listesi: klasör kapsamı + ad modunda fuzzy sıralama (boş sorguda mtime azalan).

@@ -11,7 +11,6 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 namespace noteapp::core {
@@ -20,8 +19,12 @@ struct NoteInfo {
     NotePath path;
     std::filesystem::file_time_type mtime;
     std::uintmax_t size;
-    bool binary;  // ilk 8 KB'ta NUL baytı var: önizleme/arama yapılmaz
 };
+
+// İlk 8 KB'ta NUL baytı varsa ikili: önizleme/arama/düzenleme yapılmaz. Dosyayı zaten okuyan yer (önizleme,
+// içerik indeksi, show/export) çağırır; list() içerik okumaz: 5.000 dosyayı yalnız bunun için açmak soğuk
+// açılışı 300–900 ms uzatıyordu (T35).
+bool looks_binary(std::string_view bytes);
 
 struct NewNote {
     std::string folder;  // "" = kök
@@ -46,9 +49,6 @@ public:
 
     std::vector<NoteInfo> list() const;        // mtime azalan, eşitlikte yol artan
     std::vector<std::string> folders() const;  // göreli, '/' ayırıcılı, sıralı
-
-    // Test kancası: list()'in diskten dosya başı okuma sayısı (önbellek isabeti okutmaz).
-    std::size_t head_read_count() const { return head_reads_; }
 
     std::expected<NoteContent, Error> read(const NotePath& path) const;
     std::expected<NotePath, Error>
@@ -77,17 +77,6 @@ private:
 
     std::filesystem::path root_;
     std::size_t slug_max_length_;
-
-    // list() ikili bayrağı (mtime, boyut) anahtarıyla önbelleğe alır: her çağrıda 5.000 dosyanın başını
-    // okumak ~540 ms tutuyordu. const list() içinde güncellendiği için mutable; NoteStore tek iş
-    // parçacığından kullanılır (SPEC-search "Eşzamanlılık"), kilit yok.
-    struct BinaryCacheEntry {
-        std::filesystem::file_time_type mtime;
-        std::uintmax_t size;
-        bool binary;
-    };
-    mutable std::unordered_map<std::string, BinaryCacheEntry> binary_cache_;
-    mutable std::size_t head_reads_ = 0;
 };
 
 }  // namespace noteapp::core

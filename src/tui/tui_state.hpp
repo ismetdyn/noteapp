@@ -63,14 +63,13 @@ struct Row {
     std::vector<std::size_t> positions;
     std::size_t hit_count = 0;
     std::vector<search::Hit> hits;
-    bool binary = false;  // ikili not: önizleme yerine bilgi satırı
 };
 
 // İçerik araması modele dışarıdan verilir: ContentIndex'in G/Ç'si ve tembel kurulumu modelin işi değil.
 using ContentSearcher = std::function<std::vector<search::ContentResult>(std::string_view query)>;
 
-// İki listeleme aynı notları (yol, mtime, boyut, ikili) aynı sırada mı içeriyor? Yeniden tarama "değişti mi"
-// kararı için.
+// İki listeleme aynı notları (yol, mtime, boyut) aynı sırada mı içeriyor? Yeniden tarama "değişti mi" kararı
+// için.
 bool same_listing(std::span<const core::NoteInfo> a, std::span<const core::NoteInfo> b);
 
 class TuiState {

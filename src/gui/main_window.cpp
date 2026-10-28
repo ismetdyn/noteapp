@@ -495,11 +495,9 @@ void MainWindow::show_selected() {
             return;
     }
     shown_ = info;
-    if (info.binary) {
-        set_editor(text("gui.binary_preview"), false);
-    } else if (const auto loaded = load_text(info); !loaded) {
+    binary_ = false;
+    if (const auto loaded = load_text(info); !loaded)
         set_editor(text("gui.read_failed", {{"detail", core::format_error(loaded.error())}}), false);
-    }
     update_header();
 }
 
@@ -523,6 +521,11 @@ std::expected<void, core::Error> MainWindow::load_text(const core::NoteInfo& inf
     shown_ = info;
     shown_->mtime = content->mtime;  // write()'ın beklediği mtime, içerikle aynı anda okunan değerdir
     std::string& raw = content->text;
+    binary_ = core::looks_binary(raw);
+    if (binary_) {
+        set_editor(text("gui.binary_preview"), false);
+        return {};
+    }
     crlf_ = raw.find("\r\n") != std::string::npos;
     if (crlf_) {
         for (std::size_t at = 0; (at = raw.find("\r\n", at)) != std::string::npos; ++at)
@@ -775,7 +778,8 @@ bool MainWindow::adopt_saved(const core::NotePath& path) {
         report(content.error());  // not diskte, ama tampon kirli kalır: kullanıcı yeniden deneyebilir
         return false;
     }
-    shown_ = core::NoteInfo{path, content->mtime, content->text.size(), false};
+    shown_ = core::NoteInfo{path, content->mtime, content->text.size()};
+    binary_ = false;  // editörden kaydedilen metin
     new_note_ = false;
     dirty_ = false;
     crlf_ = false;  // create() satır sonlarını LF'ye normalleştirir
@@ -962,7 +966,7 @@ void MainWindow::update_content_results() {
 // için yeniden çalışmaz: yedek tarama kullanıcının kaydırmasını ezmesin.
 void MainWindow::update_highlights() {
     const std::string query = search_->text().toStdString();
-    if (!content_mode_ || query.empty() || !shown_ || new_note_ || shown_->binary) {
+    if (!content_mode_ || query.empty() || !shown_ || new_note_ || binary_) {
         if (!highlight_key_.isEmpty()) {
             highlight_key_.clear();
             editor_->setExtraSelections({});
@@ -995,7 +999,7 @@ void MainWindow::update_highlights() {
 }
 
 void MainWindow::export_pdf() {
-    if (shown_ && shown_->binary)
+    if (shown_ && binary_)
         return;
     // Önce kaydet: PDF diskteki sürümden üretilir ve tampondaki düzenleme kaybolmaz. Kayıt başarısızsa ya da
     // vazgeçildiyse (tampon korunur) dışa aktarma da yapılmaz.

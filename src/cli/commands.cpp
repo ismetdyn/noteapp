@@ -455,13 +455,13 @@ int run_show(const ParsedArgs& args, const core::Config& config) {
     const auto note = pick_best_note(store, parsed->positional.front());
     if (!note)
         return note.error();
-    if (note->binary) {
-        std::cerr << core::tr("cli.binary_note", {{"path", note->path.string()}}) << '\n';
-        return kExitUser;
-    }
     const auto content = store.read(note->path);
     if (!content)
         return fail(content.error());
+    if (core::looks_binary(content->text)) {
+        std::cerr << core::tr("cli.binary_note", {{"path", note->path.string()}}) << '\n';
+        return kExitUser;
+    }
     std::cout.write(content->text.data(), static_cast<std::streamsize>(content->text.size()));
     return kExitOk;
 }

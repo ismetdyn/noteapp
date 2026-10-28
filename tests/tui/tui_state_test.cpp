@@ -15,7 +15,7 @@ namespace {
 core::NoteInfo note(const std::string& path, int age_hours = 0) {
     // Büyük age_hours = eski; boş sorguda sıralama mtime azalan olduğundan test düzeni buna dayanır.
     return core::NoteInfo{core::NotePath::parse(path).value(),
-                          std::filesystem::file_time_type{} + std::chrono::hours(1000 - age_hours), 1, false};
+                          std::filesystem::file_time_type{} + std::chrono::hours(1000 - age_hours), 1};
 }
 
 std::vector<core::NoteInfo> sample() {

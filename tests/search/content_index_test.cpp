@@ -196,6 +196,9 @@ TEST_CASE("content: binary and oversize notes are skipped") {
     auto r = index.search("hedef", 10);
     REQUIRE(r.size() == 1);
     CHECK(r[0].path.string() == "text.md");
+    CHECK(index.read_count() == 2);  // büyük not okunmaz; ikili içerikten tanınır
+    index.refresh();
+    CHECK(index.read_count() == 2);  // değişmeyen ikili not yeniden okunmaz
 }
 
 TEST_CASE("content: refresh rereads only changed files and drops deleted ones") {

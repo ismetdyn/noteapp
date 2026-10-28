@@ -33,7 +33,7 @@ std::size_t initial_scroll(const Row& row) {
 
 bool same_listing(std::span<const core::NoteInfo> a, std::span<const core::NoteInfo> b) {
     return std::ranges::equal(a, b, [](const core::NoteInfo& x, const core::NoteInfo& y) {
-        return x.path == y.path && x.mtime == y.mtime && x.size == y.size && x.binary == y.binary;
+        return x.path == y.path && x.mtime == y.mtime && x.size == y.size;
     });
 }
 
@@ -57,14 +57,11 @@ void TuiState::refilter(bool query_changed) {
         // Arayıcı yoksa (henüz bağlanmadı) eşleşme yok sayılır; çökmek yerine boş liste.
         if (content_searcher_)
             for (auto& result : content_searcher_(query_))
-                rows.push_back(
-                    {std::move(result.path), {}, result.hit_count, std::move(result.first_hits), false});
+                rows.push_back({std::move(result.path), {}, result.hit_count, std::move(result.first_hits)});
     } else {
         // Ad modu ve içerik modunda boş sorgu: tüm notlar mtime sırasıyla.
-        for (auto& ranked : search::rank_notes(query_, notes_)) {
-            const core::NoteInfo& info = notes_[ranked.index];
-            rows.push_back({info.path, std::move(ranked.match.positions), 0, {}, info.binary});
-        }
+        for (auto& ranked : search::rank_notes(query_, notes_))
+            rows.push_back({notes_[ranked.index].path, std::move(ranked.match.positions), 0, {}});
     }
     rows_ = std::move(rows);
 

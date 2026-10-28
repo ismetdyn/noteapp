@@ -149,7 +149,7 @@ TEST_CASE("delete confirmation uses the Turkish catalog") {
 
 TEST_CASE("select_index clamps to the last row") {
     tui::TuiState s;
-    s.set_notes({core::NoteInfo{path("a.md"), {}, 1, false}, core::NoteInfo{path("b.md"), {}, 1, false}});
+    s.set_notes({core::NoteInfo{path("a.md"), {}, 1}, core::NoteInfo{path("b.md"), {}, 1}});
     s.select_index(5);
     CHECK(s.selected() == 1);
     s.select_index(0);

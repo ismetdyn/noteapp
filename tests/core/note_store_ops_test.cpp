@@ -322,22 +322,3 @@ TEST_CASE("remove_folder removes an empty .keep folder without force and a full 
     REQUIRE_FALSE(missing.has_value());
     CHECK(missing.error().code == Error::Code::NotFound);
 }
-
-TEST_CASE("the binary-flag cache follows move, rename_folder and remove without rereading") {
-    TempDir tmp;
-    put(tmp.path() / "a.md", "metin");
-    put(tmp.path() / "d" / "b.dat", std::string("x\0y", 3));
-    put(tmp.path() / "d" / "c.md", "c");
-    NoteStore store(tmp.path());
-    REQUIRE(store.list().size() == 3);
-    const auto reads = store.head_read_count();
-
-    REQUIRE(store.move(np("a.md"), np("e.md")).has_value());
-    REQUIRE(store.rename_folder("d", "f").has_value());
-    REQUIRE(store.remove(np("f/c.md")).has_value());
-    const auto after = store.list();
-    REQUIRE(after.size() == 2);
-    CHECK(store.head_read_count() == reads);
-    for (const auto& info : after)
-        CHECK(info.binary == (info.path.string() == "f/b.dat"));
-}

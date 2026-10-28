@@ -14,7 +14,7 @@ using Positions = std::vector<std::size_t>;
 
 core::NoteInfo note(const std::string& path, int mtime_ticks = 0) {
     return core::NoteInfo{*core::NotePath::parse(path),
-                          std::filesystem::file_time_type{std::chrono::seconds{mtime_ticks}}, 0, false};
+                          std::filesystem::file_time_type{std::chrono::seconds{mtime_ticks}}, 0};
 }
 
 double score_of(std::string_view q, std::string_view c) {

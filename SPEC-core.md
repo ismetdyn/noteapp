@@ -16,7 +16,8 @@ struct Error { enum class Code { InvalidPath, NotFound, AlreadyExists, ModifiedE
                Code code; std::string message_key; std::vector<std::pair<std::string, std::string>> args; };
 
 class NotePath;                       // doğrulanmış göreli yol (SPEC.md §6)
-struct NoteInfo { NotePath path; std::filesystem::file_time_type mtime; std::uintmax_t size; bool binary; };
+struct NoteInfo { NotePath path; std::filesystem::file_time_type mtime; std::uintmax_t size; };
+bool looks_binary(std::string_view bytes);   // ilk 8 KB'ta NUL; dosyayı zaten okuyan yer çağırır
 struct NewNote  { std::string folder; std::string name; std::string type; std::string content; };
 struct NoteContent { std::string text; std::filesystem::file_time_type mtime; };   // mtime okuma anındaki
 
@@ -88,7 +89,10 @@ taşıma, silme, klasör işlemleri) iki kural uygular:
   boyut ve mtime dizin girdisinden gelir, dosya başına stat yok; mtime `stat_file` ile aynı FILETIME dönüşümünden
   geçer (Yazma › mtime kaynağı). POSIX'te `recursive_directory_iterator` + `stat_file`. Neden: kurumsal Windows'ta
   dosya başına stat 5.000 notta ~170–290 ms tutuyordu; tarama ~15–45 ms (Release, T16c).
-- Her normal dosya bir nottur; ilk 8 KB'ta NUL baytı varsa `binary = true` (listede görünür, önizleme/arama yapılmaz).
+- Her normal dosya bir nottur; ikili dosya da listede görünür. `list()` içerik okumaz: ikili tespiti (`looks_binary`,
+  ilk 8 KB'ta NUL baytı) dosyayı zaten okuyan yerde yapılır — TUI önizlemesi, `ContentIndex::refresh`, GUI editörü,
+  CLI `show`/`export`; ikili notta önizleme/arama/düzenleme/dışa aktarma yapılmaz. Neden: 5.000 dosyayı yalnız bu
+  bayrak için açmak soğuk `list()`'i 295–917 ms'ye çıkarıyordu (T35).
 
 ### Klasörler
 - `create_folder` boş klasöre gizli `.keep` dosyası koyar (git boş dizin taşımadığı için senkron korunur).
@@ -158,7 +162,8 @@ sync_timeout_seconds = 120     # AutoSync bir `note sync --background` sürecini
 4. Aynı adla iki `create` → `ad.md` ve `ad-2.md`; hiçbir dosya ezilmez.
 5. Yazma sırasında hata simüle edildiğinde orijinal içerik aynen kalır ve `.tmp` dosyası kalmaz.
 6. Dışarıdan değiştirilmiş dosyaya `write` → `ModifiedExternally`, dosya değişmez.
-7. `list()` gizli dosyaları/`.git`'i atlar, ikili dosyayı `binary=true` işaretler, mtime azalan sıralar.
+7. `list()` gizli dosyaları/`.git`'i atlar, ikili dosyayı da listeler, mtime azalan sıralar; `looks_binary` yalnız
+   ilk 8 KB'taki NUL'u ikili sayar.
 8. Dolu klasörde `remove_folder(force=false)` → `NotEmpty` ve hiçbir şey silinmez.
 9. Bozuk `config.toml` uygulamayı çökertmez: varsayılanlar + log uyarısı.
 10. `en.toml` ve `tr.toml` anahtar kümeleri eşit (test); eksik anahtar en'e düşer.

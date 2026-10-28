@@ -83,7 +83,8 @@ int run_export(const ParsedArgs& args, const core::Config& config) {
     const auto note = pick_best_note(store, parsed->positional.front());
     if (!note)
         return note.error();
-    if (note->binary) {
+    // Okunamayan not burada elenmez: hatayı dışa aktaran süreç bildirir (önceki davranış).
+    if (const auto content = store.read(note->path); content && core::looks_binary(content->text)) {
         std::cerr << core::tr("cli.binary_note", {{"path", note->path.string()}}) << '\n';
         return kExitUser;
     }

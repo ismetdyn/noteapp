@@ -115,8 +115,7 @@ int main() {
     // notes_dir ayarı değişince yeniden kurulur (list_mutex altında).
     std::optional<core::NoteStore> store;
     store.emplace(config.notes_dir, config.tuning.slug_max_length);
-    // NoteStore::list() iç önbelleği günceller (iş parçacığı güvenli değil): yeniden tarama iş parçacığı ile
-    // editör dönüşü yenilemesi aynı anda çağırmasın.
+    // Yeniden tarama iş parçacığı listelerken UI iş parçacığı store'u yeniden kurmasın (notes_dir değişimi).
     std::mutex list_mutex;
     const auto list_notes = [&] {
         const std::scoped_lock lock(list_mutex);

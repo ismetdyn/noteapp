@@ -410,60 +410,20 @@ TEST_CASE("list breaks mtime ties by path ascending") {
     CHECK(listed[1].path.string() == "b.md");
 }
 
-TEST_CASE("list flags binary files by a NUL byte in the first 8 KB") {
+TEST_CASE("looks_binary: a NUL byte within the first 8 KB marks binary content") {
+    CHECK_FALSE(looks_binary(""));
+    CHECK_FALSE(looks_binary("düz metin"));
+    CHECK(looks_binary(std::string("ab\0cd", 5)));
+    CHECK(looks_binary(std::string(8191, 'x') + '\0'));
+    CHECK_FALSE(looks_binary(std::string(8192, 'x') + '\0'));  // 8 KB'tan sonra: ikili sayılmaz
+}
+
+TEST_CASE("list includes binary files") {
     TempDir tmp;
     put(tmp.path() / "text.md", "düz metin");
     put(tmp.path() / "bin.dat", std::string("ab\0cd", 5));
-    put(tmp.path() / "late.md", std::string(9000, 'x') + '\0');  // 8 KB'tan sonra: ikili sayılmaz
     NoteStore store(tmp.path());
-    for (const auto& info : store.list()) {
-        CAPTURE(info.path.string());
-        CHECK(info.binary == (info.path.string() == "bin.dat"));
-    }
-}
-
-TEST_CASE("list caches the binary flag: unchanged files are not reread") {
-    TempDir tmp;
-    put(tmp.path() / "a.md", "metin");
-    put(tmp.path() / "b.dat", std::string("x\0y", 3));
-    NoteStore store(tmp.path());
-
     CHECK(store.list().size() == 2);
-    CHECK(store.head_read_count() == 2);
-    CHECK(store.list().size() == 2);
-    CHECK(store.head_read_count() == 2);  // değişmeyen dosyaların başı yeniden okunmadı
-
-    put(tmp.path() / "c.md", "yeni");
-    CHECK(store.list().size() == 3);
-    CHECK(store.head_read_count() == 3);  // yalnız yeni dosya okundu
-}
-
-TEST_CASE("list refreshes the cached binary flag when a file changes (text to binary and back)") {
-    TempDir tmp;
-    const fs::path file = tmp.path() / "n.md";
-    put(file, "abcd");
-    NoteStore store(tmp.path());
-    REQUIRE_FALSE(store.list().front().binary);
-
-    put(file, std::string("ab\0d", 4));  // aynı boyut: yalnız mtime farkı yakalar
-    fs::last_write_time(file, fs::last_write_time(file) + std::chrono::seconds(5));
-    CHECK(store.list().front().binary);
-
-    put(file, "abcd");
-    fs::last_write_time(file, fs::last_write_time(file) + std::chrono::seconds(10));
-    CHECK_FALSE(store.list().front().binary);
-}
-
-TEST_CASE("list refreshes the binary flag after a same-size edit within the same second") {
-    TempDir tmp;
-    const fs::path file = tmp.path() / "n.md";
-    NoteStore store(tmp.path());
-    wait_for_second_start();
-    put(file, "abcd");
-    REQUIRE_FALSE(store.list().front().binary);
-    std::this_thread::sleep_for(50ms);
-    put(file, std::string("ab\0d", 4));
-    CHECK(store.list().front().binary);
 }
 
 TEST_CASE("list skips directory links and does not descend into them") {
@@ -479,7 +439,6 @@ TEST_CASE("list skips directory links and does not descend into them") {
     const auto listed = store.list();
     REQUIRE(listed.size() == 1);
     CHECK(listed.front().path.string() == "a.md");
-    CHECK(store.head_read_count() == 1);
 }
 
 TEST_CASE("list skips files whose names fail NotePath validation") {

@@ -165,6 +165,7 @@ private:
     bool loading_ = false;   // editör programatik doldurulurken textChanged yok sayılır
     bool in_show_ = false;   // show_current yeniden girişini engeller (kayıt akışı listeyi tazeler)
     bool crlf_ = false;      // dosya CRLF'liydi: kayıtta korunur
+    bool binary_ = false;    // gösterilen not ikili: editörde yer tutucu var, vurgulanmaz/dışa aktarılmaz
     std::size_t writes_ = 0;
     bool content_mode_ = false;
     std::unique_ptr<search::ContentIndex> content_index_;  // ilk içerik aramasında kurulur
