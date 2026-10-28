@@ -7,9 +7,11 @@
 #include "core/note_store.hpp"
 #include "core/version.hpp"
 #include "detect/detect.hpp"
+#include "search/fuzzy.hpp"
 
 #include <algorithm>
 #include <cstdio>
+#include <expected>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -147,6 +149,51 @@ int run_editor_flow(const ParsedArgs& args, const core::Config& config, const st
     return kExitOk;
 }
 
+// Alt komut argümanları: konumsal değerler + isteğe bağlı -f KLASÖR. Hata mesajını yazar, çıkış kodunu döner.
+struct BrowseArgs {
+    std::vector<std::string> positional;
+    std::optional<std::string> folder;
+};
+
+std::expected<BrowseArgs, int> parse_browse_args(const std::vector<std::string>& rest, bool allow_folder) {
+    BrowseArgs parsed;
+    for (std::size_t i = 0; i < rest.size(); ++i) {
+        const std::string& arg = rest[i];
+        if (allow_folder && arg == "-f") {
+            if (i + 1 >= rest.size()) {
+                std::cerr << core::tr("cli.missing_value", {{"option", arg}}) << '\n';
+                return std::unexpected(kExitUsage);
+            }
+            parsed.folder = rest[++i];
+        } else if (arg.size() > 1 && arg[0] == '-') {
+            std::cerr << core::tr("cli.unknown_option", {{"option", arg}}) << '\n';
+            return std::unexpected(kExitUsage);
+        } else {
+            parsed.positional.push_back(arg);
+        }
+    }
+    return parsed;
+}
+
+// "En iyi eşleşme" (SPEC-cli): tam yol varsa o; yoksa rank_notes ilk sonucu ve seçilen yol stderr'e yazılır.
+// Eşleşme yoksa mesajı yazar ve 1 döner. Tek kaynak: show/edit aynı kuralı kullanır.
+std::expected<core::NoteInfo, int> pick_best_note(const core::NoteStore& store, const std::string& query) {
+    const std::vector<core::NoteInfo> notes = store.list();
+    if (const auto exact = core::NotePath::parse(query)) {
+        const auto it = std::ranges::find(notes, *exact, &core::NoteInfo::path);
+        if (it != notes.end())
+            return *it;
+    }
+    const auto ranked = search::rank_notes(query, notes);
+    if (ranked.empty()) {
+        std::cerr << core::tr("cli.no_match", {{"query", query}}) << '\n';
+        return std::unexpected(kExitUser);
+    }
+    const core::NoteInfo& best = notes[ranked.front().index];
+    std::cerr << core::tr("cli.chosen", {{"path", best.path.string()}}) << '\n';
+    return best;
+}
+
 }  // namespace
 
 int run_add(const ParsedArgs& args, const core::Config& config) {
@@ -246,11 +293,83 @@ int run_mv(const ParsedArgs& args, const core::Config& config) {
     return kExitOk;
 }
 
+int run_ls(const ParsedArgs& args, const core::Config& config) {
+    const auto parsed = parse_browse_args(args.rest, true);
+    if (!parsed)
+        return parsed.error();
+    if (parsed->positional.size() > 1) {
+        std::cerr << core::tr("cli.ls_usage") << '\n';
+        return kExitUsage;
+    }
+    std::string prefix;
+    if (parsed->folder) {
+        const auto folder = core::NotePath::parse(*parsed->folder);
+        if (!folder)
+            return fail(folder.error());
+        prefix = folder->string() + "/";  // "work/" eşleşir, "workshop.md" eşleşmez
+    }
+
+    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    std::vector<core::NoteInfo> notes = store.list();
+    std::erase_if(notes, [&](const core::NoteInfo& n) { return !n.path.string().starts_with(prefix); });
+    // Boş sorguda rank_notes saf mtime azalan sıradır; ayrı bir yol gerekmez.
+    const std::string query = parsed->positional.empty() ? "" : parsed->positional.front();
+    for (const search::Ranked& r : search::rank_notes(query, notes))
+        std::cout << notes[r.index].path.string() << '\n';
+    return kExitOk;
+}
+
+int run_show(const ParsedArgs& args, const core::Config& config) {
+    const auto parsed = parse_browse_args(args.rest, false);
+    if (!parsed)
+        return parsed.error();
+    if (parsed->positional.size() != 1) {
+        std::cerr << core::tr("cli.show_usage") << '\n';
+        return kExitUsage;
+    }
+    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    const auto note = pick_best_note(store, parsed->positional.front());
+    if (!note)
+        return note.error();
+    if (note->binary) {
+        std::cerr << core::tr("cli.binary_note", {{"path", note->path.string()}}) << '\n';
+        return kExitUser;
+    }
+    const auto content = store.read(note->path);
+    if (!content)
+        return fail(content.error());
+    std::cout.write(content->text.data(), static_cast<std::streamsize>(content->text.size()));
+    return kExitOk;
+}
+
+int run_edit(const ParsedArgs& args, const core::Config& config) {
+    const auto parsed = parse_browse_args(args.rest, false);
+    if (!parsed)
+        return parsed.error();
+    if (parsed->positional.size() != 1) {
+        std::cerr << core::tr("cli.edit_usage") << '\n';
+        return kExitUsage;
+    }
+    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    const auto note = pick_best_note(store, parsed->positional.front());
+    if (!note)
+        return note.error();
+    if (const auto edited = core::run_editor(config, config.notes_dir / note->path.value()); !edited)
+        return fail(edited.error());
+    return kExitOk;
+}
+
 int run_reserved(const ParsedArgs& args, const core::Config& config) {
     if (args.command == "rm")
         return run_rm(args, config);
     if (args.command == "mv")
         return run_mv(args, config);
+    if (args.command == "ls")
+        return run_ls(args, config);
+    if (args.command == "show")
+        return run_show(args, config);
+    if (args.command == "edit")
+        return run_edit(args, config);
     std::cerr << core::tr("cli.not_implemented", {{"command", args.command}}) << '\n';
     return kExitUsage;
 }

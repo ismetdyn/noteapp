@@ -113,6 +113,12 @@ temp_kept = "Yazdığınız metin şurada saklandı: {path}"
 unknown_option = "Bilinmeyen seçenek: {option}"
 missing_value = "{option} seçeneği bir değer ister"
 not_implemented = "'{command}' komutu henüz kullanılamıyor"
+chosen = "Seçilen: {path}"
+no_match = "'{query}' ile eşleşen not yok"
+binary_note = "İkili not gösterilemez: {path}"
+ls_usage = "Kullanım: note ls [SORGU] [-f KLASÖR]"
+show_usage = "Kullanım: note show SORGU"
+edit_usage = "Kullanım: note edit SORGU"
 help = """
 Kullanım:
   note [-t TİP] [-f KLASÖR] [-n AD] [--no-sync] METİN...   Argümanlardan not ekler

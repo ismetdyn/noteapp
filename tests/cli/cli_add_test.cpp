@@ -93,7 +93,7 @@ TEST_CASE("double dash lets a command name be note text") {
 
 TEST_CASE("reserved commands exit 2 until implemented") {
     const Sandbox box;
-    for (const char* command : {"ls", "find", "show", "edit", "export", "sync", "config"}) {
+    for (const char* command : {"find", "export", "sync", "config"}) {
         const auto result = box.run({command});
         CHECK(result.exit_code == 2);
         CHECK(result.err.find(command) != std::string::npos);
@@ -138,5 +138,5 @@ TEST_CASE("language comes from the config") {
     const auto result = box.run({"hello"});
     CHECK(result.exit_code == 0);
     CHECK(result.out == "Saved: hello.md (md, suggested)\n");
-    CHECK(box.run({"ls"}).err.find("not available yet") != std::string::npos);
+    CHECK(box.run({"export"}).err.find("not available yet") != std::string::npos);
 }

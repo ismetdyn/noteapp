@@ -15,8 +15,11 @@ inline constexpr int kExitInternal = 3;
 int run_add(const ParsedArgs& args, const core::Config& config);
 int run_help();
 int run_version();
-int run_rm(const ParsedArgs& args, const core::Config& config);  // args.rest: YOL [-y]
-int run_mv(const ParsedArgs& args, const core::Config& config);  // args.rest: KAYNAK HEDEF
+int run_rm(const ParsedArgs& args, const core::Config& config);    // args.rest: YOL [-y]
+int run_mv(const ParsedArgs& args, const core::Config& config);    // args.rest: KAYNAK HEDEF
+int run_ls(const ParsedArgs& args, const core::Config& config);    // args.rest: [SORGU] [-f KLASÖR]
+int run_show(const ParsedArgs& args, const core::Config& config);  // args.rest: SORGU
+int run_edit(const ParsedArgs& args, const core::Config& config);  // args.rest: SORGU
 // Alt komut dağıtıcısı; gerçeklenmemiş olanlar "henüz kullanılamıyor" (çıkış 2) verir.
 int run_reserved(const ParsedArgs& args, const core::Config& config);
 int run_invalid(const ParsedArgs& args);

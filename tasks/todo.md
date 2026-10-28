@@ -134,7 +134,7 @@
   `tests/core/note_store_ops_test.cpp`, `src/cli/commands.cpp`, `tests/cli/cli_manage_test.cpp` · **Boyut:** M
 
 ### T15: Fuzzy arama + `note ls/show/edit`
-- [ ] **Kabul:** SPEC-search kabul 1–3 · `rank_notes` 5.000 yolda ≤ 20 ms (Release) · `ls`, `show`, `edit` en iyi eşleşmeyi
+- [x] **Kabul:** SPEC-search kabul 1–3 · `rank_notes` 5.000 yolda ≤ 20 ms (Release) · `ls`, `show`, `edit` en iyi eşleşmeyi
   kullanır, seçilen yol stderr'e yazılır, eşleşme yoksa çıkış 1.
 - **Doğrulama:** `B && T(search) && T(cli)` · **Bağımlılık:** T14 · **Dosyalar:** `src/search/{CMakeLists.txt,fold.hpp,fold.cpp,fuzzy.hpp,fuzzy.cpp}`,
   `tests/search/fuzzy_test.cpp`, `src/cli/commands.cpp` · **Boyut:** M

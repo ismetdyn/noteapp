@@ -1,4 +1,4 @@
-noteapp_add_test(cli cli_add_test.cpp cli_editor_test.cpp cli_manage_test.cpp)
+noteapp_add_test(cli cli_add_test.cpp cli_editor_test.cpp cli_manage_test.cpp cli_browse_test.cpp)
 
 # Testler gerçek `note` ikilisini alt süreçte çalıştırır; editör akışı için EDITOR = fake_editor.
 add_dependencies(cli_tests note fake_editor)

@@ -113,6 +113,12 @@ temp_kept = "Your text was kept in: {path}"
 unknown_option = "Unknown option: {option}"
 missing_value = "Option {option} needs a value"
 not_implemented = "Command '{command}' is not available yet"
+chosen = "Chosen: {path}"
+no_match = "No note matches '{query}'"
+binary_note = "Binary note cannot be shown: {path}"
+ls_usage = "Usage: note ls [QUERY] [-f FOLDER]"
+show_usage = "Usage: note show QUERY"
+edit_usage = "Usage: note edit QUERY"
 help = """
 Usage:
   note [-t TYPE] [-f FOLDER] [-n NAME] [--no-sync] TEXT...   Add a note from the arguments
