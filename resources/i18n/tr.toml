@@ -64,6 +64,17 @@ key_hints = "Enter aç  Tab içerik  ^O yeni  ^R taşı  ^D sil  ^S senkron  F1 
 too_small = "Pencere çok küçük (en az 60x15)"
 binary_preview = "(ikili dosya - önizleme yok)"
 not_yet = "Henüz kullanılamıyor"
+save_title = "Notu kaydet"
+field_name = "Ad"
+field_folder = "Klasör"
+field_type = "Tip"
+type_suggested = "öneri: {type} %{percent}"
+save_hints = "Enter kaydet  Esc iptal  Tab sonraki  ←/→ tip"
+confirm_discard = "Not atılsın mı?"
+discard_no = "Vazgeç"
+discard_yes = "At"
+saved = "Kaydedildi: {path}"
+temp_kept = "Yazdığın metin burada duruyor: {path}"
 
 [gui]
 tab_notes = "Notlar"

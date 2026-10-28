@@ -189,7 +189,7 @@
 - **Doğrulama:** `B && T(tui)` · **Bağımlılık:** T19 · **Dosyalar:** `src/tui/{tui_state.cpp,view.cpp}`, testler · **Boyut:** S
 
 ### T21: Editör entegrasyonu + kaydet diyaloğu
-- [ ] **Kabul:** Enter aç / Ctrl-O yeni / eşleşmesiz Enter → sorgu ilk satır · editör `WithRestoredIO` ile askı-dönüş ·
+- [x] **Kabul:** Enter aç / Ctrl-O yeni / eşleşmesiz Enter → sorgu ilk satır · editör `WithRestoredIO` ile askı-dönüş ·
   kaydet diyaloğu (ad slug, klasör fuzzy önerili, tip `detect` önerili + ←→ döngü) · Esc → "atılsın mı?" onayı.
 - **Doğrulama:** `B && T(tui)`; elle `edit`/`micro` ile Windows Terminal'de · **Bağımlılık:** T20 ·
   **Dosyalar:** `src/tui/{save_dialog.hpp,save_dialog.cpp,view.cpp,tui_state.cpp}`, `tests/tui/save_dialog_test.cpp` · **Boyut:** M

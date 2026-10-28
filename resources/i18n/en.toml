@@ -64,6 +64,17 @@ key_hints = "Enter open  Tab content  ^O new  ^R move  ^D del  ^S sync  F1 help 
 too_small = "Window too small (minimum 60x15)"
 binary_preview = "(binary file - no preview)"
 not_yet = "Not available yet"
+save_title = "Save note"
+field_name = "Name"
+field_folder = "Folder"
+field_type = "Type"
+type_suggested = "suggested: {type} {percent}%"
+save_hints = "Enter save  Esc cancel  Tab next  ←/→ type"
+confirm_discard = "Discard this note?"
+discard_no = "Cancel"
+discard_yes = "Discard"
+saved = "Saved: {path}"
+temp_kept = "Your text is kept at: {path}"
 
 [gui]
 tab_notes = "Notes"

@@ -79,6 +79,18 @@ void TuiState::refilter(bool query_changed) {
         preview_scroll_ = selected_row() ? initial_scroll(*selected_row()) : 0;
 }
 
+bool TuiState::reveal(const core::NotePath& path) {
+    query_.clear();
+    mode_ = Mode::Name;
+    refilter(true);
+    const auto it = std::ranges::find(rows_, path, &Row::path);
+    if (it == rows_.end())
+        return false;
+    selected_ = static_cast<std::size_t>(it - rows_.begin());
+    preview_scroll_ = 0;
+    return true;
+}
+
 void TuiState::move_selection(int delta) {
     if (rows_.empty())
         return;
@@ -156,6 +168,10 @@ Intent TuiState::handle(Key key, std::string_view text) {
         return Intent::ShowHelp;
     case Key::F2:
         return Intent::ShowSettings;
+    case Key::ShiftTab:
+    case Key::Left:
+    case Key::Right:
+        return Intent::None;
     }
     return Intent::None;
 }

@@ -26,6 +26,9 @@ enum class Key {
     PageUp,
     PageDown,
     Tab,
+    ShiftTab,
+    Left,  // ana listede kullanılmaz; diyaloglar için
+    Right,
     Enter,
     Escape,
     CtrlO,
@@ -81,6 +84,9 @@ public:
     void set_preview_line_count(std::size_t lines);
 
     Intent handle(Key key, std::string_view text = {});
+
+    // Sorguyu temizleyip notu seçer (yeni kaydedilen not süzgeçte kalmasın); yoksa false.
+    bool reveal(const core::NotePath& path);
 
     const std::string& query() const { return query_; }
     Mode mode() const { return mode_; }

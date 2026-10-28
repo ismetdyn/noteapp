@@ -150,6 +150,65 @@ ftxui::Element preview_pane(const TuiState& state, const Preview& preview, int h
     return vbox(std::move(lines));
 }
 
+// Kaydet diyaloğunun iç genişliği; en küçük pencerede (60) kenarlara sığar.
+constexpr int kDialogWidth = 52;
+constexpr int kLabelWidth = 9;  // "Klasör:" + boşluk
+
+ftxui::Element dialog_field(std::string label, const std::string& value, bool focused,
+                            ftxui::Element extra = ftxui::emptyElement()) {
+    using namespace ftxui;
+    Element name = text(std::move(label) + ":") | size(WIDTH, EQUAL, kLabelWidth);
+    if (focused)
+        name = name | bold;
+    Elements cells = {std::move(name), text(value)};
+    if (focused)
+        cells.push_back(text("▏"));
+    cells.push_back(text("  "));
+    cells.push_back(std::move(extra));
+    return hbox(std::move(cells));
+}
+
+ftxui::Element discard_choice(const std::string& label, bool selected) {
+    using namespace ftxui;
+    Element button = text("[ " + label + " ]");
+    return selected ? button | inverted : button;
+}
+
+ftxui::Element save_dialog_box(const SaveDialogState& dialog) {
+    using namespace ftxui;
+    Elements body;
+    if (dialog.confirming_discard()) {
+        body = {text(core::tr("tui.confirm_discard")) | bold, text(""),
+                hbox({discard_choice(core::tr("tui.discard_no"), !dialog.discard_selected()), text("   "),
+                      discard_choice(core::tr("tui.discard_yes"), dialog.discard_selected())}) |
+                    center};
+    } else {
+        using Field = SaveDialogState::Field;
+        body.push_back(
+            dialog_field(core::tr("tui.field_name"), dialog.name(), dialog.focus() == Field::Name));
+        body.push_back(
+            dialog_field(core::tr("tui.field_folder"), dialog.folder(), dialog.focus() == Field::Folder));
+        if (dialog.focus() == Field::Folder) {
+            const auto& suggestions = dialog.suggestions();
+            for (std::size_t i = 0; i < suggestions.size(); ++i) {
+                const bool picked = static_cast<int>(i) == dialog.selected_suggestion();
+                Element line = hbox(
+                    {text(std::string(kLabelWidth, ' ') + (picked ? "▸ " : "  ")), text(suggestions[i])});
+                body.push_back(picked ? line | inverted : line | dim);
+            }
+        }
+        body.push_back(dialog_field(core::tr("tui.field_type"), dialog.type(), dialog.focus() == Field::Type,
+                                    text(dialog.type_label()) | dim));
+        if (!dialog.error().empty())
+            body.push_back(paragraph(dialog.error()) |
+                           color(Color::Red));  // temp yolu uzun olabilir: sarılır
+        body.push_back(text(""));
+        body.push_back(text(core::tr("tui.save_hints")) | dim);
+    }
+    return window(text(" " + core::tr("tui.save_title") + " ") | bold, vbox(std::move(body))) |
+           size(WIDTH, EQUAL, kDialogWidth) | clear_under;
+}
+
 }  // namespace
 
 const Preview& PreviewCache::get(const core::NoteStore& store, const Row* row) {
@@ -188,7 +247,7 @@ const Preview& PreviewCache::get(const core::NoteStore& store, const Row* row) {
 }
 
 ftxui::Element render(const TuiState& state, const Preview& preview, const StatusLine& status,
-                      ftxui::Dimensions window) {
+                      ftxui::Dimensions window, const SaveDialogState* dialog) {
     using namespace ftxui;
     if (window.dimx < kMinWidth || window.dimy < kMinHeight)
         return text(core::tr("tui.too_small")) | center | flex;
@@ -197,16 +256,19 @@ ftxui::Element render(const TuiState& state, const Preview& preview, const Statu
     const int list_width = window.dimx * kListWidthNumerator / kListWidthDenominator;
     const Element bottom =
         status.message.empty() ? text(core::tr("tui.key_hints")) | dim : text(status.message) | bold;
-    return vbox({
-               query_bar(state, status),
-               separator(),
-               hbox({note_list(state, panel_height) | size(WIDTH, EQUAL, list_width), separator(),
-                     preview_pane(state, preview, panel_height) | flex}) |
-                   flex,
-               separator(),
-               bottom,
-           }) |
-           border;
+    const Element main = vbox({
+                             query_bar(state, status),
+                             separator(),
+                             hbox({note_list(state, panel_height) | size(WIDTH, EQUAL, list_width),
+                                   separator(), preview_pane(state, preview, panel_height) | flex}) |
+                                 flex,
+                             separator(),
+                             bottom,
+                         }) |
+                         border;
+    if (!dialog)
+        return main;
+    return dbox({main, save_dialog_box(*dialog) | center});
 }
 
 }  // namespace noteapp::tui

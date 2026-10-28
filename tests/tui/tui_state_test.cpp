@@ -266,3 +266,15 @@ TEST_CASE("same_listing detects added, changed and reordered notes") {
     b.pop_back();
     CHECK_FALSE(tui::same_listing(a, b));
 }
+
+TEST_CASE("reveal clears the query and selects the given note") {
+    tui::TuiState s;
+    s.set_notes(sample());
+    type(s, "todo");
+    const auto target = core::NotePath::parse("snippets/sort.java").value();
+    CHECK(s.reveal(target));
+    CHECK(s.query().empty());
+    CHECK(s.mode() == Mode::Name);
+    CHECK(selected_path(s) == "snippets/sort.java");
+    CHECK_FALSE(s.reveal(core::NotePath::parse("yok.md").value()));
+}
