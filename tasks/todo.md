@@ -72,7 +72,7 @@
   `tests/core/text_test.cpp` · **Boyut:** S
 
 ### T07: 🔴 `NoteStore` — oluştur/oku/listele/yaz
-- [ ] **Kabul:** ad çakışmasında `-2` (ezme yok) · atomik yazma: hata simülasyonunda orijinal aynen, `.tmp` kalmaz ·
+- [x] **Kabul:** ad çakışmasında `-2` (ezme yok) · atomik yazma: hata simülasyonunda orijinal aynen, `.tmp` kalmaz ·
   dış değişiklikte `ModifiedExternally` · sembolik bağla kaçış reddi · gizli dosya atlanır, ikili işaretlenir,
   mtime azalan · BOM korunur.
 - **Doğrulama:** `B && T(core)`, `F` · **Bağımlılık:** T05, T06 · **Dosyalar:** `src/core/{note_store.hpp,note_store.cpp}`,

@@ -18,13 +18,14 @@ struct Error { enum class Code { InvalidPath, NotFound, AlreadyExists, ModifiedE
 class NotePath;                       // doğrulanmış göreli yol (SPEC.md §6)
 struct NoteInfo { NotePath path; std::filesystem::file_time_type mtime; std::uintmax_t size; bool binary; };
 struct NewNote  { std::string folder; std::string name; std::string type; std::string content; };
+struct NoteContent { std::string text; std::filesystem::file_time_type mtime; };   // mtime okuma anındaki
 
 class NoteStore {                     // kök: config.notes_dir
     std::vector<NoteInfo> list() const;                       // tüm notlar, mtime azalan
     std::vector<std::string> folders() const;                 // tüm klasörler (göreli)
-    std::expected<std::string, Error> read(const NotePath&) const;
-    std::expected<NotePath, Error> create(const NewNote&);    // ad boşsa içerikten slug
-    std::expected<void, Error> write(const NotePath&, std::string_view content, file_time_type expected_mtime);
+    std::expected<NoteContent, Error> read(const NotePath&) const;
+    std::expected<NotePath, Error> create(const NewNote&, system_clock::time_point now = now());  // ad boşsa içerikten slug
+    std::expected<file_time_type, Error> write(const NotePath&, std::string_view content, file_time_type expected_mtime);  // yeni mtime döner
     std::expected<NotePath, Error> move(const NotePath& from, const NotePath& to);  // uzantı değişimi = tip değişimi
     std::expected<void, Error> remove(const NotePath&);
     std::expected<void, Error> create_folder(std::string_view folder);
