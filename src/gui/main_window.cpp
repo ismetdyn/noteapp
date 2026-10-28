@@ -5,11 +5,14 @@
 #include "core/text.hpp"
 #include "detect/detect.hpp"
 #include "gui/pdf_export.hpp"
+#include "gui/settings_page.hpp"
 #include "search/fold.hpp"
+#include "sync/auto_sync.hpp"
 
 #include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QDateTime>
 #include <QFileDialog>
 #include <QFontDatabase>
 #include <QHBoxLayout>
@@ -18,6 +21,7 @@
 #include <QLineEdit>
 #include <QListView>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -133,7 +137,8 @@ public:
 }  // namespace
 
 MainWindow::MainWindow(core::Config config)
-    : config_(std::move(config)), store_(config_.notes_dir, config_.tuning.slug_max_length),
+    : sync_note_exe(sync::note_executable_beside_self()), config_(std::move(config)),
+      store_(config_.notes_dir, config_.tuning.slug_max_length),
       state_file_(to_qstring(core::state_dir() / kStateFileName)) {
     // Üretim kararları gerçek diyaloglardır; testler bu işlevleri değiştirir.
     deciders.save_dialog = [this](const SaveDialogRequest& request) {
@@ -149,6 +154,22 @@ MainWindow::MainWindow(core::Config config)
         const QString chosen = QFileDialog::getSaveFileName(this, text("gui.export_dialog_title"), suggested,
                                                             QStringLiteral("PDF (*.pdf)"));
         return chosen.isEmpty() ? std::nullopt : std::optional<QString>(chosen);
+    };
+    deciders.browse_dir = [this](const QString& initial) -> std::optional<QString> {
+        const QString chosen = QFileDialog::getExistingDirectory(this, text("gui.browse_title"), initial);
+        return chosen.isEmpty() ? std::nullopt : std::optional<QString>(chosen);
+    };
+    deciders.confirm_replace_origin = [this](const QString& message) {
+        QMessageBox box(QMessageBox::Question, text("gui.replace_origin_title"), message,
+                        QMessageBox::NoButton, this);
+        auto* replace = box.addButton(text("gui.replace_origin"), QMessageBox::AcceptRole);
+        box.setDefaultButton(
+            box.addButton(text("gui.cancel"), QMessageBox::RejectRole));  // güvenli varsayılan
+        box.exec();
+        return box.clickedButton() == replace;
+    };
+    deciders.info = [this](const QString& message) {
+        QMessageBox::information(this, QStringLiteral("noteapp"), message);
     };
 
     build_ui();
@@ -169,6 +190,7 @@ MainWindow::MainWindow(core::Config config)
     rescan_timer_.start();
 
     rescan();
+    start_sync();
     // Son seçili not (SPEC-gui "Diğer"): ilk taramadan sonra, listede hâlâ varsa seçilir.
     const QString last = QSettings(state_file_, QSettings::IniFormat).value("last_note").toString();
     if (const auto path = core::NotePath::parse(last.toStdString())) {
@@ -178,6 +200,8 @@ MainWindow::MainWindow(core::Config config)
         }
     }
 }
+
+MainWindow::~MainWindow() = default;
 
 void MainWindow::build_ui() {
     setWindowTitle(QStringLiteral("noteapp"));
@@ -259,11 +283,20 @@ void MainWindow::build_ui() {
     main_splitter_->setSizes({kDefaultLeftPaneWidth, kDefaultWindowWidth - kDefaultLeftPaneWidth});
 
     tabs_->addTab(main_splitter_, text("gui.tab_notes"));
-    tabs_->addTab(new QLabel(text("gui.settings_placeholder")), text("gui.tab_settings"));  // T32
+    SettingsHost host;
+    host.flush = [this] { return flush(); };
+    host.applied = [this](const core::Config& before, const core::Config& after) {
+        apply_settings(before, after);
+    };
+    host.synced = [this] { rescan(); };
+    settings_ = new SettingsPage(config_, deciders, std::move(host));
+    tabs_->addTab(settings_, text("gui.tab_settings"));
 
     count_label_ = new QLabel;
     statusBar()->addWidget(count_label_, 1);
-    statusBar()->addPermanentWidget(new QLabel(text("gui.sync_off")));  // T32 gerçek durumu bağlar
+    sync_label_ = new QLabel(text("gui.sync_off"));
+    sync_label_->setObjectName("syncLabel");
+    statusBar()->addPermanentWidget(sync_label_);
 
     connect(search_, &QLineEdit::textChanged, this, [this] { apply_query(); });
     connect(mode_button_, &QPushButton::toggled, this, [this](bool on) { set_content_mode(on); });
@@ -311,6 +344,7 @@ void MainWindow::build_ui() {
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_K), this, [this] { focus_search(); });
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_P), this, [this] { focus_search(); });
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma), this, [this] { show_settings_tab(); });
+    new QShortcut(QKeySequence(Qt::Key_F5), this, [this] { sync_now(); });
 
     rebuild_folders();
 }
@@ -358,6 +392,8 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         return;
     }
     save_state();
+    // Kayıt akışından sonra: bekleyen değişiklik için son senkron, en çok exit_timeout_seconds.
+    stop_sync(std::chrono::seconds(config_.tuning.exit_timeout_seconds));
     QMainWindow::closeEvent(event);
 }
 
@@ -626,6 +662,7 @@ std::expected<void, core::Error> MainWindow::try_write() {
     if (!written)
         return std::unexpected(written.error());
     ++writes_;
+    changed();
     shown_->mtime = *written;
     dirty_ = false;
     statusBar()->clearMessage();
@@ -695,6 +732,7 @@ bool MainWindow::save_copy() {
         report(created.error());
         return false;
     }
+    changed();
     statusBar()->showMessage(text("gui.saved_copy", {{"path", created->string()}}));
     return adopt_saved(*created);
 }
@@ -726,6 +764,7 @@ bool MainWindow::save_new() {
         report(created.error());
         return false;
     }
+    changed();
     return adopt_saved(*created);
 }
 
@@ -809,6 +848,7 @@ bool MainWindow::move_current(const SaveDetails& target) {
         report(moved.error());
         return false;
     }
+    changed();
     shown_->path = *moved;
     if (const auto fresh = store_.read(*moved))  // taşıma mtime'ı korur; yine de güncel değeri al
         shown_->mtime = fresh->mtime;
@@ -982,6 +1022,82 @@ void MainWindow::fail(const core::Error& error) {
     statusBar()->showMessage(text("gui.op_failed", {{"detail", core::format_error(error)}}));
 }
 
+void MainWindow::start_sync() {
+    auto_sync_.reset();
+    if (!config_.sync.enabled)
+        return show_sync_status({}, false);
+    // Çağrı İŞÇİ iş parçacığından gelir: durum kopyalanıp UI iş parçacığına kuyruklanır. AutoSync bu
+    // pencereden önce yıkıldığı için `this` callback sürdükçe geçerlidir.
+    auto_sync_ = std::make_unique<sync::AutoSync>(
+        config_, sync_note_exe, [this](const sync::SyncStatus& status, bool running) {
+            QMetaObject::invokeMethod(
+                this, [this, status, running] { show_sync_status(status, running); }, Qt::QueuedConnection);
+        });
+    show_sync_status({}, true);
+    auto_sync_->start();
+}
+
+void MainWindow::stop_sync(std::chrono::seconds timeout) {
+    if (!auto_sync_)
+        return;
+    auto_sync_->stop(timeout);
+    auto_sync_.reset();
+}
+
+void MainWindow::changed() {
+    if (auto_sync_)
+        auto_sync_->notify_changed();
+}
+
+void MainWindow::sync_now() {
+    ++sync_requests_;
+    if (auto_sync_)
+        auto_sync_->request_now();
+}
+
+void MainWindow::show_sync_status(const sync::SyncStatus& status, bool running) {
+    if (!auto_sync_ && !running && !status.last_success && !status.last_error) {
+        sync_label_->setText(text("gui.sync_off"));
+        return;
+    }
+    if (running) {
+        sync_label_->setText(text("gui.sync_running"));
+    } else if (status.last_error) {
+        sync_label_->setText(text("gui.sync_error", {{"detail", core::format_error(*status.last_error)}}));
+    } else if (status.last_success) {
+        const QDateTime time =
+            QDateTime::fromSecsSinceEpoch(std::chrono::system_clock::to_time_t(*status.last_success));
+        sync_label_->setText(text("gui.sync_ok", {{"time", time.toString("HH:mm").toStdString()}}));
+    } else {
+        sync_label_->setText(text("gui.sync_running"));  // açıldı, henüz sonuç yok
+    }
+}
+
+// Kaydedilen ayarları canlı uygular. Dil değişimi canlı çevrilmez (SPEC-gui kapsam dışı): yalnız bildirilir.
+void MainWindow::apply_settings(const core::Config& before, const core::Config& after) {
+    config_ = after;
+    autosave_timer_.setInterval(std::max(1, config_.tuning.autosave_ms));
+    type_box_for_.clear();  // tip kutusu yeni types ile yeniden dolsun
+    if (before.notes_dir != after.notes_dir) {
+        // SettingsPage kaydetmeden önce flush() ettirdi: tampon temiz, eski dizinin notu bırakılır.
+        store_ = core::NoteStore(config_.notes_dir, config_.tuning.slug_max_length);
+        content_index_.reset();
+        shown_.reset();
+        dirty_ = false;
+        current_folder_.clear();
+        folders_.clear();
+        if (!watcher_.directories().isEmpty())
+            watcher_.removePaths(watcher_.directories());  // rescan izleyiciyi yeni dizinle kurar
+        set_editor({}, false);
+    }
+    update_header();
+    rescan();
+    if (before.sync != after.sync || before.notes_dir != after.notes_dir)
+        start_sync();
+    if (before.language != after.language)
+        deciders.info(text("gui.restart_needed"));
+}
+
 bool MainWindow::shown_in(const std::string& folder) const {
     return shown_ && is_inside(shown_->path.string(), folder);
 }
@@ -1023,6 +1139,7 @@ void MainWindow::new_folder(const std::string& parent) {
         fail(created.error());
         return;
     }
+    changed();
     statusBar()->clearMessage();
     rescan();
 }
@@ -1048,6 +1165,7 @@ void MainWindow::rename_folder(const std::string& folder) {
         rescan();
         return;
     }
+    changed();
     statusBar()->clearMessage();
     if (affected) {
         if (const auto moved = core::NotePath::parse(target + shown_->path.string().substr(folder.size()))) {
@@ -1100,6 +1218,7 @@ void MainWindow::delete_folder(const std::string& folder) {
         rescan();
         return;
     }
+    changed();
     statusBar()->clearMessage();
     if (affected) {
         shown_.reset();
@@ -1125,6 +1244,7 @@ void MainWindow::delete_note() {
         fail(removed.error());
         return;
     }
+    changed();
     statusBar()->clearMessage();
     if (shown) {
         shown_.reset();

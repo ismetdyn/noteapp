@@ -306,7 +306,7 @@
 - **Doğrulama:** `B && T(gui)` · **Bağımlılık:** T30 · **Dosyalar:** `src/gui/{main_window.cpp,folder_actions.cpp}`, testler · **Boyut:** M
 
 ### T32: Ayarlar sekmesi + senkron
-- [ ] **Kabul:** SPEC-gui kabul 6 · token alanı + "Bağlantıyı test et" · durum çubuğunda senkron durumu · F5 · dil değişimi
+- [x] **Kabul:** SPEC-gui kabul 6 · token alanı + "Bağlantıyı test et" · durum çubuğunda senkron durumu · F5 · dil değişimi
   yeniden başlatma bildirimi.
 - **Doğrulama:** `B && T(gui)` · **Bağımlılık:** T27, T31 · **Dosyalar:** `src/gui/{settings_page.hpp,settings_page.cpp,main_window.cpp}`,
   `tests/gui/settings_test.cpp` · **Boyut:** M

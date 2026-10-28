@@ -6,9 +6,10 @@ add_library(noteapp_gui
     pdf_export.cpp
     note_list_model.cpp
     save_dialog.cpp
+    settings_page.cpp
     main_window.cpp)
 target_include_directories(noteapp_gui PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(noteapp_gui PUBLIC noteapp_core noteapp_search noteapp_detect Qt6::Widgets Qt6::Gui)
+target_link_libraries(noteapp_gui PUBLIC noteapp_core noteapp_search noteapp_detect noteapp_sync Qt6::Widgets Qt6::Gui)
 noteapp_target_defaults(noteapp_gui)
 
 add_executable(notes-gui WIN32

@@ -6,13 +6,16 @@
 #include "gui/note_list_model.hpp"
 #include "gui/save_dialog.hpp"
 #include "search/content_index.hpp"
+#include "sync/sync_service.hpp"
 
 #include <QFileSystemWatcher>
 #include <QMainWindow>
 #include <QString>
 #include <QTimer>
+#include <chrono>
 #include <cstddef>
 #include <expected>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -30,7 +33,13 @@ class QStandardItemModel;
 class QTabWidget;
 class QTreeView;
 
+namespace noteapp::sync {
+class AutoSync;
+}
+
 namespace noteapp::gui {
+
+class SettingsPage;
 
 // Kullanıcı kararları tek yerden geçer: üretimde gerçek diyalogları gösterir, testler değiştirir.
 // (Kalıtım hiyerarşisi değil, yalnız bir test dikişi.)
@@ -45,15 +54,23 @@ struct Deciders {
     std::function<bool(const QString& message)> confirm_delete;
     // PDF çıktı yolu istemi: (önerilen tam yol) -> seçilen yol; nullopt = vazgeçti
     std::function<std::optional<QString>(const QString& suggested)> export_path;
+    // Ayarlar: notes_dir için klasör seçimi (başlangıç yolu) -> seçilen yol; nullopt = vazgeçti
+    std::function<std::optional<QString>(const QString& initial)> browse_dir;
+    // Senkron `origin` uyuşmazlığı: true = değiştir. Üretimde varsayılan düğme Vazgeç.
+    std::function<bool(const QString& message)> confirm_replace_origin;
+    // Bilgi bildirimi (ör. dil değişimi yeniden başlatınca uygulanır)
+    std::function<void(const QString& message)> info;
 };
 
 // Ana pencere: Notlar (arama + klasör ağacı + liste | düzenlenebilir not görünümü) ve Ayarlar sekmeleri.
-// Ayarlar sayfası T32'de gelir.
 class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(core::Config config);
+    ~MainWindow() override;  // AutoSync tamamlanmamış tür olarak burada yıkılır
 
     Deciders deciders;
+    // Senkronu koşacak `note` ikilisi; testler gerçek `note`'u gösterir. Senkron açılmadan önce ayarlanır.
+    std::filesystem::path sync_note_exe;
 
     // Diski yeniden tarar; yalnız listeleme değiştiyse listeyi günceller, seçimi ve editörü korur.
     void rescan();
@@ -71,6 +88,13 @@ public:
     void export_pdf();          // Ctrl+E: gösterilen notu önce kaydeder, sonra PDF'e aktarır
     void move_note();           // Ctrl+M: yalnız klasör seçilir
     void toggle_search_mode();  // Ad <-> İçerik
+    // F5: arka plan senkronunu hemen ister (senkron kapalıysa yalnız sayılır).
+    void sync_now();
+    // Durum çubuğu: kapalı / ⟳ / ✓ SS:DD / ⚠ hata. Arka plan çağrısı kuyruktan bu işleve gelir.
+    void show_sync_status(const sync::SyncStatus& status, bool running);
+    std::size_t sync_requests() const { return sync_requests_; }
+    // Test kancası: Q_OBJECT'siz olduğundan findChild ile bulunamaz.
+    SettingsPage* settings_page() const { return settings_; }
     // Test kancası: başarılı NoteStore::write sayısı (autosave birleşmesini ölçer).
     std::size_t write_count() const { return writes_; }
 
@@ -98,6 +122,12 @@ private:
     void show_folder_menu(const QPoint& pos);
     void show_note_menu(const QPoint& pos);
     void fail(const core::Error& error);
+    // Senkron: yalnız config_.sync.enabled iken AutoSync kurulur; her yazma/taşıma/silme bildirir.
+    void start_sync();
+    void stop_sync(std::chrono::seconds timeout);
+    void changed();
+    // Ayarlar kaydedildi: config_ güncellenir ve değişenler canlı uygulanır.
+    void apply_settings(const core::Config& before, const core::Config& after);
     bool shown_in(const std::string& folder) const;
     void restore_state();
     void save_state() const;
@@ -141,6 +171,10 @@ private:
     QString highlight_key_;  // vurgunun uygulandığı (yol, sorgu); aynıysa yeniden kaydırılmaz
     QString type_box_for_;   // tip kutusunun son doldurulduğu yol (gereksiz yeniden doldurmayı önler)
 
+    std::size_t sync_requests_ = 0;
+    SettingsPage* settings_ = nullptr;
+    QLabel* sync_label_ = nullptr;
+
     QTabWidget* tabs_ = nullptr;
     QLineEdit* search_ = nullptr;
     QPushButton* mode_button_ = nullptr;
@@ -157,6 +191,7 @@ private:
     QTimer rescan_timer_;
     QTimer autosave_timer_;
     QString state_file_;
+    std::unique_ptr<sync::AutoSync> auto_sync_;  // en sonda: yıkımda önce işçi durur, sonra widget'lar gider
 };
 
 }  // namespace noteapp::gui

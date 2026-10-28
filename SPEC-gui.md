@@ -62,6 +62,12 @@ Not taşıma `Ctrl+M` diyaloğuyla (sürükle-bırak v1'de yok).
 TUI ayar ekranıyla aynı alanlar (SPEC-core config). Token: maskeli alan + Kaydet/Sil, "kasada kayıtlı" göstergesi,
 yalnız https remote'ta etkin. "Bağlantıyı test et" düğmesi `enable` + `sync_now` çalıştırıp sonucu gösterir.
 Kaydet/Geri al düğmeleri; kaydet `config.toml`'u atomik yazar. Dil değişikliği yeniden başlatınca uygulanır (bildirilir).
+- **Uygulama notları (T32):** kaydetme yalnız değişen anahtarları `set_config_value` ile uygular (hata alanın altında,
+  hiçbir şey yazılmaz); bozuk `config.toml` (söz dizimi/okunamıyor) varken CLI `config set` gibi reddeder. `notes_dir`
+  değişiminde önce açık not kaydedilir, sonra liste yeni dizine bağlanır. Senkron açma/`remote` değişimi `enable`
+  akışını (uyuşmazlıkta onay: `deciders.confirm_replace_origin`) başarıyla bitirmeden config yazılmaz. "Bağlantıyı test
+  et": `enable` UI iş parçacığında, tek `sync_now` işçide. Durum çubuğu: `senkron kapalı` / `⟳` / `✓ SS:DD` / `⚠ hata`;
+  `F5` `request_now`; her yazma/taşıma/silme/oluşturma `notify_changed`; kapanışta (kayıt akışından sonra) `stop(exit_timeout)`.
 
 ## PDF dışa aktarma
 - `Ctrl+E` → dosya diyaloğu. `md` → `QTextDocument::setMarkdown`; diğer tipler → `setPlainText` + eş aralıklı font.
