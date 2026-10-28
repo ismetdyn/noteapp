@@ -291,7 +291,7 @@
   `tests/gui/note_list_test.cpp` · **Boyut:** M
 
 ### T30: Kaydetme akışları
-- [ ] **Kabul:** SPEC-gui kabul 1–3 · tip kutusu → uzantı değişimi · kapanışta kaydedilmemiş yeni not sorusu.
+- [x] **Kabul:** SPEC-gui kabul 1–3 · tip kutusu → uzantı değişimi · kapanışta kaydedilmemiş yeni not sorusu.
 - **Doğrulama:** `B && T(gui)` · **Bağımlılık:** T29 · **Dosyalar:** `src/gui/{save_dialog.hpp,save_dialog.cpp,main_window.cpp}`,
   `tests/gui/save_test.cpp` · **Boyut:** M
 

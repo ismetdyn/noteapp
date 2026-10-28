@@ -38,6 +38,12 @@ Eşleşme yokken arama kutusunda `Enter` → sorgu ilk satır olacak şekilde ye
   *Benimkini kopya olarak kaydet* (`<ad> (copy).<uzantı>`) — varsayılan düğme **kopya olarak kaydet**.
 - Değişmemiş açık not dışarıda değişirse sessizce yeniden yüklenir.
 - Tip kutusunu değiştirmek uzantıyı değiştirir (`move`; hedef varsa hata, ezme yok).
+- **Uygulama notları (T30):** diyaloglar `MainWindow::deciders` üzerinden geçer (test dikişi). Çakışma diyaloğunda
+  dördüncü seçenek *Vazgeç* vardır (Esc): tampon korunur, kapanış/not geçişi iptal olur. Kayıt başka hatayla
+  (ör. G/Ç) başarısız olursa tampon editörde kalır, hata durum çubuğunda görünür. Dışarıdan silinmiş kirli not,
+  tampon korunarak yeni-not kaydet diyaloğuna düşer. Geçerli UTF-8 olmayan ve ikili dosyalar salt-okunurdur
+  (geri yazım baytları bozardı). CRLF'li dosya CRLF olarak kaydedilir. Yeni not boş (yalnız boşluk) ise
+  geçişte/kapanışta sorulmadan atılır.
 
 ## Klasörler
 Ağaç bağlam menüsü: Yeni klasör, Yeniden adlandır, Sil (doluysa not sayısıyla onay; kalıcı silme uyarısı).
