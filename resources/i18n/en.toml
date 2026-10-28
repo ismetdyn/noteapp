@@ -98,6 +98,24 @@ F1            this help
 Esc           clear query, or quit when empty
 ^C            quit
 """
+settings_title = "Settings"
+settings_language = "Language"
+settings_notes_dir = "Notes folder"
+settings_editor = "Editor"
+settings_default_type = "Default type"
+settings_default_folder = "Default folder"
+settings_types = "Types"
+settings_sync_enabled = "Sync enabled"
+settings_sync_remote = "Remote"
+settings_sync_branch = "Branch"
+settings_sync_idle_seconds = "Sync idle (sec)"
+settings_sync_author_name = "Author name"
+settings_sync_author_email = "Author email"
+settings_save = "Save"
+settings_hints = "↑/↓ move  ←/→ change  Enter save  Esc cancel"
+settings_saved = "Settings saved"
+settings_config_broken = "Config file unreadable, not saved: {path}"
+settings_confirm_discard = "Discard changes?"
 
 [gui]
 tab_notes = "Notes"

@@ -98,6 +98,24 @@ F1            bu yardım
 Esc           sorguyu temizler, boşsa çıkar
 ^C            çık
 """
+settings_title = "Ayarlar"
+settings_language = "Dil"
+settings_notes_dir = "Not klasörü"
+settings_editor = "Editör"
+settings_default_type = "Varsayılan tip"
+settings_default_folder = "Varsayılan klasör"
+settings_types = "Tipler"
+settings_sync_enabled = "Senkron açık"
+settings_sync_remote = "Uzak depo"
+settings_sync_branch = "Dal"
+settings_sync_idle_seconds = "Senkron bekleme (sn)"
+settings_sync_author_name = "Yazar adı"
+settings_sync_author_email = "Yazar e-postası"
+settings_save = "Kaydet"
+settings_hints = "↑/↓ gez  ←/→ değiştir  Enter kaydet  Esc iptal"
+settings_saved = "Ayarlar kaydedildi"
+settings_config_broken = "Ayar dosyası okunamıyor, kaydedilmedi: {path}"
+settings_confirm_discard = "Değişiklikler atılsın mı?"
 
 [gui]
 tab_notes = "Notlar"

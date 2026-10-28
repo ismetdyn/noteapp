@@ -8,6 +8,7 @@
 #include "search/content_index.hpp"
 #include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
+#include "tui/settings.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
 
@@ -90,19 +91,22 @@ int main() {
     const core::ConsoleUtf8Scope utf8_console;
     // Dil ve log eşiği config'ten gelir; yükleme uyarıları log'a düşer (TUI ekranına yazılmaz).
     const core::LoadedConfig loaded = core::load_config();
-    const core::Config& config = loaded.config;
+    // Ayarlar ekranı kaydedince canlı güncellenir (yalnız UI iş parçacığı yazar).
+    core::Config config = loaded.config;
     core::init_i18n(config.language);
     core::init_log(config.tuning.log_max_bytes);
     for (const auto& warning : loaded.warnings)
         core::log_warn(core::format_error(warning));
 
-    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    // notes_dir ayarı değişince yeniden kurulur (list_mutex altında).
+    std::optional<core::NoteStore> store;
+    store.emplace(config.notes_dir, config.tuning.slug_max_length);
     // NoteStore::list() iç önbelleği günceller (iş parçacığı güvenli değil): yeniden tarama iş parçacığı ile
     // editör dönüşü yenilemesi aynı anda çağırmasın.
     std::mutex list_mutex;
     const auto list_notes = [&] {
         const std::scoped_lock lock(list_mutex);
-        return store.list();
+        return store->list();
     };
     tui::TuiState state;
     tui::PreviewCache preview;
@@ -115,7 +119,7 @@ int main() {
     std::optional<noteapp::search::ContentIndex> content_index;
     state.set_content_searcher([&](std::string_view query) {
         if (!content_index) {
-            content_index.emplace(store, config.tuning.max_note_bytes);
+            content_index.emplace(*store, config.tuning.max_note_bytes);
             content_index->refresh();
         }
         return content_index->search(query, kContentResultLimit);
@@ -125,7 +129,7 @@ int main() {
 
     // Önizleme satır sayısı modele bildirilir ki PgDn son satırı aşmasın.
     const auto sync_preview = [&] {
-        state.set_preview_line_count(preview.get(store, state.selected_row()).lines.size());
+        state.set_preview_line_count(preview.get(*store, state.selected_row()).lines.size());
     };
     sync_preview();
 
@@ -137,12 +141,13 @@ int main() {
     // saklanır).
     std::optional<tui::ConfirmState> confirm;
     std::optional<tui::HelpState> help;
+    std::optional<tui::SettingsState> settings;
     std::optional<core::NotePath> target;
 
     const auto view = ftxui::Renderer([&] {
-        return tui::render(state, preview.get(store, state.selected_row()), status, ftxui::Terminal::Size(),
+        return tui::render(state, preview.get(*store, state.selected_row()), status, ftxui::Terminal::Size(),
                            dialog ? &*dialog : nullptr, confirm ? &*confirm : nullptr,
-                           help ? &*help : nullptr);
+                           help ? &*help : nullptr, settings ? &*settings : nullptr);
     });
 
     // Editör/kayıt sonrası liste, önizleme ve (kuruluysa) içerik indeksi güncellenir. `listing`'e dokunulmaz:
@@ -204,7 +209,7 @@ int main() {
         draft_content = content;
         dialog.emplace(tui::SaveDialogInit{content,
                                            folder,
-                                           store.folders(),
+                                           store->folders(),
                                            config.types,
                                            detect::suggest(content, options),
                                            config.tuning.slug_max_length,
@@ -221,7 +226,7 @@ int main() {
             return;
         target = row->path;
         dialog.emplace(
-            tui::move_dialog_init(row->path, store.folders(), config.types, config.tuning.slug_max_length));
+            tui::move_dialog_init(row->path, store->folders(), config.types, config.tuning.slug_max_length));
     };
 
     const auto start_delete = [&] {
@@ -237,7 +242,7 @@ int main() {
         const std::size_t index = state.selected();
         const auto removed = [&] {
             const std::scoped_lock lock(list_mutex);  // yeniden tarama iş parçacığı aynı store'u listeler
-            return store.remove(*target);
+            return store->remove(*target);
         }();
         const std::string removed_path = target->string();
         confirm.reset();
@@ -267,7 +272,7 @@ int main() {
             if (dialog->is_move()) {
                 const auto moved = [&] {
                     const std::scoped_lock lock(list_mutex);
-                    return tui::move_note(store, *target, dialog->request());
+                    return tui::move_note(*store, *target, dialog->request());
                 }();
                 if (!moved) {
                     dialog->set_error(core::format_error(moved.error()));  // diyalog açık kalır
@@ -282,7 +287,7 @@ int main() {
                 status.message = core::tr("tui.moved", {{"from", from.string()}, {"to", moved->string()}});
                 break;
             }
-            const auto saved = tui::save_new_note(store, draft_file, dialog->request(), draft_content);
+            const auto saved = tui::save_new_note(*store, draft_file, dialog->request(), draft_content);
             if (!saved) {
                 dialog->set_error(core::format_error(saved.error()) + "  " +
                                   core::tr("tui.temp_kept", {{"path", to_utf8(draft_file)}}));
@@ -297,6 +302,30 @@ int main() {
         }
     };
 
+    // Kaydedilen ayarlar canlı uygulanır: dil anında, notes_dir değişince store yeniden kurulup liste ve
+    // içerik indeksi sıfırlanır; diğer anahtarlar sonraki eylemlerde kullanılan `config`'e yansır. `tuning`
+    // alanına dokunulmaz: yeniden tarama iş parçacığı onu okur ve ayar ekranından değişmez.
+    const auto apply_settings = [&](const core::Config& next) {
+        const bool dir_changed = next.notes_dir != config.notes_dir;
+        config.language = next.language;
+        config.notes_dir = next.notes_dir;
+        config.editor = next.editor;
+        config.default_type = next.default_type;
+        config.default_folder = next.default_folder;
+        config.types = next.types;
+        config.sync = next.sync;
+        core::init_i18n(config.language);
+        status.sync = core::tr("tui.sync_off");  // T28 gerçek senkron durumunu yazana dek
+        if (dir_changed) {
+            {
+                const std::scoped_lock lock(list_mutex);
+                content_index.reset();  // ContentIndex eski store'a referans tutar
+                store.emplace(config.notes_dir, config.tuning.slug_max_length);
+            }
+            refresh_notes();
+        }
+    };
+
     // Ctrl-C'yi de kendimiz işleriz: FTXUI'ye bırakılırsa döngüden sonra SIGINT'i yeniden yükseltir ve süreç
     // yıkıcılar (kod sayfası geri yüklemesi dahil) çalışmadan biter.
     const auto on_event = [&](const ftxui::Event& event) {
@@ -304,13 +333,28 @@ int main() {
         const auto key = to_key(event, text);
         if (!key)
             return false;
-        if (help || confirm || dialog) {
+        if (help || confirm || dialog || settings) {
             // Çıkışta geçici dosya silinmez: yazılan metin state dizininde kalır.
             if (*key == Key::CtrlC)
                 app.Exit();
             else if (help) {
                 if (!help->handle(*key, text))
                     help.reset();
+            } else if (settings) {
+                switch (settings->handle(*key, text)) {
+                case tui::SettingsState::Outcome::Editing:
+                    break;
+                case tui::SettingsState::Outcome::Cancel:
+                    settings.reset();
+                    break;
+                case tui::SettingsState::Outcome::Submit:
+                    if (const auto saved = settings->commit(config)) {  // hata formda satır içi gösterilir
+                        apply_settings(*saved);
+                        settings.reset();
+                        status.message = core::tr("tui.settings_saved");
+                    }
+                    break;
+                }
             } else if (confirm) {
                 switch (confirm->handle(*key, text)) {
                 case tui::ConfirmState::Outcome::Pending:
@@ -352,8 +396,11 @@ int main() {
         case tui::Intent::ShowHelp:
             help.emplace(tui::help_lines().size());
             break;
+        case tui::Intent::ShowSettings:
+            settings.emplace(config);
+            break;
         default:
-            // T23 (ayarlar), T28 (senkron) bağlanana dek yer tutucu.
+            // T28 (senkron) bağlanana dek yer tutucu.
             status.message = core::tr("tui.not_yet");
             break;
         }

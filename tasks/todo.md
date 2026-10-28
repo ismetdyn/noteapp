@@ -215,7 +215,7 @@
   testler · **Boyut:** S
 
 ### T23: Ayarlar ekranı (token alanı hariç)
-- [ ] **Kabul:** F2 formu config alanlarını gösterir/düzenler · kaydet doğrular ve atomik yazar · dil anında, notes_dir
+- [x] **Kabul:** F2 formu config alanlarını gösterir/düzenler · kaydet doğrular ve atomik yazar · dil anında, notes_dir
   değişince liste yeniden yüklenir · SPEC-tui kabul 6.
 - **Doğrulama:** `B && T(tui)` · **Bağımlılık:** T22 · **Dosyalar:** `src/tui/{settings_view.hpp,settings_view.cpp,view.cpp}`,
   `tests/tui/settings_test.cpp` · **Boyut:** M

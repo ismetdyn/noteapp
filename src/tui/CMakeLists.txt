@@ -2,6 +2,7 @@
 add_library(noteapp_tui
     view.cpp
     modals.cpp
+    settings.cpp
     save_dialog.cpp
     tui_state.cpp)
 target_include_directories(noteapp_tui PUBLIC ${PROJECT_SOURCE_DIR}/src)

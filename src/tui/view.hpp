@@ -4,6 +4,7 @@
 #include "core/note_store.hpp"
 #include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
+#include "tui/settings.hpp"
 #include "tui/tui_state.hpp"
 
 #include <ftxui/dom/elements.hpp>
@@ -48,6 +49,7 @@ struct StatusLine {
 // diyalog.
 ftxui::Element render(const TuiState& state, const Preview& preview, const StatusLine& status,
                       ftxui::Dimensions window, const SaveDialogState* dialog = nullptr,
-                      const ConfirmState* confirm = nullptr, const HelpState* help = nullptr);
+                      const ConfirmState* confirm = nullptr, const HelpState* help = nullptr,
+                      const SettingsState* settings = nullptr);
 
 }  // namespace noteapp::tui

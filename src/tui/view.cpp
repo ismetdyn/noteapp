@@ -241,6 +241,73 @@ ftxui::Element help_box(const HelpState& help, int window_height) {
            size(WIDTH, EQUAL, kDialogWidth) | clear_under;
 }
 
+// Ayarlar formu: etiket / değer iki sütun. Kaydet düğmesi, hata ve ipucu satırı sabit kalır; yalnız 12 alan
+// satırı kayar (60x15'te 10 satır görünür), odaklı satır her zaman görünür.
+constexpr int kSettingsWidth = 58;
+constexpr int kSettingsLabelWidth = 22;
+constexpr std::size_t kSettingsValueCells = 30;  // uzun yol/URL'de sondaki kısım görünür (imleç orada)
+constexpr int kSettingsFixedLines = 5;           // kenarlık 2 + düğme + hata + ipucu
+
+// Değerin son `limit` kod noktası; kesilen başa "…" konur.
+std::string tail_code_points(const std::string& value, std::size_t limit) {
+    std::vector<std::size_t> starts;  // her kod noktasının ilk baytı
+    for (std::size_t i = 0; i < value.size(); ++i)
+        if ((static_cast<unsigned char>(value[i]) & 0xC0) != 0x80)
+            starts.push_back(i);
+    if (starts.size() <= limit)
+        return value;
+    return "…" + value.substr(starts[starts.size() - limit + 1]);
+}
+
+ftxui::Element settings_row(const SettingsState::Row& row, bool focused) {
+    using namespace ftxui;
+    std::string shown;
+    switch (row.kind) {
+    case SettingsState::Kind::Toggle:
+        shown = row.value == "true" ? "[x]" : "[ ]";
+        break;
+    case SettingsState::Kind::Choice:
+        shown = "‹ " + tail_code_points(row.value, kSettingsValueCells) + " ›";
+        break;
+    case SettingsState::Kind::Text:
+        shown = tail_code_points(row.value, kSettingsValueCells);
+        break;
+    }
+    if (focused && row.kind == SettingsState::Kind::Text)
+        shown += "▏";
+    Element value = text(shown);
+    if (!row.error.empty())
+        value = value | color(Color::Red);
+    Element line =
+        hbox({text(settings_label(row)) | size(WIDTH, EQUAL, kSettingsLabelWidth), std::move(value)});
+    return focused ? line | inverted : line;
+}
+
+ftxui::Element settings_box(const SettingsState& settings, int window_height) {
+    using namespace ftxui;
+    Elements body;
+    if (const ConfirmState* confirm = settings.discard_confirm()) {
+        body = confirm_body(confirm->message(), core::tr("tui.discard_yes"), confirm->yes_selected());
+    } else {
+        const auto& rows = settings.rows();
+        const auto visible = static_cast<std::size_t>(std::max(window_height - kSettingsFixedLines, 1));
+        const std::size_t focus_row = std::min(settings.focus(), rows.size() - 1);
+        const std::size_t first = focus_row < visible ? 0 : focus_row + 1 - visible;
+        std::string error = settings.error();
+        for (const auto& row : rows)
+            if (error.empty())
+                error = row.error;
+        for (std::size_t i = first; i < rows.size() && i < first + visible; ++i)
+            body.push_back(settings_row(rows[i], settings.focus() == i));
+        Element save = text("[ " + core::tr("tui.settings_save") + " ]");
+        body.push_back((settings.on_button() ? save | inverted : save) | center);
+        body.push_back(text(error) | color(Color::Red));
+        body.push_back(text(core::tr("tui.settings_hints")) | dim);
+    }
+    return window(text(" " + core::tr("tui.settings_title") + " ") | bold, vbox(std::move(body))) |
+           size(WIDTH, EQUAL, kSettingsWidth) | clear_under;
+}
+
 }  // namespace
 
 const Preview& PreviewCache::get(const core::NoteStore& store, const Row* row) {
@@ -280,7 +347,7 @@ const Preview& PreviewCache::get(const core::NoteStore& store, const Row* row) {
 
 ftxui::Element render(const TuiState& state, const Preview& preview, const StatusLine& status,
                       ftxui::Dimensions window, const SaveDialogState* dialog, const ConfirmState* confirm,
-                      const HelpState* help) {
+                      const HelpState* help, const SettingsState* settings) {
     using namespace ftxui;
     if (window.dimx < kMinWidth || window.dimy < kMinHeight)
         return text(core::tr("tui.too_small")) | center | flex;
@@ -306,6 +373,8 @@ ftxui::Element render(const TuiState& state, const Preview& preview, const Statu
         modal = confirm_box(*confirm);
     else if (dialog)
         modal = save_dialog_box(*dialog);
+    else if (settings)
+        modal = settings_box(*settings, window.dimy);
     else
         return main;
     return dbox({main, modal | center});
