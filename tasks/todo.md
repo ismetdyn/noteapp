@@ -170,7 +170,7 @@
 ## Faz 3 — TUI
 
 ### T18: `TuiState` saf modeli
-- [ ] **Kabul:** sorgu düzenleme → filtreli liste · gezinme (↑↓, Ctrl-P/N) · Esc mantığı (temizle/çık) · eşleşme yokken
+- [x] **Kabul:** sorgu düzenleme → filtreli liste · gezinme (↑↓, Ctrl-P/N) · Esc mantığı (temizle/çık) · eşleşme yokken
   Enter → "yeni not" niyeti · ad/içerik modu geçişi — hepsi UI'siz birim testli.
 - **Doğrulama:** `B && T(tui)` · **Bağımlılık:** T16 · **Dosyalar:** `src/tui/{tui_state.hpp,tui_state.cpp}`,
   `tests/tui/tui_state_test.cpp` · **Boyut:** S
