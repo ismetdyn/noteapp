@@ -92,3 +92,30 @@ TEST_CASE("highlight wraps byte ranges in ANSI bold colour and tolerates bad ran
     CHECK(highlight_ranges("abc", {{1, 2}, {1, 3}}) == "a" + on + "b" + off + "c");  // çakışan atlanır
     CHECK(highlight_ranges("abc", {{2, 2}}) == "abc");                               // boş aralık
 }
+
+// Senkronla gelen bir not terminale OSC 52 (pano yazma) ya da başlık değiştiren dizi yollayamamalı.
+TEST_CASE("sanitize_for_terminal neutralises control sequences but keeps text, tabs and newlines") {
+    using noteapp::cli::sanitize_for_terminal;
+    const std::string r = "\xEF\xBF\xBD";  // U+FFFD
+
+    CHECK(sanitize_for_terminal("düz metin\tsekme\n") == "düz metin\tsekme\n");
+    CHECK(sanitize_for_terminal("a\r\nb\r") == "a\nb");  // CR atılır
+    CHECK(sanitize_for_terminal("\x1b]52;c;ZXZpbA==\x07") == r + "]52;c;ZXZpbA==" + r);
+    CHECK(sanitize_for_terminal("\x1b]0;başlık\x1b\\") == r + "]0;başlık" + r + "\\");
+    CHECK(sanitize_for_terminal(std::string("a\0b\x7f", 4)) == "a" + r + "b" + r);
+    // C1 (U+0080–U+009F) UTF-8 kodlu tek yer tutucu olur: CSI (U+009B), NEL (U+0085).
+    CHECK(sanitize_for_terminal("\xC2\x9B[31m") == r + "[31m");
+    CHECK(sanitize_for_terminal("\xC2\x85x") == r + "x");
+    // Geçersiz UTF-8: çıplak 8 bit CSI ve kesik dizi.
+    CHECK(sanitize_for_terminal("\x9B[31m") == r + "[31m");
+    CHECK(sanitize_for_terminal("ab\xE2\x82") == "ab" + r + r);
+    // C1'in hemen üstü (NBSP) ve çok baytlı karakterler kalır.
+    CHECK(sanitize_for_terminal("\xC2\xA0ğ€😀") == "\xC2\xA0ğ€😀");
+}
+
+TEST_CASE("highlight sanitises the text around and inside the ranges") {
+    using noteapp::cli::highlight_ranges;
+    const std::string r = "\xEF\xBF\xBD";
+    CHECK(highlight_ranges("a\x1b[2Jb", {{0, 1}}) == "\x1b[1;33ma\x1b[0m" + r + "[2Jb");
+    CHECK(highlight_ranges("x\x07y", {{0, 3}}) == "\x1b[1;33mx" + r + "y\x1b[0m");
+}

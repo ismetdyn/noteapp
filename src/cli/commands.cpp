@@ -466,7 +466,12 @@ int run_show(const ParsedArgs& args, const core::Config& config) {
         std::cerr << core::tr("cli.binary_note", {{"path", note->path.string()}}) << '\n';
         return kExitUser;
     }
-    std::cout.write(content->text.data(), static_cast<std::streamsize>(content->text.size()));
+    // Terminalde kaçış dizileri etkisizleşir; boruya/dosyaya içerik bayt bayt gider.
+    const std::string& text = content->text;
+    if (stdout_is_tty())
+        std::cout << sanitize_for_terminal(text);
+    else
+        std::cout.write(text.data(), static_cast<std::streamsize>(text.size()));
     return kExitOk;
 }
 
@@ -544,11 +549,14 @@ int run_find(const ParsedArgs& args, const core::Config& config) {
         return kExitUser;
     }
 
-    const bool color = stdout_is_tty();  // boruya/dosyaya kaçış kodu yazılmaz
+    // Boruya/dosyaya kaçış kodu yazılmaz, baytlar aynen gider; terminalde not baytları temizlenir (yol adı da
+    // C1 taşıyabilir).
+    const bool tty = stdout_is_tty();
     for (const search::ContentResult& result : results) {
+        const std::string path = result.path.string();
         for (const search::Hit& hit : result.first_hits) {
-            std::cout << result.path.string() << ':' << hit.line << ": "
-                      << (color ? highlight_ranges(hit.snippet, hit.ranges) : hit.snippet) << '\n';
+            std::cout << (tty ? sanitize_for_terminal(path) : path) << ':' << hit.line << ": "
+                      << (tty ? highlight_ranges(hit.snippet, hit.ranges) : hit.snippet) << '\n';
         }
     }
     return kExitOk;

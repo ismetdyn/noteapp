@@ -29,6 +29,10 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 - Alt komut adıyla aynı metinde not eklemek için: `note -- ls`.
 - "En iyi eşleşme" = tam yol varsa o, yoksa `search::rank_notes` ilk sonucu; seçilen yol stderr'e yazılır.
   Eşleşme yoksa çıkış kodu 1.
+- **Terminal temizliği (T36):** stdout TTY ise `find` (yol + kesit) ve `show` not baytlarını
+  `sanitize_for_terminal`'dan geçirir: C0 denetim karakterleri (`\t`, `\n` hariç), DEL, C1 (U+0080–U+009F) ve geçersiz
+  UTF-8 → `U+FFFD`, `\r` atılır. Boruya/dosyaya çıktı bayt bayt aynıdır. Neden: VT işleme açıkken senkronla gelen not
+  OSC 52 (pano) ya da başlık dizisi yollayabilirdi.
 
 ## Hızlı ekleme kuralları
 

@@ -107,6 +107,17 @@ TEST_CASE("show prints the raw content byte-exact and names the chosen path on s
     CHECK(result.err == "Seçilen: work/plan.md\n");
 }
 
+// Terminal temizliği yalnız TTY'de: boruya/dosyaya giden içerik bayt bayt aynı kalır.
+TEST_CASE("show keeps control bytes byte-exact when stdout is not a terminal") {
+    const Sandbox box;
+    const std::string raw = "pano\x1b]52;c;ZXZpbA==\x07\r\n\xC2\x9B[31m\x7f";
+    put(box.notes() / "k.md", raw);
+
+    const auto result = box.run({"show", "k.md"});
+    CHECK(result.exit_code == 0);
+    CHECK(result.out == raw);
+}
+
 TEST_CASE("an exact relative path beats a better fuzzy score and prints no chosen line") {
     const Sandbox box;
     put(box.notes() / "plan.md", "tam");
