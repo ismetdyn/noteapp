@@ -43,6 +43,8 @@ struct Deciders {
     std::function<std::optional<std::string>(const QString& title, const QString& initial)> folder_name;
     // Silme onayı (not ve klasör): true = sil. Üretimde varsayılan düğme Vazgeç.
     std::function<bool(const QString& message)> confirm_delete;
+    // PDF çıktı yolu istemi: (önerilen tam yol) -> seçilen yol; nullopt = vazgeçti
+    std::function<std::optional<QString>(const QString& suggested)> export_path;
 };
 
 // Ana pencere: Notlar (arama + klasör ağacı + liste | düzenlenebilir not görünümü) ve Ayarlar sekmeleri.
@@ -66,6 +68,7 @@ public:
     void rename_folder(const std::string& folder);
     void delete_folder(const std::string& folder);
     void delete_note();         // Del (listede): onaylı
+    void export_pdf();          // Ctrl+E: gösterilen notu önce kaydeder, sonra PDF'e aktarır
     void move_note();           // Ctrl+M: yalnız klasör seçilir
     void toggle_search_mode();  // Ad <-> İçerik
     // Test kancası: başarılı NoteStore::write sayısı (autosave birleşmesini ölçer).

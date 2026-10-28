@@ -8,17 +8,32 @@
 #include <QStringList>
 #include <cstdio>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace {
+
+// WIN32 alt sistemi ikilisinin stderr'i, çağıran yönlendirmediyse (pipe/dosya) geçersizdir; o zaman üst
+// sürecin konsoluna bağlanılır. Yönlendirilmiş durumda dokunulmaz: boru zaten çalışıyor.
+void attach_parent_stderr() {
+#ifdef _WIN32
+    const HANDLE handle = GetStdHandle(STD_ERROR_HANDLE);
+    if ((handle == nullptr || handle == INVALID_HANDLE_VALUE) && AttachConsole(ATTACH_PARENT_PROCESS))
+        std::freopen("CONOUT$", "w", stderr);
+#endif
+}
 
 // notes-gui --export-pdf <girdi> <çıktı>: pencere açmadan dışa aktarır; çıkış kodu 0/1, hata stderr'e.
 int run_pdf_export(const QStringList& args) {
+    attach_parent_stderr();
     if (args.size() != 4) {
         std::fprintf(stderr, "%s\n", noteapp::core::tr("gui.usage_export_pdf").c_str());
         return 1;
     }
     const auto result = noteapp::gui::export_pdf(args.at(2), args.at(3));
     if (!result) {
-        std::fprintf(stderr, "%s\n", result.error().toUtf8().constData());
+        std::fprintf(stderr, "%s\n", noteapp::core::format_error(result.error()).c_str());
         return 1;
     }
     return 0;

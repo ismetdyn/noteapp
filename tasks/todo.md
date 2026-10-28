@@ -314,6 +314,7 @@
   md → `setMarkdown`, diğerleri eş aralıklı düz metin.
 - **Doğrulama:** `B && T(gui) && T(cli)`, `F`, elle PDF'te Türkçe · **Bağımlılık:** T32 · **Dosyalar:** `src/gui/{pdf_export.hpp,pdf_export.cpp,main.cpp}`,
   `src/cli/commands.cpp`, `tests/gui/pdf_test.cpp` · **Boyut:** M
+- [x] GUI kısmı tamam; CLI 'note export' T27 sonrası
 
 ### ✅ Kontrol noktası 5
 - [ ] Tüm testler Windows + `F` yeşil

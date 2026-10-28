@@ -4,11 +4,13 @@
 #include "core/paths.hpp"
 #include "core/text.hpp"
 #include "detect/detect.hpp"
+#include "gui/pdf_export.hpp"
 #include "search/fold.hpp"
 
 #include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QFileDialog>
 #include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -23,6 +25,7 @@
 #include <QShortcut>
 #include <QSplitter>
 #include <QStandardItemModel>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyledItemDelegate>
 #include <QTabWidget>
@@ -142,6 +145,11 @@ MainWindow::MainWindow(core::Config config)
         return ask_folder_name(this, title, initial);
     };
     deciders.confirm_delete = [this](const QString& message) { return ask_confirm_delete(this, message); };
+    deciders.export_path = [this](const QString& suggested) -> std::optional<QString> {
+        const QString chosen = QFileDialog::getSaveFileName(this, text("gui.export_dialog_title"), suggested,
+                                                            QStringLiteral("PDF (*.pdf)"));
+        return chosen.isEmpty() ? std::nullopt : std::optional<QString>(chosen);
+    };
 
     build_ui();
     restore_state();
@@ -297,6 +305,7 @@ void MainWindow::build_ui() {
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_S), this, [this] { save_now(); });
     new QShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S), this, [this] { save_as(); });
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_M), this, [this] { move_note(); });
+    new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_E), this, [this] { export_pdf(); });
     // Del yalnız liste odaktayken: editörde/arama kutusunda karakter silmeyi ezmesin.
     new QShortcut(QKeySequence(Qt::Key_Delete), note_list_, [this] { delete_note(); }, Qt::WidgetShortcut);
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_K), this, [this] { focus_search(); });
@@ -943,6 +952,30 @@ void MainWindow::update_highlights() {
         editor_->setTextCursor(first);
         editor_->ensureCursorVisible();
     }
+}
+
+void MainWindow::export_pdf() {
+    if (shown_ && shown_->binary)
+        return;
+    // Önce kaydet: PDF diskteki sürümden üretilir ve tampondaki düzenleme kaybolmaz. Kayıt başarısızsa ya da
+    // vazgeçildiyse (tampon korunur) dışa aktarma da yapılmaz.
+    if (unsaved() && !flush())
+        return;
+    if (!shown_)  // gösterilen not yok ya da boş taslak atıldı
+        return;
+    // NotePath doğrulanmış göreli yoldur (UTF-8, '/' ayırıcılı): kökle birleştirmek güvenli.
+    const std::string relative = shown_->path.string();
+    const std::filesystem::path input =
+        config_.notes_dir / std::filesystem::path(std::u8string(relative.begin(), relative.end()));
+
+    const QString suggested = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) +
+                              QLatin1Char('/') + to_qstring(input.stem()) + QStringLiteral(".pdf");
+    const auto output = deciders.export_path(suggested);
+    if (!output)
+        return;
+    if (const auto exported = gui::export_pdf(to_qstring(input), *output); !exported)
+        return fail(exported.error());
+    statusBar()->showMessage(text("gui.exported", {{"path", output->toStdString()}}));
 }
 
 void MainWindow::fail(const core::Error& error) {

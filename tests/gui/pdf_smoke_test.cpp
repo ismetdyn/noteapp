@@ -1,3 +1,4 @@
+#include "core/i18n.hpp"
 #include "gui/pdf_export.hpp"
 
 #include <QByteArray>
@@ -41,7 +42,7 @@ void check_exports_pdf(const QString& input_name, const QByteArray& content) {
     const auto result = noteapp::gui::export_pdf(input, output);
 
     if (!result) {
-        FAIL(result.error().toStdString());
+        FAIL(noteapp::core::format_error(result.error()));
     }
     CHECK(read_file(output).startsWith("%PDF-"));
 }
