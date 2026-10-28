@@ -13,6 +13,7 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `note [-t TİP] [-f KLASÖR] [-n AD] [--no-sync] METİN…` | Argümanlar tek boşlukla birleşip not olur |
 | `… \| note [bayraklar]` | stdin TTY değilse ve metin argümanı yoksa içerik stdin'den |
 | `note [bayraklar]` | Metin de stdin de yoksa editör açılır (aşağıda) |
+| `note -e [bayraklar] [METİN…]` | Editörü her durumda açar; METİN varsa ön içerik olur (ör. başlık yazıp devam etmek) |
 | `note ls [SORGU] [-f KLASÖR]` | Notları listeler: sorgu varsa fuzzy sıra, yoksa mtime azalan |
 | `note find TERİM…` | İçerik araması; `yol:satır: kesit` (TTY'de vurgulu) |
 | `note show SORGU` | En iyi eşleşmenin içeriğini yazdırır |
@@ -35,7 +36,8 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 - **Ad:** `-n` (NotePath kurallarıyla doğrulanır) yoksa içerikten slug. **Klasör:** `-f`, yoksa `default_folder`.
 - **Editör akışı:** OS geçici dizininde `noteapp-<rastgele>.<default_type>` oluşturulur → editör açılır →
   kapanınca okunur. Boş/yalnız boşluk → "iptal edildi", çıkış 1, dosya oluşmaz. Kayıt başarısız olursa geçici
-  dosya **silinmez** ve yolu yazdırılır (veri kaybı yok); başarıdaysa silinir.
+  dosya **silinmez** ve yolu yazdırılır (veri kaybı yok); başarıdaysa silinir. `-e` ile metin argümanları geçici
+  dosyaya ön içerik olarak yazılır; kullanıcı içeriği değiştirmeden kapatırsa ön içerik not olur.
 - Çıktı tek satır: `Kaydedildi: work/plan.md (md, önerilen)` / `(java, seçilen)`.
 - **Senkron:** `sync.enabled` ve `--no-sync` yoksa, yazmadan sonra ayrık arka plan süreci
   `note sync --background` başlatılır (çıktısı yok, sonucu log + sync-status'a). Komut ağ beklemez.
