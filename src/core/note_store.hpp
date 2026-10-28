@@ -36,8 +36,9 @@ struct NoteContent {
     std::filesystem::file_time_type mtime;
 };
 
-// notes_dir kökü altındaki notlar. Her erişim kanonik yolun kök içinde kaldığını doğrular
-// (sembolik bağla kaçış reddedilir). Hata durumunda istisna fırlatmaz.
+// notes_dir kökü altındaki notlar. Her erişimde kökün altındaki hiçbir yol bileşeni bağ olamaz (sembolik
+// bağ ve Windows junction'ı; reason "link") ve kanonik yol kök içinde kalmalıdır. Hata durumunda istisna
+// fırlatmaz.
 class NoteStore {
 public:
     // Kök burada oluşturulmaz; ilk create() oluşturur.
@@ -67,7 +68,8 @@ public:
     std::expected<void, Error> create_folder(std::string_view folder);
     std::expected<void, Error> rename_folder(std::string_view from, std::string_view to);
     // Not (ya da bilinmeyen dosya) içeren klasör force olmadan NotEmpty ({count} = dosya sayısı) verir
-    // ve hiçbir şey silinmez; force özyinelemeli siler (.keep dahil).
+    // ve hiçbir şey silinmez; force özyinelemeli siler (.keep dahil). İçinde bağ olan klasör force'la da
+    // silinmez (InvalidPath, reason "contains_link").
     std::expected<void, Error> remove_folder(std::string_view folder, bool force);
 
 private:

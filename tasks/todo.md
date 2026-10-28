@@ -173,6 +173,22 @@
   `src/core/{file_stat.hpp,file_stat.cpp,note_store.cpp}`, `tests/core/note_store_test.cpp`, `tests/search/content_index_test.cpp` ·
   **Boyut:** S
 
+### T16d: 🔴 Windows junction'ları not kökünden kaçırıyor (T16c'de bulundu)
+- [x] **Açıklama:** MinGW libstdc++ junction'ı bağ saymaz (`is_symlink` false, `weakly_canonical` çözmez,
+  `recursive_directory_iterator`/`remove_all` içine iner); junction yetki istemeden kurulur (`mklink /J`). `resolve()`
+  `link/x.md`'yi kök içi sayıyordu → kök dışına okuma/yazma/oluşturma/taşıma; `remove_folder(force)` ve hatta `.keep`'li
+  dış klasörde force'suz silme kök dışındaki dosyaları siliyordu. Sembolik bağ testleri Windows'ta atlandığı için
+  yakalanmamıştı. **Düzeltme:** `resolve()` kökün altındaki var olan her bileşeni `stat_file` ile denetler, bağ →
+  `InvalidPath`/`link` (her platformda); `fs::is_symlink` korumaları `stat_file` oldu; `remove_folder` önce bağ izlemeyen
+  tarama (bağ → `contains_link`, hiçbir şey silinmez), sonra bağ izlemeyen alttan üste silme (`remove_all` yok);
+  `folders()` junction'a inmez.
+- **Kabul:** junction (POSIX'te sembolik bağ) üzerinden read/write/create/move/remove/create_folder/rename_folder →
+  `InvalidPath` (`link`), dış dosya değişmez · içinde bağ olan klasörde `remove_folder` (force'lu/force'suz) →
+  `contains_link`, ne dış hedef ne kök içi silinir · `list()`/`folders()` bağın ardını göstermez · testler atlanmaz, yeşil.
+- **Doğrulama:** `B && T(core)` · **Bağımlılık:** T16c · **Dosyalar:** `src/core/{note_store.hpp,note_store.cpp}`,
+  `tests/core/{note_store_test.cpp,note_store_ops_test.cpp,i18n_test.cpp}`, `resources/i18n/{en,tr}.toml`, `SPEC-core.md` ·
+  **Boyut:** S
+
 ### T17: `note config` komutları
 - [x] **Kabul:** `path|list|get|set` çalışır · geçersiz anahtar/değer çıkış 2 · SPEC-cli kabul 9 (dil değişimi).
 - **Doğrulama:** `B && T(cli)` · **Bağımlılık:** T16 · **Dosyalar:** `src/cli/commands.cpp`, `src/core/config.cpp`,

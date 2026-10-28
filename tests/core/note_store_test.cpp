@@ -56,6 +56,15 @@ std::string arg(const Error& e, std::string_view key) {
     return {};
 }
 
+// Reddin gerekçesi (InvalidPath ise reason, değilse mesaj anahtarı); başarıda "ok". REQUIRE yerine: sonraki
+// "kök dışı dosya değişmedi" denetimleri işlem yanlışlıkla başarılı olduğunda da koşsun.
+template <typename T> std::string refusal(const std::expected<T, Error>& result) {
+    if (result)
+        return "ok";
+    return result.error().code == Error::Code::InvalidPath ? arg(result.error(), "reason")
+                                                           : result.error().message_key;
+}
+
 const auto kNow = std::chrono::system_clock::time_point{} + std::chrono::hours(24 * 365 * 56);
 
 // Ardından gelen iki yazım (aralarında 50 ms) aynı takvim saniyesine düşsün: saniye çözünürlüklü mtime
@@ -496,34 +505,38 @@ TEST_CASE("folders lists nested non-hidden directories sorted") {
     CHECK(store.folders() == std::vector<std::string>{"a", "b", "b/c"});
 }
 
-TEST_CASE("symlinks pointing outside the root are rejected") {
+// T16d: Windows'ta junction yetki istemez ve MinGW libstdc++ onu bağ saymaz (is_symlink false,
+// weakly_canonical çözmez); bağ testleri bu yüzden atlanmaz, bağ kurulamazsa düşer.
+TEST_CASE("read, write and create through a directory link to outside the root are refused") {
     TempDir tmp;
     const fs::path root = tmp.path() / "notes";
     const fs::path outside = tmp.path() / "outside";
     put(outside / "secret.md", "gizli");
+    put(outside / "sub" / "x.md", "x");
     fs::create_directories(root);
-    std::error_code ec;
-    fs::create_directory_symlink(outside, root / "link", ec);
-    if (ec) {
-        MESSAGE("dizin sembolik bağı oluşturulamadı, atlandı: " << ec.message());
-        return;
-    }
+    REQUIRE(make_dir_link(outside, root / "link"));
     NoteStore store(root);
 
-    auto read = store.read(np("link/secret.md"));
-    REQUIRE_FALSE(read.has_value());
-    CHECK(read.error().code == Error::Code::InvalidPath);
-    CHECK(arg(read.error(), "reason") == "outside_root");
-
-    auto written = store.write(np("link/secret.md"), "x", fs::last_write_time(outside / "secret.md"));
-    REQUIRE_FALSE(written.has_value());
-    CHECK(written.error().code == Error::Code::InvalidPath);
+    CHECK(refusal(store.read(np("link/secret.md"))) == "link");
+    CHECK(refusal(store.write(np("link/secret.md"), "ezildi", stat_file(outside / "secret.md")->mtime)) ==
+          "link");
     CHECK(slurp(outside / "secret.md") == "gizli");
-
-    auto created = store.create({"link", "yeni", "md", "x"}, kNow);
-    REQUIRE_FALSE(created.has_value());
-    CHECK(created.error().code == Error::Code::InvalidPath);
+    CHECK(refusal(store.create({"link", "yeni", "md", "x"}, kNow)) == "link");
+    CHECK(refusal(store.create({"link/alt", "yeni", "md", "x"}, kNow)) == "link");
     CHECK_FALSE(fs::exists(outside / "yeni.md"));
+    CHECK_FALSE(fs::exists(outside / "alt"));
 
-    CHECK(store.list().empty());  // bağ listelenmez, içine inilmez
+    CHECK(store.list().empty());     // bağ listelenmez, içine inilmez
+    CHECK(store.folders().empty());  // "link" ve "link/sub" görünmez
+}
+
+TEST_CASE("a link to a folder inside the root is refused too: notes never live behind a link") {
+    TempDir tmp;
+    put(tmp.path() / "real" / "n.md", "n");
+    REQUIRE(make_dir_link(tmp.path() / "real", tmp.path() / "alias"));
+    NoteStore store(tmp.path());
+
+    CHECK(refusal(store.read(np("alias/n.md"))) == "link");
+    CHECK(store.read(np("real/n.md")).has_value());
+    CHECK(store.folders() == std::vector<std::string>{"real"});
 }

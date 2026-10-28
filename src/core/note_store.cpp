@@ -88,15 +88,34 @@ std::error_code move_no_replace(const fs::path& from, const fs::path& to) {
 #endif
 }
 
-// Taşıma/silme yalnız gerçek dosyaya dokunur: sembolik bağ listelenmez, hedefi de silinmemeli.
-std::expected<void, Error> require_regular_note(const fs::path& root, const NotePath& path,
-                                                const fs::path& resolved) {
+// Taşıma/silme yalnız gerçek dosyaya dokunur. stat_file bağı izlemez, bağı (junction dahil) normal dosya
+// saymaz; resolve() bağı zaten reddeder, bu ikinci kilit.
+std::expected<void, Error> require_regular_note(const NotePath& path, const fs::path& resolved) {
     std::error_code ec;
     if (!fs::exists(resolved, ec))
         return std::unexpected(not_found(path.string()));
-    if (fs::is_symlink(root / path.value(), ec) || !fs::is_regular_file(resolved, ec))
+    if (const auto stat = stat_file(resolved); !stat || !stat->regular)
         return std::unexpected(io_error(path.string(), "not a regular file"));
     return {};
+}
+
+// dir'in altını alttan üste gezer (önce klasörün içi, sonra kendisi) ve bağları izlemez: stat_file bağı
+// klasör saymaz, içine inilmez. visit hata dönerse gezinti durur.
+template <typename Visit> std::error_code walk_bottom_up(const fs::path& dir, const Visit& visit) {
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+        const fs::path entry = it->path();
+        const auto stat = stat_file(entry);
+        if (!stat)
+            return stat.error();
+        if (stat->directory) {
+            if (const std::error_code sub = walk_bottom_up(entry, visit))
+                return sub;
+        }
+        if (const std::error_code visited = visit(entry, *stat))
+            return visited;
+    }
+    return ec;
 }
 
 std::string to_utf8(const fs::path& p) {
@@ -147,9 +166,28 @@ std::string normalize_line_endings(std::string_view text) {
 NoteStore::NoteStore(fs::path root, std::size_t slug_max_length)
     : root_(std::move(root)), slug_max_length_(slug_max_length) {}
 
-// Kanonik yol kökün içinde değilse reddeder: ".." zaten NotePath'te elenir, burada asıl hedef
-// sembolik bağ üzerinden kaçıştır. weakly_canonical var olmayan kuyruğu da kabul eder (create için).
+// Her işlemin geçtiği tek kapı. (1) Kökün altındaki var olan her bileşen (ara klasörler ve son öğe) bağ
+// olmamalı: notlar hiçbir bağın ardında yaşamaz. MinGW libstdc++ junction'ı bağ saymaz (is_symlink false,
+// weakly_canonical çözmez); stat_file sayar, kural her platformda aynıdır. Kökün kendisi bağ olabilir
+// (ör. notes_dir → bulut klasörü), denetlenmez. (2) Kanonik yol kökün içinde kalmalı (".." zaten
+// NotePath'te elenir). weakly_canonical var olmayan kuyruğu da kabul eder (create için).
 std::expected<fs::path, Error> NoteStore::resolve(const NotePath& path) const {
+    fs::path current = root_;
+    for (const fs::path& component : path.value()) {
+        current /= component;
+        const auto stat = stat_file(current);
+        if (!stat) {
+            // Yok ya da üstü dosya: altında bağ olamaz, kuyruk (create) serbest. Başka hata (erişim vb.)
+            // bağ olup olmadığını gizler: güvenli tarafta kalınır.
+            if (stat.error() == std::errc::no_such_file_or_directory ||
+                stat.error() == std::errc::not_a_directory)
+                break;
+            return std::unexpected(io_error(path.string(), stat.error()));
+        }
+        if (stat->symlink)
+            return std::unexpected(invalid_path("link", path.string()));
+    }
+
     std::error_code ec;
     const fs::path root = fs::weakly_canonical(root_, ec);
     if (ec)
@@ -210,8 +248,15 @@ std::vector<std::string> NoteStore::folders() const {
                 it.disable_recursion_pending();
             continue;
         }
-        if (!entry.is_symlink(entry_ec) && entry.is_directory(entry_ec))
-            result.push_back(to_utf8(entry.path().lexically_relative(root_)));
+        if (!entry.is_directory(entry_ec))
+            continue;
+        // MinGW libstdc++ junction'ı bağ saymaz ve içine iner; stat_file sayar. Bağ listelenmez, içine
+        // inilmez.
+        if (const auto stat = stat_file(entry.path()); !stat || !stat->directory) {
+            it.disable_recursion_pending();
+            continue;
+        }
+        result.push_back(to_utf8(entry.path().lexically_relative(root_)));
     }
     std::sort(result.begin(), result.end());
     return result;
@@ -325,7 +370,7 @@ std::expected<NotePath, Error> NoteStore::move(const NotePath& from, const NoteP
     const auto target = resolve(to);
     if (!target)
         return std::unexpected(target.error());
-    if (auto ok = require_regular_note(root_, from, *source); !ok)
+    if (auto ok = require_regular_note(from, *source); !ok)
         return std::unexpected(ok.error());
 
     std::error_code ec;
@@ -353,7 +398,7 @@ std::expected<void, Error> NoteStore::remove(const NotePath& path) {
     const auto target = resolve(path);
     if (!target)
         return std::unexpected(target.error());
-    if (auto ok = require_regular_note(root_, path, *target); !ok)
+    if (auto ok = require_regular_note(path, *target); !ok)
         return std::unexpected(ok.error());
     std::error_code ec;
     if (!fs::remove(*target, ec) || ec)
@@ -399,7 +444,8 @@ std::expected<void, Error> NoteStore::rename_folder(std::string_view from, std::
     std::error_code ec;
     if (!fs::exists(*source, ec))
         return std::unexpected(not_found(from_path->string()));
-    if (fs::is_symlink(root_ / from_path->value(), ec) || !fs::is_directory(*source, ec))
+    // stat_file bağı (junction dahil) klasör saymaz; resolve() bağı zaten reddeder, bu ikinci kilit.
+    if (const auto stat = stat_file(*source); !stat || !stat->directory)
         return std::unexpected(io_error(from_path->string(), "not a directory"));
     const std::string old_prefix = from_path->string() + "/";
     const std::string new_prefix = to_path->string() + "/";
@@ -443,30 +489,40 @@ std::expected<void, Error> NoteStore::remove_folder(std::string_view folder, boo
     std::error_code ec;
     if (!fs::exists(*target, ec))
         return std::unexpected(not_found(parsed->string()));
-    // Bağ yoluyla kök içindeki başka bir klasörün silinmesine izin verilmez.
-    if (fs::is_symlink(root_ / parsed->value(), ec) || !fs::is_directory(*target, ec))
+    // stat_file bağı (junction dahil) klasör saymaz; resolve() bağı zaten reddeder, bu ikinci kilit.
+    if (const auto stat = stat_file(*target); !stat || !stat->directory)
         return std::unexpected(io_error(parsed->string(), "not a directory"));
 
-    if (!force) {
-        // Dizinler ve .keep dışındaki her şey (gizli/bilinmeyen dosyalar, bağlar dahil) "dolu" sayılır;
-        // tarama belirsizse (hata) silinmez.
-        std::size_t count = 0;
-        fs::recursive_directory_iterator it(*target, fs::directory_options::none, ec);
-        for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
-            std::error_code entry_ec;
-            const bool is_dir = it->symlink_status(entry_ec).type() == fs::file_type::directory;
-            if (!is_dir && it->path().filename() != kKeepFileName)
-                ++count;
-        }
-        if (ec)
-            return std::unexpected(io_error(parsed->string(), ec));
-        if (count > 0)
-            return std::unexpected(Error{Error::Code::NotEmpty,
-                                         "error.not_empty",
-                                         {{"path", parsed->string()}, {"count", std::to_string(count)}}});
-    }
+    // Silmeden önce tam tarama (force'ta da): içeride bağ varsa hiçbir şey silinmez. Bağın hedefi kök
+    // dışında olabilir; MinGW libstdc++ fs::remove_all junction'ı klasör sanıp içinden geçerek siler.
+    // Klasörler ve .keep dışındaki her şey (gizli/bilinmeyen dosyalar dahil) "dolu" sayılır; tarama
+    // belirsizse (hata) silinmez.
+    bool has_link = false;
+    std::size_t count = 0;
+    if (const std::error_code scanned =
+            walk_bottom_up(*target, [&](const fs::path& entry, const FileStat& stat) {
+                has_link = has_link || stat.symlink;
+                if (!stat.directory && entry.filename() != kKeepFileName)
+                    ++count;
+                return std::error_code{};
+            }))
+        return std::unexpected(io_error(parsed->string(), scanned));
+    if (has_link)
+        return std::unexpected(invalid_path("contains_link", parsed->string()));
+    if (!force && count > 0)
+        return std::unexpected(Error{Error::Code::NotEmpty,
+                                     "error.not_empty",
+                                     {{"path", parsed->string()}, {"count", std::to_string(count)}}});
 
-    fs::remove_all(*target, ec);
+    // fs::remove_all yerine bağ izlemeyen kendi gezintimiz: tarama ile silme arasında bir bağ belirse bile
+    // yalnız bağın kendisi silinir (fs::remove junction'da RemoveDirectoryW: hedefe dokunmaz), içine inilmez.
+    if (const std::error_code removed = walk_bottom_up(*target, [](const fs::path& entry, const FileStat&) {
+            std::error_code remove_ec;
+            fs::remove(entry, remove_ec);
+            return remove_ec;
+        }))
+        return std::unexpected(io_error(parsed->string(), removed));
+    fs::remove(*target, ec);
     if (ec)
         return std::unexpected(io_error(parsed->string(), ec));
     const std::string prefix = parsed->string() + "/";

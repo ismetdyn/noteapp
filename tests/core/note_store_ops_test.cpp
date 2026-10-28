@@ -41,6 +41,27 @@ std::vector<std::string> listed_paths(const NoteStore& store) {
 
 using Paths = std::vector<std::string>;
 
+// Reddin gerekçesi (InvalidPath ise reason, değilse mesaj anahtarı); başarıda "ok". REQUIRE yerine: sonraki
+// "hiçbir şey silinmedi/taşınmadı" denetimleri işlem yanlışlıkla başarılı olduğunda da koşsun.
+template <typename T> std::string refusal(const std::expected<T, Error>& result) {
+    if (result)
+        return "ok";
+    return result.error().code == Error::Code::InvalidPath ? arg(result.error(), "reason")
+                                                           : result.error().message_key;
+}
+
+// Dizin bağı: Windows'ta yetki istemeyen junction, POSIX'te sembolik bağ (note_store_test.cpp ile aynı).
+bool make_dir_link(const fs::path& target, const fs::path& link) {
+#ifdef _WIN32
+    const std::wstring command = L"mklink /J \"" + link.wstring() + L"\" \"" + target.wstring() + L"\" >NUL";
+    return _wsystem(command.c_str()) == 0;
+#else
+    std::error_code ec;
+    fs::create_directory_symlink(target, link, ec);
+    return !ec;
+#endif
+}
+
 }  // namespace
 
 TEST_CASE("move renames a note, creates target folders and keeps the content") {
@@ -98,35 +119,88 @@ TEST_CASE("move refuses a directory as source") {
     CHECK(fs::exists(tmp.path() / "d" / "x.md"));
 }
 
-TEST_CASE("move and remove reject paths that escape the root through a symlink") {
+// T16d: Windows'ta junction ile (MinGW libstdc++ onu bağ saymaz), POSIX'te sembolik bağla koşar.
+TEST_CASE("move and remove reject paths through a directory link to outside the root") {
     TempDir tmp;
     const fs::path root = tmp.path() / "notes";
     const fs::path outside = tmp.path() / "outside";
     put(outside / "secret.md", "gizli");
     put(root / "a.md", "a");
-    std::error_code ec;
-    fs::create_directory_symlink(outside, root / "link", ec);
-    if (ec) {
-        MESSAGE("dizin sembolik bağı oluşturulamadı, atlandı: " << ec.message());
-        return;
-    }
+    REQUIRE(make_dir_link(outside, root / "link"));
     NoteStore store(root);
 
-    const auto from_outside = store.move(np("link/secret.md"), np("stolen.md"));
-    REQUIRE_FALSE(from_outside.has_value());
-    CHECK(from_outside.error().code == Error::Code::InvalidPath);
-    const auto to_outside = store.move(np("a.md"), np("link/a.md"));
-    REQUIRE_FALSE(to_outside.has_value());
-    CHECK(to_outside.error().code == Error::Code::InvalidPath);
-    const auto removed = store.remove(np("link/secret.md"));
-    REQUIRE_FALSE(removed.has_value());
-    CHECK(removed.error().code == Error::Code::InvalidPath);
-    const auto folder_removed = store.remove_folder("link", true);
-    REQUIRE_FALSE(folder_removed.has_value());
-    CHECK(folder_removed.error().code == Error::Code::InvalidPath);
+    CHECK(refusal(store.move(np("link/secret.md"), np("stolen.md"))) == "link");
+    CHECK(refusal(store.move(np("a.md"), np("link/a.md"))) == "link");
+    CHECK(refusal(store.remove(np("link/secret.md"))) == "link");
 
     CHECK(slurp(outside / "secret.md") == "gizli");
+    CHECK_FALSE(fs::exists(outside / "a.md"));
+    CHECK_FALSE(fs::exists(root / "stolen.md"));
     CHECK(slurp(root / "a.md") == "a");
+}
+
+TEST_CASE("remove_folder never deletes through a directory link") {
+    TempDir tmp;
+    const fs::path root = tmp.path() / "notes";
+    const fs::path outside = tmp.path() / "outside";
+    const fs::path keep_only = tmp.path() / "keep-only";  // force'suz sayımda "boş" görünen dış klasör
+    put(outside / "secret.md", "gizli");
+    put(keep_only / "sub" / ".keep", "");
+    put(root / "a" / "x.md", "x");
+    fs::create_directories(root / "b");
+    REQUIRE(make_dir_link(outside, root / "link"));
+    REQUIRE(make_dir_link(outside, root / "a" / "link"));
+    REQUIRE(make_dir_link(keep_only, root / "b" / "link"));
+    NoteStore store(root);
+
+    SUBCASE("the link itself, with force") {
+        CHECK(refusal(store.remove_folder("link", true)) == "link");
+    }
+    SUBCASE("a folder that contains a link, with force") {
+        CHECK(refusal(store.remove_folder("a", true)) == "contains_link");
+    }
+    SUBCASE("a folder whose only entry is a link to .keep-only folders, without force") {
+        CHECK(refusal(store.remove_folder("b", false)) == "contains_link");
+    }
+
+    // Ne kök dışı hedef ne de kök içindeki hiçbir şey silinmiş olmalı.
+    CHECK(slurp(outside / "secret.md") == "gizli");
+    CHECK(fs::exists(keep_only / "sub" / ".keep"));
+    CHECK(slurp(root / "a" / "x.md") == "x");
+    CHECK(fs::exists(root / "link"));
+    CHECK(fs::exists(root / "a" / "link"));
+    CHECK(fs::exists(root / "b" / "link"));
+}
+
+TEST_CASE("rename_folder refuses to move a link or to move a folder into a link") {
+    TempDir tmp;
+    const fs::path root = tmp.path() / "notes";
+    const fs::path outside = tmp.path() / "outside";
+    put(outside / "secret.md", "gizli");
+    put(root / "a" / "x.md", "x");
+    REQUIRE(make_dir_link(outside, root / "link"));
+    NoteStore store(root);
+
+    CHECK(refusal(store.rename_folder("link", "moved")) == "link");
+    CHECK_FALSE(fs::exists(root / "moved"));
+    CHECK(refusal(store.rename_folder("a", "link/a")) == "link");
+    CHECK(slurp(root / "a" / "x.md") == "x");
+    CHECK_FALSE(fs::exists(outside / "a"));
+    CHECK(slurp(outside / "secret.md") == "gizli");
+}
+
+TEST_CASE("create_folder refuses a link and a folder below a link") {
+    TempDir tmp;
+    const fs::path root = tmp.path() / "notes";
+    const fs::path outside = tmp.path() / "outside";
+    fs::create_directories(outside);
+    fs::create_directories(root);
+    REQUIRE(make_dir_link(outside, root / "link"));
+    NoteStore store(root);
+
+    CHECK(refusal(store.create_folder("link")) == "link");
+    CHECK(refusal(store.create_folder("link/alt")) == "link");
+    CHECK(fs::is_empty(outside));
 }
 
 TEST_CASE("remove deletes exactly the named note") {

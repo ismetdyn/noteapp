@@ -117,6 +117,8 @@ TEST_CASE("every Error key and reason produced by core exists in the catalogs") 
                             "reason.trailing_dot",
                             "reason.too_long",
                             "reason.outside_root",
+                            "reason.link",
+                            "reason.contains_link",
                             "reason.invalid_type",
                             "reason.invalid_name"})
         CHECK_MESSAGE(en.count(key) == 1, key);

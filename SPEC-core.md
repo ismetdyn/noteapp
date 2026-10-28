@@ -49,8 +49,16 @@ std::expected<int, Error> run_editor(const Config&, const std::filesystem::path&
 Reddedilir: boş yol; mutlak yol / sürücü harfi / UNC; `.` veya `..` bileşeni; `.` ile başlayan bileşen
 (gizli adlar uygulamaya ayrılmış); `< > : " \ | ? *` ve kontrol karakterleri (ayırıcı yalnız `/`);
 Windows ayrılmış adları (`CON PRN AUX NUL COM1-9 LPT1-9`, uzantılı hâlleri dahil, büyük/küçük harf duyarsız);
-sonda boşluk/nokta; 255 bayttan uzun bileşen. Ek olarak `NoteStore` her erişimde kanonik yolun
-`notes_dir` içinde kaldığını doğrular (sembolik bağla kaçış engellenir).
+sonda boşluk/nokta; 255 bayttan uzun bileşen. Ek olarak `NoteStore` her erişimde (okuma, yazma, oluşturma,
+taşıma, silme, klasör işlemleri) iki kural uygular:
+- **Not yolu hiçbir bileşeninde bağ içeremez; Windows junction'ları dahil.** Kökün altındaki var olan her
+  bileşen (ara klasörler ve son öğe) `core::stat_file` ile denetlenir; bağ → `InvalidPath` (`reason = link`).
+  Kural her platformda aynıdır; hedefi kök içinde olan bağ da reddedilir. Kökün (`notes_dir`) kendisi bağ
+  olabilir. Bileşen denetlenemezse (yok/üstü dosya dışındaki hata) güvenli tarafta kalınır: `Io`.
+  Neden: MinGW libstdc++ junction'ı bağ saymaz (`is_symlink` false, `weakly_canonical` çözmez,
+  `recursive_directory_iterator`/`remove_all` içine iner) ve junction yetki istemeden kurulur
+  (`mklink /J`); `link/x.md` kök dışına okuma/yazma/taşıma, klasör silme kök dışını silme demekti (T16d).
+- Kanonik yol `notes_dir` içinde kalmalı (`reason = outside_root`).
 
 ### Not oluşturma ve adlandırma
 - **Slug:** ilk dolu satır → baştaki `#`, `-`, `*`, `>` ve boşluklar atılır → Türkçe harfler ASCII'ye
@@ -85,6 +93,9 @@ sonda boşluk/nokta; 255 bayttan uzun bileşen. Ek olarak `NoteStore` her erişi
 ### Klasörler
 - `create_folder` boş klasöre gizli `.keep` dosyası koyar (git boş dizin taşımadığı için senkron korunur).
 - `remove_folder`: içinde not varsa `force` olmadan `NotEmpty` (args: not sayısı); `force` ile kalıcı silinir.
+  Silmeden önce alt ağaç bağ izlenmeden taranır; içinde bağ varsa (`force` olsa da) hiçbir şey silinmez →
+  `InvalidPath` (`reason = contains_link`). Silme `fs::remove_all` değil, bağ izlemeyen alttan üste gezintidir.
+- `folders()` bağları listelemez, içlerine inmez.
 
 ### Silme
 `remove` dosyayı kalıcı siler (çöp kutusu yok; senkron açıksa geçmişte kalır). Onay sorumluluğu ön yüzdedir.
@@ -140,7 +151,8 @@ sync_stale_lock_minutes = 10   # bundan eski sync.lock, sahibi yaşasa bile baya
 ## Kabul kriterleri
 
 1. `NotePath::parse` yukarıdaki her ret kuralı için ayrı testte reddeder; `work/2026/plan.md` gibi geçerli yolları kabul eder.
-2. notes_dir dışına işaret eden sembolik bağ üzerinden okuma/yazma reddedilir.
+2. notes_dir dışına işaret eden sembolik bağ ya da Windows junction'ı üzerinden okuma/yazma/oluşturma/taşıma/silme
+   reddedilir; içinde bağ olan klasör `force` ile de silinmez ve bağın hedefine dokunulmaz.
 3. `slugify("# Toplantı Notları: Q4!") == "toplanti-notlari-q4"`; boş/sembol-only girdi zaman damgalı ad üretir.
 4. Aynı adla iki `create` → `ad.md` ve `ad-2.md`; hiçbir dosya ezilmez.
 5. Yazma sırasında hata simüle edildiğinde orijinal içerik aynen kalır ve `.tmp` dosyası kalmaz.
