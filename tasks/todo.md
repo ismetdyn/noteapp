@@ -33,13 +33,14 @@
 - **Doğrulama:** `F` · **Bağımlılık:** T01 · **Dosyalar:** 2 · **Boyut:** S · **Gerekli:** Docker Desktop çalışıyor
 
 ### T03: Spike — libgit2 + keychain
-- [ ] **Açıklama:** Dependencies'e libgit2 v1.9.7 (`USE_SSH=exec`, Windows `USE_HTTPS=WinHTTP`, Linux OpenSSL,
+- [x] **Açıklama:** Dependencies'e libgit2 v1.9.7 (`USE_SSH=exec`, Windows `USE_HTTPS=WinHTTP`, Linux OpenSSL,
   test/CLI kapalı, gömülü zlib) ve keychain v1.3.1. Spike testi: geçici dizinde repo init → commit → yerel bare'e
   push → klonla. Keychain gidiş-dönüş testi `[manual]` etiketli (varsayılan koşuda yok).
 - **Kabul:** Windows MinGW ve Fedora'da derlenir, spike testi yeşil · elle: `[manual]` keychain testi Windows'ta
   geçer · elle: SSH-exec ile GitHub'a `ls-remote` sonucu SPEC.md §12/2'ye yazılır.
 - **Doğrulama:** `B && T(sync)`, `F` · **Bağımlılık:** T01, T02 · **Dosyalar:** `cmake/Dependencies.cmake`,
   `src/sync/CMakeLists.txt`, `tests/sync/libgit2_spike_test.cpp`, `SPEC.md` · **Boyut:** M · **Model:** opus
+- **Açık:** Fedora derlemesi (T02/Docker yok) · GitHub'a SSH-exec `ls-remote` host anahtarı onayına takıldı → kontrol noktası 4.
 
 ### T04: Spike — FTXUI + Qt
 - [x] **Açıklama:** FTXUI v7.0.3 ekle. `notes` yer tutucu: Türkçe örnek satırlarla sabit iki panel. `notes-gui`

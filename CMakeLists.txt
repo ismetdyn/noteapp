@@ -23,6 +23,7 @@ endfunction()
 
 add_subdirectory(src/core)
 add_subdirectory(src/detect)
+add_subdirectory(src/sync)
 add_subdirectory(src/tui)
 if(NOTEAPP_BUILD_GUI)
     add_subdirectory(src/gui)

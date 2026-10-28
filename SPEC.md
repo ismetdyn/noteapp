@@ -238,5 +238,8 @@ yönetimi, çoklu kullanıcı, paketleme (rpm/msi/winget), macOS'ta elle doğrul
    Windows derleyicisi Qt'nin MinGW 13.1'i (MSVC kurulu değil). Fedora doğrulaması Docker konteynerinde.
 2. **SSH:** libgit2 `USE_SSH=exec` (sistemdeki OpenSSH'yi çağırır; anahtar/agent/`~/.ssh/config` otomatik)
    seçildi. Windows 11'de erken bir spike ile doğrulanacak; olmazsa `libssh2` bağımlılığı (önce sorulur).
+   **Spike (2026-10-28):** exec arka ucu Windows'ta PATH'teki `ssh`'ı başlatıyor (doğrulandı); github.com host
+   anahtarı known_hosts'ta olmadığından bağlantı host doğrulamasında kaldı (Git Bash ssh hata verir, Win32-OpenSSH
+   onay bekleyip asılı kalır). Kontrol noktası 4: `ssh -T` onayı sonrası anahtar/agent ile `ls-remote` + asılı kalma önlemi.
 3. ~~İlk senkron~~ — **Karar (spec onayıyla, 2026-10-28):** ikisi de doluysa v1 reddeder + yönlendirir.
 4. ~~Kurulum~~ — **Karar (spec onayıyla, 2026-10-28):** v1'de paketleme yok; `cmake --install` + PATH elle.
