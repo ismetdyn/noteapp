@@ -34,7 +34,10 @@ class NoteStore {                     // kök: config.notes_dir
 };
 
 std::string slugify(std::string_view first_line);             // saf fonksiyon
-Config load_config(); std::expected<void, Error> save_config(const Config&);
+struct LoadedConfig { Config config; std::vector<std::string> warnings; };
+LoadedConfig load_config();                                   // varsayılan + config_file(); çökmez, uyarı döner
+LoadedConfig parse_config(std::string_view user_toml);        // saf çekirdek (dosya erişimi yok)
+std::expected<void, Error> save_config(const Config&);        // [tuning] hariç, atomik
 std::string tr(std::string_view key, const Args& args = {});   // i18n
 std::expected<int, Error> run_editor(const Config&, const std::filesystem::path& file);
 }
@@ -92,9 +95,18 @@ branch = "main"
 idle_seconds = 30
 author_name = ""         # boş: git global config → OS kullanıcı adı
 author_email = ""
+
+[tuning]                # arayüzde görünmeyen ayarlar; yalnız defaults.toml'da (kullanıcı isterse geçersiz kılar)
+slug_max_length = 60
+min_confidence = 0.5     # 0..1
+max_scan_bytes = 65536
+max_note_bytes = 10485760
+rescan_seconds = 5
+autosave_ms = 1000
+exit_timeout_seconds = 10
 ```
 - Varsayılanlar `resources/defaults.toml`'dan (gömülü) gelir; dosya yoksa varsayılanlarla çalışılır, ilk
-  kayıtta oluşturulur. Bilinmeyen anahtar → uyarı logu, yok sayılır. Geçersiz değer → varsayılan + uyarı.
+  kayıtta oluşturulur. Bilinmeyen anahtar → uyarı logu, yok sayılır. Geçersiz değer (yanlış tür, language ∉ {auto,tr,en}, boş/noktalı tip, idle_seconds ≤ 0, boş branch, ≤ 0 tuning) → o anahtar için varsayılan + uyarı; TOML sözdizimi hatası → tüm varsayılanlar + satır/sütunlu uyarı. `save_config` `[tuning]` yazmaz.
 - `~` ve ortam değişkenleri `notes_dir`'de genişletilir. Kaydetme atomiktir. Yorumlar korunmaz (bilinen sınır).
 - Kimlik doğrulama yöntemi `remote` şemasından türetilir; ayrı anahtar yok.
 

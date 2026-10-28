@@ -81,7 +81,8 @@ std::string normalize_line_endings(std::string_view text) {
 
 }  // namespace
 
-NoteStore::NoteStore(fs::path root) : root_(std::move(root)) {}
+NoteStore::NoteStore(fs::path root, std::size_t slug_max_length)
+    : root_(std::move(root)), slug_max_length_(slug_max_length) {}
 
 // Kanonik yol kökün içinde değilse reddeder: ".." zaten NotePath'te elenir, burada asıl hedef
 // sembolik bağ üzerinden kaçıştır. weakly_canonical var olmayan kuyruğu da kabul eder (create için).
@@ -184,7 +185,8 @@ std::expected<NotePath, Error> NoteStore::create(const NewNote& note,
             return std::unexpected(folder.error());
     }
 
-    const std::string base = note.name.empty() ? slugify(first_non_empty_line(note.content), now) : note.name;
+    const std::string base =
+        note.name.empty() ? slugify(first_non_empty_line(note.content), now, slug_max_length_) : note.name;
     const std::string prefix = note.folder.empty() ? std::string() : note.folder + "/";
     const std::string content = normalize_line_endings(note.content);
 

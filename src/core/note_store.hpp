@@ -2,8 +2,10 @@
 
 #include "core/error.hpp"
 #include "core/note_path.hpp"
+#include "core/text.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
@@ -38,7 +40,7 @@ struct NoteContent {
 class NoteStore {
 public:
     // Kök burada oluşturulmaz; ilk create() oluşturur.
-    explicit NoteStore(std::filesystem::path root);
+    explicit NoteStore(std::filesystem::path root, std::size_t slug_max_length = kDefaultSlugMaxLength);
 
     std::vector<NoteInfo> list() const;        // mtime azalan, eşitlikte yol artan
     std::vector<std::string> folders() const;  // göreli, '/' ayırıcılı, sıralı
@@ -55,6 +57,7 @@ private:
     std::expected<std::filesystem::path, Error> resolve(const NotePath& path) const;
 
     std::filesystem::path root_;
+    std::size_t slug_max_length_;
 };
 
 }  // namespace noteapp::core

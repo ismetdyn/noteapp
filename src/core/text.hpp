@@ -8,7 +8,7 @@
 
 namespace noteapp::core {
 
-// TODO(T08): defaults.toml'dan oku
+// Varsayılan; çalışma anındaki değer Tuning::slug_max_length (defaults.toml) ile gelir.
 inline constexpr std::size_t kDefaultSlugMaxLength = 60;
 
 // Geçersiz UTF-8'de (fazla uzun kodlama, vekil çift, > U+10FFFF, kesik dizi) nullopt döner.

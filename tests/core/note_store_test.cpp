@@ -113,6 +113,14 @@ TEST_CASE("create derives the name from the first non-empty line") {
     CHECK(created->string() == "toplanti-notlari-q4.md");
 }
 
+TEST_CASE("create truncates the slug to the configured maximum length") {
+    TempDir tmp;
+    NoteStore store(tmp.path(), 10);
+    auto created = store.create({"", "", "md", "abcde fghij klmno"}, kNow);
+    REQUIRE(created.has_value());
+    CHECK(created->string() == "abcde.md");  // tire sınırında kesilir
+}
+
 TEST_CASE("create falls back to a timestamped name for empty content") {
     TempDir tmp;
     NoteStore store(tmp.path());

@@ -8,6 +8,7 @@ option(NOTEAPP_BUILD_TESTS "Testler derlensin" ON)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 include(cmake/Dependencies.cmake)
+include(cmake/EmbedResources.cmake)
 
 # Dil standardı ve uyarılar yalnız bizim hedeflerimize uygulanır; üçüncü parti kodun uyarıları build'i kırmamalı.
 function(noteapp_target_defaults target)

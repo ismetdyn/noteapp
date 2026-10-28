@@ -80,7 +80,7 @@
   `tests/core/note_store_test.cpp` · **Boyut:** M
 
 ### T08: Kaynak gömme + config + platform dizinleri
-- [ ] **Kabul:** `resources/defaults.toml` ikiliye gömülü · `config.toml` yoksa varsayılanlar · bozuk dosya → varsayılan
+- [x] **Kabul:** `resources/defaults.toml` ikiliye gömülü · `config.toml` yoksa varsayılanlar · bozuk dosya → varsayılan
   + uyarı (çökme yok) · `~` genişletme · atomik kayıt · `NOTEAPP_HOME` tüm dizinleri ezer.
 - **Doğrulama:** `B && T(core)` · **Bağımlılık:** T07 · **Dosyalar:** `cmake/EmbedResources.cmake`, `resources/defaults.toml`,
   `src/core/{config.hpp,config.cpp,paths.hpp,paths.cpp}`, `tests/core/config_test.cpp` · **Boyut:** M

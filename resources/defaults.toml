@@ -1,0 +1,27 @@
+# noteapp varsayılanları: ikiliye gömülür; kullanıcının config.toml dosyası bunların üstüne biner.
+# Şema ve doğrulama kuralları: SPEC-core.md "Config".
+
+language = "auto"        # auto | tr | en
+notes_dir = "~/notes"
+editor = ""              # boş: $VISUAL -> $EDITOR -> platform varsayılanı
+default_type = "md"
+default_folder = ""      # hızlı notların klasörü ("" = kök)
+types = ["md", "txt", "csv", "cpp", "java", "py", "json", "sh"]
+
+[sync]
+enabled = false
+remote = ""
+branch = "main"
+idle_seconds = 30
+author_name = ""
+author_email = ""
+
+# Kullanıcı arayüzünde görünmeyen, davranışı ayarlayan değerler.
+[tuning]
+slug_max_length = 60          # not adı slug'ının en çok karakteri
+min_confidence = 0.5          # tip tespitinde kabul eşiği (0..1)
+max_scan_bytes = 65536        # tip tespitinde taranan en çok bayt
+max_note_bytes = 10485760     # bundan büyük notlar düzenlenmez/aranmaz (10 MiB)
+rescan_seconds = 5            # GUI/TUI dizin yeniden tarama aralığı
+autosave_ms = 1000            # GUI otomatik kayıt gecikmesi
+exit_timeout_seconds = 10     # çıkışta bekleyen senkron için üst sınır
