@@ -100,6 +100,25 @@ açmak `enable`'ı çağırır (repo varsa no-op).
 
 **Elle (Large):** gerçek private GitHub reposu ile Windows ↔ Fedora; HTTPS+token ve SSH ikisi de.
 
+## Uygulama kararları (T03 spike bulguları, 2026-10-28)
+
+1. **Kullanıcının git config'i izole edilir.** Bu makinede global/system `core.autocrlf=true` ve
+   `url.https://github.com/.insteadOf git@github.com:` var; libgit2 bunları uygular. Notlar reposunda global/system/XDG
+   arama yolları boşaltılır (`git_libgit2_opts(GIT_OPT_SET_SEARCH_PATH, …, "")`): satır sonları dönüştürülmez, remote
+   adresi gizlice değişmez. Yazar adı/e-postası için global config izolasyondan **önce** bir kez okunur.
+2. **Kimlik doğrulama türü**, izole config ile okunan `remote` URL şemasından türetilir.
+3. **SSH asılı kalma riski:** Win32-OpenSSH, host anahtarı bilinmiyorsa onay bekleyip asılı kalıyor; libgit2 exec
+   backend'ine Windows'ta argüman (`BatchMode`) geçirilemiyor (`GIT_SSH_COMMAND`/argümanlı `core.sshCommand` çalışmıyor).
+   Önlemler: (a) SSH senkronundan önce `ssh-keygen -F <host>` ön kontrolü; kayıt yoksa `sync.ssh_host_unknown`;
+   (b) **her senkron ayrı bir `note sync --background` sürecinde koşar**: `AutoSync` (TUI/GUI) ve CLI bu süreci
+   başlatıp bekler, `tuning.sync_timeout_seconds` (defaults.toml, 120) aşılırsa sonlandırır. Sonlandırma sonrası ilk
+   senkron, `sync.lock` bayatsa `.git/index.lock` gibi bayat libgit2 kilitlerini temizler.
+4. Remote her zaman bir repoya bağlı oluşturulur (bağımsız/"detached" remote, exec SSH ile çöküyor).
+5. libgit2'ye yollar UTF-8 verilir (`generic_u8string`). Testlerde Windows'ta salt-okunur git nesneleri silinmeden
+   önce öznitelikleri temizlenir.
+6. Doğrulandı: WinHTTP üzerinden HTTPS (GitHub'dan ref listesi), keychain gidiş-dönüşü (Windows Credential Manager).
+   SSH-exec gerçek bağlantısı Kontrol noktası 4'e kaldı.
+
 ## Kapsam dışı
 Rebase, seçmeli (dosya bazlı) senkron, GitHub dışı sağlayıcılara özel destek (genel git remote zaten çalışır),
 LFS, şifreli repo, Git Credential Manager entegrasyonu.
