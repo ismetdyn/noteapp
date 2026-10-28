@@ -41,8 +41,9 @@ using TokenReader =
     std::function<std::expected<std::optional<std::string>, core::Error>(std::string_view host)>;
 std::expected<std::optional<std::string>, core::Error> read_stored_token(std::string_view host);
 
-// Token sırası: NOTEAPP_GIT_TOKEN (kalıcı saklanmaz) → kasa (`stored`; testte enjekte edilir). İkisi de
-// yoksa "sync.token_missing" {host}. Hata hiçbir zaman token'ı taşımaz.
+// Token sırası: NOTEAPP_GIT_TOKEN (kalıcı saklanmaz; yalnız host NOTEAPP_GIT_TOKEN_HOST'a — varsayılan
+// github.com — büyük/küçük harf duyarsız eşitse) → kasa (`stored`; testte enjekte edilir). İkisi de yoksa
+// "sync.token_missing" {host}. Hata hiçbir zaman token'ı taşımaz.
 std::expected<std::string, core::Error> resolve_token(std::string_view host,
                                                       const TokenReader& stored = read_stored_token);
 

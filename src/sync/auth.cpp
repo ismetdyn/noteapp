@@ -21,6 +21,8 @@ namespace {
 constexpr const char* kKeychainPackage = "noteapp";
 constexpr const char* kKeychainService = "noteapp";
 constexpr const char* kTokenEnv = "NOTEAPP_GIT_TOKEN";
+constexpr const char* kTokenHostEnv = "NOTEAPP_GIT_TOKEN_HOST";  // ortam token'ının verildiği tek host
+constexpr const char* kDefaultTokenHost = "github.com";
 // GitHub token'la gelen kullanıcı adına bakmaz; bu ad, token kimliklerinin yerleşik kullanıcı adıdır.
 constexpr const char* kTokenUser = "x-access-token";
 constexpr std::string_view kBlank = " \t\r\n";
@@ -114,7 +116,10 @@ std::expected<std::optional<std::string>, core::Error> read_stored_token(std::st
 }
 
 std::expected<std::string, core::Error> resolve_token(std::string_view host, const TokenReader& stored) {
-    if (auto token = core::get_env_utf8(kTokenEnv))
+    // Ortamdaki token tek bir host'a bağlıdır: her https remote'a sunulsaydı yanlış yazılmış ya da kötü
+    // niyetli bir adres (ör. paylaşılan config'teki) onu alırdı. Diğer host'lar kendi kasa kaydını kullanır.
+    const std::string bound_host = lowercase(core::get_env_utf8(kTokenHostEnv).value_or(kDefaultTokenHost));
+    if (auto token = core::get_env_utf8(kTokenEnv); token && lowercase(host) == bound_host)
         return std::move(*token);
     auto token = stored(host);
     if (!token)

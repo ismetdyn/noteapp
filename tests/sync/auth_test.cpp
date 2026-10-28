@@ -121,6 +121,29 @@ TEST_CASE("token order: without NOTEAPP_GIT_TOKEN the host's keychain entry is u
     CHECK(asked_host == "github.com");
 }
 
+TEST_CASE(
+    "NOTEAPP_GIT_TOKEN goes only to NOTEAPP_GIT_TOKEN_HOST (default github.com), others ask the keychain") {
+    const EnvGuard env("NOTEAPP_GIT_TOKEN", fs::path("env-token"));
+    const auto keychain = [](std::string_view host) -> std::expected<std::optional<std::string>, Error> {
+        return "keychain-" + std::string(host);
+    };
+    const auto token_for = [&](std::string_view host, const noteapp::sync::TokenReader& reader) {
+        const auto token = noteapp::sync::resolve_token(host, reader);
+        return token ? *token : token.error().message_key;
+    };
+    {
+        const EnvGuard bound("NOTEAPP_GIT_TOKEN_HOST", std::nullopt);
+        CHECK(token_for("github.com", keychain) == "env-token");
+        CHECK(token_for("evil.example", keychain) == "keychain-evil.example");
+        CHECK(token_for("evil.example", no_keychain_entry) == "sync.token_missing");
+    }
+    {
+        const EnvGuard bound("NOTEAPP_GIT_TOKEN_HOST", fs::path("Git.Example.COM"));
+        CHECK(token_for("git.example.com", keychain) == "env-token");
+        CHECK(token_for("github.com", keychain) == "keychain-github.com");
+    }
+}
+
 TEST_CASE("no token anywhere is sync.token_missing; an unavailable keychain is reported as such") {
     const EnvGuard env("NOTEAPP_GIT_TOKEN", std::nullopt);
     const auto missing = noteapp::sync::resolve_token("github.com", no_keychain_entry);

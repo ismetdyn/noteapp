@@ -54,7 +54,9 @@ bool has_token(std::string_view host);
 ### Kimlik doğrulama
 - `https://…` → **token**: libgit2 credential callback'i `userpass("x-access-token", token)` döner. Token
   kaynağı: `NOTEAPP_GIT_TOKEN` ortam değişkeni (kalıcı saklanmaz) → OS kasası (keychain; servis `noteapp`,
-  hesap = host). Callback en fazla **1** kez kimlik verir; ret olursa `sync.auth_failed` (sonsuz döngü yok).
+  hesap = host). Ortamdaki token yalnız `NOTEAPP_GIT_TOKEN_HOST`'taki host'a (varsayılan `github.com`,
+  büyük/küçük harf duyarsız) verilir; başka host'lar kasadaki kendi kaydını kullanır — her https remote'a
+  sunulsaydı yanlış ya da kötü niyetli bir adres onu alırdı. Callback en fazla **1** kez kimlik verir; ret olursa `sync.auth_failed` (sonsuz döngü yok).
   Önerilen token: fine-grained PAT, yalnız not reposu, *Contents: read/write*.
 - `git@…` / `ssh://…` → **SSH**: libgit2 `USE_SSH=exec` ile sistemdeki `ssh` çağrılır; anahtar, agent ve
   `~/.ssh/config` ssh'ın kendisinden. Uygulama anahtar saklamaz. İlk bağlantıda host anahtarı onayı
