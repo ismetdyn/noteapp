@@ -79,6 +79,8 @@ saved = "Saved: {path} ({type}, {how})"
 how_detected = "suggested"
 how_chosen = "chosen"
 empty_input = "Nothing to save: the note is empty"
+cancelled = "Cancelled: the note is empty"
+temp_kept = "Your text was kept in: {path}"
 unknown_option = "Unknown option: {option}"
 missing_value = "Option {option} needs a value"
 not_implemented = "Command '{command}' is not available yet"
@@ -87,6 +89,7 @@ Usage:
   note [-t TYPE] [-f FOLDER] [-n NAME] [--no-sync] TEXT...   Add a note from the arguments
   ... | note [flags]                                          Add a note from stdin
   note [flags]                                                Add a note in your editor
+  note -e [flags] [TEXT...]                                   Always open the editor; TEXT becomes the initial content
   note ls [QUERY] [-f FOLDER]                                 List notes
   note find TERM...                                           Search note contents
   note show QUERY                                             Print the best match

@@ -123,7 +123,7 @@
   `tests/support/fake_editor.cpp`, `tests/core/editor_test.cpp` · **Boyut:** M
 
 ### T13: CLI editör akışı
-- [ ] **Kabul:** SPEC-cli kabul 4 · kayıt başarısızsa geçici dosya korunur ve yolu yazılır.
+- [x] **Kabul:** SPEC-cli kabul 4 · kayıt başarısızsa geçici dosya korunur ve yolu yazılır.
 - **Doğrulama:** `B && T(cli)`; elle `EDITOR=micro note`, `EDITOR=edit note` · **Bağımlılık:** T11, T12 ·
   **Dosyalar:** `src/cli/main.cpp`, `src/cli/commands.cpp`, `tests/cli/cli_editor_test.cpp` · **Boyut:** S
 

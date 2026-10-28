@@ -26,6 +26,7 @@ struct ParsedArgs {
     std::optional<std::string> folder;
     std::optional<std::string> name;
     bool no_sync = false;
+    bool editor = false;  // -e: editörü her durumda aç; metin argümanları ön içerik olur
     std::vector<std::string> text;
 
     // Reserved

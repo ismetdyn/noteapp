@@ -67,6 +67,8 @@ ParsedArgs parse_args(const std::vector<std::string>& args) {
             return parsed;
         } else if (arg == "--no-sync") {
             parsed.no_sync = true;
+        } else if (arg == "-e") {
+            parsed.editor = true;
         } else if (arg == "-t" || arg == "-f" || arg == "-n") {
             if (i + 1 >= args.size())
                 return invalid("cli.missing_value", {{"option", arg}});

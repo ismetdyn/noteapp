@@ -79,6 +79,8 @@ saved = "Kaydedildi: {path} ({type}, {how})"
 how_detected = "önerilen"
 how_chosen = "seçilen"
 empty_input = "Kaydedilecek bir şey yok: not boş"
+cancelled = "İptal edildi: not boş"
+temp_kept = "Yazdığınız metin şurada saklandı: {path}"
 unknown_option = "Bilinmeyen seçenek: {option}"
 missing_value = "{option} seçeneği bir değer ister"
 not_implemented = "'{command}' komutu henüz kullanılamıyor"
@@ -87,6 +89,7 @@ Kullanım:
   note [-t TİP] [-f KLASÖR] [-n AD] [--no-sync] METİN...   Argümanlardan not ekler
   ... | note [bayraklar]                                    stdin'den not ekler
   note [bayraklar]                                          Editörde not ekler
+  note -e [bayraklar] [METİN...]                            Editörü her durumda açar; METİN ön içerik olur
   note ls [SORGU] [-f KLASÖR]                               Notları listeler
   note find TERİM...                                        Not içeriklerinde arar
   note show SORGU                                           En iyi eşleşmeyi yazdırır
