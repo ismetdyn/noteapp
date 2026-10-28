@@ -1,4 +1,5 @@
 add_library(noteapp_core
+    note_path.cpp
     text.cpp
     version.cpp)
 target_include_directories(noteapp_core PUBLIC ${PROJECT_SOURCE_DIR}/src)

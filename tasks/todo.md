@@ -60,7 +60,7 @@
 ## Faz 1 — core + ilk dikey dilim `note "metin"`
 
 ### T05: 🔴 `Error` + `NotePath::parse`
-- [ ] **Kabul:** SPEC-core "Yol güvenliği" ret kurallarının her biri ayrı testte reddedilir · geçerli iç içe yollar
+- [x] **Kabul:** SPEC-core "Yol güvenliği" ret kurallarının her biri ayrı testte reddedilir · geçerli iç içe yollar
   kabul edilir · hata `code` + i18n anahtarı taşır.
 - **Doğrulama:** `B && T(core)` · **Bağımlılık:** T01 · **Dosyalar:** `src/core/{error.hpp,note_path.hpp,note_path.cpp}`,
   `tests/core/note_path_test.cpp` · **Boyut:** S
