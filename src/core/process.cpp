@@ -28,11 +28,6 @@ fs::path path_from_utf8(std::string_view utf8) {
     return fs::path(std::u8string(utf8.begin(), utf8.end()));
 }
 
-std::string to_utf8(const fs::path& p) {
-    const std::u8string u = p.u8string();
-    return std::string(u.begin(), u.end());
-}
-
 std::vector<std::string> split_list(const std::string& text, char separator) {
     std::vector<std::string> parts;
     std::size_t start = 0;
@@ -56,6 +51,13 @@ Error spawn_failed(const std::string& program, const std::string& reason) {
 }
 
 #ifdef _WIN32
+
+// Yalnız Windows dalı geniş karakterli yolları UTF-8'e çevirir; POSIX'te tanımlamak -Werror'da kullanılmayan
+// fonksiyon hatası verir.
+std::string to_utf8(const fs::path& p) {
+    const std::u8string u = p.u8string();
+    return std::string(u.begin(), u.end());
+}
 
 std::wstring to_wide(std::string_view utf8) {
     return path_from_utf8(utf8).wstring();
