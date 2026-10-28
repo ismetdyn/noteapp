@@ -16,6 +16,7 @@ endif()
 
 add_subdirectory(core)
 add_subdirectory(detect)
+add_subdirectory(search)
 add_subdirectory(sync)
 add_subdirectory(tui)
 if(NOTEAPP_BUILD_GUI)

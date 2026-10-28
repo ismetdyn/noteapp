@@ -138,6 +138,7 @@
   kullanır, seçilen yol stderr'e yazılır, eşleşme yoksa çıkış 1.
 - **Doğrulama:** `B && T(search) && T(cli)` · **Bağımlılık:** T14 · **Dosyalar:** `src/search/{CMakeLists.txt,fold.hpp,fold.cpp,fuzzy.hpp,fuzzy.cpp}`,
   `tests/search/fuzzy_test.cpp`, `src/cli/commands.cpp` · **Boyut:** M
+- [x] modül tamam; CLI bağlantısı T10 sonrası
 
 ### T16: `ContentIndex` + `note find`
 - [ ] **Kabul:** SPEC-search kabul 4–6 · `find` çıktısı `yol:satır: kesit`, TTY'de vurgulu.

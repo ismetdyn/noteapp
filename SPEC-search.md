@@ -11,7 +11,8 @@ v1'de indeks yok: bellekte içerik önbelleği + doğrusal tarama (birkaç bin n
 
 ```cpp
 namespace noteapp::search {
-struct FuzzyMatch { double score; std::vector<std::size_t> positions; };   // vurgulama için bayt ofsetleri
+struct FuzzyMatch { double score; std::vector<std::size_t> positions; };   // vurgulama için özgün bayt ofsetleri
+struct Ranked { std::size_t index; FuzzyMatch match; };                      // index = notes içindeki sıra
 std::optional<FuzzyMatch> fuzzy_match(std::string_view query, std::string_view candidate);
 std::vector<Ranked> rank_notes(std::string_view query, std::span<const core::NoteInfo> notes);
 
@@ -24,7 +25,9 @@ public:
     void refresh();                         // stat; yalnız mtime/boyutu değişenleri yeniden okur
     std::vector<ContentResult> search(std::string_view query, std::size_t limit) const;
 };
-std::string fold(std::string_view text);   // eşleştirme için katlama (aşağıda)
+struct Folded { std::u32string original, text; std::vector<std::size_t> byte_offsets; };   // kod noktası başına 1:1\r
+Folded fold(std::string_view utf8);          // eşleştirme için katlama (aşağıda); geçersiz bayt -> U+FFFD\r
+std::string fold_to_utf8(std::string_view);   // yalnız katlanmış metin
 }
 ```
 
