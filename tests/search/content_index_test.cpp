@@ -6,10 +6,12 @@
 #include <fstream>
 #include <random>
 #include <string>
+#include <thread>
 
 using namespace noteapp::search;
 namespace core = noteapp::core;
 namespace fs = std::filesystem;
+using namespace std::chrono_literals;
 
 namespace {
 
@@ -45,6 +47,13 @@ std::vector<ContentResult> find(Fixture& f, std::string_view q, std::size_t limi
 
 std::string slice(const Hit& h, std::size_t i) {
     return h.snippet.substr(h.ranges[i].first, h.ranges[i].second - h.ranges[i].first);
+}
+
+// Ardından gelen iki yazım (aralarında 50 ms) aynı takvim saniyesine düşsün: saniye çözünürlüklü mtime
+// farkı rastlantıyla değil, her seferinde kaçırır.
+void wait_for_second_start() {
+    while (std::chrono::system_clock::now().time_since_epoch() % 1s > 300ms)
+        std::this_thread::sleep_for(5ms);
 }
 
 }  // namespace
@@ -217,6 +226,18 @@ TEST_CASE("content: same-size edit is detected through mtime") {
     f.index.refresh();
     f.dir.write("a.md", "beta\n");
     fs::last_write_time(f.dir.path / "a.md", fs::file_time_type::clock::now() + std::chrono::hours{1});
+    f.index.refresh();
+    CHECK(f.index.read_count() == 2);
+    CHECK(f.index.search("beta", 10).size() == 1);
+}
+
+TEST_CASE("content: same-size edit within the same second is detected") {
+    Fixture f;
+    wait_for_second_start();
+    f.dir.write("a.md", "alfa\n");
+    f.index.refresh();
+    std::this_thread::sleep_for(50ms);
+    f.dir.write("a.md", "beta\n");
     f.index.refresh();
     CHECK(f.index.read_count() == 2);
     CHECK(f.index.search("beta", 10).size() == 1);

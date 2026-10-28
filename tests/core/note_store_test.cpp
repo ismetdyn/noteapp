@@ -1,14 +1,18 @@
+#include "core/file_stat.hpp"
 #include "core/note_store.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <doctest/doctest.h>
 #include <fstream>
 #include <iterator>
 #include <random>
+#include <thread>
 
 using namespace noteapp::core;
 namespace fs = std::filesystem;
+using namespace std::chrono_literals;
 
 namespace {
 
@@ -53,6 +57,26 @@ std::string arg(const Error& e, std::string_view key) {
 }
 
 const auto kNow = std::chrono::system_clock::time_point{} + std::chrono::hours(24 * 365 * 56);
+
+// Ardından gelen iki yazım (aralarında 50 ms) aynı takvim saniyesine düşsün: saniye çözünürlüklü mtime
+// (MinGW libstdc++ last_write_time) bu testlerde farkı rastlantıyla değil, her seferinde kaçırır.
+void wait_for_second_start() {
+    while (std::chrono::system_clock::now().time_since_epoch() % 1s > 300ms)
+        std::this_thread::sleep_for(5ms);
+}
+
+// Dizin bağı: Windows'ta yetki istemeyen junction (MinGW libstdc++ create_directory_symlink desteklemez),
+// POSIX'te sembolik bağ. Oluşturulamazsa false.
+bool make_dir_link(const fs::path& target, const fs::path& link) {
+#ifdef _WIN32
+    const std::wstring command = L"mklink /J \"" + link.wstring() + L"\" \"" + target.wstring() + L"\" >NUL";
+    return _wsystem(command.c_str()) == 0;
+#else
+    std::error_code ec;
+    fs::create_directory_symlink(target, link, ec);
+    return !ec;
+#endif
+}
 
 }  // namespace
 
@@ -196,7 +220,7 @@ TEST_CASE("write replaces the content and returns the new mtime") {
     auto written = store.write(np("n.md"), "yeni içerik", read->mtime);
     REQUIRE(written.has_value());
     CHECK(slurp(tmp.path() / "n.md") == "yeni içerik");
-    CHECK(*written == fs::last_write_time(tmp.path() / "n.md"));
+    CHECK(*written == stat_file(tmp.path() / "n.md")->mtime);
     // Dönen mtime ile ardışık kayıt dış değişiklik sayılmaz.
     CHECK(store.write(np("n.md"), "üçüncü", *written).has_value());
     CHECK(slurp(tmp.path() / "n.md") == "üçüncü");
@@ -215,6 +239,78 @@ TEST_CASE("write refuses when the file changed externally") {
     CHECK(slurp(tmp.path() / "n.md") == "eski");
 }
 
+TEST_CASE("mtimes are sub-second precise: writes 50 ms apart differ in read() and list()") {
+    TempDir tmp;
+    const fs::path file = tmp.path() / "n.md";
+    NoteStore store(tmp.path());
+    wait_for_second_start();
+    put(file, "abcd");
+    const auto first_read = store.read(np("n.md"));
+    const auto first_list = store.list();
+    std::this_thread::sleep_for(50ms);
+    put(file, "wxyz");
+    const auto second_read = store.read(np("n.md"));
+    const auto second_list = store.list();
+    REQUIRE((first_read && second_read));
+    REQUIRE((first_list.size() == 1 && second_list.size() == 1));
+    CHECK(second_read->mtime != first_read->mtime);
+    CHECK(second_list.front().mtime != first_list.front().mtime);
+}
+
+TEST_CASE("write refuses a same-size external edit made within the same second as the read") {
+    TempDir tmp;
+    const fs::path file = tmp.path() / "n.md";
+    NoteStore store(tmp.path());
+    wait_for_second_start();
+    put(file, "abcd");
+    const auto read = store.read(np("n.md"));
+    REQUIRE(read.has_value());
+    std::this_thread::sleep_for(50ms);
+    put(file, "wxyz");  // dış editör: aynı boyut, aynı saniye
+    const auto written = store.write(np("n.md"), "benim", read->mtime);
+    REQUIRE_FALSE(written.has_value());
+    CHECK(written.error().code == Error::Code::ModifiedExternally);
+    CHECK(slurp(file) == "wxyz");
+}
+
+TEST_CASE("list(), read(), write() and stat_file() report the same mtime for the same file") {
+    TempDir tmp;
+    put(tmp.path() / "n.md", "eski");
+    NoteStore store(tmp.path());
+    const auto read = store.read(np("n.md"));
+    REQUIRE(read.has_value());
+    CHECK(store.list().front().mtime == read->mtime);
+    const auto written = store.write(np("n.md"), "yeni", read->mtime);
+    REQUIRE(written.has_value());
+    const auto stat = stat_file(tmp.path() / "n.md");
+    REQUIRE(stat.has_value());
+    CHECK(stat->mtime == *written);
+    CHECK(store.list().front().mtime == *written);
+    CHECK(store.read(np("n.md"))->mtime == *written);
+}
+
+TEST_CASE("stat_file reports kind and size and does not follow symlinks") {
+    TempDir tmp;
+    put(tmp.path() / "f.md", "abc");
+    const auto file = stat_file(tmp.path() / "f.md");
+    REQUIRE(file.has_value());
+    CHECK((file->regular && !file->directory && !file->symlink));
+    CHECK(file->size == 3);
+    const auto dir = stat_file(tmp.path());
+    REQUIRE(dir.has_value());
+    CHECK((dir->directory && !dir->regular && !dir->symlink));
+    CHECK_FALSE(stat_file(tmp.path() / "yok.md").has_value());
+
+    fs::create_directories(tmp.path() / "target");
+    if (!make_dir_link(tmp.path() / "target", tmp.path() / "link")) {
+        MESSAGE("dizin bağı oluşturulamadı, bağ denetimi atlandı");
+        return;
+    }
+    const auto link = stat_file(tmp.path() / "link");
+    REQUIRE(link.has_value());
+    CHECK((link->symlink && !link->regular && !link->directory));
+}
+
 TEST_CASE("write to a missing note is NotFound") {
     TempDir tmp;
     NoteStore store(tmp.path());
@@ -229,7 +325,7 @@ TEST_CASE("failed write leaves the original intact and no .tmp behind") {
     fs::create_directories(tmp.path() / "d.md");
     put(tmp.path() / "d.md" / "icerik.txt", "korunmalı");
     NoteStore store(tmp.path());
-    auto written = store.write(np("d.md"), "x", fs::last_write_time(tmp.path() / "d.md"));
+    auto written = store.write(np("d.md"), "x", stat_file(tmp.path() / "d.md")->mtime);
     REQUIRE_FALSE(written.has_value());
     CHECK(written.error().code == Error::Code::Io);
     CHECK(fs::is_directory(tmp.path() / "d.md"));
@@ -244,7 +340,7 @@ TEST_CASE("successful write leaves no .tmp behind") {
     TempDir tmp;
     put(tmp.path() / "n.md", "eski");
     NoteStore store(tmp.path());
-    REQUIRE(store.write(np("n.md"), "yeni", fs::last_write_time(tmp.path() / "n.md")).has_value());
+    REQUIRE(store.write(np("n.md"), "yeni", stat_file(tmp.path() / "n.md")->mtime).has_value());
     int files = 0;
     for (const auto& entry : fs::directory_iterator(tmp.path())) {
         (void)entry;
@@ -294,7 +390,9 @@ TEST_CASE("list breaks mtime ties by path ascending") {
     TempDir tmp;
     put(tmp.path() / "b.md", "1");
     put(tmp.path() / "a.md", "1");
+    // İkisi de açıkça atanır: mtime artık saniye altı, yazım anındaki değerler eşit çıkmaz.
     const auto t = fs::last_write_time(tmp.path() / "a.md");
+    fs::last_write_time(tmp.path() / "a.md", t);
     fs::last_write_time(tmp.path() / "b.md", t);
     NoteStore store(tmp.path());
     auto listed = store.list();
@@ -345,6 +443,18 @@ TEST_CASE("list refreshes the cached binary flag when a file changes (text to bi
     put(file, "abcd");
     fs::last_write_time(file, fs::last_write_time(file) + std::chrono::seconds(10));
     CHECK_FALSE(store.list().front().binary);
+}
+
+TEST_CASE("list refreshes the binary flag after a same-size edit within the same second") {
+    TempDir tmp;
+    const fs::path file = tmp.path() / "n.md";
+    NoteStore store(tmp.path());
+    wait_for_second_start();
+    put(file, "abcd");
+    REQUIRE_FALSE(store.list().front().binary);
+    std::this_thread::sleep_for(50ms);
+    put(file, std::string("ab\0d", 4));
+    CHECK(store.list().front().binary);
 }
 
 TEST_CASE("list skips files whose names fail NotePath validation") {

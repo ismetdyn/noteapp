@@ -66,6 +66,10 @@ sonda boşluk/nokta; 255 bayttan uzun bileşen. Ek olarak `NoteStore` her erişi
   dışlayıcı oluşturmayla (`CREATE_NEW` / `O_EXCL`) yazılır; yarış durumunda bile var olan dosya ezilmez.
   Hata olursa geçici dosya silinir, orijinal dosya bozulmamış kalır.
 - **Dışarıdan değişiklik:** `write` diskteki mtime `expected_mtime`'dan farklıysa yazmaz → `ModifiedExternally`.
+- **mtime kaynağı:** karşılaştırılan her mtime (`list`, `read`, `write`) tek kaynaktan, `core::stat_file`'dan gelir
+  (bağı izlemez): Windows'ta FILETIME (100 ns), POSIX'te `st_mtim` / `st_mtimespec` (ns). Neden: MinGW libstdc++'ta
+  `std::filesystem::last_write_time` `_wstat64` üzerinden saniyeye keser; okumayla aynı saniyedeki aynı boyutlu dış
+  düzenleme yakalanmaz, üzerine yazılırdı (T16c, 2026-10-28). Kalan pencere dosya sisteminin saat tıkıdır (~1–16 ms).
 - UTF-8 BOM okunurken korunur, yazılırken olduğu gibi geri yazılır.
 
 ### Listeleme

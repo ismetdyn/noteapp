@@ -1,6 +1,7 @@
 #include "core/note_store.hpp"
 
 #include "core/atomic_file.hpp"
+#include "core/file_stat.hpp"
 #include "core/log.hpp"
 #include "core/text.hpp"
 
@@ -165,44 +166,27 @@ std::expected<fs::path, Error> NoteStore::resolve(const NotePath& path) const {
 std::vector<NoteInfo> NoteStore::list() const {
     std::vector<NoteInfo> notes;
     std::unordered_map<std::string, BinaryCacheEntry> seen;  // silinen dosyaların kaydı düşsün
-    std::error_code ec;
-    fs::recursive_directory_iterator it(root_, fs::directory_options::skip_permission_denied, ec);
-    for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
-        const fs::directory_entry& entry = *it;
-        if (is_hidden(entry.path())) {
-            if (entry.is_directory(ec))
-                it.disable_recursion_pending();  // .git gibi dizinlere inilmez
-            continue;
-        }
-        // Sembolik bağlar listelenmez: hedefi kök dışına kaçabilir.
-        // Tek symlink_status çağrısı: ayrı is_symlink + is_regular_file her dosyada fazladan stat demekti.
-        std::error_code entry_ec;
-        if (entry.symlink_status(entry_ec).type() != fs::file_type::regular)
-            continue;
-        const std::string relative = to_utf8(entry.path().lexically_relative(root_));
-        auto parsed = NotePath::parse(relative);
+    // Sembolik bağlar listelenmez (scan_files atlar): hedefi kök dışına kaçabilir.
+    for (const ScannedFile& file : scan_files(root_)) {
+        auto parsed = NotePath::parse(file.relative);
         if (!parsed) {
-            log_warn("note list: skipped '" + relative + "': invalid path (" +
+            log_warn("note list: skipped '" + file.relative + "': invalid path (" +
                      (parsed.error().args.empty() ? "" : parsed.error().args.front().second) + ")");
             continue;
         }
-        const auto mtime = entry.last_write_time(entry_ec);
-        const auto size = entry.file_size(entry_ec);
-        if (entry_ec) {
-            log_warn("note list: skipped '" + relative + "': " + entry_ec.message());
-            continue;
-        }
+        const auto mtime = file.stat.mtime;
+        const auto size = file.stat.size;
         bool binary = false;
-        if (const auto cached = binary_cache_.find(relative);
+        if (const auto cached = binary_cache_.find(file.relative);
             cached != binary_cache_.end() && cached->second.mtime == mtime && cached->second.size == size) {
             binary = cached->second.binary;
         } else {
-            // ponytail: aynı mtime + aynı boyutla içeriği değişen dosya (mtime çözünürlüğü içinde) eski
-            // bayrakta kalır; gerekirse anahtara içerik özeti eklenir.
+            // ponytail: mtime saat tıkı (~1–16 ms) içinde aynı kalır; o pencerede aynı boyutla değişen dosya
+            // eski bayrakta kalır. Gerekirse anahtara içerik özeti eklenir.
             ++head_reads_;
-            binary = has_nul_in_head(entry.path());
+            binary = has_nul_in_head(root_ / parsed->value());
         }
-        seen.insert_or_assign(relative, BinaryCacheEntry{mtime, size, binary});
+        seen.insert_or_assign(file.relative, BinaryCacheEntry{mtime, size, binary});
         notes.push_back(NoteInfo{*parsed, mtime, size, binary});
     }
     binary_cache_ = std::move(seen);
@@ -240,13 +224,15 @@ std::expected<NoteContent, Error> NoteStore::read(const NotePath& path) const {
     std::error_code ec;
     if (!fs::exists(*target, ec))
         return std::unexpected(not_found(path.string()));
-    if (!fs::is_regular_file(*target, ec))
-        return std::unexpected(io_error(path.string(), "not a regular file"));
     // mtime içerikten ÖNCE okunur: arada bir yazım olursa elimizdeki mtime eski kalır ve sonraki
     // write() bunu ModifiedExternally olarak yakalar (tersi sırada sessiz veri kaybı olurdu).
-    const auto mtime = fs::last_write_time(*target, ec);
-    if (ec)
-        return std::unexpected(io_error(path.string(), ec));
+    const auto stat = stat_file(*target);
+    if (!stat)
+        return std::unexpected(io_error(path.string(), stat.error()));
+    // stat_file bağı izlemez: bağın kendi mtime'ı hedefteki dış düzenlemeyi göstermezdi, okunmaz.
+    if (!stat->regular)
+        return std::unexpected(io_error(path.string(), "not a regular file"));
+    const auto mtime = stat->mtime;
     std::ifstream in(*target, std::ios::binary);
     if (!in)
         return std::unexpected(io_error(path.string(), "cannot open file"));
@@ -307,12 +293,13 @@ std::expected<fs::file_time_type, Error> NoteStore::write(const NotePath& path, 
     std::error_code ec;
     if (!fs::exists(*target, ec))
         return std::unexpected(not_found(path.string()));
-    const auto current = fs::last_write_time(*target, ec);
-    if (ec)
-        return std::unexpected(io_error(path.string(), ec));
+    const auto current = stat_file(*target);
+    if (!current)
+        return std::unexpected(io_error(path.string(), current.error()));
     // ponytail: denetim ile rename arasında küçük bir yarış penceresi var; tek kullanıcılı yerel
-    // uygulama için kabul edildi, kilit dosyası gerekirse buraya eklenir.
-    if (current != expected_mtime)
+    // uygulama için kabul edildi, kilit dosyası gerekirse buraya eklenir. Ayrıca mtime saat tıkı
+    // (~1–16 ms) içinde aynı kalır: okumayla aynı tıkta yapılan dış düzenleme kaçar.
+    if (current->mtime != expected_mtime)
         return std::unexpected(
             Error{Error::Code::ModifiedExternally, "error.modified_externally", {{"path", path.string()}}});
 
@@ -325,10 +312,10 @@ std::expected<fs::file_time_type, Error> NoteStore::write(const NotePath& path, 
         }
         return std::unexpected(std::move(error));
     }
-    const auto new_mtime = fs::last_write_time(*target, ec);
-    if (ec)
-        return std::unexpected(io_error(path.string(), ec));
-    return new_mtime;
+    const auto written = stat_file(*target);
+    if (!written)
+        return std::unexpected(io_error(path.string(), written.error()));
+    return written->mtime;
 }
 
 std::expected<NotePath, Error> NoteStore::move(const NotePath& from, const NotePath& to) {
