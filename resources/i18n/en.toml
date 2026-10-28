@@ -98,3 +98,12 @@ Use 'note -- ls' to add a note whose text is a command name.
 
 Exit codes: 0 ok, 1 user error, 2 usage error, 3 I/O or internal error, 4 sync error.
 """
+
+[sync]
+commit_message = "Sync from {host} at {time} (changed files: {count})"
+not_initialized = "Sync is not set up: '{path}' is not a Git repository with an 'origin' remote"
+busy = "Another sync is already running (process {pid}); try again later"
+diverged_not_supported = "Local and remote changes on branch '{branch}' have diverged and cannot be merged yet; nothing was changed"
+push_rejected = "The remote rejected the update of branch '{branch}': {detail}"
+branch_mismatch = "The notes repository is on branch '{current}', but sync uses branch '{branch}'"
+git_failed = "Git operation failed: {detail}"

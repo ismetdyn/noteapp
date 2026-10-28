@@ -98,3 +98,12 @@ Komut adıyla aynı metni not etmek için: 'note -- ls'.
 
 Çıkış kodları: 0 başarı, 1 kullanıcı kaynaklı, 2 kullanım hatası, 3 G/Ç veya iç hata, 4 senkron hatası.
 """
+
+[sync]
+commit_message = "{host} cihazından senkron, {time} (değişen dosya: {count})"
+not_initialized = "Senkron kurulmamış: '{path}', 'origin' uzak deposu tanımlı bir Git deposu değil"
+busy = "Başka bir senkron zaten çalışıyor (süreç {pid}); daha sonra yeniden deneyin"
+diverged_not_supported = "'{branch}' dalında yerel ve uzak değişiklikler ayrıştı, henüz birleştirilemiyor; hiçbir şey değiştirilmedi"
+push_rejected = "Uzak depo '{branch}' dalının güncellenmesini reddetti: {detail}"
+branch_mismatch = "Not deposu '{current}' dalında, ancak senkron '{branch}' dalını kullanıyor"
+git_failed = "Git işlemi başarısız: {detail}"

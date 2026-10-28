@@ -212,7 +212,7 @@
 ## Faz 4 — Senkron
 
 ### T24: 🔴 Temel döngü + kilit + durum
-- [ ] **Kabul:** commit (ekleme/silme dahil, yazar zinciri) → fetch → güncel/fast-forward → push · SPEC-sync kabul 1 ve 6 ·
+- [x] **Kabul:** commit (ekleme/silme dahil, yazar zinciri) → fetch → güncel/fast-forward → push · SPEC-sync kabul 1 ve 6 ·
   `sync-status.toml` yazılır.
 - **Doğrulama:** `B && T(sync)`, `F` · **Bağımlılık:** T03, T14 · **Dosyalar:** `src/sync/{sync_service.hpp,sync_service.cpp,lock.hpp,lock.cpp}`,
   `tests/sync/sync_basic_test.cpp` · **Boyut:** M

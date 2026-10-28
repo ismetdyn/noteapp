@@ -14,10 +14,19 @@ namespace noteapp::sync {
 enum class Auth { Https, Ssh };                         // remote şemasından türetilir
 struct SyncResult { int committed; int pulled; bool pushed; std::vector<core::NotePath> conflict_copies; };
 struct SyncStatus { std::optional<std::chrono::system_clock::time_point> last_success; std::optional<core::Error> last_error; };
+struct Author { std::string name; std::string email; };
+Author resolve_author(const core::SyncConfig&);         // config → ~/.gitconfig → XDG git config → kullanıcı@makine
+// Döngü 3–5'i "sync.push_rejected" dönerse bir kez daha koşar (testte adım enjekte edilir).
+std::expected<bool, core::Error> retry_rejected_push(const std::function<std::expected<bool, core::Error>()>& exchange);
+
+class SyncLock {                                        // <durum>/sync.lock; RAII, yalnız kendi kilidini siler
+public:
+    static std::expected<SyncLock, core::Error> acquire(const std::filesystem::path&);   // canlı+taze → sync.busy
+};
 
 class SyncService {
 public:
-    SyncService(const core::Config&, core::NoteStore&);
+    explicit SyncService(const core::Config&);
     std::expected<void, core::Error> enable(std::string_view remote);   // ilk kurulum (aşağıda)
     std::expected<SyncResult, core::Error> sync_now();                 // tek tam döngü
     SyncStatus status() const;                                          // <durum>/sync-status.toml
