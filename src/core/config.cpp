@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <climits>
 #include <cstdint>
@@ -143,11 +144,32 @@ private:
     std::vector<std::string_view> known_;
 };
 
+// https://kullanıcı:token@host/… token'ı düz metin config.toml'a (ve senkronla başka makinelere) taşır; token
+// kasada durur (`note sync login`). http(s) URL'sinde "://"dan sonraki yetki kısmında '@' varsa kimlik var
+// sayılır. SSH'nin kullanıcı adı (git@host:…, ssh://git@host/…) sır değildir. core sync'e bağımlı olamaz:
+// sync::parse_remote'un küçük, yerel eşi.
+bool remote_has_credentials(std::string_view remote) {
+    const std::size_t scheme_end = remote.find("://");
+    if (scheme_end == std::string_view::npos)
+        return false;
+    std::string scheme(remote.substr(0, scheme_end));
+    std::ranges::transform(scheme, scheme.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (scheme != "http" && scheme != "https")
+        return false;
+    const std::string_view rest = remote.substr(scheme_end + 3);
+    return rest.substr(0, rest.find_first_of("/?#")).find('@') != std::string_view::npos;
+}
+
 void apply_sync(Section& s, SyncConfig& sync) {
     if (auto v = s.boolean("enabled"))
         sync.enabled = *v;
-    if (auto v = s.string("remote"))
-        sync.remote = std::move(*v);
+    if (auto v = s.string("remote")) {
+        if (remote_has_credentials(*v))
+            s.invalid("remote", "remote_has_credentials");  // değer hata/loga yazılmaz: sır taşır
+        else
+            sync.remote = std::move(*v);
+    }
     if (auto v = s.string("branch")) {
         if (v->empty())
             s.invalid("branch", "must_not_be_empty");

@@ -49,6 +49,7 @@ must_be_type_name = "must be a non-empty name without dots"
 must_be_table = "must be a table"
 must_not_be_empty = "must not be empty"
 must_be_language = "must be one of auto, tr, en"
+remote_has_credentials = "must not contain a user name or token; store the token with 'note sync login'"
 
 [config]
 unknown_key = "Unknown setting '{key}' ignored"

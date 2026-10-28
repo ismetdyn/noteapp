@@ -49,6 +49,7 @@ must_be_type_name = "noktasız, boş olmayan bir ad olmalı"
 must_be_table = "bir tablo olmalı"
 must_not_be_empty = "boş olmamalı"
 must_be_language = "auto, tr veya en olmalı"
+remote_has_credentials = "kullanıcı adı ya da token içermemeli; token'ı 'note sync login' ile kaydedin"
 
 [config]
 unknown_key = "Bilinmeyen ayar '{key}' yok sayıldı"

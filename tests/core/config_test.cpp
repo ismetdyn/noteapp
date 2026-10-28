@@ -376,6 +376,39 @@ TEST_CASE("set_config_value rejects bad values and unknown keys without touching
     CHECK(c == original);
 }
 
+// https://kullanıcı:token@… token'ı düz metin config.toml'a yazardı; token kasada durur (note sync login).
+TEST_CASE("sync.remote with credentials in an http(s) URL is refused and the secret is never echoed") {
+    const Config original = parse_config("").config;
+    Config c = original;
+    for (const std::string bad :
+         {"https://user:s3cret@github.com/u/notes.git", "http://s3cret@host/notes.git",
+          "HTTPS://u:s3cret@host", "https://s3cret@host?x=1"}) {
+        CAPTURE(bad);
+        const auto set = set_config_value(c, "sync.remote", bad);
+        REQUIRE_FALSE(set);
+        CHECK(set.error().code == Error::Code::ConfigInvalid);
+        CHECK(arg_of(set.error(), "reason") == "remote_has_credentials");
+        for (const auto& [key, value] : set.error().args)
+            CHECK(value.find("s3cret") == std::string::npos);
+        CHECK(c == original);
+    }
+
+    const LoadedConfig loaded = parse_config("[sync]\nremote = \"https://u:s3cret@host/r.git\"\n");
+    CHECK(loaded.config.sync.remote == original.sync.remote);
+    CHECK(has_warning_about(loaded, "sync.remote", "config.invalid_value"));
+    for (const Error& warning : loaded.warnings)
+        for (const auto& [key, value] : warning.args)
+            CHECK(value.find("s3cret") == std::string::npos);
+
+    // SSH kullanıcı adı sır değildir; yoldaki '@' kullanıcı bilgisi değildir.
+    for (const std::string ok : {"git@github.com:u/notes.git", "ssh://git@host/notes.git",
+                                 "https://github.com/u/n.git", "https://host/path/with@sign.git"}) {
+        CAPTURE(ok);
+        CHECK(set_config_value(c, "sync.remote", ok));
+        CHECK(c.sync.remote == ok);
+    }
+}
+
 TEST_CASE("config_entries lists the user-facing keys with dotted sync keys and joined lists") {
     const auto entries = config_entries(parse_config("").config);
     const std::map<std::string, std::string> by_key(entries.begin(), entries.end());

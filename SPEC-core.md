@@ -151,6 +151,9 @@ sync_timeout_seconds = 120     # AutoSync bir `note sync --background` sürecini
   set`) kaybolmaz, dokunulmamış varsayılan dosyaya gömülmez (T36).
 - `~` ve ortam değişkenleri `notes_dir`'de genişletilir. Kaydetme atomiktir. Yorumlar korunmaz (bilinen sınır).
 - Kimlik doğrulama yöntemi `remote` şemasından türetilir; ayrı anahtar yok.
+- `sync.remote` http(s) URL'sinde kullanıcı bilgisi (`https://kullanıcı:token@host/…`, `://`dan sonraki ilk `/ ? #`'ten
+  önce `@`) geçersizdir → `reason = remote_has_credentials` (dosyada: varsayılan + uyarı; `set_config_value`: ret).
+  Değer hata/uyarıya yazılmaz. Neden: token düz metin `config.toml`'a girerdi; token kasada durur (T36).
 
 ### i18n
 - Kataloglar `resources/i18n/{en,tr}.toml` (düz anahtarlar, `{ad}` yer tutucuları), derlemede gömülür.
