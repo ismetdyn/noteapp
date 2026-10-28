@@ -188,8 +188,8 @@ açmak `enable`'ı çağırır (repo varsa no-op).
      durum); **işçi iş parçacığından** çağrılır, ön yüz kendi UI iş parçacığına aktarır. Debounce: her
      `notify_changed` zamanı "son bildirim + idle"a iter, sıradaki "hemen" isteğini geciktirmez. `stop(t)`: yalnız
      son senkron başladıktan sonra değişiklik varsa son bir senkron; toplam `t`'yi aşarsa süren süreç
-     sonlandırılır; yıkıcı = `stop(0)`. Sonlandırma yalnız doğrudan çocuğu öldürür (ssh torunu kalabilir;
-     gerekirse Windows'ta job object, POSIX'te süreç grubu).
+     sonlandırılır; yıkıcı = `stop(0)`. Sonlandırma tüm süreç ağacını öldürür (`core::terminate`: Windows'ta
+     iş nesnesi, POSIX'te süreç grubu), böylece asılı kalan ssh torunu yetim kalmaz (T27b).
    - **Bayat kilit kurtarma:** `sync_now`/`enable` bayat `sync.lock`'u devraldıysa (`SyncLock::took_over`)
      `.git/*.lock` ve `.git/refs/**/*.lock` **yaşına bakılmadan** silinir. Yalnız "bayat yaştan eski" libgit2
      kilitleri silinseydi zaman aşımıyla öldürülen sürecin saniyelik `index.lock`'u hiç temizlenmezdi: sonraki

@@ -5,6 +5,8 @@
 //   FAKE_EDITOR_STDOUT    -> bu metin + satır sonu stdout'a ve stderr'e yazılır (çıktı devralma testleri)
 //   FAKE_EDITOR_PID_OUT   -> sürecin PID'i bu dosyaya yazılır (sonlandırma testleri)
 //   FAKE_EDITOR_SLEEP_MS  -> çıkmadan önce bu kadar milisaniye uyur (zaman aşımı testleri)
+//   FAKE_EDITOR_GRANDCHILD_PID_OUT -> kendini uzun uyuyan bir torun olarak başlatır, torunun PID'i bu
+//                            dosyaya yazılır (süreç ağacı sonlandırma testleri; ssh torununu taklit eder)
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -21,7 +23,9 @@
 // windows.h'den sonra gelmeli
 #include <shellapi.h>
 #else
+#include <spawn.h>
 #include <unistd.h>
+extern char** environ;
 #endif
 
 namespace fs = std::filesystem;
@@ -71,6 +75,32 @@ std::vector<std::string> args([[maybe_unused]] int argc, [[maybe_unused]] char**
     return out;
 }
 
+// Kendini torun olarak yeniden başlatır (uzun uyur, PID'ini `pid_out`'a yazar). Torun bir daha torun
+// başlatmasın diye değişken çocuğa geçmeden silinir.
+void spawn_grandchild(const std::string& pid_out, const std::string& self) {
+#ifdef _WIN32
+    _putenv_s("FAKE_EDITOR_GRANDCHILD_PID_OUT", "");
+    _putenv_s("FAKE_EDITOR_PID_OUT", pid_out.c_str());
+    _putenv_s("FAKE_EDITOR_SLEEP_MS", "600000");
+    std::wstring command_line = L"\"" + fs::path(std::u8string(self.begin(), self.end())).wstring() + L"\"";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION info{};
+    if (CreateProcessW(nullptr, command_line.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup,
+                       &info)) {
+        CloseHandle(info.hThread);
+        CloseHandle(info.hProcess);
+    }
+#else
+    unsetenv("FAKE_EDITOR_GRANDCHILD_PID_OUT");
+    setenv("FAKE_EDITOR_PID_OUT", pid_out.c_str(), 1);
+    setenv("FAKE_EDITOR_SLEEP_MS", "600000", 1);
+    char* child_argv[] = {const_cast<char*>(self.c_str()), nullptr};
+    pid_t pid = 0;
+    posix_spawn(&pid, self.c_str(), nullptr, nullptr, child_argv, environ);
+#endif
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -97,6 +127,8 @@ int main(int argc, char** argv) {
 #endif
         std::ofstream(path_from_utf8(*pid_path), std::ios::binary) << pid;
     }
+    if (const auto grandchild_out = env("FAKE_EDITOR_GRANDCHILD_PID_OUT"))
+        spawn_grandchild(*grandchild_out, received.front());
     if (const auto sleep_ms = env("FAKE_EDITOR_SLEEP_MS"))
         std::this_thread::sleep_for(std::chrono::milliseconds(std::atoll(sleep_ms->c_str())));
     if (const auto code = env("FAKE_EDITOR_EXIT"))

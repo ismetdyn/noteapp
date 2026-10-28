@@ -47,9 +47,9 @@ std::expected<ProcessHandle, Error> spawn_detached(const std::vector<std::string
 std::expected<std::optional<int>, Error> wait_with_timeout(ProcessHandle& process,
                                                            std::chrono::milliseconds timeout);
 
-// Zorla sonlandırır (TerminateProcess / SIGKILL) ve bitmesini bekler; bitmiş süreçte etkisiz.
-// ponytail: yalnız doğrudan çocuk ölür; onun başlattığı süreçler (ör. ssh) kalabilir — gerekirse
-// Windows'ta iş nesnesi (job object), POSIX'te süreç grubu öldürme.
+// Zorla sonlandırır ve bitmesini bekler; bitmiş süreçte etkisiz. Çocuğun tüm süreç ağacı ölür
+// (torun ssh dahil): Windows'ta iş nesnesi (TerminateJobObject), POSIX'te süreç grubu (kill(-pid, SIGKILL)).
+// Windows'ta çocuk bir işe atanamazsa (uyarı loglanır) yalnız doğrudan çocuk öldürülür.
 void terminate(ProcessHandle& process);
 
 // spawn_detached'in döndürdüğü süreç. Taşınabilir; yıkıcı yalnız tutamacı kapatır, süreci
@@ -65,7 +65,7 @@ public:
     long long pid() const { return pid_; }
 
 private:
-    ProcessHandle(long long pid, void* handle) : pid_(pid), handle_(handle) {}
+    ProcessHandle(long long pid, void* handle, void* job) : pid_(pid), handle_(handle), job_(job) {}
     friend std::expected<ProcessHandle, Error> spawn_detached(const std::vector<std::string>&,
                                                               const EnvOverrides&);
     friend std::expected<std::optional<int>, Error> wait_with_timeout(ProcessHandle&,
@@ -74,6 +74,7 @@ private:
 
     long long pid_ = 0;
     void* handle_ = nullptr;        // Windows: süreç HANDLE'ı
+    void* job_ = nullptr;           // Windows: süreç ağacını toplayan iş nesnesi (atanamadıysa null)
     std::optional<int> exit_code_;  // bitti ve (POSIX'te) toplandı; PID artık başkasının olabilir
 };
 

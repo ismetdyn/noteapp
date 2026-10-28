@@ -271,6 +271,8 @@
   `tests/sync/{auto_sync_test.cpp,recovery_test.cpp}` · **Boyut:** M
 - **Not (T27):** SPEC-cli kabul 8'in gerçek kasa kısmı `doctest::skip()` (elle koşuldu, geçti); otomatik testler
   stdin/boş token/host yolunu sınar. Kararlar: SPEC-sync karar 9.
+- [x] **T27b:** zaman aşımında süreç ağacını sonlandır (Windows job object, POSIX süreç grubu) · `src/core/process.{hpp,cpp}`,
+  `tests/core/process_test.cpp`, `tests/support/fake_editor.cpp`.
 
 ### T28: TUI senkron entegrasyonu
 - [ ] **Kabul:** açılışta/kayıtta/çıkışta `AutoSync` · durum çubuğu (kapalı/✓/⟳/⚠) · Ctrl-S · ayarlarda token alanı

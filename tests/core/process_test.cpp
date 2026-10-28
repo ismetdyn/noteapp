@@ -10,9 +10,13 @@
 #ifdef _WIN32
 #include <io.h>
 #include <sys/stat.h>
+#include <windows.h>
 #else
+#include <cerrno>
+#include <csignal>
 #include <unistd.h>
 #endif
+#include <thread>
 
 using namespace noteapp::core;
 using namespace noteapp::test;
@@ -56,6 +60,31 @@ std::string captured_output(const std::function<void()>& action) {
     return slurp(file);
 }
 
+// PID hâlâ çalışan bir süreç mi? (Windows: çıkış kodu STILL_ACTIVE; POSIX: kill(pid, 0).)
+bool process_alive(long long pid) {
+#ifdef _WIN32
+    HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+    if (handle == nullptr)
+        return false;
+    DWORD code = 0;
+    const bool alive = GetExitCodeProcess(handle, &code) && code == STILL_ACTIVE;
+    CloseHandle(handle);
+    return alive;
+#else
+    return kill(static_cast<pid_t>(pid), 0) == 0 || errno != ESRCH;
+#endif
+}
+
+bool wait_until(const std::function<bool()>& condition, std::chrono::milliseconds limit) {
+    const auto deadline = std::chrono::steady_clock::now() + limit;
+    while (!condition()) {
+        if (std::chrono::steady_clock::now() >= deadline)
+            return false;
+        std::this_thread::sleep_for(20ms);
+    }
+    return true;
+}
+
 }  // namespace
 
 TEST_CASE("spawn_detached does not wait; wait_with_timeout returns the exit code once it ends") {
@@ -81,6 +110,40 @@ TEST_CASE("wait_with_timeout reports a still running child; terminate ends it at
     REQUIRE(ended.has_value());
     CHECK(ended->has_value());
     CHECK(std::chrono::steady_clock::now() - start < 5s);
+}
+
+TEST_CASE("terminate kills the whole process tree, grandchild included") {
+    const TempDir dir;
+    const fs::path pid_file = dir.path() / "grandchild.pid";
+    auto child = spawn_detached({kFakeEditor}, {{"FAKE_EDITOR_SLEEP_MS", "600000"},
+                                                {"FAKE_EDITOR_GRANDCHILD_PID_OUT", utf8(pid_file)}});
+    REQUIRE(child.has_value());
+    long long grandchild = 0;
+    REQUIRE(wait_until(
+        [&] {
+            if (!fs::exists(pid_file))
+                return false;
+            grandchild = std::atoll(slurp(pid_file).c_str());
+            return grandchild > 0;
+        },
+        10s));
+    REQUIRE(process_alive(grandchild));
+
+    terminate(*child);
+    CHECK(wait_until([&] { return !process_alive(child->pid()); }, 2s));
+    const bool grandchild_gone = wait_until([&] { return !process_alive(grandchild); }, 2s);
+    CHECK(grandchild_gone);
+    // Başarısızlıkta torun 10 dakika uyuyup kalmasın.
+    if (!grandchild_gone) {
+#ifdef _WIN32
+        if (HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(grandchild))) {
+            TerminateProcess(h, 1);
+            CloseHandle(h);
+        }
+#else
+        kill(static_cast<pid_t>(grandchild), SIGKILL);
+#endif
+    }
 }
 
 TEST_CASE("spawn_detached reports a missing program as NotFound") {

@@ -1,5 +1,7 @@
 #include "core/process.hpp"
 
+#include "core/log.hpp"
+
 #include <algorithm>
 #include <cerrno>
 #include <cstdlib>
@@ -191,6 +193,21 @@ HANDLE open_null_device() {
     SECURITY_ATTRIBUTES inheritable{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
     return CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable,
                        OPEN_EXISTING, 0, nullptr);
+}
+
+// Yalnız çocuğun ağacını toplayan, adsız iş nesnesi; son tutamaç kapanırsa (ör. uygulama çökerse)
+// üyeleri öldürür. Başarısızlıkta nullptr.
+HANDLE create_kill_on_close_job() {
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    if (job == nullptr)
+        return nullptr;
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+        CloseHandle(job);
+        return nullptr;
+    }
+    return job;
 }
 
 #else
@@ -440,7 +457,7 @@ std::expected<ProcessHandle, Error> spawn_detached(const std::vector<std::string
     if (ok)
         ok = CreateProcessW(command->application.c_str(), command_line.data(), nullptr, nullptr, TRUE,
                             CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | DETACHED_PROCESS |
-                                CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+                                CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_SUSPENDED,
                             env_overrides.empty() ? nullptr : environment.data(), nullptr,
                             &startup.StartupInfo, &info);
     const DWORD spawn_error = GetLastError();
@@ -449,8 +466,19 @@ std::expected<ProcessHandle, Error> spawn_detached(const std::vector<std::string
     CloseHandle(null_device);
     if (!ok)
         return std::unexpected(spawn_failed(program_name, std::to_string(spawn_error)));
+    // Çocuk askıda başlar: işe atanmadan tek komut çalışmasın ki torunlar da işe katılsın. Çağıran zaten
+    // bir işin içindeyse (CI/IDE) iç içe iş Windows 8+'ta çalışır; olmazsa doğrudan çocuğa düşülür.
+    HANDLE job = create_kill_on_close_job();
+    if (job == nullptr || !AssignProcessToJobObject(job, info.hProcess)) {
+        log_warn("process: job object unavailable (error " + std::to_string(GetLastError()) +
+                 "); terminate will only kill the direct child");
+        if (job != nullptr)
+            CloseHandle(job);
+        job = nullptr;
+    }
+    ResumeThread(info.hThread);
     CloseHandle(info.hThread);
-    return ProcessHandle(info.dwProcessId, info.hProcess);
+    return ProcessHandle(info.dwProcessId, info.hProcess, job);
 #else
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
@@ -471,7 +499,7 @@ std::expected<ProcessHandle, Error> spawn_detached(const std::vector<std::string
     posix_spawn_file_actions_destroy(&actions);
     if (!pid)
         return std::unexpected(pid.error());
-    return ProcessHandle(*pid, nullptr);
+    return ProcessHandle(*pid, nullptr, nullptr);
 #endif
 }
 
@@ -514,13 +542,17 @@ void terminate(ProcessHandle& process) {
         return;
 #ifdef _WIN32
     const auto handle = static_cast<HANDLE>(process.handle_);
-    TerminateProcess(handle, 1);  // zaten bittiyse başarısız olur; bekleme yine de kodu toplar
+    // Zaten bittiyse başarısız olur; bekleme yine de kodu toplar.
+    if (process.job_ == nullptr || !TerminateJobObject(static_cast<HANDLE>(process.job_), 1))
+        TerminateProcess(handle, 1);
     WaitForSingleObject(handle, INFINITE);
     DWORD exit_code = 1;
     GetExitCodeProcess(handle, &exit_code);
     process.exit_code_ = static_cast<int>(exit_code);
 #else
-    kill(static_cast<pid_t>(process.pid_), SIGKILL);
+    // Çocuk SETSID/SETPGROUP ile kendi grubunun lideri: -pid torunları da hedefler.
+    kill(-static_cast<pid_t>(process.pid_), SIGKILL);
+    kill(static_cast<pid_t>(process.pid_), SIGKILL);  // grup kurulamadıysa en azından çocuk
     int status = 0;
     while (waitpid(static_cast<pid_t>(process.pid_), &status, 0) < 0 && errno == EINTR) {
     }
@@ -529,13 +561,15 @@ void terminate(ProcessHandle& process) {
 }
 
 ProcessHandle::ProcessHandle(ProcessHandle&& other) noexcept
-    : pid_(other.pid_), handle_(std::exchange(other.handle_, nullptr)), exit_code_(other.exit_code_) {}
+    : pid_(other.pid_), handle_(std::exchange(other.handle_, nullptr)),
+      job_(std::exchange(other.job_, nullptr)), exit_code_(other.exit_code_) {}
 
 ProcessHandle& ProcessHandle::operator=(ProcessHandle&& other) noexcept {
     if (this != &other) {
         ProcessHandle old(std::move(*this));  // eski tutamaç yıkıcısında kapanır
         pid_ = other.pid_;
         handle_ = std::exchange(other.handle_, nullptr);
+        job_ = std::exchange(other.job_, nullptr);
         exit_code_ = other.exit_code_;
     }
     return *this;
@@ -543,6 +577,14 @@ ProcessHandle& ProcessHandle::operator=(ProcessHandle&& other) noexcept {
 
 ProcessHandle::~ProcessHandle() {
 #ifdef _WIN32
+    if (job_ != nullptr) {
+        // Tutamacı bırakmak ayrık süreci öldürmemeli (CLI arka plan senkronunu başlatıp çıkar): kapatmadan
+        // önce "kapanınca öldür" bayrağı kaldırılır; ağacı yalnız terminate() öldürür.
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+        SetInformationJobObject(static_cast<HANDLE>(job_), JobObjectExtendedLimitInformation, &limits,
+                                sizeof(limits));
+        CloseHandle(static_cast<HANDLE>(job_));
+    }
     if (handle_ != nullptr)
         CloseHandle(static_cast<HANDLE>(handle_));
 #endif
