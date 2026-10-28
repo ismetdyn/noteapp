@@ -14,3 +14,5 @@ add_executable(notes
     main.cpp)
 target_link_libraries(notes PRIVATE noteapp_tui ftxui::component)
 noteapp_target_defaults(notes)
+
+install(TARGETS notes RUNTIME DESTINATION bin)

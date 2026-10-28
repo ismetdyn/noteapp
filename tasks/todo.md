@@ -328,7 +328,7 @@
 ## Faz 6 — Bitiriş
 
 ### T34: Kurulum + README
-- [ ] **Kabul:** `cmake --install` üç ikiliyi kurar · Windows'ta `windeployqt` adımı (kurulum hedefinde) · README: derleme
+- [x] **Kabul:** `cmake --install` üç ikiliyi kurar · Windows'ta `windeployqt` adımı (kurulum hedefinde) · README: derleme
   (Windows/Fedora), `CMakeUserPresets.json` örneği, PATH kurulumu, kullanım, senkron kurulumu (PAT/SSH).
 - **Doğrulama:** temiz prefix'e kurulum + `note --version`, `notes-gui --export-pdf` · **Bağımlılık:** T33 ·
   **Dosyalar:** `CMakeLists.txt`, `src/{cli,tui,gui}/CMakeLists.txt`, `README.md` · **Boyut:** S

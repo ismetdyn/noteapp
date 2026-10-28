@@ -10,3 +10,5 @@ if(WIN32)
     target_link_libraries(note PRIVATE shell32)  # CommandLineToArgvW
 endif()
 noteapp_target_defaults(note)
+
+install(TARGETS note RUNTIME DESTINATION bin)
