@@ -75,6 +75,29 @@ discard_no = "Vazgeç"
 discard_yes = "At"
 saved = "Kaydedildi: {path}"
 temp_kept = "Yazdığın metin burada duruyor: {path}"
+move_title = "Notu taşı"
+moved = "Taşındı: {from} -> {to}"
+delete_title = "Notu sil"
+confirm_delete = "'{path}' kalıcı olarak silinsin mi?"
+delete_yes = "Sil"
+deleted = "Silindi: {path}"
+help_title = "Tuşlar"
+help_hints = "↑/↓ PgUp/PgDn kaydır  Esc/F1/q kapat"
+help_body = """
+yazı          sorguya göre notları süzer
+↑ ↓  ^P ^N    listede gezinir
+PgUp PgDn     önizlemeyi kaydırır
+Tab           ad / içerik aramasını değiştirir
+Enter         notu açar (eşleşme yoksa yeni not)
+^O            boş yeni not
+^R            taşı / yeniden adlandır / tip değiştir
+^D            sil (önce sorar)
+^S            şimdi senkronla
+F2            ayarlar
+F1            bu yardım
+Esc           sorguyu temizler, boşsa çıkar
+^C            çık
+"""
 
 [gui]
 tab_notes = "Notlar"

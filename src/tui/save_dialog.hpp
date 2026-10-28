@@ -25,6 +25,10 @@ struct SaveDialogInit {
     detect::Suggestion suggestion;
     std::size_t slug_max_length = core::kDefaultSlugMaxLength;
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+    // Taşıma kipi (Ctrl-R): ad/tip slug ve öneriden değil mevcut notun kendisinden gelir (move_dialog_init).
+    bool move = false;
+    std::string name;
+    std::string type;
 };
 
 // Kaydet diyaloğunun onayladığı değerler; NoteStore::create'e (yeni not) ya da move'a (T22) girdi olur.
@@ -66,6 +70,9 @@ public:
     // Onay penceresinde "At" seçili mi (varsayılan: hayır = "Vazgeç").
     bool discard_selected() const { return discard_selected_; }
     const SaveRequest& request() const { return request_; }
+    bool is_move() const { return init_.move; }
+    // Başlık katalog anahtarı: kaydetme / taşıma.
+    std::string title() const;
 
 private:
     Outcome handle_confirm(Key key);
@@ -90,6 +97,15 @@ private:
     bool discard_selected_ = false;
     SaveRequest request_;
 };
+
+// Mevcut notu taşıma diyaloğu girdisi: ad = dosya adı (uzantısız), klasör = üst klasör, tip = uzantı.
+SaveDialogInit move_dialog_init(const core::NotePath& current, std::vector<std::string> folders,
+                                std::vector<std::string> types, std::size_t slug_max_length);
+
+// Taşıma/yeniden adlandırma/tip değiştirme. Hedef yol değişmediyse hiçbir şey yapmaz (kaynağı döner);
+// hedef varsa NoteStore::move AlreadyExists ile reddeder (ezme yok).
+std::expected<core::NotePath, core::Error> move_note(core::NoteStore& store, const core::NotePath& from,
+                                                     const SaveRequest& request);
 
 // Klasör ön değeri: seçili notun klasörü varsa o, yoksa config.default_folder.
 std::string initial_folder(const core::NotePath* selected, std::string_view default_folder);

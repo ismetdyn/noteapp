@@ -1,6 +1,7 @@
 #include "tui/view.hpp"
 
 #include "core/i18n.hpp"
+#include "tui/modals.hpp"
 
 #include <algorithm>
 #include <string_view>
@@ -174,14 +175,22 @@ ftxui::Element discard_choice(const std::string& label, bool selected) {
     return selected ? button | inverted : button;
 }
 
+// Onay penceresinin gövdesi: soru + [Vazgeç] [Evet] düğmeleri. Silme ve not atma onayı aynı görünümü
+// paylaşır; "Vazgeç" (tui.discard_no) her ikisinde de varsayılan.
+ftxui::Elements confirm_body(const std::string& question, const std::string& yes_label, bool yes_selected) {
+    using namespace ftxui;
+    return {paragraph(question) | bold, text(""),
+            hbox({discard_choice(core::tr("tui.discard_no"), !yes_selected), text("   "),
+                  discard_choice(yes_label, yes_selected)}) |
+                center};
+}
+
 ftxui::Element save_dialog_box(const SaveDialogState& dialog) {
     using namespace ftxui;
     Elements body;
     if (dialog.confirming_discard()) {
-        body = {text(core::tr("tui.confirm_discard")) | bold, text(""),
-                hbox({discard_choice(core::tr("tui.discard_no"), !dialog.discard_selected()), text("   "),
-                      discard_choice(core::tr("tui.discard_yes"), dialog.discard_selected())}) |
-                    center};
+        body = confirm_body(core::tr("tui.confirm_discard"), core::tr("tui.discard_yes"),
+                            dialog.discard_selected());
     } else {
         using Field = SaveDialogState::Field;
         body.push_back(
@@ -205,7 +214,30 @@ ftxui::Element save_dialog_box(const SaveDialogState& dialog) {
         body.push_back(text(""));
         body.push_back(text(core::tr("tui.save_hints")) | dim);
     }
-    return window(text(" " + core::tr("tui.save_title") + " ") | bold, vbox(std::move(body))) |
+    return window(text(" " + dialog.title() + " ") | bold, vbox(std::move(body))) |
+           size(WIDTH, EQUAL, kDialogWidth) | clear_under;
+}
+
+ftxui::Element confirm_box(const ConfirmState& confirm) {
+    using namespace ftxui;
+    return window(text(" " + core::tr("tui.delete_title") + " ") | bold,
+                  vbox(confirm_body(confirm.message(), core::tr("tui.delete_yes"), confirm.yes_selected()))) |
+           size(WIDTH, EQUAL, kDialogWidth) | clear_under;
+}
+
+// Yardım: katalogdaki satırlar kaydırılır; görünür satır sayısı pencere yüksekliğinden (kenarlık 2 + boşluk
+// ve ipucu 2) çıkar, böylece 60x15'te de ipucu satırı görünür kalır.
+ftxui::Element help_box(const HelpState& help, int window_height) {
+    using namespace ftxui;
+    const std::vector<std::string> lines = help_lines();
+    const auto visible = static_cast<std::size_t>(std::max(window_height - 4, 1));
+    const std::size_t first = std::min(help.scroll(), lines.size() > visible ? lines.size() - visible : 0);
+    Elements body;
+    for (std::size_t i = first; i < lines.size() && i < first + visible; ++i)
+        body.push_back(text(lines[i]));
+    body.push_back(text(""));
+    body.push_back(text(core::tr("tui.help_hints")) | dim);
+    return window(text(" " + core::tr("tui.help_title") + " ") | bold, vbox(std::move(body))) |
            size(WIDTH, EQUAL, kDialogWidth) | clear_under;
 }
 
@@ -247,7 +279,8 @@ const Preview& PreviewCache::get(const core::NoteStore& store, const Row* row) {
 }
 
 ftxui::Element render(const TuiState& state, const Preview& preview, const StatusLine& status,
-                      ftxui::Dimensions window, const SaveDialogState* dialog) {
+                      ftxui::Dimensions window, const SaveDialogState* dialog, const ConfirmState* confirm,
+                      const HelpState* help) {
     using namespace ftxui;
     if (window.dimx < kMinWidth || window.dimy < kMinHeight)
         return text(core::tr("tui.too_small")) | center | flex;
@@ -266,9 +299,16 @@ ftxui::Element render(const TuiState& state, const Preview& preview, const Statu
                              bottom,
                          }) |
                          border;
-    if (!dialog)
+    Element modal;
+    if (help)
+        modal = help_box(*help, window.dimy);
+    else if (confirm)
+        modal = confirm_box(*confirm);
+    else if (dialog)
+        modal = save_dialog_box(*dialog);
+    else
         return main;
-    return dbox({main, save_dialog_box(*dialog) | center});
+    return dbox({main, modal | center});
 }
 
 }  // namespace noteapp::tui

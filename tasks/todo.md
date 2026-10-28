@@ -195,7 +195,7 @@
   **Dosyalar:** `src/tui/{save_dialog.hpp,save_dialog.cpp,view.cpp,tui_state.cpp}`, `tests/tui/save_dialog_test.cpp` · **Boyut:** M
 
 ### T22: Taşı/tip değiştir/sil + yardım
-- [ ] **Kabul:** Ctrl-R aynı diyalogla `move` (hedef varsa hata) · Ctrl-D onaylı, varsayılan "Vazgeç" · F1 yardım ekranı.
+- [x] **Kabul:** Ctrl-R aynı diyalogla `move` (hedef varsa hata) · Ctrl-D onaylı, varsayılan "Vazgeç" · F1 yardım ekranı.
 - **Doğrulama:** `B && T(tui)` · **Bağımlılık:** T21 · **Dosyalar:** `src/tui/{view.cpp,tui_state.cpp,confirm_dialog.cpp}`,
   testler · **Boyut:** S
 

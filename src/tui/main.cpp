@@ -6,6 +6,7 @@
 #include "core/note_store.hpp"
 #include "detect/detect.hpp"
 #include "search/content_index.hpp"
+#include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
@@ -132,10 +133,16 @@ int main() {
     std::optional<tui::SaveDialogState> dialog;
     std::filesystem::path draft_file;
     std::string draft_content;
+    // Ctrl-D onayı, F1 yardımı ve Ctrl-R'nin hedef notu (taşıma/silme sırasında seçim değişmesin diye
+    // saklanır).
+    std::optional<tui::ConfirmState> confirm;
+    std::optional<tui::HelpState> help;
+    std::optional<core::NotePath> target;
 
     const auto view = ftxui::Renderer([&] {
         return tui::render(state, preview.get(store, state.selected_row()), status, ftxui::Terminal::Size(),
-                           dialog ? &*dialog : nullptr);
+                           dialog ? &*dialog : nullptr, confirm ? &*confirm : nullptr,
+                           help ? &*help : nullptr);
     });
 
     // Editör/kayıt sonrası liste, önizleme ve (kuruluysa) içerik indeksi güncellenir. `listing`'e dokunulmaz:
@@ -195,9 +202,51 @@ int main() {
                                       config.tuning.max_scan_bytes};
         draft_file = *temp;
         draft_content = content;
-        dialog.emplace(tui::SaveDialogInit{content, folder, store.folders(), config.types,
-                                           detect::suggest(content, options), config.tuning.slug_max_length,
-                                           std::chrono::system_clock::now()});
+        dialog.emplace(tui::SaveDialogInit{content,
+                                           folder,
+                                           store.folders(),
+                                           config.types,
+                                           detect::suggest(content, options),
+                                           config.tuning.slug_max_length,
+                                           std::chrono::system_clock::now(),
+                                           /*move=*/false,
+                                           {},
+                                           {}});
+    };
+
+    // Ctrl-R: aynı diyalog taşıma kipinde; editör ve geçici dosya yok.
+    const auto start_move = [&] {
+        const tui::Row* row = state.selected_row();
+        if (!row)
+            return;
+        target = row->path;
+        dialog.emplace(
+            tui::move_dialog_init(row->path, store.folders(), config.types, config.tuning.slug_max_length));
+    };
+
+    const auto start_delete = [&] {
+        const tui::Row* row = state.selected_row();
+        if (!row)
+            return;
+        target = row->path;
+        confirm.emplace(core::tr("tui.confirm_delete", {{"path", row->path.string()}}));
+    };
+
+    // Silme onaylandı: seçim komşu satırda kalır (silinen satırın yerine gelen).
+    const auto delete_target = [&] {
+        const std::size_t index = state.selected();
+        const auto removed = [&] {
+            const std::scoped_lock lock(list_mutex);  // yeniden tarama iş parçacığı aynı store'u listeler
+            return store.remove(*target);
+        }();
+        const std::string removed_path = target->string();
+        confirm.reset();
+        refresh_notes();
+        state.select_index(index);
+        if (removed)
+            status.message = core::tr("tui.deleted", {{"path", removed_path}});
+        else
+            show_error(removed.error());
     };
 
     // Diyalog açıkken tuş işleme. Kayıt hatasında geçici dosya durur, diyalog açık kalır (ad/klasör
@@ -207,12 +256,32 @@ int main() {
         case tui::SaveDialogState::Outcome::Editing:
             break;
         case tui::SaveDialogState::Outcome::Discard: {
-            std::error_code ec;
-            std::filesystem::remove(draft_file, ec);
+            if (!dialog->is_move()) {  // taşımada geçici dosya yok
+                std::error_code ec;
+                std::filesystem::remove(draft_file, ec);
+            }
             dialog.reset();
             break;
         }
         case tui::SaveDialogState::Outcome::Submit: {
+            if (dialog->is_move()) {
+                const auto moved = [&] {
+                    const std::scoped_lock lock(list_mutex);
+                    return tui::move_note(store, *target, dialog->request());
+                }();
+                if (!moved) {
+                    dialog->set_error(core::format_error(moved.error()));  // diyalog açık kalır
+                    break;
+                }
+                const core::NotePath from = *target;
+                dialog.reset();
+                if (*moved == from)
+                    break;  // değişiklik yok
+                refresh_notes();
+                state.reveal(*moved);
+                status.message = core::tr("tui.moved", {{"from", from.string()}, {"to", moved->string()}});
+                break;
+            }
             const auto saved = tui::save_new_note(store, draft_file, dialog->request(), draft_content);
             if (!saved) {
                 dialog->set_error(core::format_error(saved.error()) + "  " +
@@ -235,11 +304,25 @@ int main() {
         const auto key = to_key(event, text);
         if (!key)
             return false;
-        if (dialog) {
+        if (help || confirm || dialog) {
             // Çıkışta geçici dosya silinmez: yazılan metin state dizininde kalır.
             if (*key == Key::CtrlC)
                 app.Exit();
-            else
+            else if (help) {
+                if (!help->handle(*key, text))
+                    help.reset();
+            } else if (confirm) {
+                switch (confirm->handle(*key, text)) {
+                case tui::ConfirmState::Outcome::Pending:
+                    break;
+                case tui::ConfirmState::Outcome::Cancelled:
+                    confirm.reset();
+                    break;
+                case tui::ConfirmState::Outcome::Confirmed:
+                    delete_target();
+                    break;
+                }
+            } else
                 handle_dialog_key(*key, text);
             sync_preview();
             return true;
@@ -260,8 +343,17 @@ int main() {
         case tui::Intent::CreateFromQuery:
             new_note(state.query() + "\n");  // nvALT: sorgu yeni notun ilk satırı olur
             break;
+        case tui::Intent::MoveSelected:
+            start_move();
+            break;
+        case tui::Intent::DeleteSelected:
+            start_delete();
+            break;
+        case tui::Intent::ShowHelp:
+            help.emplace(tui::help_lines().size());
+            break;
         default:
-            // T21 (editör), T22 (diyalog/yardım), T23 (ayarlar), T28 (senkron) bağlanana dek yer tutucu.
+            // T23 (ayarlar), T28 (senkron) bağlanana dek yer tutucu.
             status.message = core::tr("tui.not_yet");
             break;
         }

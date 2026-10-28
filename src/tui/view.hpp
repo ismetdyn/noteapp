@@ -2,6 +2,7 @@
 
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
+#include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
 #include "tui/tui_state.hpp"
 
@@ -43,8 +44,10 @@ struct StatusLine {
 };
 
 // Tüm ekran: üst çubuk, sol liste, sağ önizleme, alt çubuk. `window` terminal boyutu (testte ekran boyutu).
-// `dialog` doluysa ana yerleşimin üstüne ortalanmış modal olarak çizilir.
+// Modal doluysa ana yerleşimin üstüne ortalanmış çizilir; birden çoğu doluysa öncelik yardım > onay >
+// diyalog.
 ftxui::Element render(const TuiState& state, const Preview& preview, const StatusLine& status,
-                      ftxui::Dimensions window, const SaveDialogState* dialog = nullptr);
+                      ftxui::Dimensions window, const SaveDialogState* dialog = nullptr,
+                      const ConfirmState* confirm = nullptr, const HelpState* help = nullptr);
 
 }  // namespace noteapp::tui

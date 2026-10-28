@@ -55,6 +55,11 @@ core::Error invalid(std::string_view reason, std::string_view value) {
                        {{"reason", std::string(reason)}, {"path", std::string(value)}}};
 }
 
+std::string to_utf8(const std::filesystem::path& p) {
+    const std::u8string u = p.u8string();
+    return std::string(u.begin(), u.end());
+}
+
 bool has_separator(std::string_view s) {
     return s.find_first_of("/\\") != std::string_view::npos;
 }
@@ -79,9 +84,15 @@ std::optional<core::Error> validate(const std::string& folder, const std::string
 
 SaveDialogState::SaveDialogState(SaveDialogInit init)
     : init_(std::move(init)),
-      name_(core::slugify(first_non_blank_line(init_.content), init_.now, init_.slug_max_length)),
-      folder_(init_.folder), type_(init_.suggestion.type) {
+      name_(init_.move
+                ? init_.name
+                : core::slugify(first_non_blank_line(init_.content), init_.now, init_.slug_max_length)),
+      folder_(init_.folder), type_(init_.move ? init_.type : init_.suggestion.type) {
     refresh_suggestions();
+}
+
+std::string SaveDialogState::title() const {
+    return core::tr(init_.move ? "tui.move_title" : "tui.save_title");
 }
 
 std::string SaveDialogState::type_label() const {
@@ -164,6 +175,11 @@ void SaveDialogState::cycle_type(int delta) {
 }
 
 SaveDialogState::Outcome SaveDialogState::submit() {
+    if (init_.move && name_.empty()) {
+        // Taşımada içerikten slug türetilmez: boş ad notu adsız bırakırdı.
+        error_ = core::format_error(invalid("invalid_name", name_));
+        return Outcome::Editing;
+    }
     if (const auto problem = validate(folder_, name_, type_)) {
         error_ = core::format_error(*problem);
         return Outcome::Editing;
@@ -239,12 +255,44 @@ SaveDialogState::Outcome SaveDialogState::handle(Key key, std::string_view text)
             accept_suggestion();  // ↓ ile seçilen öneri Enter'da uygulanır
         return submit();
     case Key::Escape:
+        if (init_.move)
+            return Outcome::Discard;  // taşımada kaybolacak metin yok: onaysız iptal
         confirming_discard_ = true;
         discard_selected_ = false;
         return Outcome::Editing;
     default:
         return Outcome::Editing;
     }
+}
+
+SaveDialogInit move_dialog_init(const core::NotePath& current, std::vector<std::string> folders,
+                                std::vector<std::string> types, std::size_t slug_max_length) {
+    const std::filesystem::path& file = current.value();
+    SaveDialogInit init;
+    init.move = true;
+    init.name = to_utf8(file.stem());
+    init.type = to_utf8(file.extension());
+    if (!init.type.empty())
+        init.type.erase(0, 1);  // baştaki nokta
+    init.folder = initial_folder(&current, "");
+    init.folders = std::move(folders);
+    init.types = std::move(types);
+    init.suggestion = {init.type, 0.0, {}, false};  // ipucu yok: mevcut tip zaten ön dolu
+    init.slug_max_length = slug_max_length;
+    return init;
+}
+
+std::expected<core::NotePath, core::Error> move_note(core::NoteStore& store, const core::NotePath& from,
+                                                     const SaveRequest& request) {
+    std::string target = request.name + "." + request.type;
+    if (!request.folder.empty())
+        target = request.folder + "/" + target;
+    auto to = core::NotePath::parse(target);
+    if (!to)
+        return std::unexpected(to.error());
+    if (*to == from)
+        return from;
+    return store.move(from, *to);
 }
 
 std::string initial_folder(const core::NotePath* selected, std::string_view default_folder) {

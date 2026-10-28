@@ -75,6 +75,29 @@ discard_no = "Cancel"
 discard_yes = "Discard"
 saved = "Saved: {path}"
 temp_kept = "Your text is kept at: {path}"
+move_title = "Move note"
+moved = "Moved: {from} -> {to}"
+delete_title = "Delete note"
+confirm_delete = "Permanently delete '{path}'?"
+delete_yes = "Delete"
+deleted = "Deleted: {path}"
+help_title = "Keys"
+help_hints = "↑/↓ PgUp/PgDn scroll  Esc/F1/q close"
+help_body = """
+type          filter notes as you type
+↑ ↓  ^P ^N    move through the list
+PgUp PgDn     scroll the preview
+Tab           switch name / content search
+Enter         open note (no match: new note)
+^O            new empty note
+^R            move / rename / change type
+^D            delete (asks first)
+^S            sync now
+F2            settings
+F1            this help
+Esc           clear query, or quit when empty
+^C            quit
+"""
 
 [gui]
 tab_notes = "Notes"

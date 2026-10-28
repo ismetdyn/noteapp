@@ -88,6 +88,9 @@ public:
     // Sorguyu temizleyip notu seçer (yeni kaydedilen not süzgeçte kalmasın); yoksa false.
     bool reveal(const core::NotePath& path);
 
+    // Seçimi satır numarasına koyar (son satıra kenetlenir): silmeden sonra komşu satırda kalmak için.
+    void select_index(std::size_t index);
+
     const std::string& query() const { return query_; }
     Mode mode() const { return mode_; }
     const std::vector<Row>& rows() const { return rows_; }

@@ -51,6 +51,7 @@
   - **Tip:** `detect` önerisiyle dolu (`öneri: java %82`); `←`/`→` ile `types` listesinde gezilir ya da uzantı yazılır.
   - `Enter` kaydet. `Esc` → "Not atılsın mı?" onayı (veri kaybını önler); hayırsa diyaloğa döner.
 - `Ctrl-R` aynı diyaloğu mevcut not için açar; kaydet = `NoteStore::move` (hedef varsa hata, ezme yok).
+  - Sapma (T22): taşıma kipinde `detect` ipucu gösterilmez (ilk değer mevcut tip); `Esc` onaysız iptal eder (atılacak metin yok).
 
 ## Ayarlar ekranı (F2)
 

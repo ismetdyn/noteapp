@@ -91,6 +91,13 @@ bool TuiState::reveal(const core::NotePath& path) {
     return true;
 }
 
+void TuiState::select_index(std::size_t index) {
+    if (rows_.empty())
+        return;
+    selected_ = std::min(index, rows_.size() - 1);
+    preview_scroll_ = initial_scroll(rows_[selected_]);
+}
+
 void TuiState::move_selection(int delta) {
     if (rows_.empty())
         return;
