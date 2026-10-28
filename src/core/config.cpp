@@ -288,6 +288,38 @@ const std::array<Setting, 12>& settings() {
     return table;
 }
 
+// [tuning] anahtarları ve TOML metinleri. save_config yalnız gömülü varsayılandan farklı olanları yazar:
+// kullanıcının elle verdiği ince ayar uygulamanın kaydında kaybolmaz, varsayılanlar dosyaya gömülmez (sonraki
+// sürümün varsayılanı geçerli olur). Yeni anahtar apply_tuning'e, buraya ve gidiş-dönüş testine birlikte
+// eklenir.
+struct TuningKey {
+    std::string_view key;
+    std::string (*text)(const Tuning&);
+};
+
+std::string fraction_text(double value) {
+    std::ostringstream out;
+    out << toml::value<double>(value);  // gidiş-dönüş hassasiyetini toml++ korur
+    return out.str();
+}
+
+const std::array<TuningKey, 10>& tuning_keys() {
+    static const std::array<TuningKey, 10> table = {{
+        {"slug_max_length", [](const Tuning& t) { return std::to_string(t.slug_max_length); }},
+        {"min_confidence", [](const Tuning& t) { return fraction_text(t.min_confidence); }},
+        {"max_scan_bytes", [](const Tuning& t) { return std::to_string(t.max_scan_bytes); }},
+        {"max_note_bytes", [](const Tuning& t) { return std::to_string(t.max_note_bytes); }},
+        {"rescan_seconds", [](const Tuning& t) { return std::to_string(t.rescan_seconds); }},
+        {"autosave_ms", [](const Tuning& t) { return std::to_string(t.autosave_ms); }},
+        {"exit_timeout_seconds", [](const Tuning& t) { return std::to_string(t.exit_timeout_seconds); }},
+        {"log_max_bytes", [](const Tuning& t) { return std::to_string(t.log_max_bytes); }},
+        {"sync_stale_lock_minutes",
+         [](const Tuning& t) { return std::to_string(t.sync_stale_lock_minutes); }},
+        {"sync_timeout_seconds", [](const Tuning& t) { return std::to_string(t.sync_timeout_seconds); }},
+    }};
+    return table;
+}
+
 std::string_view trim(std::string_view text) {
     constexpr std::string_view kBlanks = " \t";
     const std::size_t first = text.find_first_not_of(kBlanks);
@@ -421,6 +453,15 @@ std::expected<void, Error> save_config(const Config& config) {
     out << "idle_seconds = " << config.sync.idle_seconds << "\n";
     out << "author_name = " << quote(config.sync.author_name) << "\n";
     out << "author_email = " << quote(config.sync.author_email) << "\n";
+
+    const Tuning defaults = parse_config("").config.tuning;
+    std::string tuning;
+    for (const TuningKey& entry : tuning_keys()) {
+        if (const std::string value = entry.text(config.tuning); value != entry.text(defaults))
+            tuning += std::string(entry.key) + " = " + value + "\n";
+    }
+    if (!tuning.empty())
+        out << "\n[tuning]\n" << tuning;
 
     const fs::path dir = config_dir();
     std::error_code ec;

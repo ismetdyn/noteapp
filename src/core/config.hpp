@@ -74,8 +74,8 @@ std::vector<std::pair<std::string, std::string>> config_entries(const Config& co
 // uyarı Error olarak döner (ConfigInvalid). `types` virgülle ayrılır. Kaydetmek çağıranın işidir.
 std::expected<void, Error> set_config_value(Config& config, std::string_view key, std::string_view value);
 
-// Kullanıcıya dönük tüm anahtarları (tuning hariç) config_file()'a atomik yazar; dizini oluşturur.
-// Yorumlar korunmaz.
+// Kullanıcıya dönük tüm anahtarları ve [tuning]'in yalnız gömülü varsayılandan farklı anahtarlarını
+// config_file()'a atomik yazar; dizini oluşturur. Yorumlar korunmaz.
 std::expected<void, Error> save_config(const Config& config);
 
 }  // namespace noteapp::core

@@ -38,7 +38,7 @@ std::string slugify(std::string_view first_line);             // saf fonksiyon
 struct LoadedConfig { Config config; std::vector<std::string> warnings; };
 LoadedConfig load_config();                                   // varsayılan + config_file(); çökmez, uyarı döner
 LoadedConfig parse_config(std::string_view user_toml);        // saf çekirdek (dosya erişimi yok)
-std::expected<void, Error> save_config(const Config&);        // [tuning] hariç, atomik
+std::expected<void, Error> save_config(const Config&);        // [tuning]'de yalnız varsayılandan farklılar, atomik
 std::string tr(std::string_view key, const Args& args = {});   // i18n
 std::expected<int, Error> run_editor(const Config&, const std::filesystem::path& file);
 }
@@ -135,7 +135,9 @@ sync_stale_lock_minutes = 10   # bundan eski sync.lock, sahibi yaşasa bile baya
 sync_timeout_seconds = 120     # AutoSync bir `note sync --background` sürecini en çok bu kadar bekler (SPEC-sync karar 3)
 ```
 - Varsayılanlar `resources/defaults.toml`'dan (gömülü) gelir; dosya yoksa varsayılanlarla çalışılır, ilk
-  kayıtta oluşturulur. Bilinmeyen anahtar → uyarı logu, yok sayılır. Geçersiz değer (yanlış tür, language ∉ {auto,tr,en}, boş/noktalı tip, idle_seconds ≤ 0, boş branch, ≤ 0 tuning) → o anahtar için varsayılan + uyarı; TOML sözdizimi hatası → tüm varsayılanlar + satır/sütunlu uyarı. `save_config` `[tuning]` yazmaz.
+  kayıtta oluşturulur. Bilinmeyen anahtar → uyarı logu, yok sayılır. Geçersiz değer (yanlış tür, language ∉ {auto,tr,en}, boş/noktalı tip, idle_seconds ≤ 0, boş branch, ≤ 0 tuning) → o anahtar için varsayılan + uyarı; TOML sözdizimi hatası → tüm varsayılanlar + satır/sütunlu uyarı. `save_config` `[tuning]`'e yalnız
+  gömülü varsayılandan farklı anahtarları yazar: elle verilmiş ince ayar uygulamanın kaydında (ör. `note config
+  set`) kaybolmaz, dokunulmamış varsayılan dosyaya gömülmez (T36).
 - `~` ve ortam değişkenleri `notes_dir`'de genişletilir. Kaydetme atomiktir. Yorumlar korunmaz (bilinen sınır).
 - Kimlik doğrulama yöntemi `remote` şemasından türetilir; ayrı anahtar yok.
 

@@ -272,6 +272,50 @@ TEST_CASE("save_config then load_config round-trips under NOTEAPP_HOME") {
     CHECK(reloaded.config == c);
 }
 
+TEST_CASE("save_config keeps the user's [tuning] overrides and leaves defaults implicit") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+    fs::create_directories(config_dir());
+    std::ofstream(config_file(), std::ios::binary) << "[tuning]\nsync_timeout_seconds = 300\n";
+
+    // Uygulamanın kendi kaydı (ör. `note config set editor`) elle yazılmış ince ayarı silmemeli.
+    Config c = load_config().config;
+    REQUIRE(c.tuning.sync_timeout_seconds == 300);
+    REQUIRE(set_config_value(c, "editor", "vim"));
+    REQUIRE(save_config(c).has_value());
+
+    const LoadedConfig reloaded = load_config();
+    CHECK(reloaded.warnings.empty());
+    CHECK(reloaded.config.tuning.sync_timeout_seconds == 300);
+    CHECK(reloaded.config.editor == "vim");
+    const std::string text = slurp(config_file());
+    CHECK(text.find("sync_timeout_seconds = 300") != std::string::npos);
+    CHECK(text.find("slug_max_length") == std::string::npos);  // dokunulmamış varsayılan yazılmaz
+}
+
+TEST_CASE("save_config round-trips every [tuning] key that differs from the defaults") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+
+    // Yeni bir tuning anahtarı kaydetme listesine eklenmeyi unutursa burada düşer.
+    Config c = parse_config("").config;
+    c.tuning.slug_max_length += 1;
+    c.tuning.min_confidence = 0.123456789;
+    c.tuning.max_scan_bytes += 1;
+    c.tuning.max_note_bytes += 1;
+    c.tuning.rescan_seconds += 1;
+    c.tuning.autosave_ms += 1;
+    c.tuning.exit_timeout_seconds += 1;
+    c.tuning.log_max_bytes += 1;
+    c.tuning.sync_stale_lock_minutes += 1;
+    c.tuning.sync_timeout_seconds += 1;
+    REQUIRE(save_config(c).has_value());
+
+    const LoadedConfig reloaded = load_config();
+    CHECK(reloaded.warnings.empty());
+    CHECK(reloaded.config.tuning == c.tuning);
+}
+
 TEST_CASE("load_config with a corrupt file returns defaults and a warning instead of failing") {
     const TempDir tmp(kTurkishUncreated);
     const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
