@@ -10,6 +10,9 @@ function(noteapp_add_test module)
     target_include_directories(${module}_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/tests)
     noteapp_target_defaults(${module}_tests)
     add_test(NAME ${module} COMMAND ${module}_tests)
+    # Varsayılan olarak hiçbir test kullanıcının gerçek config/log/state dizinine yazmasın; kendi NOTEAPP_HOME'unu
+    # kuran testler bunu süreç içinde ezer.
+    set_property(TEST ${module} APPEND PROPERTY ENVIRONMENT "NOTEAPP_HOME=${CMAKE_BINARY_DIR}/test-home")
 endfunction()
 
 # Testlerde gerçek editör yerine çalışan yardımcı (core ve cli testleri kullanır).

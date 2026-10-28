@@ -8,7 +8,7 @@ noteapp_add_test(gui
     content_search_test.cpp
     settings_test.cpp)
 # Ekransız ortamlarda (CI, Fedora container) da koşabilmek için pencere sistemi istemeyen platform eklentisi.
-set_tests_properties(gui PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+set_property(TEST gui APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
 # T33: başsız mod testleri gerçek notes-gui ikilisini alt süreçte çalıştırır.
 add_dependencies(gui_tests notes-gui)
 # T32: ayarlar testleri gerçek `note` ikilisiyle arka plan senkronunu uçtan uca koşar.
