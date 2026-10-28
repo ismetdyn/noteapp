@@ -146,6 +146,15 @@
 - **Doğrulama:** `B && T(search) && T(cli)` · **Bağımlılık:** T15 · **Dosyalar:** `src/search/{content_index.hpp,content_index.cpp}`,
   `tests/search/content_index_test.cpp`, `src/cli/commands.cpp`, `tests/cli/cli_search_test.cpp` · **Boyut:** M
 
+### T16b: `NoteStore::list()` ikili bayrak önbelleği (T16'da bulundu)
+- [ ] **Açıklama:** `list()` her notun ilk 8 KB'ını okuyor: 5.000 notta ~540 ms (Release) → TUI açılışı (≤ 500 ms) ve
+  değişiklik yokken `ContentIndex::refresh` (≤ 100 ms) hedeflerini bozuyor. `binary` bayrağı (mtime, boyut) anahtarıyla
+  `NoteStore` içinde önbelleklenir; yalnız yeni/değişen dosyanın başı okunur. `content_index_test`'teki gevşetilmiş
+  `refresh` bütçesi (yalnız ContentIndex payı) özgün kabule (toplam ≤ 100 ms) geri alınır.
+- **Kabul:** değişiklik yokken `list()` 5.000 notta ≤ 80 ms (Release) · değişen dosyanın bayrağı güncellenir · testler yeşil.
+- **Doğrulama:** `B && T(core) && T(search)`, Release ölçümü · **Bağımlılık:** T10 · **Dosyalar:** `src/core/note_store.{hpp,cpp}`,
+  `tests/core/note_store_test.cpp`, `tests/search/content_index_test.cpp` · **Boyut:** S
+
 ### T17: `note config` komutları
 - [ ] **Kabul:** `path|list|get|set` çalışır · geçersiz anahtar/değer çıkış 2 · SPEC-cli kabul 9 (dil değişimi).
 - **Doğrulama:** `B && T(cli)` · **Bağımlılık:** T16 · **Dosyalar:** `src/cli/commands.cpp`, `src/core/config.cpp`,
@@ -285,6 +294,8 @@
 
 ### T35: Performans doğrulaması
 - [ ] **Kabul:** 5.000 üretilmiş notla (Release) SPEC.md §10/2–3 ölçülür ve tutar; tutmayan için profil + düzeltme.
+  Modül testlerindeki 5.000 notluk perf vakaları (`search` Debug'da ~12 sn sürüyor) `tests/perf/`'e taşınır; günlük
+  `ctest` hızlı kalır, perf yalnız Release'te koşar.
 - **Doğrulama:** `ctest --preset windows-mingw-release -R perf` · **Bağımlılık:** T34 · **Dosyalar:** `tests/perf/perf_test.cpp` · **Boyut:** S
 
 ### T36: Son review
