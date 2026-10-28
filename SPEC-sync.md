@@ -1,0 +1,105 @@
+# Spec: sync
+
+> Modül: `sync` · Bağımlılık: core · Harita: [SPEC.md](SPEC.md) · Durum: ONAYLANDI (2026-10-28)
+
+## Amaç
+
+`notes_dir`'i private bir GitHub reposuyla, gömülü libgit2 üzerinden, açılıp kapanabilir şekilde eşitlemek.
+İlke: **hiçbir koşulda içerik kaybı yok** — force push yok, hard reset yok, çakışmada iki kopya.
+
+## Arayüz (taslak)
+
+```cpp
+namespace noteapp::sync {
+enum class Auth { Https, Ssh };                         // remote şemasından türetilir
+struct SyncResult { int committed; int pulled; bool pushed; std::vector<core::NotePath> conflict_copies; };
+struct SyncStatus { std::optional<std::chrono::system_clock::time_point> last_success; std::optional<core::Error> last_error; };
+
+class SyncService {
+public:
+    SyncService(const core::Config&, core::NoteStore&);
+    std::expected<void, core::Error> enable(std::string_view remote);   // ilk kurulum (aşağıda)
+    std::expected<SyncResult, core::Error> sync_now();                 // tek tam döngü
+    SyncStatus status() const;                                          // <durum>/sync-status.toml
+};
+
+class AutoSync {                                        // tui/gui için arka plan iş parçacığı
+public:
+    AutoSync(SyncService&, std::chrono::seconds idle, std::function<void(const SyncStatus&)> on_status);
+    void start();                                       // açılışta bir sync
+    void notify_changed();                              // idle süre dolunca sync (debounce)
+    void request_now();
+    void stop(std::chrono::seconds timeout);            // çıkışta son sync, süre aşılırsa bırakır
+};
+
+std::expected<void, core::Error> store_token(std::string_view host, std::string_view token);
+std::expected<void, core::Error> clear_token(std::string_view host);
+bool has_token(std::string_view host);
+}
+```
+
+## Davranış
+
+### Kimlik doğrulama
+- `https://…` → **token**: libgit2 credential callback'i `userpass("x-access-token", token)` döner. Token
+  kaynağı: `NOTEAPP_GIT_TOKEN` ortam değişkeni (kalıcı saklanmaz) → OS kasası (keychain; servis `noteapp`,
+  hesap = host). Callback en fazla **1** kez kimlik verir; ret olursa `sync.auth_failed` (sonsuz döngü yok).
+  Önerilen token: fine-grained PAT, yalnız not reposu, *Contents: read/write*.
+- `git@…` / `ssh://…` → **SSH**: libgit2 `USE_SSH=exec` ile sistemdeki `ssh` çağrılır; anahtar, agent ve
+  `~/.ssh/config` ssh'ın kendisinden. Uygulama anahtar saklamaz. İlk bağlantıda host anahtarı onayı
+  gerekiyorsa (TTY yok) `sync.ssh_host_unknown` hatası + "bir kez `ssh -T git@github.com` çalıştır" yönlendirmesi.
+- Linux'ta Secret Service yoksa token düz dosyaya **düşülmez**; `sync.keychain_unavailable` + ortam değişkeni yönlendirmesi.
+- Token config'e, loga, `.git/config`'e, URL'ye, hata mesajına asla yazılmaz.
+
+### İlk kurulum (`enable`)
+| Durum | Davranış |
+|---|---|
+| `.git` var, `origin` == remote | Hiçbir şey yapma |
+| `.git` var, `origin` farklı/yok | `sync.remote_mismatch` → ön yüz onay alırsa origin güncellenir |
+| `.git` yok, `notes_dir` boş | remote'u klonla (remote boşsa: init + origin + ilk commit + push) |
+| `.git` yok, `notes_dir` dolu, remote boş | init + `.gitignore` + tümünü commit + push |
+| `.git` yok, ikisi de dolu | Reddet: `sync.both_non_empty` + yönlendirme (açık soru SPEC.md §12/3) |
+
+Init sırasında notes reposuna `.gitignore` yazılır: `.noteapp/` ve `.*.tmp`. Dal: `config.sync.branch` (varsayılan `main`).
+
+### Senkron döngüsü (`sync_now`)
+1. **Kilit:** `<durum>/sync.lock` (PID + zaman). Canlı başka süreç tutuyorsa `sync.busy` (çağıran sonra dener);
+   süreci ölmüş ya da 10 dk'dan eski kilit bayat sayılır.
+2. **Commit:** tüm değişiklikler (ekleme/silme dahil) sahnelenir; değişiklik varsa commit atılır.
+   Mesaj: i18n `sync.commit_message` (`{count}` dosya, `{host}`, zaman). Yazar: config → git global config →
+   `OS_kullanıcı@host`.
+3. **Fetch** `origin/<branch>`.
+4. **Birleştirme analizi:**
+   - güncel → 5'e geç;
+   - fast-forward → `GIT_CHECKOUT_SAFE` ile checkout + ref ilerletme;
+   - normal → merge. **Çakışan her dosya için:** yerel sürüm yerinde kalır; uzak sürüm
+     `<ad> (conflict YYYY-MM-DD HHMM).<uzantı>` olarak yanına yazılır; silme/değiştirme çakışmasında
+     **değiştirilmiş sürüm** korunur. Hepsi sahnelenir, iki ebeveynli merge commit atılır.
+5. **Push** (yerel öndeyse). Non-fast-forward ret → 3'ten bir kez daha; yine olmazsa `sync.push_rejected`.
+6. **Durum** `<durum>/sync-status.toml`'a yazılır, loglanır; kilit bırakılır.
+
+Asla: force push, `reset --hard`, çalışma ağacında commit'lenmemiş değişikliği ezen checkout.
+
+### Aç/kapa
+`sync.enabled = false` iken hiçbir otomatik senkron çalışmaz; repo ve geçmiş olduğu gibi kalır. Tekrar
+açmak `enable`'ı çağırır (repo varsa no-op).
+
+## Kabul kriterleri (yerel bare repo ile, ağsız)
+
+1. Fast-forward: A'da yeni not → sync; B sync → not B'de, B'de yerel değişiklik kaybı yok.
+2. Çakışmasız birleşme: A ve B farklı notları değiştirir → ikisi de sync → her iki değişiklik her iki tarafta.
+3. Çakışma: aynı not iki tarafta değişir → ikinci sync'te yerel sürüm yerinde, uzak sürüm `(conflict …)`
+   kopyasında; içerik kaybı yok; merge commit iki ebeveynli.
+4. Silme/değiştirme çakışması → değiştirilmiş sürüm diskte kalır.
+5. Push yarışı (iki sync arasında remote ilerler) → bir yeniden deneme ile başarılı.
+6. Kilit tutuluyken ikinci süreç `sync.busy` alır; bayat kilit devralınır.
+7. Credential callback ikinci çağrıda hata döner (sayaç testi); token config/log/`.git/config`/notes_dir'de
+   geçmez (grep testi).
+8. `enable` tablosundaki 5 durumun her biri için test.
+9. `AutoSync`: `notify_changed()` art arda çağrılınca idle süre içinde tek sync; `stop(timeout)` süreyi aşmaz.
+
+**Elle (Large):** gerçek private GitHub reposu ile Windows ↔ Fedora; HTTPS+token ve SSH ikisi de.
+
+## Kapsam dışı
+Rebase, seçmeli (dosya bazlı) senkron, GitHub dışı sağlayıcılara özel destek (genel git remote zaten çalışır),
+LFS, şifreli repo, Git Credential Manager entegrasyonu.

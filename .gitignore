@@ -1,0 +1,14 @@
+# Derleme çıktıları
+build/
+out/
+cmake-build-*/
+CMakeUserPresets.json
+
+# IDE
+.idea/
+.vs/
+.vscode/
+
+# İşletim sistemi
+.DS_Store
+Thumbs.db
