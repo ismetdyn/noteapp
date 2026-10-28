@@ -74,7 +74,8 @@ core::Error io_error(const fs::path& file, const std::error_code& ec) {
 
 }  // namespace
 
-std::expected<SyncLock, core::Error> SyncLock::acquire(const fs::path& file) {
+std::expected<SyncLock, core::Error> SyncLock::acquire(const fs::path& file,
+                                                       std::chrono::minutes stale_after) {
     std::error_code ec;
     fs::create_directories(file.parent_path(), ec);
     if (ec)
@@ -94,13 +95,13 @@ std::expected<SyncLock, core::Error> SyncLock::acquire(const fs::path& file) {
             return std::unexpected(io_error(file, written.ec));
         }
 
-        // Yaş dosya zamanından: yazılırken okunan yarım içerik de 10 dk boyunca meşgul sayılır.
+        // Yaş dosya zamanından: yazılırken okunan yarım içerik de `stale_after` boyunca meşgul sayılır.
         const auto modified = fs::last_write_time(file, ec);
         if (ec == std::errc::no_such_file_or_directory)
             continue;  // sahibi tam şimdi bıraktı
         const std::string existing = read_text(file);
         const long long pid = owner_pid(existing);
-        const bool fresh = !ec && fs::file_time_type::clock::now() - modified < kStaleLockAge;
+        const bool fresh = !ec && fs::file_time_type::clock::now() - modified < stale_after;
         if (attempt > 0 || (fresh && (pid == 0 || process_alive(pid))))
             return std::unexpected(
                 core::Error{core::Error::Code::Io, "sync.busy", {{"pid", std::to_string(pid)}}});

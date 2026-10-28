@@ -35,6 +35,8 @@ using noteapp::sync::SyncService;
 
 namespace {
 
+constexpr std::chrono::minutes kStaleAfter{10};  // tuning.sync_stale_lock_minutes varsayılanı
+
 // Hata anahtarı ve argümanları; başarısız REQUIRE'da neyin ters gittiği görünsün.
 template <class T> std::string describe(const std::expected<T, Error>& result) {
     if (result)
@@ -267,22 +269,22 @@ TEST_CASE("SyncLock: a live, fresh lock makes the next acquirer busy; release re
     const TempDir root;
     const fs::path file = root.path() / "state" / "sync.lock";
     {
-        const auto first = SyncLock::acquire(file);
+        const auto first = SyncLock::acquire(file, kStaleAfter);
         REQUIRE_MESSAGE(first.has_value(), describe(first));
         CHECK(fs::exists(file));
-        const auto second = SyncLock::acquire(file);
+        const auto second = SyncLock::acquire(file, kStaleAfter);
         REQUIRE_FALSE(second.has_value());
         CHECK(second.error().message_key == "sync.busy");
     }
     CHECK_FALSE(fs::exists(file));
-    CHECK(SyncLock::acquire(file).has_value());
+    CHECK(SyncLock::acquire(file, kStaleAfter).has_value());
 }
 
 TEST_CASE("SyncLock: a lock whose owner process is dead is taken over") {
     const TempDir root;
     const fs::path file = root.path() / "sync.lock";
     write_file(file, "999999999\n2026-10-28T00:00:00Z\n");  // böyle bir PID yok
-    const auto lock = SyncLock::acquire(file);
+    const auto lock = SyncLock::acquire(file, kStaleAfter);
     REQUIRE_MESSAGE(lock.has_value(), describe(lock));
     CHECK(read_file(file) != "999999999\n2026-10-28T00:00:00Z\n");
 }
@@ -290,26 +292,24 @@ TEST_CASE("SyncLock: a lock whose owner process is dead is taken over") {
 TEST_CASE("SyncLock: a lock older than 10 minutes is stale even if its owner lives") {
     const TempDir root;
     const fs::path file = root.path() / "sync.lock";
-    const auto hung = SyncLock::acquire(file);  // bu süreç: canlı sahip
+    const auto hung = SyncLock::acquire(file, kStaleAfter);  // bu süreç: canlı sahip
     REQUIRE(hung.has_value());
-    fs::last_write_time(file, fs::file_time_type::clock::now() - noteapp::sync::kStaleLockAge -
-                                  std::chrono::minutes(1));
-    const auto taken = SyncLock::acquire(file);
+    fs::last_write_time(file, fs::file_time_type::clock::now() - kStaleAfter - std::chrono::minutes(1));
+    const auto taken = SyncLock::acquire(file, kStaleAfter);
     REQUIRE_MESSAGE(taken.has_value(), describe(taken));
 }
 
 TEST_CASE("SyncLock: the previous owner of a taken-over lock does not delete the new owner's lock") {
     const TempDir root;
     const fs::path file = root.path() / "sync.lock";
-    std::optional<std::expected<SyncLock, Error>> hung(SyncLock::acquire(file));
+    std::optional<std::expected<SyncLock, Error>> hung(SyncLock::acquire(file, kStaleAfter));
     REQUIRE(hung->has_value());
-    fs::last_write_time(file, fs::file_time_type::clock::now() - noteapp::sync::kStaleLockAge -
-                                  std::chrono::minutes(1));
-    const auto taken = SyncLock::acquire(file);
+    fs::last_write_time(file, fs::file_time_type::clock::now() - kStaleAfter - std::chrono::minutes(1));
+    const auto taken = SyncLock::acquire(file, kStaleAfter);
     REQUIRE(taken.has_value());
     hung.reset();  // eski sahip sonunda bitiyor
     CHECK(fs::exists(file));
-    CHECK(SyncLock::acquire(file).error().message_key == "sync.busy");
+    CHECK(SyncLock::acquire(file, kStaleAfter).error().message_key == "sync.busy");
 }
 
 TEST_CASE("retry_rejected_push retries a rejected push exactly once") {
@@ -552,7 +552,7 @@ TEST_CASE("acceptance 6: sync_now is sync.busy while another live process holds 
     write_file(a / "not.md", "x\n");
     SyncService sync_a(SyncFixture::config_for(a));
     {
-        const auto held = SyncLock::acquire(noteapp::core::state_dir() / "sync.lock");
+        const auto held = SyncLock::acquire(noteapp::core::state_dir() / "sync.lock", kStaleAfter);
         REQUIRE(held.has_value());
         const auto result = sync_a.sync_now();
         REQUIRE_FALSE(result.has_value());
@@ -561,6 +561,26 @@ TEST_CASE("acceptance 6: sync_now is sync.busy while another live process holds 
         CHECK_FALSE(sync_a.status().last_error.has_value());  // durum, kilidi tutan sürecindir
     }
     const auto result = sync_a.sync_now();
+    REQUIRE_MESSAGE(result.has_value(), describe(result));
+    CHECK(result->pushed);
+}
+
+TEST_CASE("sync_now takes the stale-lock age from tuning.sync_stale_lock_minutes") {
+    const SyncFixture fx;
+    const fs::path a = fx.make_clone(u8"A");
+    write_file(a / "not.md", "x\n");
+    const fs::path file = noteapp::core::state_dir() / "sync.lock";
+    const auto held = SyncLock::acquire(file, kStaleAfter);  // bu süreç: canlı sahip
+    REQUIRE(held.has_value());
+    fs::last_write_time(file, fs::file_time_type::clock::now() - std::chrono::minutes(2));
+
+    const auto busy = SyncService(SyncFixture::config_for(a)).sync_now();  // varsayılan 10 dk: taze
+    REQUIRE_FALSE(busy.has_value());
+    CHECK(busy.error().message_key == "sync.busy");
+
+    noteapp::core::Config config = SyncFixture::config_for(a);
+    config.tuning.sync_stale_lock_minutes = 1;
+    const auto result = SyncService(config).sync_now();
     REQUIRE_MESSAGE(result.has_value(), describe(result));
     CHECK(result->pushed);
 }

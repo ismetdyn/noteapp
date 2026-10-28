@@ -368,7 +368,8 @@ retry_rejected_push(const std::function<std::expected<bool, core::Error>()>& exc
 SyncService::SyncService(const core::Config& config) : config_(config) {}
 
 std::expected<SyncResult, core::Error> SyncService::sync_now() {
-    const auto lock = SyncLock::acquire(core::state_dir() / "sync.lock");
+    const auto lock = SyncLock::acquire(core::state_dir() / "sync.lock",
+                                        std::chrono::minutes(config_.tuning.sync_stale_lock_minutes));
     if (!lock) {
         // Durum dosyası kilidi tutan sürecindir; meşgulken yazılmaz.
         const auto log = lock.error().message_key == "sync.busy" ? core::log_info : core::log_error;

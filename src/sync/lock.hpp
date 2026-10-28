@@ -9,17 +9,15 @@
 
 namespace noteapp::sync {
 
-// Bu yaştan eski kilit, sahibi yaşasa bile bayattır (SPEC-sync döngü 1): asılı kalmış bir senkron
-// sonsuza dek engellemesin.
-inline constexpr std::chrono::minutes kStaleLockAge{10};
-
 // Süreçler arası senkron kilidi: dosya (PID + ISO zaman + rastgele belirteç) özel olarak oluşturulur,
 // yıkıcıda — hâlâ bizimse — silinir.
 class SyncLock {
 public:
-    // Canlı bir süreç tutuyor ve kilit kStaleLockAge'den gençse Error{"sync.busy", {pid}}. Bayat kilit
-    // (sahibi ölmüş ya da eski) devralınır ve loglanır. Dizin yoksa oluşturulur.
-    static std::expected<SyncLock, core::Error> acquire(const std::filesystem::path& file);
+    // Canlı bir süreç tutuyor ve kilit `stale_after`'dan gençse Error{"sync.busy", {pid}}. Bayat kilit
+    // (sahibi ölmüş ya da eski) devralınır ve loglanır: asılı kalmış bir senkron sonsuza dek engellemesin
+    // (SPEC-sync döngü 1, tuning.sync_stale_lock_minutes). Dizin yoksa oluşturulur.
+    static std::expected<SyncLock, core::Error> acquire(const std::filesystem::path& file,
+                                                        std::chrono::minutes stale_after);
 
     SyncLock(SyncLock&& other) noexcept;
     SyncLock& operator=(SyncLock&&) = delete;

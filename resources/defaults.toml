@@ -26,3 +26,4 @@ rescan_seconds = 5            # GUI/TUI dizin yeniden tarama aralığı
 autosave_ms = 1000            # GUI otomatik kayıt gecikmesi
 exit_timeout_seconds = 10     # çıkışta bekleyen senkron için üst sınır
 log_max_bytes = 1048576       # log.txt bu boyutu aşınca log.1.txt'ye döner (1 MiB)
+sync_stale_lock_minutes = 10  # bundan eski senkron kilidi, sahibi yaşasa bile bayat sayılır
