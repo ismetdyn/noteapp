@@ -116,7 +116,7 @@
   `tests/detect/detect_test.cpp`, `tests/detect/samples/**` (veri), `src/cli/main.cpp` · **Boyut:** M
 
 ### T12: `core::process` + editör çözümleme/başlatma
-- [ ] **Kabul:** kabuksuz başlatma (CreateProcessW / posix_spawnp), bekleme, çıkış kodu · editör komutu tırnaklı
+- [x] **Kabul:** kabuksuz başlatma (CreateProcessW / posix_spawnp), bekleme, çıkış kodu · editör komutu tırnaklı
   argümanlarla bölünür · çözüm sırası config → VISUAL → EDITOR → platform · bulunamazsa denenen adaylar mesajda ·
   `fake-editor` test yardımcısı.
 - **Doğrulama:** `B && T(core)`, `F` · **Bağımlılık:** T09 · **Dosyalar:** `src/core/{process.hpp,process.cpp,editor.hpp,editor.cpp}`,

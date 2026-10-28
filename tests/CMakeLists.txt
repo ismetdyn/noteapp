@@ -7,6 +7,13 @@ function(noteapp_add_test module)
     add_test(NAME ${module} COMMAND ${module}_tests)
 endfunction()
 
+# Testlerde gerçek editör yerine çalışan yardımcı (core ve cli testleri kullanır).
+add_executable(fake_editor support/fake_editor.cpp)
+noteapp_target_defaults(fake_editor)
+if(WIN32)
+    target_link_libraries(fake_editor PRIVATE shell32)
+endif()
+
 add_subdirectory(core)
 add_subdirectory(detect)
 add_subdirectory(sync)

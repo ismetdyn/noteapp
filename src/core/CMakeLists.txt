@@ -1,9 +1,11 @@
 add_library(noteapp_core
     atomic_file.cpp
     config.cpp
+    editor.cpp
     note_path.cpp
     note_store.cpp
     paths.cpp
+    process.cpp
     text.cpp
     version.cpp)
 target_include_directories(noteapp_core PUBLIC ${PROJECT_SOURCE_DIR}/src)
