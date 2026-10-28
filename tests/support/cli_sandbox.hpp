@@ -23,6 +23,9 @@ public:
     RunResult run(const std::vector<std::string>& args, const std::string& stdin_bytes = "") const {
         return run_process(NOTEAPP_NOTE_EXE, args, stdin_bytes);
     }
+    RunResult run_null_stdin(const std::vector<std::string>& args) const {
+        return run_process(NOTEAPP_NOTE_EXE, args, "", true);
+    }
     bool has_any_note() const {
         if (!fs::exists(notes()))
             return false;

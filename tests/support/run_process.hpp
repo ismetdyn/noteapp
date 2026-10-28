@@ -27,8 +27,9 @@ struct RunResult {
 };
 
 // `stdin_bytes` verilmezse stdin boş bir dosyadan gelir (TTY olmaz, EOF hemen görülür).
+// `null_stdin`: stdin NUL / /dev/null aygıtından gelir — Windows'ta _isatty bunu yanlışlıkla TTY sayar.
 inline RunResult run_process(const fs::path& exe, const std::vector<std::string>& args,
-                             const std::string& stdin_bytes = "") {
+                             const std::string& stdin_bytes = "", bool null_stdin = false) {
     const TempDir scratch;
     const fs::path in = scratch.path() / "stdin.bin";
     const fs::path out = scratch.path() / "stdout.bin";
@@ -53,7 +54,13 @@ inline RunResult run_process(const fs::path& exe, const std::vector<std::string>
 #endif
     for (const auto& a : args)
         command += " " + quote(a);
-    command += " < " + quote(utf8(in)) + " > " + quote(utf8(out)) + " 2> " + quote(utf8(err));
+#ifdef _WIN32
+    const std::string null_device = "NUL";
+#else
+    const std::string null_device = "/dev/null";
+#endif
+    command += " < " + (null_stdin ? null_device : quote(utf8(in))) + " > " + quote(utf8(out)) + " 2> " +
+               quote(utf8(err));
 #ifdef _WIN32
     command += "\"";
 #endif

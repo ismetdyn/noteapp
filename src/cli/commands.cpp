@@ -25,7 +25,10 @@
 #include <vector>
 
 #ifdef _WIN32
-#include <io.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #else
 #include <unistd.h>
 #endif
@@ -34,9 +37,18 @@ namespace noteapp::cli {
 
 namespace {
 
+#ifdef _WIN32
+// _isatty NUL gibi her karakter aygıtını TTY sayar; `note < NUL` editör açıp betiği asılı bırakırdı.
+// Gerçek konsol yalnız GetConsoleMode'un başarılı olduğu tutamaçtır.
+bool is_console(DWORD std_handle) {
+    DWORD mode = 0;
+    return GetConsoleMode(GetStdHandle(std_handle), &mode) != 0;
+}
+#endif
+
 bool stdin_is_tty() {
 #ifdef _WIN32
-    return _isatty(_fileno(stdin)) != 0;
+    return is_console(STD_INPUT_HANDLE);
 #else
     return isatty(STDIN_FILENO) != 0;
 #endif
@@ -44,7 +56,7 @@ bool stdin_is_tty() {
 
 bool stdout_is_tty() {
 #ifdef _WIN32
-    return _isatty(_fileno(stdout)) != 0;
+    return is_console(STD_OUTPUT_HANDLE);
 #else
     return isatty(STDOUT_FILENO) != 0;
 #endif

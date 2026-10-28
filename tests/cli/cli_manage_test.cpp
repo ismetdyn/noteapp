@@ -39,6 +39,18 @@ TEST_CASE("rm without -y refuses when stdin is not a terminal") {
     CHECK(slurp(box.notes() / "a.md") == "a");
 }
 
+// Windows'ta _isatty NUL aygıtını TTY sayar; betikten `< NUL` ile çağrı soru sormadan reddedilmeli.
+TEST_CASE("rm without -y refuses without prompting when stdin is the null device") {
+    const Sandbox box;
+    put(box.notes() / "a.md", "a");
+
+    const auto result = box.run_null_stdin({"rm", "a.md"});
+    CHECK(result.exit_code == 1);
+    CHECK(result.err.find("-y") != std::string::npos);
+    CHECK(result.err.find("[e/H]") == std::string::npos);
+    CHECK(slurp(box.notes() / "a.md") == "a");
+}
+
 TEST_CASE("rm piped 'yes' on stdin is not a confirmation") {
     const Sandbox box;
     put(box.notes() / "a.md", "a");

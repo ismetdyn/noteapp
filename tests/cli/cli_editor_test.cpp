@@ -33,6 +33,17 @@ TEST_CASE("editor flow: content written by the editor becomes a note with a dete
     CHECK(slurp(box.notes() / "public-class-a.java") == code);
 }
 
+// Betik `note < NUL` çağırırsa editör açılıp süreç asılı kalmamalı: stdin TTY değil, boş girdi reddedilir.
+TEST_CASE("editor flow: stdin from the null device does not open the editor") {
+    const Sandbox box;
+    const EditorEnv env;
+    const ScopedEnv content("FAKE_EDITOR_CONTENT", "editor must not run");
+
+    const auto result = box.run_null_stdin({});
+    CHECK(result.exit_code == 1);
+    CHECK_FALSE(box.has_any_note());
+}
+
 TEST_CASE("editor flow: chosen type and folder rules match quick add") {
     const Sandbox box;
     const EditorEnv env;
