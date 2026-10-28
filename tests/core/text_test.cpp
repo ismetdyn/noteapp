@@ -88,3 +88,14 @@ TEST_CASE("first_non_empty_line skips blank and whitespace-only lines") {
     CHECK(first_non_empty_line("satır\r\nsonraki") == "satır\r");
     CHECK(first_non_empty_line("tek") == "tek");
 }
+
+// create() ve GUI editörü aynı kuralı kullanır: yalnız CRLF'nin CR'si düşer, tek başına CR kalır.
+TEST_CASE("normalize_line_endings turns CRLF into LF and keeps a lone CR") {
+    CHECK(normalize_line_endings("") == "");
+    CHECK(normalize_line_endings("a\r\nb\r\n") == "a\nb\n");
+    CHECK(normalize_line_endings("a\rb\n\r") == "a\rb\n\r");
+    CHECK(normalize_line_endings("\r\r\n") == "\r\n");
+    CHECK(normalize_line_endings("çğ\r\nış") == "çğ\nış");
+    const std::string big(1 << 20, 'x');  // doğrusal: büyük girdide de bir geçiş
+    CHECK(normalize_line_endings(big + "\r\n") == big + "\n");
+}

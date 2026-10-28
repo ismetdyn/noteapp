@@ -20,6 +20,10 @@ bool is_valid_utf8(std::string_view utf8);
 // Geçersiz UTF-8 girdisi değiştirilmeden döner.
 std::string transliterate_turkish(std::string_view utf8);
 
+// CRLF → LF; tek başına CR olduğu gibi kalır. Tek geçiş (doğrusal): yeni notlar (NoteStore::create) ve GUI
+// editörüne yüklenen CRLF'li içerik aynı kuraldan geçer.
+std::string normalize_line_endings(std::string_view text);
+
 // İlk dolu (yalnız boşluk olmayan) satır, olduğu gibi; yoksa boş. Not adı bundan türetilir — CLI, TUI ve GUI
 // aynı kuralı kullansın diye tek kaynak burasıdır.
 std::string first_non_empty_line(std::string_view content);

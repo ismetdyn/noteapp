@@ -141,17 +141,6 @@ std::expected<fs::path, std::error_code> long_name(const fs::path& path) {
 }
 #endif
 
-std::string normalize_line_endings(std::string_view text) {
-    std::string out;
-    out.reserve(text.size());
-    for (std::size_t i = 0; i < text.size(); ++i) {
-        if (text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n')
-            continue;  // CR atlanır, LF kalır
-        out += text[i];
-    }
-    return out;
-}
-
 }  // namespace
 
 bool looks_binary(std::string_view bytes) {
