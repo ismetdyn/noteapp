@@ -75,6 +75,12 @@ taşıma, silme, klasör işlemleri) iki kural uygular:
   (MinGW libstdc++'ta da var olan hedefi değiştirdiği doğrulandı, 2026-10-28). Yeni not `create`'te geçici dosyasız,
   dışlayıcı oluşturmayla (`CREATE_NEW` / `O_EXCL`) yazılır; yarış durumunda bile var olan dosya ezilmez.
   Hata olursa geçici dosya silinir, orijinal dosya bozulmamış kalır.
+- **İzinler korunur (T36):** var olan dosya değiştirilirken POSIX'te hedefin mod bitleri (`fchmod`, `& 07777`) ve
+  yetki varsa sahibi (`fchown`, en iyi çaba) geçici dosyaya kopyalanır; Windows'ta değiştirme `ReplaceFileW`
+  (`REPLACEFILE_IGNORE_MERGE_ERRORS`) ile yapılır, hedefin ACL'si ve öznitelikleri (gizli vb.) kalır. `ReplaceFileW`
+  başarısızsa (desteklenmeyen birim, paylaşım hatası) `rename`'e düşülür; hedefi kaldırıp yenisini koyamadıysa
+  geçici dosya silinmez (yeni içeriğin tek kopyası). Neden: düz `rename` geçici dosyanın `0666 & ~umask`'ını
+  getiriyordu; `0600` not tek kayıtta `0644` olur, senkron da her kayıtta mod değişikliği commit'lerdi.
 - **Dışarıdan değişiklik:** `write` diskteki mtime `expected_mtime`'dan farklıysa yazmaz → `ModifiedExternally`.
 - **mtime kaynağı:** karşılaştırılan her mtime (`list`, `read`, `write`) tek kaynaktan, `core::stat_file`'dan gelir
   (bağı izlemez): Windows'ta FILETIME (100 ns), POSIX'te `st_mtim` / `st_mtimespec` (ns). Neden: MinGW libstdc++'ta

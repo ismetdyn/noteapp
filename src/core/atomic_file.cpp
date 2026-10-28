@@ -1,5 +1,7 @@
 #include "core/atomic_file.hpp"
 
+#include "core/log.hpp"
+
 #include <algorithm>
 #include <array>
 #include <random>
@@ -10,6 +12,7 @@
 #else
 #include <cerrno>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -39,6 +42,27 @@ Error io_error(const fs::path& path, const std::error_code& ec) {
         "error.io",
         {{"path", std::string(reinterpret_cast<const char*>(u.data()), u.size())}, {"detail", ec.message()}}};
 }
+
+#ifndef _WIN32
+// Hedefin izin bitlerini (ve yetki varsa sahibini) geçici dosyaya kopyalar. En iyi çaba: mod kopyalanamazsa
+// (ör. modsuz dosya sistemi) kayıt yine yapılır, uyarı loglanır; içerik kaybından iyidir. O_NOFOLLOW: geçici
+// adın yerine bağ konmuşsa bağın hedefine dokunulmaz.
+void copy_mode(const fs::path& tmp, const struct stat& like) {
+    const int fd = ::open(tmp.c_str(), O_WRONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) {
+        log_warn("atomic write: cannot keep the mode of '" + tmp.string() +
+                 "': " + std::error_code(errno, std::generic_category()).message());
+        return;
+    }
+    if (::fchown(fd, like.st_uid, like.st_gid) != 0) {
+        // Başka sahip/grup yalnız yetkiyle verilebilir (EPERM); mod yine kopyalanır.
+    }
+    if (::fchmod(fd, like.st_mode & 07777) != 0)
+        log_warn("atomic write: cannot keep the mode of '" + tmp.string() +
+                 "': " + std::error_code(errno, std::generic_category()).message());
+    ::close(fd);
+}
+#endif
 
 }  // namespace
 
@@ -105,11 +129,29 @@ std::expected<void, Error> write_file_atomically(const fs::path& target, std::st
             fs::remove(tmp, ec);  // başkasının dosyasına dokunma
         return std::unexpected(io_error(target, written.ec));
     }
+    // Değiştirilen hedefin izinleri/ACL'si korunur: düz rename geçici dosyanınkini getirirdi (0600/0755 not
+    // tek kayıtta 0644, gizli dosya görünür olurdu; senkron da her kayıtta bir mod değişikliği commit'lerdi).
+#ifdef _WIN32
+    const bool existed = GetFileAttributesW(target.c_str()) != INVALID_FILE_ATTRIBUTES;
+    // ReplaceFileW hedefin ACL'sini, özniteliklerini ve oluşturma zamanını yeni içeriğe taşır. Desteklenmeyen
+    // birimde ya da paylaşım hatasında aşağıdaki rename denenir.
+    if (existed && ReplaceFileW(target.c_str(), tmp.c_str(), nullptr, REPLACEFILE_IGNORE_MERGE_ERRORS,
+                                nullptr, nullptr) != 0)
+        return {};
+#else
+    struct stat existing{};
+    const bool existed = ::stat(target.c_str(), &existing) == 0;
+    if (existed)
+        copy_mode(tmp, existing);
+#endif
     // MinGW (GCC 13) ve POSIX'te std::filesystem::rename mevcut dosyanın üzerine yazar.
     fs::rename(tmp, target, ec);
     if (ec) {
         std::error_code ignored;
-        fs::remove(tmp, ignored);
+        // ReplaceFileW hedefi kaldırıp yenisini yerine koyamadıysa (ERROR_UNABLE_TO_MOVE_REPLACEMENT) geçici
+        // dosya yeni içeriğin tek kopyasıdır: silinmez.
+        if (!existed || fs::exists(target, ignored))
+            fs::remove(tmp, ignored);
         return std::unexpected(io_error(target, ec));
     }
     return {};

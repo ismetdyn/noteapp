@@ -7,8 +7,17 @@
 #include <doctest/doctest.h>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <random>
 #include <thread>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 using namespace noteapp::core;
 namespace fs = std::filesystem;
@@ -357,6 +366,45 @@ TEST_CASE("successful write leaves no .tmp behind") {
     }
     CHECK(files == 1);
 }
+
+// Atomik yazım geçici dosyayı hedefin üzerine taşır; hedefin izinleri/öznitelikleri tek kayıtta kaybolmamalı
+// (senkron da her kayıtta bir mod değişikliği commit'lerdi).
+#ifdef _WIN32
+TEST_CASE("write keeps the file's attributes: a hidden note stays hidden") {
+    TempDir tmp;
+    put(tmp.path() / "n.md", "eski");
+    const std::wstring file = (tmp.path() / "n.md").wstring();
+    REQUIRE(SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE));
+    NoteStore store(tmp.path());
+
+    REQUIRE(store.write(np("n.md"), "yeni", stat_file(tmp.path() / "n.md")->mtime).has_value());
+    CHECK(slurp(tmp.path() / "n.md") == "yeni");
+    CHECK((GetFileAttributesW(file.c_str()) & FILE_ATTRIBUTE_HIDDEN) != 0);
+    int files = 0;
+    for (const auto& entry : fs::directory_iterator(tmp.path())) {
+        CAPTURE(entry.path().string());
+        ++files;
+    }
+    CHECK(files == 1);  // geçici dosya kalmadı
+}
+#else
+TEST_CASE("write keeps the file's permission bits") {
+    TempDir tmp;
+    for (const fs::perms mode : {fs::perms::owner_read | fs::perms::owner_write,
+                                 fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec |
+                                     fs::perms::others_read | fs::perms::others_exec,
+                                 fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_all}) {
+        CAPTURE(static_cast<int>(mode));
+        put(tmp.path() / "n.md", "eski");
+        fs::permissions(tmp.path() / "n.md", mode, fs::perm_options::replace);
+        NoteStore store(tmp.path());
+
+        REQUIRE(store.write(np("n.md"), "yeni", stat_file(tmp.path() / "n.md")->mtime).has_value());
+        CHECK(slurp(tmp.path() / "n.md") == "yeni");
+        CHECK(fs::status(tmp.path() / "n.md").permissions() == mode);
+    }
+}
+#endif
 
 TEST_CASE("handles Turkish file and folder names") {
     TempDir tmp;
