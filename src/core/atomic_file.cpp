@@ -42,9 +42,10 @@ Error io_error(const fs::path& path, const std::error_code& ec) {
 
 }  // namespace
 
-FileWriteResult write_new_file(const fs::path& file, std::string_view content) {
+FileWriteResult write_new_file(const fs::path& file, std::string_view content, bool owner_only) {
     FileWriteResult result;
 #ifdef _WIN32
+    (void)owner_only;  // Windows: izinler üst dizinden miras kalır (kullanıcıya özel durum dizini)
     const HANDLE h =
         CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) {
@@ -67,7 +68,7 @@ FileWriteResult write_new_file(const fs::path& file, std::string_view content) {
         result.ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
     CloseHandle(h);
 #else
-    const int fd = ::open(file.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    const int fd = ::open(file.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, owner_only ? 0600 : 0666);
     if (fd < 0) {
         result.already_exists = errno == EEXIST;
         result.ec = std::error_code(errno, std::generic_category());

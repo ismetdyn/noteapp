@@ -1,5 +1,6 @@
 #include "core/config.hpp"
 #include "core/editor.hpp"
+#include "core/paths.hpp"
 #include "core/process.hpp"
 #include "support/test_support.hpp"
 
@@ -122,4 +123,25 @@ TEST_CASE("run_editor maps a missing editor program to EditorNotFound") {
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().code == Error::Code::EditorNotFound);
     CHECK(result.error().args.at(0).second == "noteapp-no-such-editor-xyz");
+}
+
+TEST_CASE("create_private_temp_file lives under the user-private state dir with owner-only permissions") {
+    const TempDir home;
+    const ScopedEnv env("NOTEAPP_HOME", utf8(home.path()));
+
+    const auto first = create_private_temp_file("md", "ön içerik");
+    const auto second = create_private_temp_file("md", "");
+    REQUIRE(first.has_value());
+    REQUIRE(second.has_value());
+    CHECK(*first != *second);
+    CHECK(first->parent_path() == state_dir() / "tmp");
+    CHECK(first->filename().string().starts_with("noteapp-"));
+    CHECK(first->extension() == ".md");
+    CHECK(slurp(*first) == "ön içerik");
+#ifndef _WIN32
+    // Yalnız POSIX'te anlamlı (Windows'ta izinler üst dizinden miras kalır).
+    using fs::perms;
+    CHECK(fs::status(*first).permissions() == (perms::owner_read | perms::owner_write));
+    CHECK(fs::status(state_dir() / "tmp").permissions() == perms::owner_all);
+#endif
 }

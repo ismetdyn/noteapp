@@ -20,6 +20,12 @@ std::vector<std::string> split_command_line(std::string_view command);
 // Hiçbiri yoksa Error{EditorNotFound, "error.editor_not_found", {{"candidates", "a, b"}}}.
 std::expected<std::vector<std::string>, Error> resolve_editor(const Config& config);
 
+// Editör için kullanıcıya özel geçici dosya: state_dir()/tmp/noteapp-<16 hex>.<type> (POSIX'te dizin 0700,
+// dosya 0600; ortak /tmp'de başkası okuyamasın ya da önceden oluşturamasın). Dosya YALNIZ yoksa
+// (O_EXCL / CREATE_NEW) `initial` içeriğiyle oluşturulur. Silmek çağıranın işidir.
+std::expected<std::filesystem::path, Error> create_private_temp_file(std::string_view type,
+                                                                     std::string_view initial);
+
 // Dosya yolu son argüman olarak eklenir. Sıfır dışı çıkış: Error{EditorFailed, "error.editor_failed",
 // {{"editor", ...}, {"code", ...}}}; program bulunamazsa EditorNotFound.
 std::expected<void, Error> run_editor(const Config& config, const std::filesystem::path& file);

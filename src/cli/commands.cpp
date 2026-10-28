@@ -1,6 +1,5 @@
 #include "cli/commands.hpp"
 
-#include "core/atomic_file.hpp"
 #include "core/editor.hpp"
 #include "core/error.hpp"
 #include "core/i18n.hpp"
@@ -15,7 +14,6 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
-#include <random>
 #include <string>
 
 #ifdef _WIN32
@@ -80,32 +78,6 @@ std::string to_utf8(const fs::path& p) {
     return std::string(u.begin(), u.end());
 }
 
-// Editör için geçici dosya: OS temp dizininde noteapp-<rastgele>.<tip>; yalnız yoksa oluşturulur.
-std::expected<fs::path, core::Error> create_temp_file(const std::string& type, const std::string& initial) {
-    std::error_code ec;
-    const fs::path dir = fs::temp_directory_path(ec);
-    if (ec)
-        return std::unexpected(
-            core::Error{core::Error::Code::Io, "error.io", {{"path", "(temp)"}, {"detail", ec.message()}}});
-    std::random_device random;
-    constexpr int kMaxAttempts = 100;  // çakışma döngüsünün sonsuza gitmesine karşı sigorta
-    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
-        const fs::path file = dir / ("noteapp-" + std::to_string(random()) + "." + type);
-        const core::FileWriteResult written = core::write_new_file(file, initial);
-        if (written.already_exists)
-            continue;
-        if (written.ec) {
-            fs::remove(file, ec);
-            return std::unexpected(core::Error{core::Error::Code::Io,
-                                               "error.io",
-                                               {{"path", to_utf8(file)}, {"detail", written.ec.message()}}});
-        }
-        return file;
-    }
-    return std::unexpected(core::Error{
-        core::Error::Code::Io, "error.io", {{"path", to_utf8(dir)}, {"detail", "no free temp file name"}}});
-}
-
 std::string read_file(const fs::path& file) {
     std::ifstream in(file, std::ios::binary);
     return std::string(std::istreambuf_iterator<char>(in), {});
@@ -140,7 +112,7 @@ std::optional<core::Error> save_note(const ParsedArgs& args, const core::Config&
 
 // Editör akışı (SPEC-cli "Hızlı ekleme kuralları"): geçici dosya yalnız veri kaybı riski yoksa silinir.
 int run_editor_flow(const ParsedArgs& args, const core::Config& config, const std::string& initial) {
-    const auto temp = create_temp_file(config.default_type, initial);
+    const auto temp = core::create_private_temp_file(config.default_type, initial);
     if (!temp)
         return fail(temp.error());
 

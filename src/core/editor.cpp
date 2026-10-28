@@ -1,9 +1,13 @@
 #include "core/editor.hpp"
 
+#include "core/atomic_file.hpp"
+#include "core/paths.hpp"
 #include "core/process.hpp"
 
 #include <array>
 #include <cctype>
+#include <cstdio>
+#include <random>
 #include <utility>
 
 namespace noteapp::core {
@@ -16,7 +20,52 @@ constexpr std::array<std::string_view, 2> kPlatformCandidates = {"edit", "notepa
 constexpr std::array<std::string_view, 2> kPlatformCandidates = {"nano", "vi"};
 #endif
 
+Error temp_io_error(const std::filesystem::path& path, std::string_view detail) {
+    const std::u8string u = path.generic_u8string();
+    return Error{Error::Code::Io,
+                 "error.io",
+                 {{"path", std::string(reinterpret_cast<const char*>(u.data()), u.size())},
+                  {"detail", std::string(detail)}}};
+}
+
+// 64 bit rastgelelik: ad tahmin edilemesin (O_EXCL zaten ezmeyi engeller).
+std::string random_name_part() {
+    std::random_device rd;
+    char buffer[17];
+    std::snprintf(buffer, sizeof buffer, "%08x%08x", static_cast<unsigned>(rd()),
+                  static_cast<unsigned>(rd()));
+    return buffer;
+}
+
 }  // namespace
+
+std::expected<std::filesystem::path, Error> create_private_temp_file(std::string_view type,
+                                                                     std::string_view initial) {
+    namespace fs = std::filesystem;
+    const fs::path dir = state_dir() / "tmp";
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    if (ec)
+        return std::unexpected(temp_io_error(dir, ec.message()));
+#ifndef _WIN32
+    fs::permissions(dir, fs::perms::owner_all, fs::perm_options::replace, ec);  // 0700
+    if (ec)
+        return std::unexpected(temp_io_error(dir, ec.message()));
+#endif
+    constexpr int kMaxAttempts = 100;  // çakışma döngüsünün sonsuza gitmesine karşı sigorta
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        const fs::path file = dir / ("noteapp-" + random_name_part() + "." + std::string(type));
+        const FileWriteResult written = write_new_file(file, initial, true);
+        if (written.already_exists)
+            continue;
+        if (written.ec) {
+            fs::remove(file, ec);
+            return std::unexpected(temp_io_error(file, written.ec.message()));
+        }
+        return file;
+    }
+    return std::unexpected(temp_io_error(dir, "no free temp file name"));
+}
 
 // Ters eğik çizgi bilerek düz karakterdir: Windows yolları (C:\Program Files\x.exe) bozulmasın.
 // Tek istisna çift tırnak içindeki \" dizisidir (kaçışlı tırnak). Tek tırnak içinde hiçbir şey

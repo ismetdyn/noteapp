@@ -16,7 +16,9 @@ struct FileWriteResult {
 
 // Dosyayı YALNIZ yoksa oluşturur (O_EXCL / CREATE_NEW: yarış olsa bile ezmez), içeriği yazar,
 // diske zorlar (fsync / FlushFileBuffers) ve kapatır. Hatada dosyayı silmek çağıranın işidir.
-FileWriteResult write_new_file(const std::filesystem::path& file, std::string_view content);
+// owner_only: POSIX'ta 0600 (kişisel/geçici dosyalar); aksi hâlde 0666 & ~umask (notlar).
+FileWriteResult write_new_file(const std::filesystem::path& file, std::string_view content,
+                               bool owner_only = false);
 
 // Var olan ya da olmayan dosyayı atomik değiştirir: aynı dizinde geçici dosya → diske zorla → rename.
 // Hata olursa geçici dosya silinir, hedef bozulmaz. İstisna fırlatmaz; Io hatası "path" argümanı
