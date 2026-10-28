@@ -59,18 +59,6 @@ void NoteListModel::rebuild_scope() {
 
 void NoteListModel::refilter() {
     rows_.clear();
-    if (query_.empty()) {
-        // rank_notes boş sorguda puan eşit kalınca önce kısa yolu koyuyor (SPEC-search "mtime azalan" der);
-        // GUI'nin sözleşmesi saf mtime sırası olduğundan burada açıkça sıralanır.
-        for (std::size_t i = 0; i < scope_.size(); ++i)
-            rows_.push_back({i, {}});
-        std::ranges::sort(rows_, [this](const Row& a, const Row& b) {
-            const core::NoteInfo& x = scope_[a.scope_index];
-            const core::NoteInfo& y = scope_[b.scope_index];
-            return x.mtime != y.mtime ? x.mtime > y.mtime : x.path < y.path;
-        });
-        return;
-    }
     for (auto& ranked : search::rank_notes(query_, scope_))
         rows_.push_back({ranked.index, std::move(ranked.match.positions)});
 }
