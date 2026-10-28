@@ -61,6 +61,10 @@ taşıma, silme, klasör işlemleri) iki kural uygular:
   `recursive_directory_iterator`/`remove_all` içine iner) ve junction yetki istemeden kurulur
   (`mklink /J`); `link/x.md` kök dışına okuma/yazma/taşıma, klasör silme kök dışını silme demekti (T16d).
 - Kanonik yol `notes_dir` içinde kalmalı (`reason = outside_root`).
+- **Windows 8.3 kısa adları (T36):** `GIT~1/config`, `GITIGN~1`, `NOTEAP~1` NotePath'ten geçer ama `.git`, `.gitignore`,
+  `.noteapp`'e çözülür. Var olan ve `~` içeren her bileşenin diskteki uzun adı (`FindFirstFileExW`'nin `cFileName`'i)
+  gizli ad kuralından yeniden geçer → `InvalidPath` (`reason = hidden`); denetlenemezse `Io`. Otomatik 8.3 adları hep
+  `~` taşır; yöneticinin `SetFileShortNameW` ile verdiği tildesiz kısa ad kapsam dışıdır.
 
 ### Not oluşturma ve adlandırma
 - **Slug:** ilk dolu satır → baştaki `#`, `-`, `*`, `>` ve boşluklar atılır → Türkçe harfler ASCII'ye

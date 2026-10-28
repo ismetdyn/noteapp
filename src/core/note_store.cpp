@@ -127,6 +127,20 @@ bool is_hidden(const fs::path& p) {
     return !name.empty() && name.front() == u8'.';
 }
 
+#ifdef _WIN32
+// Var olan bileşenin diskteki uzun adı: 8.3 kısa adla ("GIT~1") verilse de gerçek adı (".git") döner
+// (FindFirstFileExW kısa adla da eşleşir, cFileName uzun addır).
+std::expected<fs::path, std::error_code> long_name(const fs::path& path) {
+    WIN32_FIND_DATAW data;
+    const HANDLE find =
+        FindFirstFileExW(path.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr, 0);
+    if (find == INVALID_HANDLE_VALUE)
+        return std::unexpected(std::error_code(static_cast<int>(GetLastError()), std::system_category()));
+    FindClose(find);
+    return fs::path(data.cFileName);
+}
+#endif
+
 std::string normalize_line_endings(std::string_view text) {
     std::string out;
     out.reserve(text.size());
@@ -167,6 +181,20 @@ std::expected<fs::path, Error> NoteStore::resolve(const NotePath& path) const {
         }
         if (stat->symlink)
             return std::unexpected(invalid_path("link", path.string()));
+#ifdef _WIN32
+        // 8.3 kısa adı gizli adın kuralını atlatır: "GIT~1/config" NotePath'ten geçer ama ".git/config"tir
+        // (8.3 C:'de açık). Kısa adın uzun adı da gizli ad kuralından geçmeli.
+        // ponytail: yalnız '~' içeren bileşen açılır (otomatik 8.3 adları hep '~' taşır); yönetici
+        // SetFileShortNameW ile tildesiz kısa ad verdiyse kaçar — gerekirse her bileşen açılır (+1
+        // FindFirstFile).
+        if (component.native().find(L'~') != std::wstring::npos) {
+            const auto name = long_name(current);
+            if (!name)
+                return std::unexpected(io_error(path.string(), name.error()));
+            if (is_hidden(*name))
+                return std::unexpected(invalid_path("hidden", path.string()));
+        }
+#endif
     }
 
     std::error_code ec;

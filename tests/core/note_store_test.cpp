@@ -537,6 +537,52 @@ TEST_CASE("read, write and create through a directory link to outside the root a
     CHECK(store.folders().empty());  // "link" ve "link/sub" görünmez
 }
 
+#ifdef _WIN32
+namespace {
+
+// Birimin 8.3 kısa adı (ör. ".git" → "GIT~1"); 8.3 kapalıysa ya da ad zaten kısaysa nullopt.
+std::optional<std::string> short_alias(const fs::path& path) {
+    std::wstring buffer(MAX_PATH, L'\0');
+    const DWORD n = GetShortPathNameW(path.c_str(), buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (n == 0 || n >= buffer.size())
+        return std::nullopt;
+    buffer.resize(n);
+    const std::u8string name = fs::path(buffer).filename().u8string();
+    if (name == path.filename().u8string())
+        return std::nullopt;
+    return std::string(name.begin(), name.end());
+}
+
+}  // namespace
+
+// 8.3 kısa adı gizli adı gizler: "GIT~1/config" NotePath'ten geçer ama ".git/config"tir.
+TEST_CASE("8.3 short names of hidden entries are refused like the hidden names themselves") {
+    TempDir tmp;
+    put(tmp.path() / ".git" / "config", "[core]");
+    put(tmp.path() / ".gitignore", "*.tmp");
+    const auto git = short_alias(tmp.path() / ".git");
+    const auto ignore = short_alias(tmp.path() / ".gitignore");
+    if (!git || !ignore) {
+        MESSAGE("8.3 kısa adları bu birimde kapalı; test atlandı");
+        return;
+    }
+    NoteStore store(tmp.path());
+
+    CHECK(refusal(store.read(np(*git + "/config"))) == "hidden");
+    CHECK(refusal(store.write(np(*git + "/config"), "ezildi",
+                              stat_file(tmp.path() / ".git" / "config")->mtime)) == "hidden");
+    CHECK(refusal(store.remove(np(*git + "/config"))) == "hidden");
+    CHECK(refusal(store.create({*git, "yeni", "md", "x"}, kNow)) == "hidden");
+    CHECK(refusal(store.read(np(*ignore))) == "hidden");
+    CHECK(refusal(store.remove(np(*ignore))) == "hidden");
+    CHECK(refusal(store.remove_folder(*git, true)) == "hidden");
+
+    CHECK(slurp(tmp.path() / ".git" / "config") == "[core]");
+    CHECK(slurp(tmp.path() / ".gitignore") == "*.tmp");
+    CHECK_FALSE(fs::exists(tmp.path() / ".git" / "yeni.md"));
+}
+#endif
+
 TEST_CASE("a link to a folder inside the root is refused too: notes never live behind a link") {
     TempDir tmp;
     put(tmp.path() / "real" / "n.md", "n");
