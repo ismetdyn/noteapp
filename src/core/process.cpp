@@ -404,9 +404,10 @@ std::expected<ProcessHandle, Error> spawn_detached(const std::vector<std::string
                                                    const EnvOverrides& env_overrides) {
     if (argv.empty())
         return std::unexpected(Error{Error::Code::InvalidPath, "error.process_empty_command", {}});
-    const std::string& program_name = argv.front();
 
 #ifdef _WIN32
+    // POSIX dalı hatayı spawn_posix'ten hazır alır; adı yalnız Windows dalı kullanır (-Werror).
+    const std::string& program_name = argv.front();
     const auto command = prepare_command(argv);
     if (!command)
         return std::unexpected(command.error());
