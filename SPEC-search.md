@@ -21,9 +21,10 @@ struct ContentResult { core::NotePath path; std::size_t hit_count; std::vector<H
 
 class ContentIndex {                       // bellek içi önbellek; G/Ç yalnız refresh'te
 public:
-    explicit ContentIndex(const core::NoteStore& store);
+    ContentIndex(const core::NoteStore& store, std::size_t max_note_bytes);
     void refresh();                         // stat; yalnız mtime/boyutu değişenleri yeniden okur
     std::vector<ContentResult> search(std::string_view query, std::size_t limit) const;
+    std::size_t read_count() const;         // test kancası: şimdiye kadar (yeniden) okunan dosya sayısı
 };
 struct Folded { std::u32string original, text; std::vector<std::size_t> byte_offsets; };   // kod noktası başına 1:1\r
 Folded fold(std::string_view utf8);          // eşleştirme için katlama (aşağıda); geçersiz bayt -> U+FFFD\r

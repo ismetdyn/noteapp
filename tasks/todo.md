@@ -141,6 +141,7 @@
 - [x] modül tamam; CLI bağlantısı T10 sonrası
 
 ### T16: `ContentIndex` + `note find`
+- [x] modül tamam; CLI bağlantısı T10 sonrası
 - [ ] **Kabul:** SPEC-search kabul 4–6 · `find` çıktısı `yol:satır: kesit`, TTY'de vurgulu.
 - **Doğrulama:** `B && T(search) && T(cli)` · **Bağımlılık:** T15 · **Dosyalar:** `src/search/{content_index.hpp,content_index.cpp}`,
   `tests/search/content_index_test.cpp`, `src/cli/commands.cpp`, `tests/cli/cli_search_test.cpp` · **Boyut:** M
