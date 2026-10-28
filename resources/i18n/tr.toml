@@ -119,6 +119,9 @@ binary_note = "İkili not gösterilemez: {path}"
 ls_usage = "Kullanım: note ls [SORGU] [-f KLASÖR]"
 show_usage = "Kullanım: note show SORGU"
 edit_usage = "Kullanım: note edit SORGU"
+find_usage = "Kullanım: note find TERİM... [--limit N]"
+find_no_match = "'{query}' geçen not yok"
+invalid_limit = "--limit pozitif bir tam sayı ister, verilen: '{value}'"
 help = """
 Kullanım:
   note [-t TİP] [-f KLASÖR] [-n AD] [--no-sync] METİN...   Argümanlardan not ekler

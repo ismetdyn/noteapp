@@ -1,12 +1,14 @@
 #include "cli/commands.hpp"
 
 #include "cli/confirm.hpp"
+#include "cli/highlight.hpp"
 #include "core/editor.hpp"
 #include "core/error.hpp"
 #include "core/i18n.hpp"
 #include "core/note_store.hpp"
 #include "core/version.hpp"
 #include "detect/detect.hpp"
+#include "search/content_index.hpp"
 #include "search/fuzzy.hpp"
 
 #include <algorithm>
@@ -16,6 +18,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -35,6 +38,14 @@ bool stdin_is_tty() {
     return _isatty(_fileno(stdin)) != 0;
 #else
     return isatty(STDIN_FILENO) != 0;
+#endif
+}
+
+bool stdout_is_tty() {
+#ifdef _WIN32
+    return _isatty(_fileno(stdout)) != 0;
+#else
+    return isatty(STDOUT_FILENO) != 0;
 #endif
 }
 
@@ -359,7 +370,66 @@ int run_edit(const ParsedArgs& args, const core::Config& config) {
     return kExitOk;
 }
 
+int run_find(const ParsedArgs& args, const core::Config& config) {
+    std::size_t limit = std::numeric_limits<std::size_t>::max();
+    std::string query;
+    bool only_terms = false;  // `--` sonrası her şey terimdir
+    for (std::size_t i = 0; i < args.rest.size(); ++i) {
+        const std::string& arg = args.rest[i];
+        if (only_terms || arg.size() < 2 || arg[0] != '-') {
+            query += (query.empty() ? "" : " ") + arg;
+        } else if (arg == "--") {
+            only_terms = true;
+        } else if (arg == "--limit") {
+            if (i + 1 >= args.rest.size()) {
+                std::cerr << core::tr("cli.missing_value", {{"option", arg}}) << '\n';
+                return kExitUsage;
+            }
+            const std::string& value = args.rest[++i];
+            std::size_t used = 0;
+            unsigned long long parsed = 0;
+            try {
+                parsed = std::stoull(value, &used);
+            } catch (const std::exception&) {  // sayı değil / taşma: kullanım hatası
+                used = 0;
+            }
+            if (used != value.size() || value.empty() || value[0] == '-' || parsed == 0) {
+                std::cerr << core::tr("cli.invalid_limit", {{"value", value}}) << '\n';
+                return kExitUsage;
+            }
+            limit = static_cast<std::size_t>(parsed);
+        } else {
+            std::cerr << core::tr("cli.unknown_option", {{"option", arg}}) << '\n';
+            return kExitUsage;
+        }
+    }
+    if (query.empty()) {
+        std::cerr << core::tr("cli.find_usage") << '\n';
+        return kExitUsage;
+    }
+
+    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    search::ContentIndex index(store, config.tuning.max_note_bytes);
+    index.refresh();
+    const auto results = index.search(query, limit);
+    if (results.empty()) {
+        std::cerr << core::tr("cli.find_no_match", {{"query", query}}) << '\n';
+        return kExitUser;
+    }
+
+    const bool color = stdout_is_tty();  // boruya/dosyaya kaçış kodu yazılmaz
+    for (const search::ContentResult& result : results) {
+        for (const search::Hit& hit : result.first_hits) {
+            std::cout << result.path.string() << ':' << hit.line << ": "
+                      << (color ? highlight_ranges(hit.snippet, hit.ranges) : hit.snippet) << '\n';
+        }
+    }
+    return kExitOk;
+}
+
 int run_reserved(const ParsedArgs& args, const core::Config& config) {
+    if (args.command == "find")
+        return run_find(args, config);
     if (args.command == "rm")
         return run_rm(args, config);
     if (args.command == "mv")
