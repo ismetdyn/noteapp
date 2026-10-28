@@ -58,7 +58,9 @@ sonda boşluk/nokta; 255 bayttan uzun bileşen. Ek olarak `NoteStore` her erişi
 - Klasör yoksa oluşturulur. Yeni not içeriği LF satır sonuyla yazılır; mevcut notların satır sonlarına dokunulmaz.
 
 ### Yazma
-- **Atomik:** aynı dizinde `.<ad>.<rastgele>.tmp` → flush → rename (Windows'ta `MoveFileExW` + `REPLACE_EXISTING`).
+- **Atomik:** aynı dizinde `.<ad>.<rastgele>.tmp` → fsync (`FlushFileBuffers` / `fsync`) → `std::filesystem::rename`
+  (MinGW libstdc++'ta da var olan hedefi değiştirdiği doğrulandı, 2026-10-28). Yeni not `create`'te geçici dosyasız,
+  dışlayıcı oluşturmayla (`CREATE_NEW` / `O_EXCL`) yazılır; yarış durumunda bile var olan dosya ezilmez.
   Hata olursa geçici dosya silinir, orijinal dosya bozulmamış kalır.
 - **Dışarıdan değişiklik:** `write` diskteki mtime `expected_mtime`'dan farklıysa yazmaz → `ModifiedExternally`.
 - UTF-8 BOM okunurken korunur, yazılırken olduğu gibi geri yazılır.
