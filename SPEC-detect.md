@@ -40,7 +40,11 @@ Suggestion suggest(std::string_view content, const Options& options);
    - `md`: `#`–`######` başlık, `- ` / `* ` / `1. ` listeler, ```` ``` ```` çitleri, `[x](y)`, `**x**`, `|` tabloları, `- [ ]`
    - Ayrım kuralları: `#include` → Java puanı sıfırlanır; `import java.` / `package …;` → C++ puanı sıfırlanır;
      çit (```` ``` ````) içindeki kod, kod tiplerine **sayılmaz** (Markdown içinde kod bloğu olan belge `md`'dir).
-6. En yüksek puan `min_confidence` altındaysa: Markdown sinyali yoksa `txt`, varsa `md`; hiçbiri yoksa `default_type`.
+6. En yüksek puan `min_confidence` altındaysa: Markdown sinyali varsa `md`, yoksa `txt` (`detected = true`).
+   `default_type` yalnız boş / tek dolu satırlı girdide döner (kural 1).
+7. **Sınırlamalar (uygulamada netleşti):** Python `:` blok sinyali yalnız Python anahtar kelimesiyle başlayıp
+   sonraki dolu satırı girintili satırlarda sayılır (Türkçe düz yazı korunur); tek `# ` başlığı en çok 1,5 puan
+   (py/sh yorumları Markdown sayılmasın); CSV için ayrıca Markdown puanı < 3 ve ortalama alan uzunluğu ≤ 40.
 
 Yalnızca ilk `max_scan_bytes` taranır; satır bazlı, regex motoru zorunlu değil (performans).
 
