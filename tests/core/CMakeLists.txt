@@ -1,2 +1,3 @@
 noteapp_add_test(core
-    smoke_test.cpp)
+    smoke_test.cpp
+    text_test.cpp)

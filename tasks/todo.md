@@ -66,7 +66,7 @@
   `tests/core/note_path_test.cpp` · **Boyut:** S
 
 ### T06: UTF-8 yardımcıları + transliterasyon + `slugify`
-- [ ] **Kabul:** `slugify("# Toplantı Notları: Q4!") == "toplanti-notlari-q4"` · boş/sembol girdi zaman damgalı ad ·
+- [x] **Kabul:** `slugify("# Toplantı Notları: Q4!") == "toplanti-notlari-q4"` · boş/sembol girdi zaman damgalı ad ·
   60 karakter sınırı tire sınırında · bozuk UTF-8 çökertmez.
 - **Doğrulama:** `B && T(core)` · **Bağımlılık:** T01 · **Dosyalar:** `src/core/{text.hpp,text.cpp}`,
   `tests/core/text_test.cpp` · **Boyut:** S
