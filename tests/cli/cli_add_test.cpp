@@ -93,7 +93,7 @@ TEST_CASE("double dash lets a command name be note text") {
 
 TEST_CASE("reserved commands exit 2 until implemented") {
     const Sandbox box;
-    for (const char* command : {"export", "sync", "config"}) {
+    for (const char* command : {"export", "sync"}) {
         const auto result = box.run({command});
         CHECK(result.exit_code == 2);
         CHECK(result.err.find(command) != std::string::npos);

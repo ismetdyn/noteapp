@@ -13,7 +13,7 @@ bool is_reserved_command(std::string_view word);
 struct ParsedArgs {
     enum class Kind {
         Add,       // hızlı ekleme (metin/stdin/editör)
-        Help,      // --help, -h, help [KOMUT]
+        Help,      // --help, -h, help [KOMUT]; `help KOMUT` için `command` dolu
         Version,   // --version
         Reserved,  // ayrılmış alt komut; `command` + `rest` dolu
         Invalid    // kullanım hatası; `error_key` + `error_args` dolu (çıkış 2)

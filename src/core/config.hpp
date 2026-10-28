@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace noteapp::core {
@@ -62,6 +63,15 @@ LoadedConfig load_config();
 
 // Saf çekirdek: gömülü varsayılanların üstüne `user_toml` biner. Dosya erişimi yok.
 LoadedConfig parse_config(std::string_view user_toml);
+
+// Kullanıcıya dönük ayarlar (tuning ve token hariç) sıralı {anahtar, değer} metinleri olarak; `sync.*`
+// noktalı anahtardır, liste "md, txt" biçiminde birleşir. `note config list/get` bunu kullanır.
+std::vector<std::pair<std::string, std::string>> config_entries(const Config& config);
+
+// Tek bir ayarı metinden (ör. CLI argümanı) şemadaki türüne çevirip `config`'e uygular. Doğrulama
+// parse_config ile AYNIDIR (aynı kurallar); geçersiz değer/bilinmeyen anahtarda `config` değişmez ve ilk
+// uyarı Error olarak döner (ConfigInvalid). `types` virgülle ayrılır. Kaydetmek çağıranın işidir.
+std::expected<void, Error> set_config_value(Config& config, std::string_view key, std::string_view value);
 
 // Kullanıcıya dönük tüm anahtarları (tuning hariç) config_file()'a atomik yazar; dizini oluşturur.
 // Yorumlar korunmaz.

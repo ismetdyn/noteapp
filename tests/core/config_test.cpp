@@ -8,6 +8,7 @@
 #include <doctest/doctest.h>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <random>
 #include <string>
@@ -278,4 +279,65 @@ TEST_CASE("load_config with a corrupt file returns defaults and a warning instea
     const LoadedConfig loaded = load_config();
     CHECK(loaded.config == parse_config("").config);
     CHECK_FALSE(loaded.warnings.empty());
+}
+
+TEST_CASE("set_config_value applies typed values with the same rules as parse_config") {
+    Config c = parse_config("").config;
+
+    CHECK(set_config_value(c, "language", "en"));
+    CHECK(c.language == "en");
+    CHECK(set_config_value(c, "sync.enabled", "true"));
+    CHECK(c.sync.enabled);
+    CHECK(set_config_value(c, "sync.idle_seconds", "45"));
+    CHECK(c.sync.idle_seconds == 45);
+    CHECK(set_config_value(c, "sync.remote", "https://example.com/n.git"));
+    CHECK(c.sync.remote == "https://example.com/n.git");
+    CHECK(set_config_value(c, "editor", ""));  // boş editör geçerli: platform varsayılanı
+    CHECK(set_config_value(c, "types", "md, txt ,py"));
+    CHECK(c.types == std::vector<std::string>{"md", "txt", "py"});
+    CHECK(set_config_value(c, "notes_dir", "~/elsewhere"));
+    CHECK(c.notes_dir == expand_user_path("~/elsewhere"));
+}
+
+TEST_CASE("set_config_value rejects bad values and unknown keys without touching the config") {
+    const Config original = parse_config("").config;
+    Config c = original;
+
+    for (const auto& [key, value] :
+         std::vector<std::pair<std::string, std::string>>{{"language", "de"},
+                                                          {"sync.enabled", "yes"},
+                                                          {"sync.idle_seconds", "0"},
+                                                          {"sync.idle_seconds", "abc"},
+                                                          {"sync.idle_seconds", "3000000000"},
+                                                          {"sync.branch", ""},
+                                                          {"default_type", "a.b"},
+                                                          {"types", "md,,txt"},
+                                                          {"types", "md,a.b"},
+                                                          {"notes_dir", ""}}) {
+        CAPTURE(key);
+        CAPTURE(value);
+        const auto result = set_config_value(c, key, value);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == Error::Code::ConfigInvalid);
+        CHECK(c == original);
+    }
+
+    const auto unknown = set_config_value(c, "nope", "1");
+    REQUIRE_FALSE(unknown);
+    CHECK(unknown.error().message_key == "config.unknown_key");
+    CHECK_FALSE(set_config_value(c, "tuning.autosave_ms", "5"));  // ayar arayüzünde görünmez
+    CHECK_FALSE(set_config_value(c, "sync.token", "secret"));
+    CHECK(c == original);
+}
+
+TEST_CASE("config_entries lists the user-facing keys with dotted sync keys and joined lists") {
+    const auto entries = config_entries(parse_config("").config);
+    const std::map<std::string, std::string> by_key(entries.begin(), entries.end());
+
+    CHECK(by_key.at("language") == "auto");
+    CHECK(by_key.at("types") == "md, txt, csv, cpp, java, py, json, sh");
+    CHECK(by_key.at("sync.enabled") == "false");
+    CHECK(by_key.at("sync.idle_seconds") == "30");
+    CHECK(by_key.count("tuning.autosave_ms") == 0);
+    CHECK(entries.front().first == "language");
 }

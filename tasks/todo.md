@@ -159,7 +159,7 @@
   `tests/core/note_store_test.cpp`, `tests/search/content_index_test.cpp` · **Boyut:** S
 
 ### T17: `note config` komutları
-- [ ] **Kabul:** `path|list|get|set` çalışır · geçersiz anahtar/değer çıkış 2 · SPEC-cli kabul 9 (dil değişimi).
+- [x] **Kabul:** `path|list|get|set` çalışır · geçersiz anahtar/değer çıkış 2 · SPEC-cli kabul 9 (dil değişimi).
 - **Doğrulama:** `B && T(cli)` · **Bağımlılık:** T16 · **Dosyalar:** `src/cli/commands.cpp`, `src/core/config.cpp`,
   `tests/cli/cli_config_test.cpp` · **Boyut:** S
 

@@ -6,6 +6,7 @@
 #include "core/error.hpp"
 #include "core/i18n.hpp"
 #include "core/note_store.hpp"
+#include "core/paths.hpp"
 #include "core/version.hpp"
 #include "detect/detect.hpp"
 #include "search/content_index.hpp"
@@ -225,9 +226,83 @@ int run_add(const ParsedArgs& args, const core::Config& config) {
     return kExitOk;
 }
 
-int run_help() {
-    std::cout << core::tr("cli.help");
+int run_help(const ParsedArgs& args) {
+    if (args.command.empty() || args.command == "help") {
+        std::cout << core::tr("cli.help");
+        return kExitOk;
+    }
+    // Komut başına metin katalogda `cli.help_<komut>` anahtarıdır; yalnız bilinen komut adları aranır.
+    if (!is_reserved_command(args.command)) {
+        std::cerr << core::tr("cli.unknown_command", {{"command", args.command}}) << '\n';
+        return kExitUsage;
+    }
+    std::cout << core::tr("cli.help_" + args.command) << '\n';
     return kExitOk;
+}
+
+namespace {
+
+// Token kasada (T27'de `note sync login`) tutulur; config'e yazılmaz/okunmaz (SPEC-cli kabul 8).
+bool is_token_key(std::string_view key) {
+    return key == "sync.token";
+}
+
+}  // namespace
+
+int run_config(const ParsedArgs& args, const core::Config& config) {
+    const std::vector<std::string>& rest = args.rest;
+    const std::string verb = rest.empty() ? "" : rest.front();
+    const std::size_t operands = rest.empty() ? 0 : rest.size() - 1;
+
+    if (verb == "path" && operands == 0) {
+        std::cout << to_utf8(core::config_file()) << '\n';
+        return kExitOk;
+    }
+    if (verb == "list" && operands == 0) {
+        for (const auto& [key, value] : core::config_entries(config))
+            std::cout << key << " = " << value << '\n';
+        return kExitOk;
+    }
+    if ((verb == "get" && operands == 1) || (verb == "set" && operands == 2)) {
+        const std::string& key = rest[1];
+        if (is_token_key(key)) {
+            std::cerr << core::tr("cli.token_not_config") << '\n';
+            return kExitUsage;
+        }
+        const auto entries = core::config_entries(config);
+        const auto entry = std::ranges::find(entries, key, &std::pair<std::string, std::string>::first);
+        if (entry == entries.end()) {
+            std::cerr << core::tr("cli.config_unknown_key", {{"key", key}}) << '\n';
+            return kExitUsage;
+        }
+        if (verb == "get") {
+            std::cout << entry->second << '\n';
+            return kExitOk;
+        }
+
+        // Bozuk (sözdizimi hatalı) dosya varsayılanlarla okunur; üzerine yazmak elle yazılmış ayarları yok
+        // ederdi. Bu yüzden kaydetmeden önce dosyanın gerçekten okunabildiği doğrulanır.
+        core::LoadedConfig fresh = core::load_config();
+        for (const core::Error& warning : fresh.warnings) {
+            if (warning.message_key == "config.syntax_error" || warning.message_key == "config.unreadable") {
+                std::cerr << core::format_error(warning) << '\n' << core::tr("cli.config_not_saved") << '\n';
+                return kExitUser;
+            }
+        }
+        if (const auto set = core::set_config_value(fresh.config, key, rest[2]); !set) {
+            std::cerr << core::format_error(set.error()) << '\n' << core::tr("cli.config_not_saved") << '\n';
+            return kExitUsage;
+        }
+        if (const auto saved = core::save_config(fresh.config); !saved)
+            return fail(saved.error());
+        // Normalleşmiş değeri yazdır (ör. "md, py ,rs" → "md, py, rs"): kaydedilen budur.
+        for (const auto& [saved_key, saved_value] : core::config_entries(fresh.config))
+            if (saved_key == key)
+                std::cout << saved_key << " = " << saved_value << '\n';
+        return kExitOk;
+    }
+    std::cerr << core::tr("cli.config_usage") << '\n';
+    return kExitUsage;
 }
 
 int run_version() {
@@ -430,6 +505,8 @@ int run_find(const ParsedArgs& args, const core::Config& config) {
 int run_reserved(const ParsedArgs& args, const core::Config& config) {
     if (args.command == "find")
         return run_find(args, config);
+    if (args.command == "config")
+        return run_config(args, config);
     if (args.command == "rm")
         return run_rm(args, config);
     if (args.command == "mv")

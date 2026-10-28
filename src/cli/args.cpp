@@ -42,6 +42,8 @@ ParsedArgs parse_args(const std::vector<std::string>& args) {
     if (!args.empty() && is_reserved_command(args[0])) {
         if (args[0] == "help") {
             parsed.kind = ParsedArgs::Kind::Help;
+            if (args.size() > 1)
+                parsed.command = args[1];  // `note help KOMUT`
             return parsed;
         }
         parsed.kind = ParsedArgs::Kind::Reserved;

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <climits>
 #include <cstdint>
 #include <fstream>
@@ -248,7 +249,117 @@ Error io_error(const fs::path& path, std::string_view detail) {
     return Error{Error::Code::Io, "error.io", {{"path", to_utf8(path)}, {"detail", std::string(detail)}}};
 }
 
+// Kullanıcıya dönük ayarlar (tuning ve token hariç): anahtar, değer türü, değeri metne çeviren işlev.
+// `set_config_value` ve `config_entries` aynı tablodan beslenir; şema tek yerde.
+enum class ValueKind { String, Bool, Integer, StringList };
+
+struct Setting {
+    std::string_view key;
+    ValueKind kind;
+    std::string (*get)(const Config&);
+};
+
+std::string join(const std::vector<std::string>& items) {
+    std::string out;
+    for (std::size_t i = 0; i < items.size(); ++i)
+        out += (i == 0 ? "" : ", ") + items[i];
+    return out;
+}
+
+const std::array<Setting, 12>& settings() {
+    static const std::array<Setting, 12> table = {{
+        {"language", ValueKind::String, [](const Config& c) { return c.language; }},
+        {"notes_dir", ValueKind::String, [](const Config& c) { return to_utf8(c.notes_dir); }},
+        {"editor", ValueKind::String, [](const Config& c) { return c.editor; }},
+        {"default_type", ValueKind::String, [](const Config& c) { return c.default_type; }},
+        {"default_folder", ValueKind::String, [](const Config& c) { return c.default_folder; }},
+        {"types", ValueKind::StringList, [](const Config& c) { return join(c.types); }},
+        {"sync.enabled", ValueKind::Bool,
+         [](const Config& c) { return std::string(c.sync.enabled ? "true" : "false"); }},
+        {"sync.remote", ValueKind::String, [](const Config& c) { return c.sync.remote; }},
+        {"sync.branch", ValueKind::String, [](const Config& c) { return c.sync.branch; }},
+        {"sync.idle_seconds", ValueKind::Integer,
+         [](const Config& c) { return std::to_string(c.sync.idle_seconds); }},
+        {"sync.author_name", ValueKind::String, [](const Config& c) { return c.sync.author_name; }},
+        {"sync.author_email", ValueKind::String, [](const Config& c) { return c.sync.author_email; }},
+    }};
+    return table;
+}
+
+std::string_view trim(std::string_view text) {
+    constexpr std::string_view kBlanks = " \t";
+    const std::size_t first = text.find_first_not_of(kBlanks);
+    if (first == std::string_view::npos)
+        return {};
+    return text.substr(first, text.find_last_not_of(kBlanks) - first + 1);
+}
+
 }  // namespace
+
+std::vector<std::pair<std::string, std::string>> config_entries(const Config& config) {
+    std::vector<std::pair<std::string, std::string>> entries;
+    for (const Setting& setting : settings())
+        entries.emplace_back(std::string(setting.key), setting.get(config));
+    return entries;
+}
+
+std::expected<void, Error> set_config_value(Config& config, std::string_view key, std::string_view value) {
+    const auto setting = std::ranges::find(settings(), key, &Setting::key);
+    if (setting == settings().end())
+        return std::unexpected(
+            Error{Error::Code::ConfigInvalid, "config.unknown_key", {{"key", std::string(key)}}});
+
+    // Değer, şemadaki türüyle TOML düğümüne çevrilir ve dosya yüklemesiyle AYNI `apply` doğrulamasından
+    // geçer. Türe uymayan metin (ör. "abc" tamsayı için) string kalır; apply bunu tür hatası olarak raporlar.
+    toml::table root;
+    toml::table* target = &root;
+    std::string_view leaf = key;
+    if (const auto dot = key.find('.'); dot != std::string_view::npos) {
+        target = root.insert_or_assign(key.substr(0, dot), toml::table{}).first->second.as_table();
+        leaf = key.substr(dot + 1);
+    }
+    switch (setting->kind) {
+    case ValueKind::Bool:
+        if (value == "true" || value == "false")
+            target->insert_or_assign(leaf, value == "true");
+        else
+            target->insert_or_assign(leaf, std::string(value));
+        break;
+    case ValueKind::Integer: {
+        std::int64_t number = 0;
+        const char* end = value.data() + value.size();
+        if (const auto parsed = std::from_chars(value.data(), end, number);
+            parsed.ec == std::errc{} && parsed.ptr == end)
+            target->insert_or_assign(leaf, number);
+        else
+            target->insert_or_assign(leaf, std::string(value));
+        break;
+    }
+    case ValueKind::StringList: {
+        toml::array items;
+        for (std::size_t start = 0;;) {
+            const std::size_t comma = value.find(',', start);
+            items.push_back(std::string(trim(value.substr(start, comma - start))));
+            if (comma == std::string_view::npos)
+                break;
+            start = comma + 1;
+        }
+        target->insert_or_assign(leaf, std::move(items));
+        break;
+    }
+    case ValueKind::String:
+        target->insert_or_assign(leaf, std::string(value));
+        break;
+    }
+
+    Config candidate = config;
+    std::vector<Error> problems;
+    apply(root, candidate, problems);
+    if (!problems.empty())
+        return std::unexpected(std::move(problems.front()));
+    config = std::move(candidate);
+    return {};
+}
 
 LoadedConfig parse_config(std::string_view user_toml) {
     LoadedConfig loaded{};

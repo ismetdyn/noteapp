@@ -13,7 +13,8 @@ inline constexpr int kExitInternal = 3;
 
 // Komut gövdeleri düz fonksiyonlardır; hepsi çıkış kodunu döner, çıktıyı stdout/stderr'e yazar.
 int run_add(const ParsedArgs& args, const core::Config& config);
-int run_help();
+int run_help(const ParsedArgs& args);  // args.command doluysa yalnız o komutun yardımı
+int run_config(const ParsedArgs& args, const core::Config& config);  // args.rest: path|list|get K|set K V
 int run_version();
 int run_rm(const ParsedArgs& args, const core::Config& config);    // args.rest: YOL [-y]
 int run_mv(const ParsedArgs& args, const core::Config& config);    // args.rest: KAYNAK HEDEF

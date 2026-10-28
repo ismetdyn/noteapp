@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
         code = cli::run_add(args, loaded.config);
         break;
     case cli::ParsedArgs::Kind::Help:
-        code = cli::run_help();
+        code = cli::run_help(args);
         break;
     case cli::ParsedArgs::Kind::Version:
         code = cli::run_version();
