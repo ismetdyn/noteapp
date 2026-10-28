@@ -11,7 +11,7 @@
 
 ```cpp
 namespace noteapp::sync {
-enum class Auth { Https, Ssh };                         // remote şemasından türetilir
+enum class Auth { None, Https, Ssh };                   // remote şemasından türetilir (auth.hpp)
 struct SyncResult { int committed; int pulled; bool pushed; std::vector<core::NotePath> conflict_copies; };
 struct SyncStatus { std::optional<std::chrono::system_clock::time_point> last_success; std::optional<core::Error> last_error; };
 struct Author { std::string name; std::string email; };
@@ -27,7 +27,7 @@ public:
 class SyncService {
 public:
     explicit SyncService(const core::Config&);
-    std::expected<void, core::Error> enable(std::string_view remote);   // ilk kurulum (aşağıda)
+    std::expected<void, core::Error> enable(std::string_view remote, bool replace_origin = false);  // ilk kurulum
     std::expected<SyncResult, core::Error> sync_now();                 // tek tam döngü
     SyncStatus status() const;                                          // <durum>/sync-status.toml
 };
@@ -144,6 +144,31 @@ açmak `enable`'ı çağırır (repo varsa no-op).
    (fazlalık, kayıp değil). Merge başladıktan sonraki bir hata (ör. dosya/klasör ad çakışması) depoyu MERGE
    durumunda bırakır → sonraki senkron `sync.repo_busy_state`; iki tarafın içeriği HEAD'de ve uzak dalda durur.
    Push yarışı: ret → fetch → yeniden merge → push (bir kez); testte `sync_now(before_push)` dikiş noktasıyla.
+8. **Kurulum ve kimlik (T26):**
+   - `enable` senkron kilidi altında koşar (arka plan senkronu yarım depoda commit atmasın). `enable` kodu
+     `sync_service.cpp`'de (plandaki `enable.cpp` değil): commit/fetch/integrate/push yardımcılarını paylaşır.
+   - Adres sınırda bir kez doğrulanır (`validate_remote`), `enable` ve her `sync_now` ağa çıkmadan önce:
+     ssh dışında URL'de kullanıcı bilgisi → `sync.remote_has_credentials` (adres hata/log'a hiç girmez);
+     boş adres, boş ya da `-` ile başlayan host (ssh seçenek enjeksiyonu) ve **var olmayan yerel klasör** →
+     `sync.remote_invalid`. Sonuncusu gerekli: Windows'ta libgit2 var olmayan `C:/…` yolunu scp biçimi sayıp
+     ön kontrolsüz sistem `ssh`'ını başlatıyor (host `C`).
+   - `http://` token almaz (Auth::None). HTTPS token'ı ağa çıkmadan çözülür (yoksa ağsız `sync.token_missing`).
+     Callback kimliği yalnız remote'un kendi host'una, https ile ve userpass olarak verir; ikinci çağrı,
+     başka host ya da http → `sync.auth_failed`. Tek deneme kuralı ağ işlemi (ls, fetch, push) başınadır.
+   - Kasa kaydı: package `noteapp`, servis `noteapp`, hesap = küçük harfli host (Windows Credential Manager'da
+     `noteapp.noteapp/<host>`). `NotFound` dışındaki her kasa hatası `sync.keychain_unavailable`; düz dosya yok.
+     `store_token` baştaki/sondaki boşluğu atar; boş token `sync.token_missing`.
+   - SSH ön kontrolü `ssh-keygen -F <host>` (port 22 dışıysa `[host]:port`); `~/.ssh/config` takma adları
+     (Host … HostName) görülmez. ssh-keygen bulduğu satırı (açık host anahtarı) stdout'a yazar: arka plan
+     senkron süreci (T27) stdout/stderr'i devralmamalı.
+   - "Uzak boş" = `git_remote_ls`'te `refs/` ile başlayan ref yok. Uzakta geçmiş var ama `sync.branch` dalı
+     yoksa `sync.remote_branch_missing` (both_non_empty'den önce). Klon = init + origin + fetch + doğmamış dala
+     hızlı ileri (döngü 4'ün `integrate`'i); gizli girdili ya da var olmayan klasörde de çalışır.
+   - Hata olursa yalnız bu çağrının **oluşturduğu** `.git` (salt-okunur bitleri temizlenerek) ve yazdığı
+     `.gitignore` silinir; notlara dokunulmaz, yarıda kalan bir klonun yazdığı dosyalar da silinmez.
+   - `replace_origin`: origin silinip yeniden oluşturulur; eski `origin/*` takip dalları da gider (yoksa boş yeni
+     remote'a push "güncel" sanılıp yapılmazdı). `remote_mismatch`'teki `current` adresinden kimlik ayıklanır.
+   - Var olan `.gitignore`'a yalnız eksik satırlar eklenir (CRLF korunur); okunamıyorsa üzerine yazılmaz.
 
 ## Kapsam dışı
 Rebase, seçmeli (dosya bazlı) senkron, GitHub dışı sağlayıcılara özel destek (genel git remote zaten çalışır),

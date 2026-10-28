@@ -241,10 +241,11 @@
   `tests/sync/sync_conflict_test.cpp` · **Boyut:** M
 
 ### T26: 🔴 `enable` + kimlik doğrulama
-- [ ] **Kabul:** SPEC-sync kabul 7–8 (5 kurulum durumu, callback tek deneme, token sızıntısı grep testi) · `.gitignore` ·
+- [x] **Kabul:** SPEC-sync kabul 7–8 (5 kurulum durumu, callback tek deneme, token sızıntısı grep testi) · `.gitignore` ·
   HTTPS token: env → keychain · SSH: exec · Secret Service yoksa düz dosyaya düşmez.
-- **Doğrulama:** `B && T(sync)`, `F` · **Bağımlılık:** T25 · **Dosyalar:** `src/sync/{enable.cpp,auth.hpp,auth.cpp}`,
-  `tests/sync/{enable_test.cpp,auth_test.cpp}` · **Boyut:** M
+- **Doğrulama:** `B && T(sync)`, `F` · **Bağımlılık:** T25 · **Dosyalar:** `src/sync/{auth.hpp,auth.cpp}`, `enable`
+  `sync_service.cpp`'de (yardımcıları paylaşır; SPEC-sync karar 8), `tests/sync/{enable_test.cpp,auth_test.cpp}`,
+  `tests/sync/fake_ssh_keygen.cpp` · **Boyut:** M
 
 ### T27: `AutoSync` + `note sync …` + arka plan senkronu
 - [ ] **Kabul:** SPEC-sync kabul 9 · `sync`, `status`, `on/off`, `init`, `login/logout` (ekosuz giriş) · hızlı eklemede

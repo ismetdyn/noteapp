@@ -5,8 +5,10 @@
 #include "core/log.hpp"
 #include "core/paths.hpp"
 #include "core/process.hpp"
+#include "sync/auth.hpp"
 #include "sync/lock.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
@@ -245,7 +247,37 @@ std::expected<int, core::Error> commit_all(git_repository* repo, const std::stri
     return changed;
 }
 
-std::expected<void, core::Error> fetch(git_remote* remote, const std::string& branch) {
+// Bir ağ işleminin (ls, fetch, push) callback yükü. Kimliğin tek deneme kuralı işlem başınadır: her işlem
+// hazırlanmış kimliğin taze bir kopyasıyla başlar. Push'ta sunucunun ref reddi de buraya düşer.
+struct Exchange {
+    Credentials credentials;
+    std::string rejection;
+};
+
+int give_credentials(git_credential** out, const char* url, const char* /*username_from_url*/,
+                     unsigned int allowed_types, void* payload) {
+    return acquire_credentials(out, url, allowed_types, static_cast<Exchange*>(payload)->credentials);
+}
+
+int record_rejection(const char* /*refname*/, const char* status, void* payload) {
+    if (status != nullptr)
+        static_cast<Exchange*>(payload)->rejection = status;
+    return 0;
+}
+
+void attach(git_remote_callbacks& callbacks, Exchange& exchange) {
+    callbacks.credentials = give_credentials;
+    callbacks.push_update_reference = record_rejection;
+    callbacks.payload = &exchange;
+}
+
+// Callback kimliği reddettiyse onun nedeni (sync.auth_failed), değilse libgit2'ninki.
+core::Error network_failure(const Exchange& exchange) {
+    return exchange.credentials.error ? *exchange.credentials.error : git_failure();
+}
+
+std::expected<void, core::Error> fetch(git_remote* remote, const std::string& branch,
+                                       const Credentials& credentials) {
     // '+' yalnız yerel takip dalını zorla günceller; uzak geçmişe yazılmaz.
     std::string refspec = "+" + local_ref(branch) + ":" + tracking_ref(branch);
     char* refspecs_raw[] = {refspec.data()};
@@ -253,7 +285,10 @@ std::expected<void, core::Error> fetch(git_remote* remote, const std::string& br
     git_fetch_options options;
     TRY_GIT(git_fetch_options_init(&options, GIT_FETCH_OPTIONS_VERSION));
     options.download_tags = GIT_REMOTE_DOWNLOAD_TAGS_NONE;
-    TRY_GIT(git_remote_fetch(remote, &refspecs, &options, nullptr));
+    Exchange exchange{credentials, {}};
+    attach(options.callbacks, exchange);
+    if (git_remote_fetch(remote, &refspecs, &options, nullptr) < 0)
+        return std::unexpected(network_failure(exchange));
     return {};
 }
 
@@ -464,15 +499,9 @@ std::expected<int, core::Error> integrate(git_repository* repo, const std::strin
     return changed;
 }
 
-int record_rejection(const char* /*refname*/, const char* status, void* payload) {
-    if (status != nullptr)
-        *static_cast<std::string*>(payload) = status;
-    return 0;
-}
-
 // Döngü 5: yerel dal uzaktakinden öndeyse push. Dönüş: push yapıldı mı. Ret "sync.push_rejected".
 std::expected<bool, core::Error> push_if_ahead(git_repository* repo, git_remote* remote,
-                                               const std::string& branch) {
+                                               const std::string& branch, const Credentials& credentials) {
     const std::string local = local_ref(branch);
     git_oid local_id;
     if (const int rc = git_reference_name_to_id(&local_id, repo, local.c_str()); rc == GIT_ENOTFOUND)
@@ -494,21 +523,207 @@ std::expected<bool, core::Error> push_if_ahead(git_repository* repo, git_remote*
     const git_strarray refspecs{refspecs_raw, 1};
     git_push_options options;
     TRY_GIT(git_push_options_init(&options, GIT_PUSH_OPTIONS_VERSION));
-    std::string rejection;  // sunucu ref'i güncellemeyi reddederse çağrı başarılı döner, ret buraya düşer
-    options.callbacks.push_update_reference = record_rejection;
-    options.callbacks.payload = &rejection;
+    // Sunucu ref'i güncellemeyi reddederse çağrı başarılı döner, ret exchange.rejection'a düşer.
+    Exchange exchange{credentials, {}};
+    attach(options.callbacks, exchange);
     if (const int rc = git_remote_push(remote, &refspecs, &options); rc == GIT_ENONFASTFORWARD)
-        rejection = git_error_last()->message;  // uzak dal fetch'ten sonra ilerlemiş
+        exchange.rejection = git_error_last()->message;  // uzak dal fetch'ten sonra ilerlemiş
     else if (rc < 0)
-        return std::unexpected(git_failure());
-    if (!rejection.empty())
+        return std::unexpected(network_failure(exchange));
+    if (!exchange.rejection.empty())
         return std::unexpected(
-            sync_error(std::string(kPushRejected), {{"branch", branch}, {"detail", rejection}}));
+            sync_error(std::string(kPushRejected), {{"branch", branch}, {"detail", exchange.rejection}}));
     return true;
 }
 
 fs::path status_file() {
     return core::state_dir() / "sync-status.toml";
+}
+
+fs::path lock_file() {
+    return core::state_dir() / "sync.lock";
+}
+
+// Gizli girdiler (.git, .noteapp, geçici dosyalar) not sayılmaz (SPEC.md §8); gizli olmayan boş klasör
+// sayılır. Klasör yoksa boştur.
+bool has_visible_entries(const fs::path& dir) {
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+        if (!utf8(it->path().filename()).starts_with('.'))
+            return true;
+    return false;
+}
+
+// Eksik satırlar sona eklenir; var olan içerik (CRLF dahil) olduğu gibi kalır.
+std::expected<void, core::Error> ensure_gitignore(const fs::path& notes_dir) {
+    const fs::path file = notes_dir / ".gitignore";
+    std::error_code ec;
+    std::ifstream in(file, std::ios::binary);
+    if (!in && fs::exists(file, ec))  // okunamayanı boş sayıp üzerine yazmak kullanıcının satırlarını silerdi
+        return std::unexpected(sync_error("error.io", {{"path", utf8(file)}, {"detail", "cannot read"}}));
+    std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    in.close();
+    std::vector<std::string> present;
+    std::istringstream lines(text);
+    for (std::string line; std::getline(lines, line);)
+        present.push_back(line.ends_with('\r') ? line.substr(0, line.size() - 1) : line);
+    std::string missing;
+    for (const std::string line : {".noteapp/", ".*.tmp"})
+        if (std::ranges::find(present, line) == present.end())
+            missing += line + "\n";
+    if (missing.empty())
+        return {};
+    if (!text.empty() && !text.ends_with('\n'))
+        text += '\n';
+    return core::write_file_atomically(file, text + missing);
+}
+
+// Elle yazılmış origin'de kimlik olabilir: hata argümanına (oradan log/durum dosyasına) kullanıcı bilgisi
+// girmez.
+std::string without_userinfo(std::string url) {
+    const RemoteEndpoint endpoint = parse_remote(url);
+    if (endpoint.auth == Auth::Ssh || endpoint.userinfo.empty())
+        return url;
+    // ssh dışında kullanıcı bilgisi yalnız "://"den hemen sonra gelir (scp biçimi hep ssh'tır).
+    return url.erase(url.find("://") + 3, endpoint.userinfo.size() + 1);
+}
+
+// libgit2 nesne dosyalarını salt-okunur yazar; Windows salt-okunur dosyayı silmez.
+void remove_git_dir(const fs::path& git_dir) {
+    std::error_code ec;
+    std::error_code ignored;
+    for (fs::recursive_directory_iterator it(git_dir, ec), end; !ec && it != end; it.increment(ec))
+        fs::permissions(it->path(), fs::perms::owner_write, fs::perm_options::add, ignored);
+    if (fs::remove_all(git_dir, ec); ec)
+        core::log_error("sync: cannot remove half-initialized " + utf8(git_dir) + ": " + ec.message());
+}
+
+// Kurulum tablosunun ilk iki satırı: .git zaten var. origin aynıysa no-op; farklı ya da yoksa onay
+// (`replace_origin`) gelene kadar "sync.remote_mismatch".
+std::expected<void, core::Error> adopt_repository(const fs::path& notes_dir, const std::string& remote,
+                                                  bool replace_origin) {
+    git_repository* repo_raw = nullptr;
+    TRY_GIT(git_repository_open(&repo_raw, utf8(notes_dir).c_str()));
+    const Repository repo(repo_raw);
+    std::optional<std::string> current;
+    git_remote* origin_raw = nullptr;
+    if (const int rc = git_remote_lookup(&origin_raw, repo.get(), kRemoteName); rc == 0) {
+        const Remote origin(origin_raw);
+        const char* url = git_remote_url(origin.get());
+        current = url != nullptr ? url : "";
+    } else if (rc != GIT_ENOTFOUND) {
+        return std::unexpected(git_failure());
+    }
+    if (current == remote)
+        return {};
+    if (!replace_origin)
+        return std::unexpected(
+            sync_error("sync.remote_mismatch",
+                       {{"current", without_userinfo(current.value_or(""))}, {"remote", remote}}));
+    // Silme, eski uzak takip dallarını da götürür: yeni remote boşsa bayat origin/<dal> push'u "güncel" sanıp
+    // engellerdi.
+    if (current)
+        TRY_GIT(git_remote_delete(repo.get(), kRemoteName));
+    git_remote* created = nullptr;
+    TRY_GIT(git_remote_create(&created, repo.get(), kRemoteName, remote.c_str()));
+    git_remote_free(created);
+    return {};
+}
+
+// Uzaktaki ref adları (boş uzak depoda hiçbiri). Remote depoya bağlıdır: bağımsız ("detached") remote exec
+// SSH ile çöker (SPEC-sync karar 4).
+std::expected<std::vector<std::string>, core::Error> remote_refs(git_remote* remote,
+                                                                 const Credentials& credentials) {
+    Exchange exchange{credentials, {}};
+    git_remote_callbacks callbacks;
+    TRY_GIT(git_remote_init_callbacks(&callbacks, GIT_REMOTE_CALLBACKS_VERSION));
+    attach(callbacks, exchange);
+    if (git_remote_connect(remote, GIT_DIRECTION_FETCH, &callbacks, nullptr, nullptr) < 0)
+        return std::unexpected(network_failure(exchange));
+    const git_remote_head** heads = nullptr;
+    std::size_t count = 0;
+    const int rc = git_remote_ls(&heads, &count, remote);
+    std::vector<std::string> names;
+    for (std::size_t i = 0; rc == 0 && i < count; ++i)
+        names.emplace_back(heads[i]->name);
+    git_remote_disconnect(remote);  // `exchange` bu kapsamla ölür; bağlantı onu tutmasın
+    if (rc < 0)
+        return std::unexpected(git_failure());
+    return names;
+}
+
+// Kurulum tablosunun son üç satırı: .git yok. Depo bu fonksiyonda oluşturulur (`created`); hata olursa
+// çağıran onu siler.
+std::expected<void, core::Error> initialize(const core::Config& config, const std::string& remote_url,
+                                            const Credentials& credentials, bool local_empty, bool& created) {
+    const fs::path& notes_dir = config.notes_dir;
+    const std::string& branch = config.sync.branch;
+    git_repository_init_options options;
+    TRY_GIT(git_repository_init_options_init(&options, GIT_REPOSITORY_INIT_OPTIONS_VERSION));
+    options.flags = GIT_REPOSITORY_INIT_MKPATH | GIT_REPOSITORY_INIT_NO_REINIT;
+    options.initial_head = branch.c_str();  // kullanıcının init.defaultBranch ayarına bırakılmaz
+    git_repository* repo_raw = nullptr;
+    TRY_GIT(git_repository_init_ext(&repo_raw, utf8(notes_dir).c_str(), &options));
+    created = true;
+    const Repository repo(repo_raw);
+    git_remote* remote_raw = nullptr;
+    TRY_GIT(git_remote_create(&remote_raw, repo.get(), kRemoteName, remote_url.c_str()));
+    const Remote remote(remote_raw);
+
+    const auto refs = remote_refs(remote.get(), credentials);
+    if (!refs)
+        return std::unexpected(refs.error());
+    if (std::ranges::none_of(*refs, [](const std::string& name) { return name.starts_with("refs/"); })) {
+        // Uzak boş: yerel her şey (yoksa yalnız .gitignore) ilk commit olur ve gönderilir.
+        if (auto written = ensure_gitignore(notes_dir); !written)
+            return std::unexpected(written.error());
+        if (auto committed = commit_all(repo.get(), branch, config.sync); !committed)
+            return std::unexpected(committed.error());
+        const auto pushed = push_if_ahead(repo.get(), remote.get(), branch, credentials);
+        if (!pushed)
+            return std::unexpected(pushed.error());
+        return {};
+    }
+    if (std::ranges::find(*refs, local_ref(branch)) == refs->end())
+        return std::unexpected(sync_error("sync.remote_branch_missing", {{"branch", branch}}));
+    if (!local_empty)
+        return std::unexpected(sync_error("sync.both_non_empty", {{"path", utf8(notes_dir)}}));
+    // Uzakta geçmiş varken fetch'ten önce commit atılmaz: atılsaydı iki ilgisiz geçmiş doğardı (T25 bulgusu).
+    // Doğmamış dala hızlı ileri sarma = klon; notes_dir var ve gizli girdiler içeriyor olsa da çalışır.
+    if (auto fetched = fetch(remote.get(), branch, credentials); !fetched)
+        return std::unexpected(fetched.error());
+    std::vector<core::NotePath> copies;  // doğmamış dalda birleştirme yok, kopya da oluşmaz
+    if (auto pulled = integrate(repo.get(), branch, config.sync, copies); !pulled)
+        return std::unexpected(pulled.error());
+    return ensure_gitignore(notes_dir);
+}
+
+// Kilit altında kurulum: önce adres doğrulanır, sonra tabloya göre dallanılır. Ya tam kurulum ya hiç: yarım
+// kalan .git ve bu çağrının yazdığı .gitignore silinir; notlara dokunulmaz (yarıda kalan bir klonun yazdığı
+// dosyalar da kalır — silmek veri kaybı riskidir).
+std::expected<void, core::Error> enable_locked(const core::Config& config, std::string_view remote,
+                                               bool replace_origin) {
+    if (auto valid = validate_remote(remote); !valid)
+        return std::unexpected(valid.error());
+    const fs::path& notes_dir = config.notes_dir;
+    const std::string url(remote);
+    std::error_code ec;
+    if (fs::exists(notes_dir / ".git", ec))
+        return adopt_repository(notes_dir, url, replace_origin);
+
+    const auto credentials = prepare_credentials(url);  // ağa çıkmadan: SSH ön kontrolü / token
+    if (!credentials)
+        return std::unexpected(credentials.error());
+    const bool local_empty = !has_visible_entries(notes_dir);
+    const bool had_gitignore = fs::exists(notes_dir / ".gitignore", ec);
+    bool created = false;
+    auto outcome = initialize(config, url, *credentials, local_empty, created);
+    if (!outcome && created) {  // yalnız kendi oluşturduğumuz depo: başkasının .git'ine asla dokunulmaz
+        remove_git_dir(notes_dir / ".git");
+        if (!had_gitignore)
+            fs::remove(notes_dir / ".gitignore", ec);
+    }
+    return outcome;
 }
 
 }  // namespace
@@ -544,9 +759,23 @@ retry_rejected_push(const std::function<std::expected<bool, core::Error>()>& exc
 
 SyncService::SyncService(const core::Config& config) : config_(config) {}
 
+std::expected<void, core::Error> SyncService::enable(std::string_view remote, bool replace_origin) {
+    // Kilit: kurulum sürerken bir arka plan senkronu yarım depoda commit atıp ilgisiz geçmiş doğurmasın.
+    const auto lock =
+        SyncLock::acquire(lock_file(), std::chrono::minutes(config_.tuning.sync_stale_lock_minutes));
+    if (!lock)
+        return std::unexpected(lock.error());
+    auto outcome = enable_locked(config_, remote, replace_origin);
+    if (outcome)
+        core::log_info("sync: enabled with origin " + std::string(remote));  // doğrulandı: kimlik içermez
+    else
+        core::log_error("sync: enable: " + core::format_error(outcome.error()));
+    return outcome;
+}
+
 std::expected<SyncResult, core::Error> SyncService::sync_now(const std::function<void()>& before_push) {
-    const auto lock = SyncLock::acquire(core::state_dir() / "sync.lock",
-                                        std::chrono::minutes(config_.tuning.sync_stale_lock_minutes));
+    const auto lock =
+        SyncLock::acquire(lock_file(), std::chrono::minutes(config_.tuning.sync_stale_lock_minutes));
     if (!lock) {
         // Durum dosyası kilidi tutan sürecindir; meşgulken yazılmaz.
         const auto log = lock.error().message_key == "sync.busy" ? core::log_info : core::log_error;
@@ -581,6 +810,11 @@ std::expected<SyncResult, core::Error> SyncService::run_cycle(const std::functio
     const std::string& branch = config_.sync.branch;
     if (auto on_branch = check_head(repo.get(), branch); !on_branch)
         return std::unexpected(on_branch.error());
+    // Ağa çıkmadan, hiçbir şeye dokunmadan: SSH host anahtarı ön kontrolü, HTTPS token'ı.
+    const char* url = git_remote_url(remote.get());
+    const auto credentials = prepare_credentials(url != nullptr ? url : "");
+    if (!credentials)
+        return std::unexpected(credentials.error());
 
     SyncResult result;
     const auto committed = commit_all(repo.get(), branch, config_.sync);
@@ -589,7 +823,7 @@ std::expected<SyncResult, core::Error> SyncService::run_cycle(const std::functio
     result.committed = *committed;
 
     const auto pushed = retry_rejected_push([&]() -> std::expected<bool, core::Error> {
-        if (auto fetched = fetch(remote.get(), branch); !fetched)
+        if (auto fetched = fetch(remote.get(), branch, *credentials); !fetched)
             return std::unexpected(fetched.error());
         const auto pulled = integrate(repo.get(), branch, config_.sync, result.conflict_copies);
         if (!pulled)
@@ -597,7 +831,7 @@ std::expected<SyncResult, core::Error> SyncService::run_cycle(const std::functio
         result.pulled += *pulled;
         if (before_push)
             before_push();
-        return push_if_ahead(repo.get(), remote.get(), branch);
+        return push_if_ahead(repo.get(), remote.get(), branch, *credentials);
     });
     if (!pushed)
         return std::unexpected(pushed.error());

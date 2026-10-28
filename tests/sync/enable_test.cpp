@@ -1,0 +1,382 @@
+#include "core/error.hpp"
+#include "core/i18n.hpp"
+#include "core/paths.hpp"
+#include "sync/lock.hpp"
+#include "sync/sync_service.hpp"
+#include "sync_fixture.hpp"
+
+#include <chrono>
+#include <doctest/doctest.h>
+#include <expected>
+#include <filesystem>
+#include <git2.h>
+#include <optional>
+#include <set>
+#include <string>
+
+namespace fs = std::filesystem;
+using noteapp::core::Error;
+using noteapp::sync::SyncService;
+using namespace noteapp::sync_test;
+
+namespace {
+
+const std::string kGitignore = ".noteapp/\n.*.tmp\n";
+
+std::optional<std::string> origin_url(const fs::path& dir) {
+    const Repository repo = open_repository(dir);
+    git_remote* remote = nullptr;
+    if (git_remote_lookup(&remote, repo.get(), "origin") < 0)
+        return std::nullopt;
+    std::string url = git_remote_url(remote);
+    git_remote_free(remote);
+    return url;
+}
+
+// `ref`'in ağacındaki dosyalar, depo-göreli '/' ayırıcılı.
+std::set<std::string> tree_files(const fs::path& repo_dir, const std::string& ref) {
+    const Repository repo = open_repository(repo_dir);
+    git_object* tree = nullptr;
+    REQUIRE_GIT(git_revparse_single(&tree, repo.get(), (ref + "^{tree}").c_str()));
+    std::set<std::string> files;
+    REQUIRE_GIT(git_tree_walk(
+        reinterpret_cast<git_tree*>(tree), GIT_TREEWALK_PRE,
+        [](const char* root, const git_tree_entry* entry, void* payload) {
+            if (git_tree_entry_type(entry) == GIT_OBJECT_BLOB)
+                static_cast<std::set<std::string>*>(payload)->insert(std::string(root) +
+                                                                     git_tree_entry_name(entry));
+            return 0;
+        },
+        &files));
+    git_object_free(tree);
+    return files;
+}
+
+std::set<std::string> entries(const fs::path& dir) {
+    std::set<std::string> names;
+    for (const auto& entry : fs::directory_iterator(dir))
+        names.insert(utf8(entry.path().filename()));
+    return names;
+}
+
+// Uzak depoya, enable'dan bağımsız olarak (eski usul klon + senkron) bir not yollar.
+void seed_remote(const SyncFixture& fx) {
+    const fs::path seed = fx.make_clone(u8"tohum");
+    write_file(seed / u8"klasör" / u8"ilk not.md", "# İlk\nçğıöşü\n");
+    const auto synced = SyncService(SyncFixture::config_for(seed)).sync_now();
+    REQUIRE_MESSAGE(synced.has_value(), describe(synced));
+}
+
+std::expected<void, Error> enable(const fs::path& notes_dir, const std::string& remote,
+                                  bool replace_origin = false) {
+    return SyncService(SyncFixture::config_for(notes_dir)).enable(remote, replace_origin);
+}
+
+}  // namespace
+
+TEST_CASE("enable row 1: a repository whose origin is the remote is left as it is") {
+    const SyncFixture fx;
+    const fs::path a = fx.make_clone(u8"A notları");
+    write_file(a / "not.md", "x\n");
+    const auto result = enable(a, utf8(fx.remote()));
+    REQUIRE_MESSAGE(result.has_value(), describe(result));
+    CHECK_FALSE(fs::exists(a / ".gitignore"));
+    CHECK(commit_count(a) == 0);
+    CHECK(origin_url(a) == utf8(fx.remote()));
+    CHECK_FALSE(ref_id(fx.remote(), "refs/heads/main").has_value());
+}
+
+TEST_CASE("enable row 2: another or no origin is sync.remote_mismatch until the caller confirms") {
+    const SyncFixture fx;
+    const fs::path other = fx.root() / u8"başka uzak.git";
+    init_repository(other, true);
+
+    const fs::path a = fx.make_clone(u8"A notları");
+    auto result = enable(a, utf8(other));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message_key == "sync.remote_mismatch");
+    CHECK(result.error().args ==
+          noteapp::core::Args{{"current", utf8(fx.remote())}, {"remote", utf8(other)}});
+    CHECK(origin_url(a) == utf8(fx.remote()));
+    result = enable(a, utf8(other), true);
+    REQUIRE_MESSAGE(result.has_value(), describe(result));
+    CHECK(origin_url(a) == utf8(other));
+
+    const fs::path b = fx.root() / u8"B notları";
+    init_repository(b, false);
+    result = enable(b, utf8(other));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message_key == "sync.remote_mismatch");
+    CHECK_FALSE(origin_url(b).has_value());
+    result = enable(b, utf8(other), true);
+    REQUIRE_MESSAGE(result.has_value(), describe(result));
+    CHECK(origin_url(b) == utf8(other));
+}
+
+TEST_CASE("sync.remote_mismatch never echoes the credentials of a hand-written origin") {
+    const SyncFixture fx;
+    const fs::path a = fx.make_clone(u8"A notları");
+    {
+        const Repository repo = open_repository(a);
+        REQUIRE_GIT(
+            git_remote_set_url(repo.get(), "origin", "https://kisi:gizli@github.com/kisi/notlar.git"));
+    }
+    const auto result = enable(a, utf8(fx.remote()));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message_key == "sync.remote_mismatch");
+    CHECK(result.error().args == noteapp::core::Args{{"current", "https://github.com/kisi/notlar.git"},
+                                                     {"remote", utf8(fx.remote())}});
+}
+
+TEST_CASE("sync_now checks the remote before touching anything: unknown SSH host, credentials in the URL") {
+    const SyncFixture fx;
+    const EnvGuard path("PATH", fs::path(NOTEAPP_FAKE_SSH_DIR));
+    const fs::path a = fx.make_clone(u8"A notları");
+    write_file(a / "not.md", "x\n");
+    struct Row {
+        const char* url;
+        const char* key;
+    };
+    for (const Row row :
+         {Row{"git@unknown.example:kisi/notlar.git", "sync.ssh_host_unknown"},
+          Row{"https://kisi:gizli@github.com/kisi/notlar.git", "sync.remote_has_credentials"}}) {
+        CAPTURE(row.url);
+        {
+            const Repository repo = open_repository(a);
+            REQUIRE_GIT(git_remote_set_url(repo.get(), "origin", row.url));
+        }
+        const auto result = SyncService(SyncFixture::config_for(a)).sync_now();
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().message_key == row.key);
+        CHECK(commit_count(a) == 0);  // commit dahil hiçbir şeye dokunulmadı
+    }
+}
+
+TEST_CASE("after replacing origin with an empty remote the next sync pushes the whole history there") {
+    const SyncFixture fx;
+    const fs::path a = fx.make_clone(u8"A notları");
+    write_file(a / "not.md", "x\n");
+    SyncService sync_a(SyncFixture::config_for(a));
+    REQUIRE(sync_a.sync_now().has_value());
+    const fs::path other = fx.root() / u8"yeni uzak.git";
+    init_repository(other, true);
+
+    const auto replaced = sync_a.enable(utf8(other), true);
+    REQUIRE_MESSAGE(replaced.has_value(), describe(replaced));
+    const auto synced = sync_a.sync_now();
+    REQUIRE_MESSAGE(synced.has_value(), describe(synced));
+    CHECK(synced->pushed);
+    CHECK(ref_id(other, "refs/heads/main") == ref_id(a, "refs/heads/main"));
+}
+
+TEST_CASE(
+    "enable row 3: an empty notes folder (hidden entries allowed, or none at all) gets the remote's notes") {
+    const SyncFixture fx;
+    seed_remote(fx);
+    const fs::path b = fx.root() / u8"B notları";
+    write_file(b / ".noteapp" / "durum", "gizli\n");  // gizli girdi klasörü "dolu" yapmaz
+    const fs::path c = fx.root() / u8"henüz yok" / u8"C notları";
+
+    for (const fs::path& dir : {b, c}) {
+        CAPTURE(utf8(dir));
+        const auto result = enable(dir, utf8(fx.remote()));
+        REQUIRE_MESSAGE(result.has_value(), describe(result));
+        CHECK(read_file(dir / u8"klasör" / u8"ilk not.md") == "# İlk\nçğıöşü\n");
+        CHECK(ref_id(dir, "HEAD") == ref_id(fx.remote(), "refs/heads/main"));
+        CHECK(origin_url(dir) == utf8(fx.remote()));
+        CHECK(read_file(dir / ".gitignore") == kGitignore);
+    }
+    CHECK(read_file(b / ".noteapp" / "durum") == "gizli\n");
+}
+
+TEST_CASE("enable row 3, empty remote: init, a first commit with only .gitignore, push") {
+    const SyncFixture fx;
+    const fs::path b = fx.root() / u8"B notları";
+    const auto result = enable(b, utf8(fx.remote()));
+    REQUIRE_MESSAGE(result.has_value(), describe(result));
+    CHECK(commit_count(b) == 1);
+    CHECK(tree_files(fx.remote(), "refs/heads/main") == std::set<std::string>{".gitignore"});
+    CHECK(ref_id(fx.remote(), "refs/heads/main") == ref_id(b, "HEAD"));
+    CHECK(read_file(b / ".gitignore") == kGitignore);
+}
+
+TEST_CASE("enable row 4: notes and an empty remote: init, .gitignore, commit everything, push") {
+    const SyncFixture fx;
+    const fs::path a = fx.root() / u8"A notları";
+    write_file(a / u8"ilk not.md", "bir\n");
+    write_file(a / u8"klasör" / u8"ikinci.md", "iki\r\n");
+    write_file(a / ".noteapp" / "index", "dahili\n");  // .gitignore: .noteapp/
+    write_file(a / u8".ilk not.md.tmp", "yarım\n");    // .gitignore: .*.tmp
+
+    const auto result = enable(a, utf8(fx.remote()));
+    REQUIRE_MESSAGE(result.has_value(), describe(result));
+    CHECK(commit_count(a) == 1);
+    CHECK(tree_files(a, "HEAD") == std::set<std::string>{".gitignore", "ilk not.md", "klasör/ikinci.md"});
+    CHECK(ref_id(fx.remote(), "refs/heads/main") == ref_id(a, "HEAD"));
+    CHECK(read_file(a / ".gitignore") == kGitignore);
+    CHECK(read_file(a / u8"klasör" / u8"ikinci.md") == "iki\r\n");
+}
+
+TEST_CASE("enable row 5: notes on both sides is sync.both_non_empty and nothing changes") {
+    const SyncFixture fx;
+    seed_remote(fx);
+    const auto remote_head = ref_id(fx.remote(), "refs/heads/main");
+    const fs::path c = fx.root() / u8"C notları";
+    write_file(c / "yerel.md", "yerel\n");
+
+    const auto result = enable(c, utf8(fx.remote()));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message_key == "sync.both_non_empty");
+    CHECK(entries(c) == std::set<std::string>{"yerel.md"});  // .git ve .gitignore kalmadı
+    CHECK(read_file(c / "yerel.md") == "yerel\n");
+    CHECK(ref_id(fx.remote(), "refs/heads/main") == remote_head);
+}
+
+TEST_CASE("a non-hidden empty folder makes the notes folder non-empty") {
+    const SyncFixture fx;
+    seed_remote(fx);
+    const fs::path c = fx.root() / u8"C notları";
+    fs::create_directories(c / u8"boş klasör");
+    const auto result = enable(c, utf8(fx.remote()));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message_key == "sync.both_non_empty");
+    CHECK(entries(c) == std::set<std::string>{"boş klasör"});
+}
+
+TEST_CASE("an existing .gitignore keeps its content and only gets the missing lines") {
+    const SyncFixture fx;
+    const fs::path a = fx.root() / u8"A notları";
+    write_file(a / "not.md", "x\n");
+    write_file(a / ".gitignore", "*.bak\r\n.noteapp/");  // CRLF, son satırda satır sonu yok
+    const auto result = enable(a, utf8(fx.remote()));
+    REQUIRE_MESSAGE(result.has_value(), describe(result));
+    CHECK(read_file(a / ".gitignore") == "*.bak\r\n.noteapp/\n.*.tmp\n");
+    CHECK(tree_files(a, "HEAD") == std::set<std::string>{".gitignore", "not.md"});
+}
+
+TEST_CASE("a remote without sync.branch is sync.remote_branch_missing and nothing is created") {
+    const SyncFixture fx;
+    const fs::path a = fx.root() / u8"A notları";
+    write_file(a / "not.md", "x\n");
+    noteapp::core::Config master = SyncFixture::config_for(a);
+    master.sync.branch = "master";
+    const auto seeded = SyncService(master).enable(utf8(fx.remote()));
+    REQUIRE_MESSAGE(seeded.has_value(), describe(seeded));
+    REQUIRE(ref_id(fx.remote(), "refs/heads/master").has_value());
+
+    const fs::path b = fx.root() / u8"B notları";
+    fs::create_directories(b);
+    const auto result = enable(b, utf8(fx.remote()));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message_key == "sync.remote_branch_missing");
+    CHECK(result.error().args == noteapp::core::Args{{"branch", "main"}});
+    CHECK(entries(b).empty());
+}
+
+TEST_CASE("a failed enable leaves no .git and no .gitignore of its own; the notes stay") {
+    const SyncFixture fx;
+    const fs::path a = fx.root() / u8"A notları";
+    write_file(a / u8"not ç.md", "içerik\n");
+
+    SUBCASE("the local remote does not exist (refused before anything is created)") {
+        const auto result = enable(a, utf8(fx.root() / u8"olmayan uzak.git"));
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().message_key == "sync.remote_invalid");
+    }
+    SUBCASE("the remote is not a repository (fails after the repository was created)") {
+        fs::create_directories(fx.root() / u8"boş klasör.git");
+        const auto result = enable(a, utf8(fx.root() / u8"boş klasör.git"));
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().message_key == "sync.git_failed");
+    }
+    SUBCASE("the first push is rejected") {
+        // Uzak dalın kilidi tutulursa push ref bazında reddedilir (commit zaten yapılmıştır).
+        write_file(fx.remote() / "refs" / "heads" / "main.lock", "");
+        const auto result = enable(a, utf8(fx.remote()));
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().message_key == "sync.push_rejected");
+        CHECK_FALSE(ref_id(fx.remote(), "refs/heads/main").has_value());
+    }
+    SUBCASE("the SSH host key is unknown (checked before anything is created)") {
+        const EnvGuard path("PATH", fs::path(NOTEAPP_FAKE_SSH_DIR));
+        const auto result = enable(a, "git@unknown.example:kisi/notlar.git");
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().message_key == "sync.ssh_host_unknown");
+    }
+    SUBCASE("ssh-keygen is not available") {
+        const TempDir empty;
+        const EnvGuard path("PATH", empty.path());
+        const auto result = enable(a, "ssh://git@known.example/notlar.git");
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().message_key == "sync.ssh_unavailable");
+    }
+    CHECK(entries(a) == std::set<std::string>{"not ç.md"});
+    CHECK(read_file(a / u8"not ç.md") == "içerik\n");
+}
+
+TEST_CASE("an https remote with credentials in it is refused, nothing is created and it is not echoed") {
+    const SyncFixture fx;
+    const fs::path a = fx.root() / u8"A notları";
+    write_file(a / "not.md", "x\n");
+    for (const std::string url : {"https://kisi:gizli-parola@github.com/kisi/notlar.git",
+                                  "https://gizli-parola@github.com/kisi/notlar.git"}) {
+        const auto result = enable(a, url);
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().message_key == "sync.remote_has_credentials");
+        CHECK(noteapp::core::format_error(result.error()).find("gizli-parola") == std::string::npos);
+        CHECK(result.error().args.empty());
+    }
+    for (const std::string url : {"", "ssh://git@-oProxyCommand=calc/x.git", "-oProxyCommand=calc:x.git"}) {
+        CAPTURE(url);
+        const auto result = enable(a, url);
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().message_key == "sync.remote_invalid");
+    }
+    CHECK(entries(a) == std::set<std::string>{"not.md"});
+}
+
+TEST_CASE("enable holds the sync lock: while a sync runs it is sync.busy and creates nothing") {
+    const SyncFixture fx;
+    const auto lock =
+        noteapp::sync::SyncLock::acquire(noteapp::core::state_dir() / "sync.lock", std::chrono::minutes(10));
+    REQUIRE(lock.has_value());
+    const fs::path a = fx.root() / u8"A notları";
+    write_file(a / "not.md", "x\n");
+    const auto result = enable(a, utf8(fx.remote()));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message_key == "sync.busy");
+    CHECK(entries(a) == std::set<std::string>{"not.md"});
+}
+
+TEST_CASE("acceptance 8: A enables an empty remote, B enables against it, then sync_now works both ways") {
+    const SyncFixture fx;
+    const fs::path a = fx.root() / u8"A notları";
+    const fs::path b = fx.root() / u8"B notları";
+    write_file(a / u8"ilk not.md", "A'nın notu\n");
+    SyncService sync_a(SyncFixture::config_for(a));
+    SyncService sync_b(SyncFixture::config_for(b));
+    const auto enabled_a = sync_a.enable(utf8(fx.remote()));
+    REQUIRE_MESSAGE(enabled_a.has_value(), describe(enabled_a));
+    const auto enabled_b = sync_b.enable(utf8(fx.remote()));
+    REQUIRE_MESSAGE(enabled_b.has_value(), describe(enabled_b));
+    CHECK(read_file(b / u8"ilk not.md") == "A'nın notu\n");
+
+    write_file(b / u8"klasör" / u8"B notu.md", "B'nin notu\n");
+    auto result_b = sync_b.sync_now();
+    REQUIRE_MESSAGE(result_b.has_value(), describe(result_b));
+    CHECK(result_b->committed == 1);
+    CHECK(result_b->pushed);
+
+    write_file(a / u8"ilk not.md", "A'nın notu, düzenlendi\n");
+    const auto result_a = sync_a.sync_now();
+    REQUIRE_MESSAGE(result_a.has_value(), describe(result_a));
+    CHECK(result_a->pulled == 1);
+    CHECK(result_a->pushed);
+    CHECK(read_file(a / u8"klasör" / u8"B notu.md") == "B'nin notu\n");
+
+    result_b = sync_b.sync_now();
+    REQUIRE_MESSAGE(result_b.has_value(), describe(result_b));
+    CHECK(read_file(b / u8"ilk not.md") == "A'nın notu, düzenlendi\n");
+    CHECK(ref_id(a, "HEAD") == ref_id(b, "HEAD"));
+    CHECK(result_b->conflict_copies.empty());
+}

@@ -1,4 +1,5 @@
 add_library(noteapp_sync
+    auth.cpp
     git_runtime.cpp
     lock.cpp
     sync_service.cpp)

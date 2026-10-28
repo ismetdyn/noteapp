@@ -10,6 +10,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace noteapp::sync {
@@ -46,6 +47,17 @@ retry_rejected_push(const std::function<std::expected<bool, core::Error>()>& exc
 class SyncService {
 public:
     explicit SyncService(const core::Config& config);
+
+    // İlk kurulum (SPEC-sync "İlk kurulum" tablosu), senkron kilidi altında:
+    //  - .git var, origin == remote → no-op; origin farklı/yok → "sync.remote_mismatch" {current, remote},
+    //    `replace_origin` (ön yüz onayı) ile origin değiştirilir;
+    //  - .git yok, uzak boş → init + .gitignore + tümünü commit + push (boş klasörde yalnız .gitignore);
+    //  - .git yok, notes_dir boş (gizli girdiler sayılmaz), uzakta `sync.branch` var → klon (init + origin +
+    //    fetch + checkout); dal yoksa "sync.remote_branch_missing";
+    //  - .git yok, ikisi de dolu → "sync.both_non_empty".
+    // Ağa çıkmadan adres doğrulanır ve SSH ön kontrolü / HTTPS token'ı hazırlanır (bkz. auth.hpp). Hata
+    // olursa oluşturulan .git ve bu çağrının yazdığı .gitignore silinir; notlara dokunulmaz.
+    std::expected<void, core::Error> enable(std::string_view remote, bool replace_origin = false);
 
     // Tek tam döngü: kilit → commit → fetch → fast-forward ya da merge → push → durum dosyası. Asla force
     // push, hard reset ya da commit'lenmemiş değişikliği ezen checkout yapmaz. Çakışmada yerel sürüm yolunda
