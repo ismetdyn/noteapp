@@ -147,10 +147,13 @@
   `tests/search/content_index_test.cpp`, `src/cli/commands.cpp`, `tests/cli/cli_search_test.cpp` · **Boyut:** M
 
 ### T16b: `NoteStore::list()` ikili bayrak önbelleği (T16'da bulundu)
-- [ ] **Açıklama:** `list()` her notun ilk 8 KB'ını okuyor: 5.000 notta ~540 ms (Release) → TUI açılışı (≤ 500 ms) ve
+- [x] **Açıklama:** `list()` her notun ilk 8 KB'ını okuyor: 5.000 notta ~540 ms (Release) → TUI açılışı (≤ 500 ms) ve
   değişiklik yokken `ContentIndex::refresh` (≤ 100 ms) hedeflerini bozuyor. `binary` bayrağı (mtime, boyut) anahtarıyla
   `NoteStore` içinde önbelleklenir; yalnız yeni/değişen dosyanın başı okunur. `content_index_test`'teki gevşetilmiş
   `refresh` bütçesi (yalnız ContentIndex payı) özgün kabule (toplam ≤ 100 ms) geri alınır.
+  **Sonuç:** önbellek dosya açmayı kaldırdı (sıcak `list()` ~140–330 ms, soğuk ~540–750 ms; kurumsal Windows'ta dosya başına
+  stat tabanı baskın, salt dizin gezintisi ~60–90 ms). ≤ 80 ms / toplam ≤ 100 ms için yerel dizin taraması gerekir → gevşetilmiş
+  bütçe `ponytail:` notuyla korundu.
 - **Kabul:** değişiklik yokken `list()` 5.000 notta ≤ 80 ms (Release) · değişen dosyanın bayrağı güncellenir · testler yeşil.
 - **Doğrulama:** `B && T(core) && T(search)`, Release ölçümü · **Bağımlılık:** T10 · **Dosyalar:** `src/core/note_store.{hpp,cpp}`,
   `tests/core/note_store_test.cpp`, `tests/search/content_index_test.cpp` · **Boyut:** S

@@ -315,6 +315,38 @@ TEST_CASE("list flags binary files by a NUL byte in the first 8 KB") {
     }
 }
 
+TEST_CASE("list caches the binary flag: unchanged files are not reread") {
+    TempDir tmp;
+    put(tmp.path() / "a.md", "metin");
+    put(tmp.path() / "b.dat", std::string("x\0y", 3));
+    NoteStore store(tmp.path());
+
+    CHECK(store.list().size() == 2);
+    CHECK(store.head_read_count() == 2);
+    CHECK(store.list().size() == 2);
+    CHECK(store.head_read_count() == 2);  // değişmeyen dosyaların başı yeniden okunmadı
+
+    put(tmp.path() / "c.md", "yeni");
+    CHECK(store.list().size() == 3);
+    CHECK(store.head_read_count() == 3);  // yalnız yeni dosya okundu
+}
+
+TEST_CASE("list refreshes the cached binary flag when a file changes (text to binary and back)") {
+    TempDir tmp;
+    const fs::path file = tmp.path() / "n.md";
+    put(file, "abcd");
+    NoteStore store(tmp.path());
+    REQUIRE_FALSE(store.list().front().binary);
+
+    put(file, std::string("ab\0d", 4));  // aynı boyut: yalnız mtime farkı yakalar
+    fs::last_write_time(file, fs::last_write_time(file) + std::chrono::seconds(5));
+    CHECK(store.list().front().binary);
+
+    put(file, "abcd");
+    fs::last_write_time(file, fs::last_write_time(file) + std::chrono::seconds(10));
+    CHECK_FALSE(store.list().front().binary);
+}
+
 TEST_CASE("list skips files whose names fail NotePath validation") {
     TempDir tmp;
     put(tmp.path() / "ok.md", "x");

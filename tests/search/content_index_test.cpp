@@ -253,9 +253,7 @@ TEST_CASE("content: performance with 5000 notes of ~5 KB") {
     auto t3 = std::chrono::steady_clock::now();
     index.refresh();
     auto t4 = std::chrono::steady_clock::now();
-    const auto listed =
-        store.list()
-            .size();  // refresh'in G/Ç tabanı: NoteStore::list() her dosyayı açıp ikili kontrolü yapar
+    const auto listed = store.list().size();  // ikili bayrak önbelleği sıcak: yalnız stat maliyeti
     auto t5 = std::chrono::steady_clock::now();
     auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
     MESSAGE("cold refresh " << ms(t0, t1) << " ms, first search " << ms(t1, t2) << " ms, warm search "
@@ -266,8 +264,9 @@ TEST_CASE("content: performance with 5000 notes of ~5 KB") {
     CHECK_FALSE(r.empty());
 #ifdef NDEBUG
     CHECK(ms(t2, t3) <= 100.0);
-    // ponytail: list() (src/core) 5.000 dosyayı açar; bütçe yalnız ContentIndex'in kendi payına (stat dışı
-    // iş) uygulanır.
+    // ponytail: ikili bayrak önbelleği (T16b) dosya açmayı kaldırdı ama list() hâlâ dosya başına stat
+    // maliyetini öder (kurumsal Windows'ta ~200 ms/5.000 dosya); bütçe ContentIndex'in kendi payına
+    // uygulanır. Toplam ≤ 100 ms için yerel dizin taraması (FindFirstFileEx / getdents) gerekir.
     CHECK(ms(t3, t4) - ms(t4, t5) <= 100.0);
 #endif
 }

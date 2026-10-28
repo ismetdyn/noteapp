@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace noteapp::core {
@@ -45,6 +46,9 @@ public:
     std::vector<NoteInfo> list() const;        // mtime azalan, eşitlikte yol artan
     std::vector<std::string> folders() const;  // göreli, '/' ayırıcılı, sıralı
 
+    // Test kancası: list()'in diskten dosya başı okuma sayısı (önbellek isabeti okutmaz).
+    std::size_t head_read_count() const { return head_reads_; }
+
     std::expected<NoteContent, Error> read(const NotePath& path) const;
     std::expected<NotePath, Error>
     create(const NewNote& note, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
@@ -58,6 +62,17 @@ private:
 
     std::filesystem::path root_;
     std::size_t slug_max_length_;
+
+    // list() ikili bayrağı (mtime, boyut) anahtarıyla önbelleğe alır: her çağrıda 5.000 dosyanın başını
+    // okumak ~540 ms tutuyordu. const list() içinde güncellendiği için mutable; NoteStore tek iş
+    // parçacığından kullanılır (SPEC-search "Eşzamanlılık"), kilit yok.
+    struct BinaryCacheEntry {
+        std::filesystem::file_time_type mtime;
+        std::uintmax_t size;
+        bool binary;
+    };
+    mutable std::unordered_map<std::string, BinaryCacheEntry> binary_cache_;
+    mutable std::size_t head_reads_ = 0;
 };
 
 }  // namespace noteapp::core

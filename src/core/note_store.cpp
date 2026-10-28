@@ -103,6 +103,7 @@ std::expected<fs::path, Error> NoteStore::resolve(const NotePath& path) const {
 
 std::vector<NoteInfo> NoteStore::list() const {
     std::vector<NoteInfo> notes;
+    std::unordered_map<std::string, BinaryCacheEntry> seen;  // silinen dosyaların kaydı düşsün
     std::error_code ec;
     fs::recursive_directory_iterator it(root_, fs::directory_options::skip_permission_denied, ec);
     for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
@@ -113,8 +114,9 @@ std::vector<NoteInfo> NoteStore::list() const {
             continue;
         }
         // Sembolik bağlar listelenmez: hedefi kök dışına kaçabilir.
+        // Tek symlink_status çağrısı: ayrı is_symlink + is_regular_file her dosyada fazladan stat demekti.
         std::error_code entry_ec;
-        if (entry.is_symlink(entry_ec) || !entry.is_regular_file(entry_ec))
+        if (entry.symlink_status(entry_ec).type() != fs::file_type::regular)
             continue;
         const std::string relative = to_utf8(entry.path().lexically_relative(root_));
         auto parsed = NotePath::parse(relative);
@@ -129,8 +131,20 @@ std::vector<NoteInfo> NoteStore::list() const {
             log_warn("note list: skipped '" + relative + "': " + entry_ec.message());
             continue;
         }
-        notes.push_back(NoteInfo{*parsed, mtime, size, has_nul_in_head(entry.path())});
+        bool binary = false;
+        if (const auto cached = binary_cache_.find(relative);
+            cached != binary_cache_.end() && cached->second.mtime == mtime && cached->second.size == size) {
+            binary = cached->second.binary;
+        } else {
+            // ponytail: aynı mtime + aynı boyutla içeriği değişen dosya (mtime çözünürlüğü içinde) eski
+            // bayrakta kalır; gerekirse anahtara içerik özeti eklenir.
+            ++head_reads_;
+            binary = has_nul_in_head(entry.path());
+        }
+        seen.insert_or_assign(relative, BinaryCacheEntry{mtime, size, binary});
+        notes.push_back(NoteInfo{*parsed, mtime, size, binary});
     }
+    binary_cache_ = std::move(seen);
     std::sort(notes.begin(), notes.end(), [](const NoteInfo& a, const NoteInfo& b) {
         if (a.mtime != b.mtime)
             return a.mtime > b.mtime;
