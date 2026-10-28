@@ -26,7 +26,7 @@
   `.clang-format`, `src/core/CMakeLists.txt`, `tests/core/smoke_test.cpp` · **Boyut:** M
 
 ### T02: Fedora Docker doğrulaması
-- [ ] **Açıklama:** `docker/fedora.Containerfile` (gcc-c++, cmake, ninja-build, qt6-qtbase-devel, libsecret-devel,
+- [x] **Açıklama:** `docker/fedora.Containerfile` (gcc-c++, cmake, ninja-build, qt6-qtbase-devel, libsecret-devel,
   openssl-devel, pkgconf) + `scripts/check-fedora.sh` (repo'yu bağlar, `linux-gcc-debug` derler, ctest koşar,
   `QT_QPA_PLATFORM=offscreen`).
 - **Kabul:** `F` T01 testlerini Fedora'da yeşil koşar · imaj önbelleklenir (ikinci koşu bağımlılık indirmez).

@@ -12,3 +12,6 @@ CMakeUserPresets.json
 # İşletim sistemi
 .DS_Store
 Thumbs.db
+
+# Claude Code ajan çalışma kopyaları
+.claude/worktrees/

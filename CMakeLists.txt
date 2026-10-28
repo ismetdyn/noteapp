@@ -4,6 +4,9 @@ project(noteapp VERSION 0.1.0 LANGUAGES CXX)
 option(NOTEAPP_BUILD_GUI "notes-gui (Qt 6) derlensin" ON)
 option(NOTEAPP_BUILD_TESTS "Testler derlensin" ON)
 
+# C++20 modülleri kullanılmıyor; tarama yalnız derlemeyi yavaşlatır.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 include(cmake/Dependencies.cmake)
 
 # Dil standardı ve uyarılar yalnız bizim hedeflerimize uygulanır; üçüncü parti kodun uyarıları build'i kırmamalı.
