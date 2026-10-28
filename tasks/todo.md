@@ -304,6 +304,9 @@
 ### T36: Son review
 - [ ] **Kabul:** tüm dal için `/code-review` + `security-review`; bulgular düzeltildi ya da gerekçesiyle yazıldı ·
   SPEC'ler gerçekleşen kararlarla güncel.
+- **Biriken borç (yol boyunca not edildi):** `first_non_empty_line` kuralı `core/note_store.cpp` ve `tui/save_dialog.cpp`'de
+  iki kopya → core'dan dışa aç, TUI kullansın · `NoteStore::list()` önbelleği thread-safe değil (TUI mutex'le koruyor;
+  GUI tek iş parçacığı) — sözleşmeyi başlıkta belgele.
 - **Doğrulama:** tüm testler Windows + `F` · **Bağımlılık:** T35 · **Model:** opus · **Boyut:** M
 
 ### ✅ Son kontrol noktası
