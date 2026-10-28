@@ -314,6 +314,9 @@
 - [ ] **Kabul:** 5.000 üretilmiş notla (Release) SPEC.md §10/2–3 ölçülür ve tutar; tutmayan için profil + düzeltme.
   Modül testlerindeki 5.000 notluk perf vakaları (`search` Debug'da ~12 sn sürüyor) `tests/perf/`'e taşınır; günlük
   `ctest` hızlı kalır, perf yalnız Release'te koşar.
+  **Bilinen açık (T16c ölçümü):** soğuk `list()` 295–917 ms (TUI açılışı ≤ 500 ms hedefi bu makinede güvenilir değil);
+  maliyet 5.000 dosyanın `binary` koklaması için açılması. Önerilen hamle: `NoteInfo.binary`'yi `list()`'ten kaldır,
+  ikili tespitini dosyayı zaten okuyan yerlere (önizleme, `ContentIndex::refresh`, CLI `show`) taşı.
 - **Doğrulama:** `ctest --preset windows-mingw-release -R perf` · **Bağımlılık:** T34 · **Dosyalar:** `tests/perf/perf_test.cpp` · **Boyut:** S
 
 ### T36: Son review
