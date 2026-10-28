@@ -221,7 +221,7 @@
   `tests/sync/sync_basic_test.cpp` · **Boyut:** M
 
 ### T25: 🔴 Birleştirme + çakışma kopyaları
-- [ ] **Kabul:** SPEC-sync kabul 2–5 · kodda force push / hard reset yok.
+- [x] **Kabul:** SPEC-sync kabul 2–5 · kodda force push / hard reset yok.
 - **Doğrulama:** `B && T(sync)`, `F` · **Bağımlılık:** T24 · **Dosyalar:** `src/sync/sync_service.cpp`,
   `tests/sync/sync_conflict_test.cpp` · **Boyut:** M
 

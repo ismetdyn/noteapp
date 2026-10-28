@@ -81,9 +81,18 @@ Init sırasında notes reposuna `.gitignore` yazılır: `.noteapp/` ve `.*.tmp`.
 4. **Birleştirme analizi:**
    - güncel → 5'e geç;
    - fast-forward → `GIT_CHECKOUT_SAFE` ile checkout + ref ilerletme;
+   - ortak ata yok (ilgisiz geçmiş) → `sync.unrelated_histories`, merge'e hiç başlanmaz (ilk kurulum `enable`'ın işi);
    - normal → merge. **Çakışan her dosya için:** yerel sürüm yerinde kalır; uzak sürüm
      `<ad> (conflict YYYY-MM-DD HHMM).<uzantı>` olarak yanına yazılır; silme/değiştirme çakışmasında
      **değiştirilmiş sürüm** korunur. Hepsi sahnelenir, iki ebeveynli merge commit atılır.
+     - Ad: `<ad>` = uzantısız dosya adı, damga **yerel saat**, aynı klasörde. Uzantısız dosyada nokta yok
+       (`yapilacaklar (conflict 2026-10-28 1430)`). Ad doluysa uzantıdan önce ` 2`, ` 3` …:
+       `not (conflict 2026-10-28 1430) 2.md`. Kopya yalnız yoksa oluşturulur; var olan dosyanın üzerine yazılmaz.
+     - İki tarafta aynı içerik çakışma değildir (kopya yok). İkili dosyalar aynı kurallarla, bayt bayt.
+     - Kopyalar `SyncResult.conflict_copies`'te döner (gizli dosya kopyası `NotePath` olmadığından listede
+       yok, diskte ve commit'te var) ve her biri loglanır. Merge mesajı: i18n `sync.merge_message`.
+   - Döngü başında depo yarım bir git işlemindeyse (merge/rebase/cherry-pick; `git_repository_state` ≠ NONE)
+     `sync.repo_busy_state`: commit dahil hiçbir şeye dokunulmaz, kullanıcı git ile bitirir ya da iptal eder.
 5. **Push** (yerel öndeyse). Non-fast-forward ret → 3'ten bir kez daha; yine olmazsa `sync.push_rejected`.
 6. **Durum** `<durum>/sync-status.toml`'a yazılır, loglanır; kilit bırakılır.
 
@@ -127,6 +136,14 @@ açmak `enable`'ı çağırır (repo varsa no-op).
    önce öznitelikleri temizlenir.
 6. Doğrulandı: WinHTTP üzerinden HTTPS (GitHub'dan ref listesi), keychain gidiş-dönüşü (Windows Credential Manager).
    SSH-exec gerçek bağlantısı Kontrol noktası 4'e kaldı.
+7. **Merge (T25):** `git_merge`, dosya tercihi NORMAL, checkout `SAFE | USE_OURS | DONT_OVERWRITE_IGNORED`:
+   çakışan dosyaya `<<<<<<<` işaretli metin hiç yazılmaz, yolda doğrudan yerel sürüm durur (silme/değiştirmede
+   checkout tek kalan sürümü yazar). Uygulama yalnız yeni kopya dosyası oluşturur, hiçbir dosyanın üzerine yazmaz.
+   **Yeniden adlandırma tespiti kapalı:** açıkken libgit2 farklı yollardaki girdileri tek çakışmada birleştiriyor
+   ve checkout bir tarafı yazmıyor; kapalıyken bir tarafta adlandırma + diğerinde düzenleme iki dosya bırakır
+   (fazlalık, kayıp değil). Merge başladıktan sonraki bir hata (ör. dosya/klasör ad çakışması) depoyu MERGE
+   durumunda bırakır → sonraki senkron `sync.repo_busy_state`; iki tarafın içeriği HEAD'de ve uzak dalda durur.
+   Push yarışı: ret → fetch → yeniden merge → push (bir kez); testte `sync_now(before_push)` dikiş noktasıyla.
 
 ## Kapsam dışı
 Rebase, seçmeli (dosya bazlı) senkron, GitHub dışı sağlayıcılara özel destek (genel git remote zaten çalışır),

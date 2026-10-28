@@ -9,15 +9,19 @@
 
 #include <chrono>
 #include <cstdio>
+#include <ctime>
 #include <format>
 #include <fstream>
 #include <git2.h>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <toml++/toml.hpp>
+#include <vector>
 
 #ifndef _WIN32
 #include <pwd.h>
@@ -50,6 +54,9 @@ using AnnotatedCommit = std::unique_ptr<git_annotated_commit, GitFree<git_annota
 using Diff = std::unique_ptr<git_diff, GitFree<git_diff_free>>;
 using Signature = std::unique_ptr<git_signature, GitFree<git_signature_free>>;
 using GitConfig = std::unique_ptr<git_config, GitFree<git_config_free>>;
+using Blob = std::unique_ptr<git_blob, GitFree<git_blob_free>>;
+using ConflictIterator =
+    std::unique_ptr<git_index_conflict_iterator, GitFree<git_index_conflict_iterator_free>>;
 
 core::Error sync_error(std::string key, core::Args args = {}) {
     return {core::Error::Code::Io, std::move(key), std::move(args)};
@@ -86,6 +93,19 @@ fs::path path_from_utf8(const std::string& text) {
 
 std::string iso_utc(std::chrono::system_clock::time_point when) {
     return std::format("{:%FT%TZ}", std::chrono::floor<std::chrono::seconds>(when));
+}
+
+// Çakışma kopyası adındaki damga, yerel saatle "YYYY-MM-DD HHMM": kullanıcı adı kendi saatiyle okur.
+std::string local_minute_stamp() {
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    return std::format("{:04}-{:02}-{:02} {:02}{:02}", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday,
+                       local.tm_hour, local.tm_min);
 }
 
 std::optional<std::chrono::system_clock::time_point> parse_iso_utc(const std::string& text) {
@@ -182,6 +202,13 @@ std::expected<void, core::Error> check_head(git_repository* repo, const std::str
     return {};
 }
 
+std::expected<Signature, core::Error> signature_now(const core::SyncConfig& sync) {
+    const Author author = resolve_author(sync);
+    git_signature* raw = nullptr;
+    TRY_GIT(git_signature_now(&raw, author.name.c_str(), author.email.c_str()));
+    return Signature(raw);
+}
+
 // Döngü 2: eklenen, değişen ve silinen her şey (.gitignore'a uyarak) sahnelenir; ağaç değiştiyse commit.
 std::expected<int, core::Error> commit_all(git_repository* repo, const std::string& branch,
                                            const core::SyncConfig& sync) {
@@ -204,17 +231,16 @@ std::expected<int, core::Error> commit_all(git_repository* repo, const std::stri
     if (!changed || *changed == 0)
         return changed;
 
-    const Author author = resolve_author(sync);
-    git_signature* signature_raw = nullptr;
-    TRY_GIT(git_signature_now(&signature_raw, author.name.c_str(), author.email.c_str()));
-    const Signature signature(signature_raw);
+    const auto signature = signature_now(sync);
+    if (!signature)
+        return std::unexpected(signature.error());
     const std::string message =
         core::tr("sync.commit_message", {{"count", std::to_string(*changed)},
                                          {"host", host_name()},
                                          {"time", iso_utc(std::chrono::system_clock::now())}});
     const git_commit* parents[] = {parent->first.get()};
     git_oid commit_id;
-    TRY_GIT(git_commit_create(&commit_id, repo, "HEAD", signature.get(), signature.get(), nullptr,
+    TRY_GIT(git_commit_create(&commit_id, repo, "HEAD", signature->get(), signature->get(), nullptr,
                               message.c_str(), tree.get(), parent->first ? 1 : 0, parents));
     return changed;
 }
@@ -231,9 +257,160 @@ std::expected<void, core::Error> fetch(git_remote* remote, const std::string& br
     return {};
 }
 
-// Döngü 4: güncel → 0; hızlı ileri (doğmamış yerel dal dahil) → checkout + dal ref'i; ayrışmış → T25'e kadar
-// hiçbir şeye dokunmadan hata. Dönüş: değişen dosya sayısı.
-std::expected<int, core::Error> fast_forward(git_repository* repo, const std::string& branch) {
+// Onların sürümü `<ad> (conflict YYYY-MM-DD HHMM).<uzantı>` olarak yanına yazılır; ad doluysa uzantıdan önce
+// " 2", " 3" … eklenir. Dosya yalnız yoksa oluşturulur (O_EXCL): var olan hiçbir şeyin üzerine yazılmaz.
+// Dönüş: depo-göreli, '/' ayırıcılı UTF-8 yol.
+std::expected<std::string, core::Error> write_conflict_copy(git_repository* repo, const fs::path& workdir,
+                                                            const std::string& path, const git_oid& blob_id,
+                                                            const std::string& stamp) {
+    git_blob* raw = nullptr;
+    TRY_GIT(git_blob_lookup(&raw, repo, &blob_id));
+    const Blob blob(raw);
+    const std::string_view content(static_cast<const char*>(git_blob_rawcontent(blob.get())),
+                                   static_cast<std::size_t>(git_blob_rawsize(blob.get())));
+    const fs::path original = path_from_utf8(path);
+    const std::string stem = utf8(original.stem());
+    const std::string extension = utf8(original.extension());  // uzantısız dosyada boş: nokta eklenmez
+    for (int number = 1;; ++number) {
+        const std::string suffix = number == 1 ? "" : " " + std::to_string(number);
+        const fs::path name =
+            original.parent_path() /
+            path_from_utf8(std::format("{} (conflict {}){}{}", stem, stamp, suffix, extension));
+        const core::FileWriteResult written = core::write_new_file(workdir / name, content);
+        if (!written.already_exists && !written.ec)
+            return utf8(name);
+        if (!written.already_exists) {
+            std::error_code ec;
+            fs::remove(workdir / name, ec);  // yarım yazılmış kendi kopyamız; içerik git'te duruyor
+            return std::unexpected(
+                sync_error("error.io", {{"path", utf8(workdir / name)}, {"detail", written.ec.message()}}));
+        }
+    }
+}
+
+// Çakışma çözümü. Değişmez kural: hiçbir taraf kaybolmaz — iki tarafın içeriği de ya kendi yolunda ya da
+// yanındaki çakışma kopyasında durur; hiçbir dosya silinmez, hiçbir dosyanın üzerine yazılmaz.
+//  - değiştirme/değiştirme, ekleme/ekleme: yolda bizimki (merge checkout'u USE_OURS ile yazdı), onlarınki
+//    yeni bir "(conflict …)" kopyasında;
+//  - silme/değiştirme (iki yönde de): değiştirilmiş sürüm yolunda (checkout tek kalan tarafı yazdı);
+//  - iki tarafta aynı içerik çakışma değildir: kopya yok.
+// Her yol ve kopya diskten sahnelenir; sahneleme çakışma kaydını kapatır. Dönüş: oluşturulan kopyalar.
+std::expected<std::vector<core::NotePath>, core::Error> resolve_conflicts(git_repository* repo,
+                                                                          git_index* index) {
+    struct Conflict {
+        std::string path;
+        std::optional<git_oid> theirs_to_copy;
+    };
+    std::vector<Conflict> conflicts;  // önce topla: index değişince yineleyici geçersizleşir
+    git_index_conflict_iterator* iterator_raw = nullptr;
+    TRY_GIT(git_index_conflict_iterator_new(&iterator_raw, index));
+    const ConflictIterator iterator(iterator_raw);
+    const git_index_entry* ancestor = nullptr;
+    const git_index_entry* ours = nullptr;
+    const git_index_entry* theirs = nullptr;
+    int rc = 0;
+    while ((rc = git_index_conflict_next(&ancestor, &ours, &theirs, iterator.get())) == 0) {
+        const git_index_entry* present = ours != nullptr ? ours : theirs != nullptr ? theirs : ancestor;
+        const bool both_differ =
+            ours != nullptr && theirs != nullptr && !git_oid_equal(&ours->id, &theirs->id);
+        conflicts.push_back({present->path, both_differ ? std::optional(theirs->id) : std::nullopt});
+    }
+    if (rc != GIT_ITEROVER)
+        return std::unexpected(git_failure());
+
+    const fs::path workdir = path_from_utf8(git_repository_workdir(repo));
+    const std::string stamp = local_minute_stamp();
+    std::vector<core::NotePath> copies;
+    for (const Conflict& conflict : conflicts) {
+        if (conflict.theirs_to_copy) {
+            const auto copy =
+                write_conflict_copy(repo, workdir, conflict.path, *conflict.theirs_to_copy, stamp);
+            if (!copy)
+                return std::unexpected(copy.error());
+            TRY_GIT(git_index_add_bypath(index, copy->c_str()));
+            core::log_warn(
+                std::format("sync: conflict in {}; remote version kept as {}", conflict.path, *copy));
+            if (auto note = core::NotePath::parse(*copy))
+                copies.push_back(std::move(*note));  // gizli dosyanın kopyası not değildir; diskte yine durur
+        }
+        // Silme/değiştirme dahil: yoldaki dosya (tek kalan sürüm ya da bizimki) sahnelenir.
+        TRY_GIT(git_index_add_bypath(index, conflict.path.c_str()));
+    }
+    return copies;
+}
+
+// Ayrışmış geçmiş: üç yollu merge → çakışma çözümü → iki ebeveynli commit. Ortak ata yoksa (ilgisiz geçmiş)
+// hiçbir şeye dokunmadan hata: ilk kurulum enable'ın işi. Dönüş: değişen dosya sayısı.
+std::expected<int, core::Error> merge_diverged(git_repository* repo, const std::string& branch,
+                                               const git_annotated_commit* their,
+                                               const core::SyncConfig& sync,
+                                               std::vector<core::NotePath>& copies) {
+    const auto ours = branch_tip(repo, local_ref(branch));
+    if (!ours)
+        return std::unexpected(ours.error());
+    const git_oid* their_id = git_annotated_commit_id(their);
+    git_oid base;
+    if (const int rc = git_merge_base(&base, repo, git_commit_id(ours->first.get()), their_id);
+        rc == GIT_ENOTFOUND)
+        return std::unexpected(sync_error("sync.unrelated_histories", {{"branch", branch}}));
+    else if (rc < 0)
+        return std::unexpected(git_failure());
+
+    git_merge_options merge_options;
+    TRY_GIT(git_merge_options_init(&merge_options, GIT_MERGE_OPTIONS_VERSION));
+    // Yeniden adlandırma tespiti kapalı: açıkken libgit2 farklı yollardaki girdileri tek çakışmada
+    // birleştirir ve checkout bir tarafı yazmaz. Kapalıyken "adlandırma + düzenleme" iki dosya bırakır —
+    // fazlalık, kayıp değil.
+    merge_options.flags = 0;
+    merge_options.file_favor = GIT_MERGE_FILE_FAVOR_NORMAL;
+    // SAFE: commit'lenmemiş değişikliğin üzerine yazmak yerine merge hiç başlamaz. USE_OURS: çakışan dosyaya
+    // işaretli (<<<<<<<) metin yerine bizim sürüm yazılır; diskte hiçbir an bozuk not durmaz.
+    git_checkout_options checkout;
+    TRY_GIT(git_checkout_options_init(&checkout, GIT_CHECKOUT_OPTIONS_VERSION));
+    checkout.checkout_strategy =
+        GIT_CHECKOUT_SAFE | GIT_CHECKOUT_USE_OURS | GIT_CHECKOUT_DONT_OVERWRITE_IGNORED;
+    const git_annotated_commit* heads[] = {their};
+    TRY_GIT(git_merge(repo, heads, 1, &merge_options, &checkout));
+
+    // Bundan sonraki bir hata depoyu MERGE durumunda bırakır: sonraki senkron repo_busy_state ile durur,
+    // iki tarafın içeriği HEAD'de ve uzak dalda durduğu için kayıp yoktur.
+    git_index* index_raw = nullptr;
+    TRY_GIT(git_repository_index(&index_raw, repo));
+    const Index index(index_raw);
+    auto resolved = resolve_conflicts(repo, index.get());
+    if (!resolved)
+        return std::unexpected(resolved.error());
+    TRY_GIT(git_index_write(index.get()));
+    git_oid tree_id;
+    TRY_GIT(git_index_write_tree(&tree_id, index.get()));  // çözülmemiş çakışma kalırsa GIT_EUNMERGED
+    git_tree* tree_raw = nullptr;
+    TRY_GIT(git_tree_lookup(&tree_raw, repo, &tree_id));
+    const Tree tree(tree_raw);
+    git_commit* their_raw = nullptr;
+    TRY_GIT(git_commit_lookup(&their_raw, repo, their_id));
+    const Commit their_commit(their_raw);
+
+    const auto signature = signature_now(sync);
+    if (!signature)
+        return std::unexpected(signature.error());
+    const std::string message =
+        core::tr("sync.merge_message", {{"host", host_name()},
+                                        {"time", iso_utc(std::chrono::system_clock::now())},
+                                        {"conflicts", std::to_string(resolved->size())}});
+    const git_commit* parents[] = {ours->first.get(), their_commit.get()};
+    git_oid commit_id;
+    TRY_GIT(git_commit_create(&commit_id, repo, "HEAD", signature->get(), signature->get(), nullptr,
+                              message.c_str(), tree.get(), 2, parents));
+    TRY_GIT(git_repository_state_cleanup(repo));
+
+    copies.insert(copies.end(), resolved->begin(), resolved->end());
+    return count_changes(repo, ours->second.get(), tree.get());
+}
+
+// Döngü 4: güncel → 0; hızlı ileri (doğmamış yerel dal dahil) → checkout + dal ref'i; ayrışmış →
+// merge_diverged. Dönüş: değişen dosya sayısı; çakışma kopyaları `copies`'e eklenir.
+std::expected<int, core::Error> integrate(git_repository* repo, const std::string& branch,
+                                          const core::SyncConfig& sync, std::vector<core::NotePath>& copies) {
     git_reference* their_ref_raw = nullptr;
     if (const int rc = git_reference_lookup(&their_ref_raw, repo, tracking_ref(branch).c_str());
         rc == GIT_ENOTFOUND)
@@ -252,7 +429,7 @@ std::expected<int, core::Error> fast_forward(git_repository* repo, const std::st
     if (analysis & GIT_MERGE_ANALYSIS_UP_TO_DATE)
         return 0;
     if (!(analysis & (GIT_MERGE_ANALYSIS_FASTFORWARD | GIT_MERGE_ANALYSIS_UNBORN)))
-        return std::unexpected(sync_error("sync.diverged_not_supported", {{"branch", branch}}));
+        return merge_diverged(repo, branch, their.get(), sync, copies);
 
     const std::string local = local_ref(branch);
     const auto old_tip = branch_tip(repo, local);
@@ -367,7 +544,7 @@ retry_rejected_push(const std::function<std::expected<bool, core::Error>()>& exc
 
 SyncService::SyncService(const core::Config& config) : config_(config) {}
 
-std::expected<SyncResult, core::Error> SyncService::sync_now() {
+std::expected<SyncResult, core::Error> SyncService::sync_now(const std::function<void()>& before_push) {
     const auto lock = SyncLock::acquire(core::state_dir() / "sync.lock",
                                         std::chrono::minutes(config_.tuning.sync_stale_lock_minutes));
     if (!lock) {
@@ -376,12 +553,12 @@ std::expected<SyncResult, core::Error> SyncService::sync_now() {
         log("sync: " + core::format_error(lock.error()));
         return std::unexpected(lock.error());
     }
-    auto outcome = run_cycle();
+    auto outcome = run_cycle(before_push);
     record(outcome);
     return outcome;
 }
 
-std::expected<SyncResult, core::Error> SyncService::run_cycle() {
+std::expected<SyncResult, core::Error> SyncService::run_cycle(const std::function<void()>& before_push) {
     const std::string notes_dir = utf8(config_.notes_dir);
     const core::Error not_initialized{
         core::Error::Code::NotFound, "sync.not_initialized", {{"path", notes_dir}}};
@@ -396,6 +573,11 @@ std::expected<SyncResult, core::Error> SyncService::run_cycle() {
         return std::unexpected(not_initialized);
     const Remote remote(remote_raw);
 
+    // Elle başlatılmış ya da yarıda kalmış merge/rebase/cherry-pick: index'teki çakışmaları commit_all
+    // işaretli dosyalarla "çözerdi". Kullanıcı bitirene (ya da iptal edene) kadar hiçbir şeye dokunulmaz.
+    if (git_repository_state(repo.get()) != GIT_REPOSITORY_STATE_NONE)
+        return std::unexpected(sync_error("sync.repo_busy_state", {{"path", notes_dir}}));
+
     const std::string& branch = config_.sync.branch;
     if (auto on_branch = check_head(repo.get(), branch); !on_branch)
         return std::unexpected(on_branch.error());
@@ -409,10 +591,12 @@ std::expected<SyncResult, core::Error> SyncService::run_cycle() {
     const auto pushed = retry_rejected_push([&]() -> std::expected<bool, core::Error> {
         if (auto fetched = fetch(remote.get(), branch); !fetched)
             return std::unexpected(fetched.error());
-        const auto pulled = fast_forward(repo.get(), branch);
+        const auto pulled = integrate(repo.get(), branch, config_.sync, result.conflict_copies);
         if (!pulled)
             return std::unexpected(pulled.error());
         result.pulled += *pulled;
+        if (before_push)
+            before_push();
         return push_if_ahead(repo.get(), remote.get(), branch);
     });
     if (!pushed)
