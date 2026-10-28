@@ -21,6 +21,10 @@ function(noteapp_target_defaults target)
 endfunction()
 
 add_subdirectory(src/core)
+add_subdirectory(src/tui)
+if(NOTEAPP_BUILD_GUI)
+    add_subdirectory(src/gui)
+endif()
 
 if(NOTEAPP_BUILD_TESTS)
     enable_testing()

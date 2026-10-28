@@ -42,13 +42,14 @@
   `src/sync/CMakeLists.txt`, `tests/sync/libgit2_spike_test.cpp`, `SPEC.md` · **Boyut:** M · **Model:** opus
 
 ### T04: Spike — FTXUI + Qt
-- [ ] **Açıklama:** FTXUI v7.0.3 ekle. `notes` yer tutucu: Türkçe örnek satırlarla sabit iki panel. `notes-gui`
+- [x] **Açıklama:** FTXUI v7.0.3 ekle. `notes` yer tutucu: Türkçe örnek satırlarla sabit iki panel. `notes-gui`
   yer tutucu: pencere + `--export-pdf` ile "çğıİöşü" içeren PDF. Windows'ta konsol UTF-8 ayarı.
 - **Kabul:** iki ikili Windows'ta açılır, Türkçe karakterler doğru görünür (elle) · PDF'te Türkçe glifler (elle) ·
   Fedora'da offscreen PDF testi yeşil · `NOTEAPP_BUILD_GUI=OFF` ile Qt'siz derleme çalışır.
 - **Doğrulama:** `B && T(gui)`, `F`, elle çalıştırma · **Bağımlılık:** T01, T02 · **Dosyalar:** `cmake/Dependencies.cmake`,
   `src/tui/{CMakeLists.txt,main.cpp}`, `src/gui/{CMakeLists.txt,main.cpp}`, `tests/gui/pdf_smoke_test.cpp` ·
   **Boyut:** M · **Model:** opus
+- **Not:** Windows B + T + GUI=OFF + PDF (Türkçe/A4/15 mm) doğrulandı; açık: `F` (T02) ve iki ikilinin elle göz kontrolü.
 
 ### ✅ Kontrol noktası 0
 - [ ] Windows (B + tüm testler) ve `F` yeşil

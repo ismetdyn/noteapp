@@ -8,3 +8,7 @@ function(noteapp_add_test module)
 endfunction()
 
 add_subdirectory(core)
+add_subdirectory(tui)
+if(NOTEAPP_BUILD_GUI)
+    add_subdirectory(gui)
+endif()
