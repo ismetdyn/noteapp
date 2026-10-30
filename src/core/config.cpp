@@ -41,6 +41,11 @@ public:
                                   {{"key", prefix_ + std::string(key)}, {"reason", std::string(rule)}}});
     }
 
+    void warn(std::string_view key, std::string message_key) {
+        warnings_.push_back(
+            Error{Error::Code::ConfigInvalid, std::move(message_key), {{"key", prefix_ + std::string(key)}}});
+    }
+
     std::optional<std::string> string(std::string_view key) {
         const toml::node* node = find(key);
         if (node == nullptr)
@@ -146,29 +151,37 @@ private:
 
 // https://kullanıcı:token@host/… token'ı düz metin config.toml'a (ve senkronla başka makinelere) taşır; token
 // kasada durur (`note sync login`). http(s) URL'sinde "://"dan sonraki yetki kısmında '@' varsa kimlik var
-// sayılır. SSH'nin kullanıcı adı (git@host:…, ssh://git@host/…) sır değildir. core sync'e bağımlı olamaz:
-// sync::parse_remote'un küçük, yerel eşi.
-bool remote_has_credentials(std::string_view remote) {
+// sayılır ve kimliksiz URL döner; yoksa nullopt. SSH'nin kullanıcı adı (git@host:…, ssh://git@host/…) sır
+// değildir. core sync'e bağımlı olamaz: sync::parse_remote'un küçük, yerel eşi.
+std::optional<std::string> without_credentials(std::string_view remote) {
     const std::size_t scheme_end = remote.find("://");
     if (scheme_end == std::string_view::npos)
-        return false;
+        return std::nullopt;
     std::string scheme(remote.substr(0, scheme_end));
     std::ranges::transform(scheme, scheme.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (scheme != "http" && scheme != "https")
-        return false;
-    const std::string_view rest = remote.substr(scheme_end + 3);
-    return rest.substr(0, rest.find_first_of("/?#")).find('@') != std::string_view::npos;
+        return std::nullopt;
+    const std::size_t host_start = scheme_end + 3;
+    const std::string_view rest = remote.substr(host_start);
+    const std::size_t at = rest.substr(0, rest.find_first_of("/?#")).rfind('@');
+    if (at == std::string_view::npos)
+        return std::nullopt;
+    return std::string(remote.substr(0, host_start)) + std::string(rest.substr(at + 1));
 }
 
 void apply_sync(Section& s, SyncConfig& sync) {
     if (auto v = s.boolean("enabled"))
         sync.enabled = *v;
     if (auto v = s.string("remote")) {
-        if (remote_has_credentials(*v))
-            s.invalid("remote", "remote_has_credentials");  // değer hata/loga yazılmaz: sır taşır
-        else
+        // Elle yazılmış dosya: remote kaybolmasın, sır bellekte kalmasın ve sonraki kayıtta dosyadan
+        // silinsin. URL'nin ham hâli uyarıya yazılmaz.
+        if (auto clean = without_credentials(*v)) {
+            s.warn("remote", "config.remote_credentials_stripped");
+            sync.remote = std::move(*clean);
+        } else {
             sync.remote = std::move(*v);
+        }
     }
     if (auto v = s.string("branch")) {
         if (v->empty())
@@ -364,6 +377,12 @@ std::expected<void, Error> set_config_value(Config& config, std::string_view key
     if (setting == settings().end())
         return std::unexpected(
             Error{Error::Code::ConfigInvalid, "config.unknown_key", {{"key", std::string(key)}}});
+    // Dosyanın aksine burada kaydedilecek yeni değer söz konusu: soyup kabul etmek yerine reddedilir ki
+    // kullanıcı token'ını `note sync login` ile kaydetsin. Değer hataya yazılmaz.
+    if (key == "sync.remote" && without_credentials(value))
+        return std::unexpected(Error{Error::Code::ConfigInvalid,
+                                     "config.invalid_value",
+                                     {{"key", std::string(key)}, {"reason", "remote_has_credentials"}}});
 
     // Değer, şemadaki türüyle TOML düğümüne çevrilir ve dosya yüklemesiyle AYNI `apply` doğrulamasından
     // geçer. Türe uymayan metin (ör. "abc" tamsayı için) string kalır; apply bunu tür hatası olarak raporlar.

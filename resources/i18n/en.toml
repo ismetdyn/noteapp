@@ -57,6 +57,7 @@ invalid_value = "Setting '{key}' {reason}; using the default"
 syntax_error = "Syntax error in the config file at line {line}, column {column}: {detail}; using all defaults"
 unreadable = "Cannot read the config file '{path}'; using all defaults"
 defaults_unusable = "Built-in defaults are unusable"
+remote_credentials_stripped = "The user name or token in '{key}' was ignored; remove it from the config file and use 'note sync login' for the token"
 
 [tui]
 query_placeholder = "query"

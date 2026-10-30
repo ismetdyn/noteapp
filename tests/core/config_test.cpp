@@ -1,4 +1,5 @@
 #include "core/config.hpp"
+#include "core/i18n.hpp"
 #include "core/paths.hpp"
 #include "core/resources.hpp"
 #include "support/test_support.hpp"
@@ -393,13 +394,6 @@ TEST_CASE("sync.remote with credentials in an http(s) URL is refused and the sec
         CHECK(c == original);
     }
 
-    const LoadedConfig loaded = parse_config("[sync]\nremote = \"https://u:s3cret@host/r.git\"\n");
-    CHECK(loaded.config.sync.remote == original.sync.remote);
-    CHECK(has_warning_about(loaded, "sync.remote", "config.invalid_value"));
-    for (const Error& warning : loaded.warnings)
-        for (const auto& [key, value] : warning.args)
-            CHECK(value.find("s3cret") == std::string::npos);
-
     // SSH kullanıcı adı sır değildir; yoldaki '@' kullanıcı bilgisi değildir.
     for (const std::string ok : {"git@github.com:u/notes.git", "ssh://git@host/notes.git",
                                  "https://github.com/u/n.git", "https://host/path/with@sign.git"}) {
@@ -407,6 +401,45 @@ TEST_CASE("sync.remote with credentials in an http(s) URL is refused and the sec
         CHECK(set_config_value(c, "sync.remote", ok));
         CHECK(c.sync.remote == ok);
     }
+}
+
+// Elle yazılmış remote kaybolmasın: URL'deki kimlik zaten hiç kullanılmaz (token ortamdan ya da kasadan
+// gelir).
+TEST_CASE(
+    "loading a sync.remote with credentials strips them, keeps the remote and warns without the secret") {
+    for (const auto& [raw, clean] : std::vector<std::pair<std::string, std::string>>{
+             {"https://u:s3cret@host/r.git", "https://host/r.git"},
+             {"http://s3cret@host/r.git", "http://host/r.git"},
+             {"HTTPS://u:s3cret@host", "HTTPS://host"},
+             {"https://u:s3cret@x@host?y=1", "https://host?y=1"}}) {
+        CAPTURE(raw);
+        const LoadedConfig loaded = parse_config("[sync]\nremote = \"" + raw + "\"\n");
+        CHECK(loaded.config.sync.remote == clean);
+        REQUIRE(has_warning_about(loaded, "sync.remote", "config.remote_credentials_stripped"));
+        for (const Error& warning : loaded.warnings) {
+            CHECK(format_error(warning).find("s3cret") == std::string::npos);
+            for (const auto& [key, value] : warning.args)
+                CHECK(value.find("s3cret") == std::string::npos);
+        }
+    }
+
+    const LoadedConfig plain = parse_config("[sync]\nremote = \"git@github.com:u/notes.git\"\n");
+    CHECK(plain.config.sync.remote == "git@github.com:u/notes.git");
+    CHECK(plain.warnings.empty());
+}
+
+TEST_CASE("the next save_config leaves no credentials from sync.remote in the file") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+    fs::create_directories(config_dir());
+    std::ofstream(config_file(), std::ios::binary) << "[sync]\nremote = \"https://u:s3cret@host/r.git\"\n";
+
+    REQUIRE(save_config(load_config().config).has_value());
+
+    CHECK(slurp(config_file()).find("s3cret") == std::string::npos);
+    const LoadedConfig reloaded = load_config();
+    CHECK(reloaded.config.sync.remote == "https://host/r.git");
+    CHECK(reloaded.warnings.empty());
 }
 
 TEST_CASE("config_entries lists the user-facing keys with dotted sync keys and joined lists") {

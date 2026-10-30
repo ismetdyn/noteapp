@@ -57,6 +57,7 @@ invalid_value = "'{key}' ayarı {reason}; varsayılan kullanılıyor"
 syntax_error = "Yapılandırma dosyasında {line}. satır, {column}. sütunda sözdizimi hatası: {detail}; tüm varsayılanlar kullanılıyor"
 unreadable = "'{path}' yapılandırma dosyası okunamadı; tüm varsayılanlar kullanılıyor"
 defaults_unusable = "Yerleşik varsayılanlar kullanılamıyor"
+remote_credentials_stripped = "'{key}' içindeki kullanıcı adı ya da token yok sayıldı; dosyadan silin, token için 'note sync login' kullanın"
 
 [tui]
 query_placeholder = "sorgu"

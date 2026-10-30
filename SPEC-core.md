@@ -152,8 +152,12 @@ sync_timeout_seconds = 120     # AutoSync bir `note sync --background` sürecini
 - `~` ve ortam değişkenleri `notes_dir`'de genişletilir. Kaydetme atomiktir. Yorumlar korunmaz (bilinen sınır).
 - Kimlik doğrulama yöntemi `remote` şemasından türetilir; ayrı anahtar yok.
 - `sync.remote` http(s) URL'sinde kullanıcı bilgisi (`https://kullanıcı:token@host/…`, `://`dan sonraki ilk `/ ? #`'ten
-  önce `@`) geçersizdir → `reason = remote_has_credentials` (dosyada: varsayılan + uyarı; `set_config_value`: ret).
-  Değer hata/uyarıya yazılmaz. Neden: token düz metin `config.toml`'a girerdi; token kasada durur (T36).
+  önce `@`; birden çok `@`'ta sonuncusuna kadar) kabul edilmez (T36):
+  - `set_config_value` reddeder → `config.invalid_value`, `reason = remote_has_credentials`.
+  - Dosyadan yüklemede kimlik soyulur, remote korunur, uyarı `config.remote_credentials_stripped` üretilir; sır bellekte
+    kalmaz, sonraki `save_config` dosyadan da siler. Neden: elle yazılmış remote sessizce kaybolmasın; URL'deki kimlik
+    zaten hiç kullanılmaz (token ortamdan ya da kasadan gelir, yoksa `sync.token_missing`).
+  - URL'nin ham hâli hata ve uyarılara asla yazılmaz. SSH kullanıcı adı (`git@host:…`, `ssh://git@host/…`) etkilenmez.
 
 ### i18n
 - Kataloglar `resources/i18n/{en,tr}.toml` (düz anahtarlar, `{ad}` yer tutucuları), derlemede gömülür.
