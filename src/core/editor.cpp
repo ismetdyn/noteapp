@@ -134,7 +134,7 @@ std::expected<void, Error> run_editor(const Config& config, const std::filesyste
     const std::u8string path = file.u8string();
     argv->emplace_back(path.begin(), path.end());
 
-    const auto code = run_and_wait(*argv);
+    const auto code = run_and_wait(*argv, without_secrets());  // editör ve eklentileri token'ı görmez
     if (!code) {
         if (code.error().code == Error::Code::NotFound)
             return std::unexpected(

@@ -5,11 +5,13 @@
 //   FAKE_EDITOR_STDOUT    -> bu metin + satır sonu stdout'a ve stderr'e yazılır (çıktı devralma testleri)
 //   FAKE_EDITOR_PID_OUT   -> sürecin PID'i bu dosyaya yazılır (sonlandırma testleri)
 //   FAKE_EDITOR_SLEEP_MS  -> çıkmadan önce bu kadar milisaniye uyur (zaman aşımı testleri)
+//   FAKE_EDITOR_ENV_OUT   -> tüm ortam (satır başına AD=değer, UTF-8) bu dosyaya yazılır
 //   FAKE_EDITOR_GRANDCHILD_PID_OUT -> kendini uzun uyuyan bir torun olarak başlatır, torunun PID'i bu
 //                            dosyaya yazılır (süreç ağacı sonlandırma testleri; ssh torununu taklit eder)
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -113,6 +115,18 @@ int main(int argc, char** argv) {
     if (const auto content = env("FAKE_EDITOR_CONTENT"); content && received.size() > 1) {
         std::ofstream out(path_from_utf8(received.back()), std::ios::binary);
         out.write(content->data(), static_cast<std::streamsize>(content->size()));
+    }
+    if (const auto env_out = env("FAKE_EDITOR_ENV_OUT")) {
+        std::ofstream out(path_from_utf8(*env_out), std::ios::binary);
+#ifdef _WIN32
+        wchar_t* block = GetEnvironmentStringsW();
+        for (const wchar_t* p = block; p != nullptr && *p != L'\0'; p += std::wcslen(p) + 1)
+            out << to_utf8(p) << '\n';
+        FreeEnvironmentStringsW(block);
+#else
+        for (char** e = environ; e != nullptr && *e != nullptr; ++e)
+            out << *e << '\n';
+#endif
     }
     if (const auto text = env("FAKE_EDITOR_STDOUT")) {
         std::printf("%s\n", text->c_str());

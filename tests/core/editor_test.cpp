@@ -107,6 +107,20 @@ TEST_CASE("run_editor passes configured arguments and appends the file last") {
     CHECK(slurp(args_out) == "--wait\ntwo words\n" + utf8(file) + "\n");
 }
 
+// Editör kullanıcının programıdır (eklentileri dahil): senkron token'ı ona geçmez.
+TEST_CASE("run_editor does not pass the sync token variables to the editor") {
+    TempDir dir;
+    const auto dump = dir.path() / "env.txt";
+    const ScopedEnv out("FAKE_EDITOR_ENV_OUT", utf8(dump));
+    const ScopedEnv token("NOTEAPP_GIT_TOKEN", "s3cret-token");
+    const ScopedEnv host("NOTEAPP_GIT_TOKEN_HOST", "s3cret.example");
+
+    REQUIRE(run_editor(make_config(quoted_fake_editor()), dir.path() / "n.md").has_value());
+    const std::string env = slurp(dump);
+    CHECK(env.find("FAKE_EDITOR_ENV_OUT=") != std::string::npos);
+    CHECK(env.find("s3cret") == std::string::npos);
+}
+
 TEST_CASE("run_editor maps a non-zero exit to EditorFailed") {
     TempDir dir;
     ScopedEnv exit_code("FAKE_EDITOR_EXIT", "3");

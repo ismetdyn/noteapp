@@ -110,7 +110,7 @@ int run_export(const ParsedArgs& args, const core::Config& config) {
 
     // Çocuğun stderr'i devralınır: yerelleştirilmiş hata satırı doğrudan kullanıcıya ulaşır.
     const auto code = core::run_and_wait({to_utf8(gui), "--export-pdf", to_utf8(*input), to_utf8(output)},
-                                         {{"QT_QPA_PLATFORM", "offscreen"}});
+                                         core::without_secrets({{"QT_QPA_PLATFORM", "offscreen"}}));
     if (!code) {
         std::cerr << core::format_error(code.error()) << '\n';
         return kExitInternal;

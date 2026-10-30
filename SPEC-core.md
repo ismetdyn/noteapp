@@ -162,7 +162,12 @@ sync_timeout_seconds = 120     # AutoSync bir `note sync --background` sürecini
 ### Editör
 - Çözüm sırası: `config.editor` → `$VISUAL` → `$EDITOR` → Windows: PATH'te `edit` varsa o, yoksa `notepad`;
   Unix: `nano`, yoksa `vi`. Komut tırnak kurallarıyla argümanlara bölünür (`"code --wait"` desteklenir),
-  dosya yolu son argüman olarak eklenir. Kabuk kullanılmaz (CreateProcessW / posix_spawnp); süreç beklenir.
+  dosya yolu son argüman olarak eklenir. Kabuk kullanılmaz (CreateProcessW / posix_spawn); süreç beklenir.
+- **Süreç sertleştirme (T36):** program `find_program`'la bir kez çözülür ve bulunan yol başlatılır (POSIX'te
+  `posix_spawnp`'in ikinci PATH araması yok; boş PATH girdisi çalışma dizini sayılmaz, PATH yoksa varsayılan arama da
+  yok). `.cmd`/`.bat` için `cmd.exe` `GetSystemDirectoryW`'den gelir, PATH'ten değil. `EnvOverrides` değeri `nullopt`
+  ise değişken çocuktan silinir; editör ve `notes-gui` `without_secrets()` ile `NOTEAPP_GIT_TOKEN` /
+  `NOTEAPP_GIT_TOKEN_HOST` görmeden çalışır.
 - Bulunamazsa `EditorNotFound` (denenen adaylar args'ta); sıfır dışı çıkış kodu `EditorFailed`.
 
 ### Platform dizinleri ve log

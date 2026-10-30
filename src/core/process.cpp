@@ -112,8 +112,9 @@ bool is_batch_file(const fs::path& p) {
     return _wcsicmp(ext.c_str(), L".bat") == 0 || _wcsicmp(ext.c_str(), L".cmd") == 0;
 }
 
-// Mevcut ortam + geçersiz kılmalar; değişken adları Windows'ta büyük/küçük harfe duyarsızdır.
-std::wstring build_environment_block(const std::vector<std::pair<std::string, std::string>>& overrides) {
+// Mevcut ortam + geçersiz kılmalar (nullopt: silinir); değişken adları Windows'ta büyük/küçük harfe
+// duyarsızdır.
+std::wstring build_environment_block(const EnvOverrides& overrides) {
     std::vector<std::wstring> entries;
     wchar_t* block = GetEnvironmentStringsW();
     for (const wchar_t* p = block; block != nullptr && *p != L'\0'; p += std::wcslen(p) + 1)
@@ -123,15 +124,12 @@ std::wstring build_environment_block(const std::vector<std::pair<std::string, st
 
     for (const auto& [key, value] : overrides) {
         const std::wstring wide_key = to_wide(key);
-        const auto same_key = [&](const std::wstring& entry) {
+        std::erase_if(entries, [&](const std::wstring& entry) {
             const std::size_t eq = entry.find(L'=', 1);  // "=C:=..." gibi gizli girdiler 1'den başlar
             return eq == wide_key.size() && _wcsnicmp(entry.c_str(), wide_key.c_str(), eq) == 0;
-        };
-        const std::wstring entry = wide_key + L"=" + to_wide(value);
-        if (auto it = std::find_if(entries.begin(), entries.end(), same_key); it != entries.end())
-            *it = entry;
-        else
-            entries.push_back(entry);
+        });
+        if (value)
+            entries.push_back(wide_key + L"=" + to_wide(*value));
     }
     std::sort(entries.begin(), entries.end(), [](const std::wstring& a, const std::wstring& b) {
         return _wcsicmp(a.c_str(), b.c_str()) < 0;
@@ -157,6 +155,17 @@ struct Command {
     std::wstring command_line;
 };
 
+// cmd.exe PATH'ten değil sistem dizininden gelir: PATH'in önündeki sahte cmd.exe betiği çalıştıran kabuğun
+// yerine geçemez.
+std::optional<fs::path> system_cmd() {
+    std::wstring dir(MAX_PATH, L'\0');
+    const UINT length = GetSystemDirectoryW(dir.data(), static_cast<UINT>(dir.size()));
+    if (length == 0 || length >= dir.size())
+        return std::nullopt;
+    dir.resize(length);
+    return fs::path(dir) / L"cmd.exe";
+}
+
 std::expected<Command, Error> prepare_command(const std::vector<std::string>& argv) {
     const std::string& program_name = argv.front();
     const auto program = find_program(program_name);
@@ -171,7 +180,7 @@ std::expected<Command, Error> prepare_command(const std::vector<std::string>& ar
             if (has_cmd_metacharacter(text))
                 return std::unexpected(
                     Error{Error::Code::InvalidPath, "error.process_unsafe_argument", {{"argument", text}}});
-        const auto cmd = find_program("cmd.exe");
+        const auto cmd = system_cmd();
         if (!cmd)
             return std::unexpected(not_found("cmd.exe"));
         // /s ile dıştaki tırnak çifti soyulur; içte program ve argümanlar ayrı ayrı tırnaklıdır.
@@ -221,18 +230,16 @@ std::vector<char*> c_strings(const std::vector<std::string>& strings) {
     return out;
 }
 
-std::vector<std::string>
-build_environment(const std::vector<std::pair<std::string, std::string>>& overrides) {
+// Mevcut ortam + geçersiz kılmalar (nullopt: silinir).
+std::vector<std::string> build_environment(const EnvOverrides& overrides) {
     std::vector<std::string> entries;
     for (char** e = environ; e != nullptr && *e != nullptr; ++e)
         entries.emplace_back(*e);
     for (const auto& [key, value] : overrides) {
         const std::string prefix = key + "=";
-        const auto same_key = [&](const std::string& entry) { return entry.starts_with(prefix); };
-        if (auto it = std::find_if(entries.begin(), entries.end(), same_key); it != entries.end())
-            *it = prefix + value;
-        else
-            entries.push_back(prefix + value);
+        std::erase_if(entries, [&](const std::string& entry) { return entry.starts_with(prefix); });
+        if (value)
+            entries.push_back(prefix + *value);
     }
     return entries;
 }
@@ -242,11 +249,16 @@ std::expected<pid_t, Error> spawn_posix(const std::vector<std::string>& argv,
                                         const EnvOverrides& env_overrides,
                                         const posix_spawn_file_actions_t* actions,
                                         const posix_spawnattr_t* attributes) {
+    // posix_spawnp ikinci bir PATH araması yapardı (boş girdi = çalışma dizini); find_program'ın bulduğu yol
+    // aynen başlatılır, argv[0] verilen ad kalır.
+    const auto program = find_program(argv.front());
+    if (!program)
+        return std::unexpected(not_found(argv.front()));
     const std::vector<std::string> env_strings = build_environment(env_overrides);
     std::vector<char*> args = c_strings(argv);
     std::vector<char*> envp = c_strings(env_strings);
     pid_t pid = 0;
-    const int rc = posix_spawnp(&pid, argv.front().c_str(), actions, attributes, args.data(), envp.data());
+    const int rc = posix_spawn(&pid, program->c_str(), actions, attributes, args.data(), envp.data());
     if (rc == ENOENT)
         return std::unexpected(not_found(argv.front()));
     if (rc != 0)
@@ -263,6 +275,12 @@ int exit_status(int status) {
 #endif
 
 }  // namespace
+
+EnvOverrides without_secrets(EnvOverrides overrides) {
+    for (const char* name : {"NOTEAPP_GIT_TOKEN", "NOTEAPP_GIT_TOKEN_HOST"})
+        overrides.emplace_back(name, std::nullopt);
+    return overrides;
+}
 
 std::optional<std::string> get_env_utf8(std::string_view name) {
 #ifdef _WIN32

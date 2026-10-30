@@ -93,6 +93,21 @@ TEST_CASE("export never reads a note through a directory link") {
     CHECK(slurp(outside.path() / "secret.md") == "gizli");
 }
 
+TEST_CASE("export runs notes-gui offscreen and without the sync token variables") {
+    const Sandbox box;
+    put(box.notes() / "a.md", "x");
+    const TempDir out;
+    const ScopedEnv gui("NOTEAPP_GUI_EXE", std::string(NOTEAPP_FAKE_EDITOR));
+    const ScopedEnv env_out("FAKE_EDITOR_ENV_OUT", utf8(out.path() / "env.txt"));
+    const ScopedEnv token("NOTEAPP_GIT_TOKEN", "s3cret-token");
+    const ScopedEnv host("NOTEAPP_GIT_TOKEN_HOST", "s3cret.example");
+
+    CHECK(box.run({"export", "--pdf", "a.md", "-o", utf8(out.path() / "a.pdf")}).exit_code == 0);
+    const std::string env = slurp(out.path() / "env.txt");
+    CHECK(env.find("QT_QPA_PLATFORM=offscreen") != std::string::npos);
+    CHECK(env.find("s3cret") == std::string::npos);
+}
+
 TEST_CASE("missing GUI executable exits 3 with the install hint") {
     const Sandbox box("en");
     put(box.notes() / "a.md", "x");

@@ -239,7 +239,66 @@ TEST_CASE("find_program locates a program on PATH and ignores the working direct
     CHECK(find_program(kFakeEditor).has_value());  // dizin içeren ad doğrudan denenir
 }
 
+TEST_CASE("env overrides can remove a variable from the child's environment") {
+    TempDir dir;
+    const auto dump = dir.path() / "env.txt";
+    const ScopedEnv inherited("NOTEAPP_TEST_REMOVED", "s3cret");
+
+    const auto result = run_and_wait({kFakeEditor}, {{"FAKE_EDITOR_ENV_OUT", utf8(dump)},
+                                                     {"NOTEAPP_TEST_REMOVED", std::nullopt},
+                                                     {"NOTEAPP_TEST_ABSENT", std::nullopt}});
+    REQUIRE(result.value() == 0);
+    const std::string env = slurp(dump);
+    CHECK(env.find("FAKE_EDITOR_ENV_OUT=") != std::string::npos);  // döküm gerçekten yapıldı
+    CHECK(env.find("s3cret") == std::string::npos);
+    CHECK(env.find("NOTEAPP_TEST_ABSENT") == std::string::npos);
+}
+
+TEST_CASE("without_secrets drops the sync token variables and keeps the given overrides") {
+    TempDir dir;
+    const auto dump = dir.path() / "env.txt";
+    const ScopedEnv token("NOTEAPP_GIT_TOKEN", "s3cret-token");
+    const ScopedEnv host("NOTEAPP_GIT_TOKEN_HOST", "s3cret.example");
+
+    REQUIRE(run_and_wait({kFakeEditor}, without_secrets({{"FAKE_EDITOR_ENV_OUT", utf8(dump)}})).value() == 0);
+    const std::string env = slurp(dump);
+    CHECK(env.find("FAKE_EDITOR_ENV_OUT=") != std::string::npos);
+    CHECK(env.find("s3cret") == std::string::npos);
+}
+
+#ifndef _WIN32
+// posix_spawnp ikinci bir PATH araması yapar ve boş PATH girdisini çalışma dizini sayar; find_program saymaz.
+TEST_CASE(
+    "run_and_wait starts what find_program found: an empty PATH entry does not mean the working directory") {
+    TempDir dir;
+    const fs::path probe = dir.path() / "noteapp-cwd-probe";
+    fs::copy_file(kFakeEditor, probe);
+    fs::permissions(probe, fs::perms::owner_all, fs::perm_options::replace);
+    const fs::path old_cwd = fs::current_path();
+    fs::current_path(dir.path());
+    std::expected<int, Error> result = 0;
+    {
+        const ScopedEnv path("PATH", ":/noteapp-no-such-dir");
+        result = run_and_wait({"noteapp-cwd-probe"});
+    }
+    fs::current_path(old_cwd);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == Error::Code::NotFound);
+}
+#endif
+
 #ifdef _WIN32
+// PATH'in önüne konmuş sahte cmd.exe .cmd betiğini çalıştıran kabuğun yerine geçmemeli.
+TEST_CASE("batch scripts run through the system cmd.exe, not a cmd.exe found on PATH") {
+    TempDir dir;
+    const auto script = dir.path() / "tool.cmd";
+    std::ofstream(script) << "@exit /b 3\r\n";
+    fs::copy_file(kFakeEditor, dir.path() / "cmd.exe");  // seçilirse betik koşmaz, çıkış kodu 3 olmaz
+    const ScopedEnv path("PATH", utf8(dir.path()));
+
+    CHECK(run_and_wait({utf8(script)}).value() == 3);
+}
+
 TEST_CASE("run_and_wait runs .cmd scripts through cmd.exe and rejects metacharacters") {
     TempDir dir;
     const auto script = dir.path() / "tool with space.cmd";

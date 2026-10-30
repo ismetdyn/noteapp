@@ -13,7 +13,12 @@
 
 namespace noteapp::core {
 
-using EnvOverrides = std::vector<std::pair<std::string, std::string>>;
+// Mevcut ortamın üstüne binen değişkenler; değer nullopt ise değişken çocuğun ortamından silinir.
+using EnvOverrides = std::vector<std::pair<std::string, std::optional<std::string>>>;
+
+// `overrides` + senkron token'ını taşıyan değişkenlerin (NOTEAPP_GIT_TOKEN, NOTEAPP_GIT_TOKEN_HOST)
+// silinmesi. Kullanıcının programlarına (editör, notes-gui) verilir: token yalnız senkronun işidir.
+EnvOverrides without_secrets(EnvOverrides overrides = {});
 
 // Boş değer "tanımsız" sayılır. Windows'ta geniş API ile okunup UTF-8'e çevrilir.
 std::optional<std::string> get_env_utf8(std::string_view name);
