@@ -651,7 +651,7 @@ TEST_CASE(
     hooks.after_conflict_copy = [](const std::string&) -> std::expected<void, Error> {
         throw std::runtime_error("süreç öldürüldü");
     };
-    CHECK_THROWS(SyncService(SyncFixture::config_for(w.a)).sync_now(hooks));
+    CHECK_THROWS(static_cast<void>(SyncService(SyncFixture::config_for(w.a)).sync_now(hooks)));
     REQUIRE(repository_state(w.a) == GIT_REPOSITORY_STATE_MERGE);
     write_file(noteapp::core::state_dir() / "sync.lock", "999999999\n2026-10-28T00:00:00Z\n00000000\n");
 
