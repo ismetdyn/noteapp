@@ -42,6 +42,8 @@ namespace {
 constexpr const char* kRemoteName = "origin";
 constexpr std::string_view kBranchPrefix = "refs/heads/";
 constexpr std::string_view kPushRejected = "sync.push_rejected";
+constexpr std::size_t kMaxFileNameBytes = 255;  // Linux NAME_MAX; Windows'un 255 UTF-16 birimi de sığar
+constexpr std::size_t kMaxExtensionBytes = 32;  // bundan uzunu uzantı sayılmaz: kopyanın adını doldururdu
 // OS kullanıcı/makine adı okunamazsa yazarda boş alan kalmasın diye son çare değerler.
 constexpr std::string_view kUnknownUser = "noteapp";
 constexpr std::string_view kUnknownHost = "localhost";
@@ -302,9 +304,19 @@ struct CreatedCopy {
     git_oid blob;      // yazılan içerik
 };
 
+// En çok `max_bytes` bayta keser; çok baytlı bir UTF-8 karakterini bölmez.
+std::string cut_utf8(const std::string& text, std::size_t max_bytes) {
+    if (text.size() <= max_bytes)
+        return text;
+    std::size_t end = max_bytes;
+    while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0) == 0x80)  // 10xxxxxx: devam baytı
+        --end;
+    return text.substr(0, end);
+}
+
 // Onların sürümü `<ad> (conflict YYYY-MM-DD HHMM).<uzantı>` olarak yanına yazılır; ad doluysa uzantıdan önce
-// " 2", " 3" … eklenir. Dosya yalnız yoksa oluşturulur (O_EXCL): var olan hiçbir şeyin üzerine yazılmaz.
-// Dönüş: depo-göreli, '/' ayırıcılı UTF-8 yol.
+// " 2", " 3" … eklenir; ad 255 bayta sığmıyorsa `<ad>` kısaltılır. Dosya yalnız yoksa oluşturulur (O_EXCL):
+// var olan hiçbir şeyin üzerine yazılmaz. Dönüş: depo-göreli, '/' ayırıcılı UTF-8 yol.
 std::expected<std::string, core::Error> write_conflict_copy(git_repository* repo, const fs::path& workdir,
                                                             const std::string& path, const git_oid& blob_id,
                                                             const std::string& stamp) {
@@ -314,13 +326,17 @@ std::expected<std::string, core::Error> write_conflict_copy(git_repository* repo
     const std::string_view content(static_cast<const char*>(git_blob_rawcontent(blob.get())),
                                    static_cast<std::size_t>(git_blob_rawsize(blob.get())));
     const fs::path original = path_from_utf8(path);
-    const std::string stem = utf8(original.stem());
-    const std::string extension = utf8(original.extension());  // uzantısız dosyada boş: nokta eklenmez
+    std::string stem = utf8(original.stem());
+    std::string extension = utf8(original.extension());  // uzantısız dosyada boş: nokta eklenmez
+    if (extension.size() > kMaxExtensionBytes) {         // gerçek uzantı değil; damgaya yer kalsın
+        stem += extension;
+        extension.clear();
+    }
     for (int number = 1;; ++number) {
         const std::string suffix = number == 1 ? "" : " " + std::to_string(number);
+        const std::string tail = std::format(" (conflict {}){}{}", stamp, suffix, extension);
         const fs::path name =
-            original.parent_path() /
-            path_from_utf8(std::format("{} (conflict {}){}{}", stem, stamp, suffix, extension));
+            original.parent_path() / path_from_utf8(cut_utf8(stem, kMaxFileNameBytes - tail.size()) + tail);
         const core::FileWriteResult written = core::write_new_file(workdir / name, content);
         if (!written.already_exists && !written.ec)
             return utf8(name);

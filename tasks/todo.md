@@ -361,6 +361,7 @@
   - [x] Taze klon, klasörde kalmış izlenmeyen `.gitignore`'a takılmaz; satırları birleştirilir
   - [x] `--background` kilit beklemesi `sync_timeout_seconds / 3` ile sınırlı (AutoSync'in öldürmesiyle yarışmaz)
   - [x] Sahibi canlı kilit asla devralınmaz; yaş yalnız sahibi okunamayan kilitte geçerli
+  - [x] Çakışma kopyasının adı 255 bayta sığar (kök UTF-8 güvenli kısaltılır)
 - **Doğrulama:** tüm testler Windows + `F` · **Bağımlılık:** T35 · **Model:** opus · **Boyut:** M
 
 ### ✅ Son kontrol noktası

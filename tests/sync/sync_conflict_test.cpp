@@ -510,6 +510,64 @@ TEST_CASE("unrelated histories are sync.unrelated_histories and nothing is merge
     CHECK(ref_id(fx.remote(), "refs/heads/main") == remote_head);
 }
 
+// Dosya adı sınırı 255 bayt (Linux); "ç" 2 bayttır ama Windows'ta tek UTF-16 birimi, bu yüzden yol MAX_PATH'i
+// aşmaz. Kesme karakter ortasına denk gelsin: damgadan sonra kök için 225 (tek sayı) bayt kalır.
+TEST_CASE("a conflict copy's name fits 255 bytes: the stem is cut on a UTF-8 character boundary") {
+    const SyncFixture fx;
+    const auto stem_of = [](int characters) {
+        std::string text;
+        for (int i = 0; i < characters; ++i)
+            text += "ç";
+        return text;
+    };
+    const std::string name = stem_of(123) + "a.md";  // 250 bayt
+
+    SUBCASE("the free name") {
+        const World w = start(fx, {{name, "ortak\n"}});
+        write_file(w.b / note(name), "B\n");
+        sync_ok(w.b);
+        write_file(w.a / note(name), "A\n");
+        const auto t0 = Clock::now();
+        const SyncResult result = sync_ok(w.a);
+        const auto t1 = Clock::now();
+        REQUIRE(result.conflict_copies.size() == 1);
+        const std::string copy = result.conflict_copies[0].string();
+        CHECK(copy.size() <= 255);
+        CHECK_MESSAGE(is_copy(copy, stem_of(112), ".md", t0, t1), copy);
+        CHECK(read_file(w.a / note(copy)) == "B\n");
+    }
+    SUBCASE("the number also fits: the stem gets shorter") {
+        const World w = start(fx, {{name, "ortak\n"}});
+        write_file(w.b / note(name), "B\n");
+        sync_ok(w.b);
+        const auto now = Clock::now();
+        write_file(w.a / note(copy_name(stem_of(112), ".md", now)), "eski 1\n");
+        write_file(w.a / note(copy_name(stem_of(112), ".md", now + std::chrono::minutes(1))), "eski 2\n");
+        write_file(w.a / note(name), "A\n");
+        const auto t0 = Clock::now();
+        const SyncResult result = sync_ok(w.a);
+        const auto t1 = Clock::now();
+        REQUIRE(result.conflict_copies.size() == 1);
+        const std::string copy = result.conflict_copies[0].string();
+        CHECK(copy.size() <= 255);
+        CHECK_MESSAGE(is_copy(copy, stem_of(111), ".md", t0, t1, " 2"), copy);
+        CHECK(read_file(w.a / note(copy)) == "B\n");
+    }
+    SUBCASE("a huge extension is treated as part of the name") {
+        std::string huge = "x.";
+        huge += stem_of(125);  // 252 bayt; uzantı tek başına sınırı doldururdu
+        const World w = start(fx, {{huge, "ortak\n"}});
+        write_file(w.b / note(huge), "B\n");
+        sync_ok(w.b);
+        write_file(w.a / note(huge), "A\n");
+        const SyncResult result = sync_ok(w.a);
+        REQUIRE(result.conflict_copies.size() == 1);
+        const std::string copy = result.conflict_copies[0].string();
+        CHECK(copy.size() <= 255);
+        CHECK(read_file(w.a / note(copy)) == "B\n");
+    }
+}
+
 // Merge başladıktan sonraki bir hata merge'ü geri alır (SPEC-sync karar 9): merge'den önce tüm yerel
 // değişiklikler commit'lendi, HEAD ve uzak dal her baytı tutar. Depo MERGE durumunda kalsaydı her senkron
 // sync.repo_busy_state ile dururdu.

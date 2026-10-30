@@ -94,6 +94,7 @@ Init sırasında notes reposuna `.gitignore` yazılır: `.noteapp/` ve `.*.tmp`.
      - Ad: `<ad>` = uzantısız dosya adı, damga **yerel saat**, aynı klasörde. Uzantısız dosyada nokta yok
        (`yapilacaklar (conflict 2026-10-28 1430)`). Ad doluysa uzantıdan önce ` 2`, ` 3` …:
        `not (conflict 2026-10-28 1430) 2.md`. Kopya yalnız yoksa oluşturulur; var olan dosyanın üzerine yazılmaz.
+       Tam ad 255 bayta sığmıyorsa `<ad>` kısaltılır (UTF-8 karakteri bölünmez); 32 bayttan uzun "uzantı", adın parçası sayılır.
      - İki tarafta aynı içerik çakışma değildir (kopya yok). İkili dosyalar aynı kurallarla, bayt bayt.
      - Kopyalar `SyncResult.conflict_copies`'te döner (gizli dosya kopyası `NotePath` olmadığından listede
        yok, diskte ve commit'te var) ve her biri loglanır. Merge mesajı: i18n `sync.merge_message`.
