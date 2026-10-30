@@ -53,9 +53,9 @@
 - **Not:** Windows B + T + GUI=OFF + PDF (Türkçe/A4/15 mm) doğrulandı; açık: `F` (T02) ve iki ikilinin elle göz kontrolü.
 
 ### ✅ Kontrol noktası 0
-- [ ] Windows (B + tüm testler) ve `F` yeşil
-- [ ] SSH-exec kararı SPEC'e işlendi; libssh2 gerekiyorsa kullanıcıya soruldu
-- [ ] Spike kodu atılabilir/yeniden kullanılabilir kısımları ayrıldı
+- [x] Windows (B + tüm testler) ve `F` yeşil
+- [x] SSH-exec kararı SPEC'e işlendi; libssh2 gerekiyorsa kullanıcıya soruldu
+- [x] Spike kodu atılabilir/yeniden kullanılabilir kısımları ayrıldı
 
 ---
 
@@ -100,7 +100,7 @@
   `tests/support/run_process.hpp`, `tests/cli/cli_add_test.cpp` · **Boyut:** M
 
 ### ✅ Kontrol noktası 1
-- [ ] Tüm testler Windows + `F` yeşil
+- [x] Tüm testler Windows + `F` yeşil
 - [ ] Elle: `note "merhaba dünya"` → `~/notes/merhaba-dunya.md`; süre ≤ 200 ms
 - [ ] Kullanıcı ilk dilimi denedi
 
@@ -195,7 +195,7 @@
   `tests/cli/cli_config_test.cpp` · **Boyut:** S
 
 ### ✅ Kontrol noktası 2
-- [ ] Tüm testler Windows + `F` yeşil
+- [x] Tüm testler Windows + `F` yeşil
 - [ ] Elle: `edit` ve `micro` ile yeni not/düzenleme; `note ls`, `note find` Türkçe sorgularla
 - [ ] Kullanıcı CLI'yi denedi
 
@@ -237,7 +237,7 @@
   `tests/tui/settings_test.cpp` · **Boyut:** M
 
 ### ✅ Kontrol noktası 3
-- [ ] Tüm testler Windows + `F` yeşil
+- [x] Tüm testler Windows + `F` yeşil
 - [ ] Elle: Windows Terminal'de `notes` — Türkçe giriş, edit/micro askı-dönüş, yeniden boyutlandırma
 - [ ] Kullanıcı TUI'yi denedi
 
@@ -281,9 +281,9 @@
   testler · **Boyut:** M
 
 ### ✅ Kontrol noktası 4
-- [ ] Tüm testler Windows + `F` yeşil
+- [x] Tüm testler Windows + `F` yeşil
 - [ ] Elle (kullanıcı reposu ile): HTTPS+token ve SSH ile iki klon arasında senkron; aynı notu iki yerde değiştirince çakışma kopyası
-- [ ] `security-review`: yol güvenliği, token yaşam döngüsü, senkron — bulgular düzeltildi
+- [x] `security-review`: yol güvenliği, token yaşam döngüsü, senkron — bulgular düzeltildi
 
 ---
 
@@ -319,7 +319,7 @@
 - [x] GUI kısmı tamam; CLI `note export --pdf` tamam (`commands_export.cpp`, `tests/cli/cli_export_test.cpp`)
 
 ### ✅ Kontrol noktası 5
-- [ ] Tüm testler Windows + `F` yeşil
+- [x] Tüm testler Windows + `F` yeşil
 - [ ] Elle: Windows'ta GUI — Türkçe giriş, koyu tema, otomatik kayıt, dış değişiklik diyaloğu, PDF
 - [ ] Kullanıcı GUI'yi denedi
 
@@ -345,7 +345,7 @@
 - **Doğrulama:** `ctest --preset windows-mingw-release -R perf` · **Bağımlılık:** T34 · **Dosyalar:** `tests/perf/` · **Boyut:** S
 
 ### T36: Son review
-- [ ] **Kabul:** tüm dal için `/code-review` + `security-review`; bulgular düzeltildi ya da gerekçesiyle yazıldı ·
+- [x] **Kabul:** tüm dal için `/code-review` + `security-review`; bulgular düzeltildi ya da gerekçesiyle yazıldı ·
   SPEC'ler gerçekleşen kararlarla güncel.
 - **Biriken borç (yol boyunca not edildi):** `first_non_empty_line` kuralı `core/note_store.cpp` ve `tui/save_dialog.cpp`'de
   iki kopya → core'dan dışa aç, TUI kullansın · ~~`NoteStore::list()` önbelleği thread-safe değil~~ (T35'te önbellek
@@ -353,7 +353,7 @@
 - [x] Çekirdek + CLI review bulguları: atomik yazımda izin/ACL · `save_config` `[tuning]` · `NoteStore::absolute_path`
   (edit/export) · 8.3 kısa adlar · ayrılmış aygıt adları · terminal kaçış temizliği · süreç sertleştirme ·
   `sync.remote` kimlik bilgisi · `normalize_line_endings` dışa açıldı (POSIX dalları `F`'de doğrulanacak).
-- [ ] GUI/TUI takibi: `absolute_path` ve `normalize_line_endings` çağrı noktalarına geçiş.
+- [x] GUI/TUI takibi: `absolute_path` ve `normalize_line_endings` çağrı noktalarına geçiş.
 - **Sync review bulguları:**
   - [x] Uzak bağlar düz dosya olarak çıkar (`core.symlinks=false`); bağ olan `.gitignore` okunmaz
   - [x] `NOTEAPP_GIT_TOKEN` yalnız `NOTEAPP_GIT_TOKEN_HOST`'a (varsayılan `github.com`) verilir
@@ -371,5 +371,14 @@
 - **Doğrulama:** tüm testler Windows + `F` · **Bağımlılık:** T35 · **Model:** opus · **Boyut:** M
 
 ### ✅ Son kontrol noktası
-- [ ] SPEC.md §10 başarı kriterleri 1–9 tek tek işaretli (kanıtıyla)
+- SPEC.md §10 başarı kriterleri (2026-10-30, `feat/v1`):
+  - [x] 1. Temiz derleme: taze `git clone` + Windows MinGW, boş birimle Fedora 44 / GCC 16; 7/7 paket yeşil (Release'te 8/8).
+  - [x] 2. `note "x"`: medyan 34 ms (hedef 200 ms, Release).
+  - [x] 3. 5.000 not: açılış vekili 55 ms (500), tuş başına 6,5 ms (50), sıcak içerik araması 26 ms (100). Yeniden başlatma sonrası gerçek soğuk disk ölçülmedi.
+  - [x] 4. Tip önerisi korpusta 50/50; TUI ve GUI kaydet diyaloğunda tip değiştirme testli.
+  - [ ] 5. Senkron: yerel bare repolarla tüm senaryolar testli; **gerçek GitHub (HTTPS+token, SSH) Windows ↔ Fedora elle testi bekliyor.**
+  - [x] 6. Token sızıntısı tarama testi: notes, `.git`, config, log, durum dosyası temiz.
+  - [x] 7. TR/EN değişimi testli, katalog anahtar eşliği testi yeşil.
+  - [ ] 8. PDF: geçerli dosya ve Türkçe metin çıkarımı doğrulandı (`pdftotext`, T04); **görsel olarak göz kontrolü bekliyor.**
+  - [x] 9. GUI ve TUI ayarları aynı `config.toml`'u yazar; `load_config` ile testli.
 - [ ] Kullanıcı evde Fedora'da elle son kontrol yaptı
