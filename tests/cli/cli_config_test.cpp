@@ -170,7 +170,10 @@ TEST_CASE("a config syntax error is announced on stderr instead of silently usin
     const auto result = box.run({"config", "list"});
 
     CHECK(result.exit_code == 0);
-    CHECK(result.err.find("sözdizimi hatası") != std::string::npos);
+    // Config okunamadığı için dil varsayılana (auto) düşer: metin makinenin diline bağlıdır.
+    const bool announced = result.err.find("sözdizimi hatası") != std::string::npos ||
+                           result.err.find("Syntax error") != std::string::npos;
+    CHECK(announced);
     CHECK(result.out.find("language = ") != std::string::npos);
 }
 
