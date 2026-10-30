@@ -36,6 +36,10 @@ std::string without_userinfo(std::string url);
 // (ssh'a seçenek enjeksiyonu) ya da var olmayan yerel klasör "sync.remote_invalid" {remote}.
 std::expected<RemoteEndpoint, core::Error> validate_remote(std::string_view url);
 
+// Windows Credential Manager'daki hedef adı: "noteapp.noteapp/<küçük harfli host>". Eski sürümlerin (keychain
+// kütüphanesi) yazdığı adla aynıdır: var olan kayıtlar okunmaya devam eder.
+std::string keychain_target(std::string_view host);
+
 // Kasa okuması: kayıt yoksa nullopt; kasa yoksa ya da erişilemiyorsa "sync.keychain_unavailable".
 using TokenReader =
     std::function<std::expected<std::optional<std::string>, core::Error>(std::string_view host)>;

@@ -17,6 +17,19 @@
 #include <string_view>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+// clang-format off
+#include <windows.h>
+#include <wincred.h>
+// clang-format on
+#endif
+
 namespace fs = std::filesystem;
 using noteapp::core::Error;
 using noteapp::sync::Auth;
@@ -48,6 +61,18 @@ bool mentions(const Error& error, std::string_view secret) {
             return true;
     return false;
 }
+
+#ifdef _WIN32
+DWORD credential_persist(const std::string& host) {
+    const std::string name = noteapp::sync::keychain_target(host);
+    PCREDENTIALW credential = nullptr;
+    if (!CredReadW(std::wstring(name.begin(), name.end()).c_str(), CRED_TYPE_GENERIC, 0, &credential))
+        return 0;
+    const DWORD persist = credential->Persist;
+    CredFree(credential);
+    return persist;
+}
+#endif
 
 std::vector<std::string> files_containing(const fs::path& root, std::string_view needle) {
     std::vector<std::string> hits;
@@ -168,6 +193,10 @@ TEST_CASE("store_token refuses an empty or blank token before touching the keych
     }
 }
 
+TEST_CASE("the Windows credential target keeps the old library's name so existing entries are still read") {
+    CHECK(noteapp::sync::keychain_target("GitHub.COM") == "noteapp.noteapp/github.com");
+}
+
 // Elle: gerçek OS kasasına yazar; varsayılan koşuda kullanıcının kasasına dokunulmaz.
 // Koşturma: sync_tests --no-skip -tc="*keychain*"
 TEST_CASE("store_token, has_token and clear_token round-trip through the OS keychain (manual)" *
@@ -180,10 +209,40 @@ TEST_CASE("store_token, has_token and clear_token round-trip through the OS keyc
     const auto token = noteapp::sync::resolve_token(host);
     REQUIRE_MESSAGE(token.has_value(), describe(token));
     CHECK(*token == "test-token-çğü");
+#ifdef _WIN32
+    CHECK(credential_persist(host) == CRED_PERSIST_LOCAL_MACHINE);  // etki alanında başka makineye dolaşmaz
+#endif
     REQUIRE(noteapp::sync::clear_token(host).has_value());
     CHECK_FALSE(noteapp::sync::has_token(host));
     CHECK(noteapp::sync::clear_token(host).has_value());  // kayıt yokken de başarılı
 }
+
+#ifdef _WIN32
+// Elle: eski sürümün kaydı (ENTERPRISE dolaşırdı; test bunun yerine SESSION yazar, hiçbir şey makineden
+// çıkmaz) okununca yerel kayda çevrilir.
+TEST_CASE("reading a credential that is not machine-local migrates it, keychain (manual)" * doctest::skip()) {
+    const std::string host = "noteapp-test.invalid";
+    std::wstring target(host.begin(), host.end());
+    target.insert(0, L"noteapp.noteapp/");
+    std::wstring user(host.begin(), host.end());
+    std::string blob = "eski-token";
+    CREDENTIALW credential{};
+    credential.Type = CRED_TYPE_GENERIC;
+    credential.TargetName = target.data();
+    credential.UserName = user.data();
+    credential.CredentialBlobSize = static_cast<DWORD>(blob.size());
+    credential.CredentialBlob = reinterpret_cast<LPBYTE>(blob.data());
+    credential.Persist = CRED_PERSIST_SESSION;
+    REQUIRE(CredWriteW(&credential, 0));
+
+    const auto token = noteapp::sync::read_stored_token(host);
+    REQUIRE_MESSAGE(token.has_value(), describe(token));
+    CHECK(*token == "eski-token");
+    CHECK(credential_persist(host) == CRED_PERSIST_LOCAL_MACHINE);
+    REQUIRE(noteapp::sync::clear_token(host).has_value());
+    CHECK_FALSE(noteapp::sync::has_token(host));
+}
+#endif
 
 TEST_CASE("acceptance 7: the credentials callback gives x-access-token once, the second call fails") {
     const noteapp::sync::GitRuntime runtime;  // git_credential ayırıcısı için

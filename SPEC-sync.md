@@ -168,6 +168,10 @@ açmak `enable`'ı çağırır (repo varsa no-op).
      başka host ya da http → `sync.auth_failed`. Tek deneme kuralı ağ işlemi (ls, fetch, push) başınadır.
    - Kasa kaydı: package `noteapp`, servis `noteapp`, hesap = küçük harfli host (Windows Credential Manager'da
      `noteapp.noteapp/<host>`). `NotFound` dışındaki her kasa hatası `sync.keychain_unavailable`; düz dosya yok.
+     Windows'ta kütüphane kullanılmaz: `CRED_PERSIST_ENTERPRISE` yazar, etki alanı profilinde token başka
+     makinelere dolaşır (T36). `CredWriteW/ReadW/DeleteW`, `CRED_TYPE_GENERIC`, aynı hedef adı,
+     `CRED_PERSIST_LOCAL_MACHINE`; yerel olmayan eski kayıt ilk okumada yerele çevrilir (olmazsa uyarı, token yine
+     kullanılır). Linux/macOS'ta kütüphane kalır.
      `store_token` baştaki/sondaki boşluğu atar; boş token `sync.token_missing`.
    - SSH ön kontrolü `ssh-keygen -F <host>` (port 22 dışıysa `[host]:port`); `~/.ssh/config` takma adları
      (Host … HostName) görülmez. ssh-keygen bulduğu satırı (açık host anahtarı) stdout'a yazar: arka plan

@@ -1,6 +1,7 @@
 #include "sync/auth.hpp"
 
 #include "core/i18n.hpp"
+#include "core/log.hpp"
 #include "core/process.hpp"
 
 #include <algorithm>
@@ -8,9 +9,23 @@
 #include <filesystem>
 #include <format>
 #include <git2.h>
-#include <keychain/keychain.h>
 #include <system_error>
 #include <utility>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+// clang-format off
+#include <windows.h>
+#include <wincred.h>
+// clang-format on
+#else
+#include <keychain/keychain.h>
+#endif
 
 namespace noteapp::sync {
 
@@ -39,9 +54,103 @@ std::string lowercase(std::string_view text) {
     return out;
 }
 
-core::Error keychain_failure(const keychain::Error& error) {
+// Kasa işlemleri; `account` küçük harfli host. Kayıt yoksa okuma nullopt, silme başarı döner.
+#ifdef _WIN32
+
+core::Error vault_failure(DWORD code) {
+    return sync_error("sync.keychain_unavailable", {{"detail", std::format("Windows error {}", code)}});
+}
+
+std::wstring wide(const std::string& utf8) {
+    const int size = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    std::wstring text(static_cast<std::size_t>(size), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), text.data(), size);
+    return text;
+}
+
+// keychain kütüphanesi CRED_PERSIST_ENTERPRISE yazar: etki alanı profilinde token başka makinelere dolaşır
+// (burası kurum cihazı). Bu yüzden Windows'ta Credential Manager doğrudan kullanılır: yalnız bu makine.
+std::expected<void, core::Error> vault_write(const std::string& account, const std::string& token) {
+    if (token.size() > CRED_MAX_CREDENTIAL_BLOB_SIZE)
+        return std::unexpected(vault_failure(ERROR_INVALID_PARAMETER));
+    std::wstring target = wide(keychain_target(account));
+    std::wstring user = wide(account);
+    std::string blob = token;  // API imzası const değil
+    CREDENTIALW credential{};
+    credential.Type = CRED_TYPE_GENERIC;
+    credential.TargetName = target.data();
+    credential.UserName = user.data();
+    credential.CredentialBlobSize = static_cast<DWORD>(blob.size());
+    credential.CredentialBlob = reinterpret_cast<LPBYTE>(blob.data());
+    credential.Persist = CRED_PERSIST_LOCAL_MACHINE;
+    if (!CredWriteW(&credential, 0))
+        return std::unexpected(vault_failure(GetLastError()));
+    return {};
+}
+
+std::expected<std::optional<std::string>, core::Error> vault_read(const std::string& account) {
+    PCREDENTIALW credential = nullptr;
+    if (!CredReadW(wide(keychain_target(account)).c_str(), CRED_TYPE_GENERIC, 0, &credential)) {
+        const DWORD code = GetLastError();
+        if (code == ERROR_NOT_FOUND)
+            return std::nullopt;
+        return std::unexpected(vault_failure(code));
+    }
+    std::string token(reinterpret_cast<const char*>(credential->CredentialBlob),
+                      credential->CredentialBlobSize);
+    const bool roaming = credential->Persist != CRED_PERSIST_LOCAL_MACHINE;
+    CredFree(credential);
+    // Eski sürümün dolaşan kaydı yerine yerel kayıt; olmazsa token yine kullanılır, sonraki okumada yeniden
+    // denenir.
+    if (roaming && !token.empty())
+        if (const auto migrated = vault_write(account, token); !migrated)
+            core::log_warn("sync: keychain entry could not be made local: " +
+                           core::format_error(migrated.error()));
+    return token;
+}
+
+std::expected<void, core::Error> vault_delete(const std::string& account) {
+    if (CredDeleteW(wide(keychain_target(account)).c_str(), CRED_TYPE_GENERIC, 0))
+        return {};
+    const DWORD code = GetLastError();
+    if (code == ERROR_NOT_FOUND)
+        return {};
+    return std::unexpected(vault_failure(code));
+}
+
+#else
+
+core::Error vault_failure(const keychain::Error& error) {
     return sync_error("sync.keychain_unavailable", {{"detail", error.message}});
 }
+
+std::expected<void, core::Error> vault_write(const std::string& account, const std::string& token) {
+    keychain::Error error;
+    keychain::setPassword(kKeychainPackage, kKeychainService, account, token, error);
+    if (error)
+        return std::unexpected(vault_failure(error));
+    return {};
+}
+
+std::expected<std::optional<std::string>, core::Error> vault_read(const std::string& account) {
+    keychain::Error error;
+    std::string token = keychain::getPassword(kKeychainPackage, kKeychainService, account, error);
+    if (error.type == keychain::ErrorType::NotFound)
+        return std::nullopt;
+    if (error)
+        return std::unexpected(vault_failure(error));
+    return token;
+}
+
+std::expected<void, core::Error> vault_delete(const std::string& account) {
+    keychain::Error error;
+    keychain::deletePassword(kKeychainPackage, kKeychainService, account, error);
+    if (error && error.type != keychain::ErrorType::NotFound)
+        return std::unexpected(vault_failure(error));
+    return {};
+}
+
+#endif
 
 }  // namespace
 
@@ -103,14 +212,13 @@ std::expected<RemoteEndpoint, core::Error> validate_remote(std::string_view url)
     return endpoint;
 }
 
+std::string keychain_target(std::string_view host) {
+    return std::format("{}.{}/{}", kKeychainPackage, kKeychainService, lowercase(host));
+}
+
 std::expected<std::optional<std::string>, core::Error> read_stored_token(std::string_view host) {
-    keychain::Error error;
-    std::string token = keychain::getPassword(kKeychainPackage, kKeychainService, lowercase(host), error);
-    if (error.type == keychain::ErrorType::NotFound)
-        return std::nullopt;
-    if (error)
-        return std::unexpected(keychain_failure(error));
-    if (token.empty())
+    auto token = vault_read(lowercase(host));
+    if (token && *token && (*token)->empty())
         return std::nullopt;
     return token;
 }
@@ -135,19 +243,11 @@ std::expected<void, core::Error> store_token(std::string_view host, std::string_
     if (first == std::string_view::npos)
         return std::unexpected(sync_error("sync.token_missing", {{"host", std::string(host)}}));
     token = token.substr(first, token.find_last_not_of(kBlank) - first + 1);
-    keychain::Error error;
-    keychain::setPassword(kKeychainPackage, kKeychainService, lowercase(host), std::string(token), error);
-    if (error)
-        return std::unexpected(keychain_failure(error));
-    return {};
+    return vault_write(lowercase(host), std::string(token));
 }
 
 std::expected<void, core::Error> clear_token(std::string_view host) {
-    keychain::Error error;
-    keychain::deletePassword(kKeychainPackage, kKeychainService, lowercase(host), error);
-    if (error && error.type != keychain::ErrorType::NotFound)
-        return std::unexpected(keychain_failure(error));
-    return {};
+    return vault_delete(lowercase(host));
 }
 
 bool has_token(std::string_view host) {

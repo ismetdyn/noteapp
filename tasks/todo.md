@@ -363,6 +363,7 @@
   - [x] Sahibi canlı kilit asla devralınmaz; yaş yalnız sahibi okunamayan kilitte geçerli
   - [x] Çakışma kopyasının adı 255 bayta sığar (kök UTF-8 güvenli kısaltılır)
   - [x] Yazılamayan uzak yol ve harf büyüklüğü çakışması `sync.remote_invalid_paths` ile reddedilir
+  - [x] Windows kasası `CRED_PERSIST_LOCAL_MACHINE` (token etki alanında dolaşmaz; eski kayıt okunurken çevrilir)
 - **Doğrulama:** tüm testler Windows + `F` · **Bağımlılık:** T35 · **Model:** opus · **Boyut:** M
 
 ### ✅ Son kontrol noktası
