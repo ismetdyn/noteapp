@@ -10,6 +10,7 @@
 #include <QListView>
 #include <QPlainTextEdit>
 #include <QStandardItemModel>
+#include <QStatusBar>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTreeView>
@@ -193,4 +194,22 @@ TEST_CASE_FIXTURE(WindowFixture, "selected note is restored from gui-state.ini a
     Widgets w(*reopened);
     CHECK(w.current() == "alpha.md");
     CHECK(w.editor->toPlainText() == "alpha body");
+}
+
+TEST_CASE_FIXTURE(WindowFixture, "config warnings are shown in the status bar at startup") {
+    auto window = make_window();
+    auto* bar = window->statusBar();
+
+    window->show_config_warnings({});
+    CHECK(bar->currentMessage().isEmpty());
+
+    const noteapp::core::Error unknown{
+        noteapp::core::Error::Code::ConfigInvalid, "config.unknown_key", {{"key", "bogus"}}};
+    const noteapp::core::Error invalid{noteapp::core::Error::Code::ConfigInvalid,
+                                       "config.invalid_value",
+                                       {{"key", "sync.idle_seconds"}, {"reason", "must_be_positive"}}};
+    window->show_config_warnings({unknown, invalid});
+    const QString shown = bar->currentMessage();
+    CHECK(shown.contains(QString::fromStdString(noteapp::core::format_error(unknown))));
+    CHECK(shown.contains(QString::fromStdString(noteapp::core::format_error(invalid))));
 }

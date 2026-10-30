@@ -42,7 +42,8 @@ int run_pdf_export(const QStringList& args) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-    // Dil ve log eşiği config'ten gelir; yükleme uyarıları log'a düşer.
+    // Dil ve log eşiği config'ten gelir; yükleme uyarıları log'a düşer, pencere açılınca durum çubuğunda
+    // görünür.
     const noteapp::core::LoadedConfig loaded = noteapp::core::load_config();
     noteapp::core::init_i18n(loaded.config.language);
     noteapp::core::init_log(loaded.config.tuning.log_max_bytes);
@@ -57,6 +58,7 @@ int main(int argc, char* argv[]) {
     }
 
     noteapp::gui::MainWindow window(loaded.config);
+    window.show_config_warnings(loaded.warnings);
     window.show();
     return QApplication::exec();
 }

@@ -24,10 +24,19 @@ int main(int argc, char** argv) {
     const core::LoadedConfig loaded = core::load_config();
     core::init_i18n(loaded.config.language);
     core::init_log(loaded.config.tuning.log_max_bytes);
-    for (const auto& warning : loaded.warnings)
-        core::log_warn(core::format_error(warning));
-
     const cli::ParsedArgs args = cli::parse_args(cli::utf8_arguments(argc, argv));
+    // Arka plan senkronu ayrık süreçtir ve sessiz kalır (uyarıyı ön plandaki komut zaten gösterdi).
+    const bool silent = args.kind == cli::ParsedArgs::Kind::Reserved && args.command == "sync" &&
+                        !args.rest.empty() && args.rest.front() == "--background";
+    for (const auto& warning : loaded.warnings) {
+        const std::string message = core::format_error(warning);
+        core::log_warn(message);
+        // Bozuk config sessizce varsayılana (~/notes) düşmesin: kullanıcı stderr'de görür. stdout/çıkış kodu
+        // aynı.
+        if (!silent)
+            std::fprintf(stderr, "%s\n", message.c_str());
+    }
+
     int code = cli::kExitInternal;
     switch (args.kind) {
     case cli::ParsedArgs::Kind::Add:

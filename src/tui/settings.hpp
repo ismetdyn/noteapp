@@ -110,6 +110,10 @@ std::string settings_label(const SettingsState::Row& row);
 // Çalışan AutoSync'in yeniden kurulması gerekir mi? Yalnız kurulurken okunan alanlar (etkin/remote/dal/boşta
 // süresi/notes_dir) sayılır. Yazar adı/e-postasını `note sync --background` config'ten taze okur; editör gibi
 // ilgisiz bir ayar için süren birleştirmeyi öldürmek gerekmez.
+// Açılışta alt çubuğa konacak config uyarıları: her biri format_error ile çevrilir, "; " ile birleşir; uyarı
+// yoksa boş. Bozuk config.toml sessizce varsayılan dizine düşmesin diye kullanıcıya gösterilir.
+std::string config_warnings_message(const std::vector<core::Error>& warnings);
+
 bool sync_restart_needed(const core::Config& before, const core::Config& after);
 
 }  // namespace noteapp::tui

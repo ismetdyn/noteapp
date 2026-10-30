@@ -1010,6 +1010,14 @@ void MainWindow::export_pdf() {
     statusBar()->showMessage(text("gui.exported", {{"path", output->toStdString()}}));
 }
 
+void MainWindow::show_config_warnings(const std::vector<core::Error>& warnings) {
+    QStringList messages;
+    for (const auto& warning : warnings)
+        messages << QString::fromStdString(core::format_error(warning));
+    if (!messages.isEmpty())
+        statusBar()->showMessage(messages.join(QStringLiteral("; ")));
+}
+
 void MainWindow::fail(const core::Error& error) {
     statusBar()->showMessage(text("gui.op_failed", {{"detail", core::format_error(error)}}));
 }

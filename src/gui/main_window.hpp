@@ -95,6 +95,9 @@ public:
     std::size_t sync_requests() const { return sync_requests_; }
     // Test kancası: kurulan AutoSync sayısı (ayar kaydı gereksiz yere yeniden kurmamalı).
     std::size_t sync_restarts() const { return sync_restarts_; }
+    // Açılışta config yükleme uyarılarını durum çubuğunda gösterir (bozuk config.toml sessizce varsayılana
+    // düşmesin). Uyarı yoksa hiçbir şey yapmaz.
+    void show_config_warnings(const std::vector<core::Error>& warnings);
     // Test kancası: Q_OBJECT'siz olduğundan findChild ile bulunamaz.
     SettingsPage* settings_page() const { return settings_; }
     // Test kancası: başarılı NoteStore::write sayısı (autosave birleşmesini ölçer).

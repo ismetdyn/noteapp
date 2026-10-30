@@ -134,3 +134,52 @@ TEST_CASE("help COMMAND prints that command's line, not the general help") {
     const auto unknown = box.run({"help", "bogus"});
     CHECK(unknown.exit_code == 2);
 }
+
+namespace {
+
+// config.toml'un sonuna satır ekler (kum havuzunun yazdığı dosyanın yolu `config path` ile alınır).
+void append_to_config(const Sandbox& box, const std::string& extra) {
+    std::string path = box.run({"config", "path"}).out;
+    path.pop_back();  // '\n'
+    std::ofstream(std::filesystem::path(std::u8string(path.begin(), path.end())),
+                  std::ios::binary | std::ios::app)
+        << extra;
+}
+
+}  // namespace
+
+TEST_CASE("an unknown config key is warned on stderr while stdout, exit code and the note are unchanged") {
+    const Sandbox box;
+    append_to_config(box, "bogus_key = 1\n");
+
+    const auto result = box.run({"hello"});
+
+    CHECK(result.exit_code == 0);
+    CHECK(result.err.find("bogus_key") != std::string::npos);
+    CHECK(fs::exists(box.notes() / "hello.md"));
+    const auto value = box.run({"config", "get", "language"});
+    CHECK(value.exit_code == 0);
+    CHECK(value.out == "tr\n");  // stdout yalnız değer: uyarı stderr'de
+    CHECK(value.err.find("bogus_key") != std::string::npos);
+}
+
+TEST_CASE("a config syntax error is announced on stderr instead of silently using defaults") {
+    const Sandbox box;
+    append_to_config(box, "this is = = not toml\n");
+
+    const auto result = box.run({"config", "list"});
+
+    CHECK(result.exit_code == 0);
+    CHECK(result.err.find("sözdizimi hatası") != std::string::npos);
+    CHECK(result.out.find("language = ") != std::string::npos);
+}
+
+TEST_CASE("sync --background stays silent even with config warnings") {
+    const Sandbox box;
+    append_to_config(box, "bogus_key = 1\n");
+
+    const auto result = box.run({"sync", "--background"});
+
+    CHECK(result.out.empty());
+    CHECK(result.err.empty());
+}

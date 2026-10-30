@@ -357,3 +357,17 @@ TEST_CASE("the discard confirmation replaces the form body") {
     s.handle(Key::Escape);
     CHECK(has(render_settings(s, 60, 15), core::tr("tui.settings_confirm_discard")));
 }
+
+TEST_CASE("config warnings become one translated status line, empty when there are none") {
+    const Home home;
+    CHECK(tui::config_warnings_message({}).empty());
+
+    const core::Error unknown{core::Error::Code::ConfigInvalid, "config.unknown_key", {{"key", "bogus"}}};
+    const core::Error syntax{core::Error::Code::ConfigInvalid,
+                             "config.syntax_error",
+                             {{"line", "3"}, {"column", "5"}, {"detail", "x"}}};
+    CHECK(tui::config_warnings_message({unknown}) == core::format_error(unknown));
+    const std::string both = tui::config_warnings_message({unknown, syntax});
+    CHECK(both == core::format_error(unknown) + "; " + core::format_error(syntax));
+    CHECK(both.find("bogus") != std::string::npos);
+}

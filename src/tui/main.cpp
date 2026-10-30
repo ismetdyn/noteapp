@@ -103,7 +103,7 @@ int main() {
     namespace tui = noteapp::tui;
     // FTXUI konsolu UTF-8'e çeker ama geri almaz; eski kod sayfasını biz saklayıp geri yükleriz.
     const core::ConsoleUtf8Scope utf8_console;
-    // Dil ve log eşiği config'ten gelir; yükleme uyarıları log'a düşer (TUI ekranına yazılmaz).
+    // Dil ve log eşiği config'ten gelir; yükleme uyarıları log'a düşer ve açılışta alt çubukta gösterilir.
     const core::LoadedConfig loaded = core::load_config();
     // Ayarlar ekranı kaydedince canlı güncellenir (yalnız UI iş parçacığı yazar).
     core::Config config = loaded.config;
@@ -123,7 +123,8 @@ int main() {
     };
     tui::TuiState state;
     tui::PreviewCache preview;
-    tui::StatusLine status{core::tr("tui.sync_off"), ""};
+    // Yükleme uyarıları (ör. bozuk config.toml -> varsayılanlar) açılışta alt çubukta görünür.
+    tui::StatusLine status{core::tr("tui.sync_off"), tui::config_warnings_message(loaded.warnings)};
     tui::SyncIndicator sync_indicator;
     auto listing = list_notes();
     state.set_notes(listing);
