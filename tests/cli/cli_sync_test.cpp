@@ -176,6 +176,25 @@ TEST_CASE("--background waits for a sync that holds the lock instead of dropping
     CHECK(remote.commits() == 2);
 }
 
+// AutoSync süreci sync_timeout_seconds sonunda öldürür: tüm bütçe kilit beklemeye gitseydi kilit tam
+// öldürülmeden önce alınıp senkron yarıda kesilirdi.
+TEST_CASE("--background gives up on a held lock within a third of sync_timeout_seconds") {
+    const Sandbox box("en");
+    const BareRemote remote;
+    REQUIRE(box.run({"sync", "init", remote.arg()}).exit_code == 0);
+    append_config(box, "[tuning]\nsync_timeout_seconds = 6\n");
+    std::ofstream(box.notes() / "bekleyen.md", std::ios::binary) << "x\n";
+
+    const auto held =
+        noteapp::sync::SyncLock::acquire(state_dir(box) / "sync.lock", std::chrono::minutes(10));
+    REQUIRE(held.has_value());
+    const auto background = box.run({"sync", "--background"});
+    CHECK(background.exit_code == 4);
+    CHECK(background.elapsed >= 1000ms);  // gerçekten bekledi
+    CHECK(background.elapsed < 4000ms);   // bütçenin tamamını (6 sn) değil, üçte birini (2 sn)
+    CHECK(remote.commits() == 1);
+}
+
 TEST_CASE("sync init against another origin: refused without a terminal, --replace replaces it") {
     const Sandbox box("en");
     const BareRemote first;

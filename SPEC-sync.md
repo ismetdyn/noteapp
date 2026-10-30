@@ -187,8 +187,9 @@ açmak `enable`'ı çağırır (repo varsa no-op).
    - `note sync --background` = ayrık süreç (`core::spawn_detached`: stdio boş aygıt, yalnız NUL tutamacı
      devredilir; Windows `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`, POSIX `setsid`).
      Hiç çıktı yazmaz; sonuç log + `sync-status.toml`, çıkış 0/4. `sync.enabled` kapalıysa hiçbir şey yapmaz.
-     `sync.busy`'de 500 ms aralıkla `tuning.sync_timeout_seconds`'a kadar yeniden dener: ayrık sürecin "sonra
-     deneyen" çağıranı yok, yoksa arka arkaya iki hızlı eklemenin ikincisi senkronlanmadan kalırdı.
+     `sync.busy`'de 500 ms aralıkla `tuning.sync_timeout_seconds / 3`'e kadar yeniden dener: ayrık sürecin "sonra
+     deneyen" çağıranı yok, yoksa arka arkaya iki hızlı eklemenin ikincisi senkronlanmadan kalırdı. Üçte bir
+     sınırı: AutoSync aynı bütçe sonunda süreci öldürür; kilit tam o anda alınırsa senkron yarıda kesilirdi.
    - CLI'de notu değiştiren her komut (hızlı ekleme/editör akışı, `rm`, `mv`, `edit` — mtime değiştiyse)
      `sync.enabled` ve `--no-sync` yokken `note sync --background`'u başlatır, beklemez. Kendi yolu
      `core::current_executable()` (Windows `GetModuleFileNameW`, Linux `/proc/self/exe`; diğerlerinde PATH'teki

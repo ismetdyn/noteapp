@@ -181,13 +181,16 @@ int sync_foreground(const core::Config& config) {
 
 // Ayrık süreç (start_background_sync / AutoSync): hiçbir çıktı yok, sonuç log + sync-status.toml'da.
 // Başka bir senkron kilidi tutuyorsa (sync.busy) bekleyip yeniden dener: o senkron bu değişikliği görmemiş
-// olabilir ve ayrık sürecin "sonra deneyen" bir çağıranı yok. Üst sınır AutoSync'inkiyle aynı süre.
+// olabilir ve ayrık sürecin "sonra deneyen" bir çağıranı yok. Bekleme bütçenin üçte biriyle sınırlı: AutoSync
+// bu süreci sync_timeout_seconds sonunda öldürür; kilit tam öldürülmeden önce alınırsa senkron her seferinde
+// yarıda kesilirdi. Kalan üçte iki senkronun kendisine kalır.
 int sync_background(const core::Config& config) {
     if (!config.sync.enabled)
         return kExitOk;  // süreç başlatıldıktan sonra kapatıldıysa: kapalıyken otomatik senkron yok
     sync::SyncService service(config);
     const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(config.tuning.sync_timeout_seconds);
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(std::chrono::seconds(config.tuning.sync_timeout_seconds)) / 3;
     for (;;) {
         const auto result = service.sync_now();
         if (result)
