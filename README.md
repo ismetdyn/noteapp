@@ -150,11 +150,11 @@ Bozuk `config.toml` uygulamayı çökertmez (varsayılanlar + log uyarısı), `n
 1. GitHub'da **boş ve private** yeni bir repo aç (ör. `notes`). Kod reposunu **asla** not reposu olarak kullanma.
 2. **HTTPS + token:** Settings → Developer settings → *Fine-grained personal access token*; yalnız bu repoyu seç,
    izin: **Contents → Read and write**.
-3. Remote'u bağla ve token'ı kasaya yaz:
+3. Önce token'ı kasaya yaz, sonra remote'u bağla (`init` private repoya erişmek için token'a ihtiyaç duyar):
 
 ```bash
+note sync login github.com           # token'ı gizli ister (ekrana yansımaz); Windows Credential Manager'a gider
 note sync init https://github.com/<kullanici>/notes.git
-note sync login                      # token'ı gizli ister (ekrana yansımaz); Windows Credential Manager'a gider
 ```
 
    **SSH alternatifi:** anahtarını GitHub hesabına ekle, bir kez `ssh -T git@github.com` çalıştırıp host anahtarını

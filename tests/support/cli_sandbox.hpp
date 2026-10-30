@@ -20,6 +20,7 @@ public:
     }
 
     fs::path notes() const { return home_.path() / "notes"; }
+    fs::path config_file() const { return home_.path() / "config" / "config.toml"; }
     RunResult run(const std::vector<std::string>& args, const std::string& stdin_bytes = "") const {
         return run_process(NOTEAPP_NOTE_EXE, args, stdin_bytes);
     }

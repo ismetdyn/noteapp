@@ -78,6 +78,27 @@ TEST_CASE("sync init sets up an empty remote and turns sync on; sync off/on togg
     CHECK(box.run({"config", "get", "sync.enabled"}).out == "true\n");
 }
 
+// İlk kurulum: token henüz yokken `init` ağa çıkmadan düşer; mesaj kullanıcıya bir sonraki komutu söylemeli.
+TEST_CASE("sync init without a token says how to log in, and changes nothing") {
+    const Sandbox box;
+    const ScopedEnv no_env_token("NOTEAPP_GIT_TOKEN", std::nullopt);
+    const std::string before = slurp(box.config_file());
+
+    const auto result = box.run({"sync", "init", "https://noteapp-test.invalid/u/notes.git"});
+
+    CHECK(result.exit_code == 4);
+    // Kasası olmayan ortamda (konteyner, başsız Linux) login de çalışamaz: mesaj ortam değişkenine
+    // yönlendirir.
+    const bool guided = result.err.find("note sync login noteapp-test.invalid") != std::string::npos ||
+                        result.err.find("NOTEAPP_GIT_TOKEN") != std::string::npos;
+    CHECK(guided);
+#ifdef _WIN32
+    CHECK(result.err.find("note sync login noteapp-test.invalid") != std::string::npos);
+#endif
+    CHECK_FALSE(fs::exists(box.notes() / ".git"));
+    CHECK(slurp(box.config_file()) == before);
+}
+
 TEST_CASE("acceptance: quick add, mv and rm return at once; a detached background sync pushes each") {
     const Sandbox box("en");
     const BareRemote remote;
