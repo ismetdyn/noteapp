@@ -216,7 +216,12 @@ int main() {
         const tui::Row* row = state.selected_row();
         if (!row)
             return;
-        const auto file = config.notes_dir / row->path.value();
+        // Elle birleştirilen yol bağ denetimini atlardı: store aynı kapıdan geçirir (bkz.
+        // NoteStore::absolute_path).
+        const auto resolved = store->absolute_path(row->path);
+        if (!resolved)
+            return show_error(resolved.error());
+        const std::filesystem::path& file = *resolved;
         const FileStamp before = stamp_of(file);
         const auto edited = edit_file(file);
         refresh_notes();

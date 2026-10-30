@@ -993,10 +993,12 @@ void MainWindow::export_pdf() {
         return;
     if (!shown_)  // gösterilen not yok ya da boş taslak atıldı
         return;
-    // NotePath doğrulanmış göreli yoldur (UTF-8, '/' ayırıcılı): kökle birleştirmek güvenli.
-    const std::string relative = shown_->path.string();
-    const std::filesystem::path input =
-        config_.notes_dir / std::filesystem::path(std::u8string(relative.begin(), relative.end()));
+    // Elle birleştirilen yol bağ denetimini atlardı: store aynı kapıdan (read/write ile aynı kurallar)
+    // geçirir.
+    const auto resolved = store_.absolute_path(shown_->path);
+    if (!resolved)
+        return fail(resolved.error());
+    const std::filesystem::path& input = *resolved;
 
     const QString suggested = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) +
                               QLatin1Char('/') + to_qstring(input.stem()) + QStringLiteral(".pdf");

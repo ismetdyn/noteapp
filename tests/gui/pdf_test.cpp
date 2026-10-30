@@ -1,6 +1,7 @@
 // T33: başsız `notes-gui --export-pdf` (gerçek ikili, alt süreç) ve Ctrl+E akışı.
 #include "gui/pdf_export.hpp"
 #include "support/run_process.hpp"
+#include "support/test_support.hpp"
 #include "window_fixture.hpp"
 
 #include <QDir>
@@ -183,4 +184,28 @@ TEST_CASE_FIXTURE(ExportFixture, "export does nothing when no note is shown") {
     window->export_pdf();
 
     CHECK(asked == 0);
+}
+
+TEST_CASE_FIXTURE(ExportFixture, "export refuses a note that now sits behind a folder link") {
+    add_note("sub/a.md", "# gizli");
+    auto window = make_window();
+    wire(*window, out_path());
+    // Listelendikten sonra klasör bağla değiştirilir (TOCTOU): elle birleştirilen yol bağı izleyip dışarı
+    // çıkardı.
+    const QString outside = home.filePath(QStringLiteral("outside"));
+    QDir().mkpath(outside);
+    QFile secret(outside + QStringLiteral("/a.md"));
+    REQUIRE(secret.open(QIODevice::WriteOnly));
+    secret.write("# dis");
+    secret.close();
+    REQUIRE(QDir(full_path(QStringLiteral("sub"))).removeRecursively());
+    REQUIRE(noteapp::test::make_dir_link(
+        std::filesystem::path(outside.toStdU16String()),
+        std::filesystem::path(full_path(QStringLiteral("sub")).toStdU16String())));
+
+    window->export_pdf();
+
+    CHECK(asked == 0);
+    CHECK(QDir(out.path()).isEmpty());
+    CHECK(window->statusBar()->currentMessage().contains(QStringLiteral("Operation failed")));
 }
