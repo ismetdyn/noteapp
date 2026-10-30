@@ -49,10 +49,14 @@ FetchContent_MakeAvailable(libgit2)
 # SYSTEM: libgit2 başlıklarındaki uyarılar bizim -Werror'umuzu kırmasın.
 target_include_directories(libgit2package SYSTEM INTERFACE $<BUILD_INTERFACE:${libgit2_SOURCE_DIR}/include>)
 
-FetchContent_Declare(keychain
-    URL https://github.com/hrantzsch/keychain/archive/refs/tags/v1.3.1.tar.gz
-    URL_HASH SHA256=9a9fc5aaa94d03180f1c3735f93d1ebcf9d2925fc915306b8476abc17a3906a9)
-FetchContent_MakeAvailable(keychain)
+# Windows'ta token doğrudan Credential Manager'a yazılır (src/sync/auth.cpp); kütüphane CRED_PERSIST_ENTERPRISE
+# kullandığından yalnız Linux/macOS'ta gerekir.
+if(NOT WIN32)
+    FetchContent_Declare(keychain
+        URL https://github.com/hrantzsch/keychain/archive/refs/tags/v1.3.1.tar.gz
+        URL_HASH SHA256=9a9fc5aaa94d03180f1c3735f93d1ebcf9d2925fc915306b8476abc17a3906a9)
+    FetchContent_MakeAvailable(keychain)
+endif()
 
 if(NOTEAPP_BUILD_TESTS)
     FetchContent_Declare(doctest

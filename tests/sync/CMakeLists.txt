@@ -1,12 +1,17 @@
 noteapp_add_test(sync
     libgit2_spike_test.cpp
-    keychain_spike_test.cpp
     sync_basic_test.cpp
     sync_conflict_test.cpp
     enable_test.cpp
     auth_test.cpp
     recovery_test.cpp
     auto_sync_test.cpp)
+
+# Kasa kütüphanesi yalnız Windows dışında var (bkz. cmake/Dependencies.cmake).
+if(NOT WIN32)
+    target_sources(sync_tests PRIVATE keychain_spike_test.cpp)
+    target_link_libraries(sync_tests PRIVATE keychain)
+endif()
 
 # AutoSync testleri `note` yerine fake_editor'ı (uyuyan/çıkan çocuk) ve uçtan uca gerçek `note`'u başlatır.
 add_dependencies(sync_tests note fake_editor)
