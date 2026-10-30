@@ -592,3 +592,24 @@ TEST_CASE_FIXTURE(SaveFixture, "CRLF line endings survive an edit") {
     window->save_now();
     CHECK(read_note("win.txt") == "one\r\ntwo\r\nthree\r\n");
 }
+
+// Karakterizasyon: yükleme CRLF'i doğrusal sürede LF'ye indirir (eskiden satır başına erase, O(n^2)); süre
+// değil içerik doğrulanır.
+TEST_CASE_FIXTURE(SaveFixture, "a large CRLF note loads with its content intact and keeps CRLF on save") {
+    QByteArray crlf;
+    QString expected;
+    for (int line = 0; line < 20000; ++line) {
+        crlf += "satır " + QByteArray::number(line) + "\r\n";
+        expected += QString("satır %1\n").arg(line);
+    }
+    add_note("big.txt", crlf, 10);
+    auto window = make_window();
+    Ui ui(*window);
+    REQUIRE(ui.current() == "big.txt");
+    CHECK(ui.editor->toPlainText().replace(QChar::ParagraphSeparator, '\n') == expected);
+
+    ui.editor->moveCursor(QTextCursor::End);
+    ui.editor->insertPlainText("son\n");
+    window->save_now();
+    CHECK(read_note("big.txt") == crlf + "son\r\n");
+}

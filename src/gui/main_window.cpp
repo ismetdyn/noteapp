@@ -527,10 +527,8 @@ std::expected<void, core::Error> MainWindow::load_text(const core::NoteInfo& inf
         return {};
     }
     crlf_ = raw.find("\r\n") != std::string::npos;
-    if (crlf_) {
-        for (std::size_t at = 0; (at = raw.find("\r\n", at)) != std::string::npos; ++at)
-            raw.erase(at, 1);
-    }
+    if (crlf_)
+        raw = core::normalize_line_endings(raw);
     set_editor(QString::fromUtf8(raw.data(), static_cast<qsizetype>(raw.size())), core::is_valid_utf8(raw));
     return {};
 }
@@ -656,6 +654,8 @@ std::expected<void, core::Error> MainWindow::try_write() {
     dirty_ = false;
     statusBar()->clearMessage();
     update_header();
+    // ponytail: her otomatik kayıtta tam yeniden tarama (>= 1 sn boşta sonrası, 5.000 notta ~20 ms) kabul
+    // edilebilir; yükseltme yolu: write()'ın döndürdüğü mtime ile yalnız ilgili model satırını güncellemek.
     rescan();  // listedeki mtime tazelenir: yoksa aynı not "dışarıdan değişmiş" sanılıp yeniden yüklenirdi
     return {};
 }
