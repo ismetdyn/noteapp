@@ -174,6 +174,9 @@ açmak `enable`'ı çağırır (repo varsa no-op).
    - `replace_origin`: origin silinip yeniden oluşturulur; eski `origin/*` takip dalları da gider (yoksa boş yeni
      remote'a push "güncel" sanılıp yapılmazdı). `remote_mismatch`'teki `current` adresinden kimlik ayıklanır.
    - Var olan `.gitignore`'a yalnız eksik satırlar eklenir (CRLF korunur); okunamıyorsa üzerine yazılmaz.
+   - Klon, izlenmeyen bir `.gitignore`'a takılmaz (T36): dosya `.gitignore.noteapp.tmp`'ye alınır (silinmez,
+     süreç öldürülse de satırlar kaybolmaz), checkout sonrası satırları uzaktan gelene eklenir; checkout
+     başarısızsa bayt bayt geri gelir. Çakışan diğer gizli dosyalar klonu temizce durdurur, üzerlerine yazılmaz.
    - **Bağlar düz dosyadır (T36):** libgit2 Linux/macOS'ta init'te `core.symlinks`'i açık bırakır; uzaktaki
      `.gitignore -> ../.ssh/id_ed25519` gerçek bağ olarak çıkar, `.gitignore` tamamlanırken hedef okunup commit'e
      girerdi. Notlar deposunun yerel config'ine init'ten hemen sonra ve depo kurulumda/her senkronda açılırken

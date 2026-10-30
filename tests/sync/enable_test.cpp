@@ -192,6 +192,41 @@ TEST_CASE(
     CHECK(read_file(b / ".noteapp" / "durum") == "gizli\n");
 }
 
+// Uzakta kurulumun yazdığı .gitignore var; klasörde yalnız gizli, izlenmeyen bir .gitignore kalmış (ör. eski
+// bir kurulumdan): klasör boş sayılır ama SAFE checkout o dosyanın üzerine yazamazdı.
+TEST_CASE("enable row 3 with a leftover .gitignore: the clone keeps the remote's and adds the local lines") {
+    const SyncFixture fx;
+    const fs::path a = fx.root() / u8"A notları";
+    write_file(a / "not.md", "A\n");
+    REQUIRE(enable(a, utf8(fx.remote())).has_value());  // uzak: .gitignore + not.md
+    const fs::path b = fx.root() / u8"B notları";
+    write_file(b / ".gitignore", "*.bak\r\n.noteapp/\n");
+
+    const auto result = enable(b, utf8(fx.remote()));
+    REQUIRE_MESSAGE(result.has_value(), describe(result));
+    CHECK(read_file(b / "not.md") == "A\n");
+    CHECK(read_file(b / ".gitignore") == kGitignore + "*.bak\n");
+    CHECK(ref_id(b, "HEAD") == ref_id(fx.remote(), "refs/heads/main"));
+}
+
+TEST_CASE("a leftover hidden file the clone would overwrite fails the enable; it and .gitignore stay as they "
+          "were") {
+    const SyncFixture fx;
+    const fs::path a = fx.root() / u8"A notları";
+    write_file(a / "not.md", "A\n");
+    write_file(a / ".ayar", "uzak ayar\n");
+    REQUIRE(enable(a, utf8(fx.remote())).has_value());
+    const fs::path b = fx.root() / u8"B notları";
+    write_file(b / ".ayar", "yerel ayar\n");
+    write_file(b / ".gitignore", "*.bak\n");
+
+    const auto result = enable(b, utf8(fx.remote()));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(read_file(b / ".ayar") == "yerel ayar\n");
+    CHECK(read_file(b / ".gitignore") == "*.bak\n");
+    CHECK_FALSE(fs::exists(b / ".git"));
+}
+
 TEST_CASE("enable row 3, empty remote: init, a first commit with only .gitignore, push") {
     const SyncFixture fx;
     const fs::path b = fx.root() / u8"B notları";

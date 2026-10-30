@@ -691,27 +691,50 @@ std::expected<std::optional<std::string>, core::Error> read_regular_file(const f
 #endif
 }
 
+std::vector<std::string> split_lines(const std::string& text) {
+    std::vector<std::string> lines;
+    std::istringstream stream(text);
+    for (std::string line; std::getline(stream, line);)
+        lines.push_back(line.ends_with('\r') ? line.substr(0, line.size() - 1) : line);
+    return lines;
+}
+
 // Eksik satırlar sona eklenir; var olan içerik (CRLF dahil) olduğu gibi kalır. Okunamayan dosya boş sayılıp
 // üzerine yazılmaz: kullanıcının satırlarını silerdi.
-std::expected<void, core::Error> ensure_gitignore(const fs::path& notes_dir) {
-    const fs::path file = notes_dir / ".gitignore";
+std::expected<void, core::Error> add_missing_lines(const fs::path& file,
+                                                   const std::vector<std::string>& wanted) {
     auto existing = read_regular_file(file);
     if (!existing)
         return std::unexpected(existing.error());
     std::string text = existing->value_or("");
-    std::vector<std::string> present;
-    std::istringstream lines(text);
-    for (std::string line; std::getline(lines, line);)
-        present.push_back(line.ends_with('\r') ? line.substr(0, line.size() - 1) : line);
+    std::vector<std::string> present = split_lines(text);
     std::string missing;
-    for (const std::string line : {".noteapp/", ".*.tmp"})
-        if (std::ranges::find(present, line) == present.end())
-            missing += line + "\n";
+    for (const std::string& line : wanted) {
+        if (line.empty() || std::ranges::find(present, line) != present.end())
+            continue;
+        missing += line + "\n";
+        present.push_back(line);
+    }
     if (missing.empty())
         return {};
     if (!text.empty() && !text.ends_with('\n'))
         text += '\n';
     return core::write_file_atomically(file, text + missing);
+}
+
+std::expected<void, core::Error> ensure_gitignore(const fs::path& notes_dir) {
+    return add_missing_lines(notes_dir / ".gitignore", {".noteapp/", ".*.tmp"});
+}
+
+// Klonun checkout'unu engellememesi için kenara alınan .gitignore geri gelir: checkout yazmadıysa bayt bayt,
+// yazdıysa eksik satırları ona eklenir.
+std::expected<void, core::Error> restore_gitignore(const fs::path& file, const std::string& original) {
+    const auto current = read_regular_file(file);
+    if (!current)
+        return std::unexpected(current.error());
+    if (!*current)
+        return core::write_file_atomically(file, original);
+    return add_missing_lines(file, split_lines(original));
 }
 
 // Bayat kilit devralındı: önceki senkron yarıda öldürülmüş olabilir (AutoSync zaman aşımı, çökme; SPEC-sync
@@ -865,8 +888,28 @@ std::expected<void, core::Error> initialize(const core::Config& config, const st
     // Doğmamış dala hızlı ileri sarma = klon; notes_dir var ve gizli girdiler içeriyor olsa da çalışır.
     if (auto fetched = fetch(remote.get(), branch, credentials); !fetched)
         return std::unexpected(fetched.error());
+    // Gizli girdiler klasörü "dolu" yapmaz ama izlenmeyen bir .gitignore SAFE checkout'u durdurur. Silinmez,
+    // kenara alınır (`.*.tmp`: yok sayılır): süreç tam burada öldürülse de satırlar kaybolmaz. Diğer gizli
+    // dosyalardaki çakışma checkout'u temizce durdurur; hiçbirinin üzerine yazılmaz.
+    const fs::path gitignore = notes_dir / ".gitignore";
+    const fs::path set_aside = notes_dir / ".gitignore.noteapp.tmp";
+    const auto leftover = read_regular_file(gitignore);
+    if (!leftover)
+        return std::unexpected(leftover.error());
+    if (*leftover) {
+        std::error_code ec;
+        if (fs::rename(gitignore, set_aside, ec); ec)
+            return std::unexpected(read_failure(gitignore, ec));
+    }
     std::vector<core::NotePath> copies;  // doğmamış dalda birleştirme yok, kopya da oluşmaz
-    if (auto pulled = integrate(repo.get(), branch, config.sync, copies); !pulled)
+    const auto pulled = integrate(repo.get(), branch, config.sync, copies);
+    if (*leftover) {
+        if (auto restored = restore_gitignore(gitignore, **leftover); !restored)
+            return std::unexpected(restored.error());  // kenardaki kopya yerinde kalır
+        std::error_code ec;
+        fs::remove(set_aside, ec);
+    }
+    if (!pulled)
         return std::unexpected(pulled.error());
     return ensure_gitignore(notes_dir);
 }
