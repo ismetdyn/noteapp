@@ -1184,34 +1184,31 @@ void MainWindow::rename_folder(const std::string& folder) {
 void MainWindow::delete_folder(const std::string& folder) {
     if (folder.empty())
         return;
-    std::size_t notes = 0;
+    // Not listesi gizli ya da geçersiz adlı dosyaları göstermez: onaydaki sayıyı listeye bakarak değil, silme
+    // işleminin kendisine (NotEmpty'nin {count}'u) sordururuz; sayılmayan şey sessizce silinmez. Listede not
+    // varsa klasör kesin dolu; yalnız "boş görünen" klasörde önce sade onay sorulur (boş klasör onaysız
+    // silinmesin diye).
+    bool has_notes = false;
     for (const auto& info : store_.list())
-        notes += is_inside(info.path.string(), folder) ? 1 : 0;
-    const bool has_notes = notes > 0;
-    const QString message =
-        has_notes ? text("gui.confirm_delete_folder", {{"folder", folder}, {"count", std::to_string(notes)}})
-                  : text("gui.confirm_delete_empty_folder", {{"folder", folder}});
-    if (!deciders.confirm_delete(message))
+        has_notes = has_notes || is_inside(info.path.string(), folder);
+    if (!has_notes && !deciders.confirm_delete(text("gui.confirm_delete_empty_folder", {{"folder", folder}})))
         return;
 
     const bool affected = shown_in(folder);
-    if (affected && !flush())
-        return;
-    watcher_.removePaths(watcher_.directories());  // bkz. rename_folder
-    auto removed = store_.remove_folder(folder, has_notes);
+    watcher_.removePaths(watcher_.directories());        // bkz. rename_folder
+    auto removed = store_.remove_folder(folder, false);  // dolu klasörde hiçbir şey silmez
     if (!removed && removed.error().code == core::Error::Code::NotEmpty) {
-        // "Boş" görünen klasörde not olmayan dosyalar var: sayıyla ikinci, ayrı onay.
         std::string count = "?";
         for (const auto& [key, value] : removed.error().args)
             if (key == "count")
                 count = value;
-        if (deciders.confirm_delete(
-                text("gui.confirm_delete_folder", {{"folder", folder}, {"count", count}})))
-            removed = store_.remove_folder(folder, true);
-        else {
-            rescan();
+        if (!deciders.confirm_delete(
+                text("gui.confirm_delete_folder", {{"folder", folder}, {"count", count}})) ||
+            (affected && !flush())) {
+            rescan();  // izleyiciyi yeniden kurar
             return;
         }
+        removed = store_.remove_folder(folder, true);
     }
     if (!removed) {  // contains_link dahil: hiçbir şey silinmedi
         fail(removed.error());

@@ -127,6 +127,37 @@ TEST_CASE_FIXTURE(FolderFixture, "deleting a non-empty folder never happens with
     CHECK(ui.folders().empty());
 }
 
+TEST_CASE_FIXTURE(FolderFixture, "the delete confirmation counts hidden files the note list does not show") {
+    add_note("work/a.md", "a", 10);
+    add_note("work/.hidden.dat", "x", 10);
+    auto window = make_window();
+    wire(*window);
+
+    delete_answer = false;
+    window->delete_folder("work");
+    CHECK(confirms == 1);
+    CHECK(last_confirm == text("gui.confirm_delete_folder", {{"folder", "work"}, {"count", "2"}}));
+    CHECK(note_exists("work/a.md"));
+    CHECK(note_exists("work/.hidden.dat"));  // vazgeçildi: hiçbir şey silinmedi
+
+    delete_answer = true;
+    window->delete_folder("work");
+    CHECK(confirms == 2);
+    CHECK_FALSE(dir_exists("work"));
+}
+
+TEST_CASE_FIXTURE(FolderFixture, "a folder that only looks empty never loses hidden files without a count") {
+    add_note("work/.hidden.dat", "x", 10);
+    auto window = make_window();
+    wire(*window);
+
+    // Boş görünen klasörde de gizli dosya sayısı gösterilmeden silinmez.
+    delete_answer = true;
+    window->delete_folder("work");
+    CHECK(last_confirm == text("gui.confirm_delete_folder", {{"folder", "work"}, {"count", "1"}}));
+    CHECK_FALSE(dir_exists("work"));
+}
+
 TEST_CASE_FIXTURE(FolderFixture, "deleting an empty folder asks a simple confirmation") {
     auto window = make_window();
     wire(*window);
