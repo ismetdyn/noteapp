@@ -78,6 +78,10 @@ ile okunur ve girdi yolu `NoteStore::absolute_path`'ten gelir: okuma/yol hatası
 `0` başarı · `1` kullanıcı kaynaklı (iptal, bulunamadı, onay verilmedi) · `2` kullanım hatası ·
 `3` G/Ç/iç hata · `4` senkron hatası. Hatalar stderr'e, i18n mesajıyla.
 
+**Config uyarıları (T36):** `load_config()` uyarıları (bozuk `config.toml` -> tüm varsayılanlar, ayıklanan remote kimlik
+bilgisi, geçersiz değer) her komutta stderr'e yazılır; stdout ve çıkış kodu değişmez. Tek istisna ayrık süreç
+`sync --background`: tamamen sessiz kalır.
+
 Argüman ayrıştırma elle yazılır (ek kütüphane yok). Windows'ta UTF-8 argümanlar `wmain`/`GetCommandLineW` ile alınır.
 
 ## Kabul kriterleri (alt süreç testleri, `NOTEAPP_HOME` geçici dizinde)

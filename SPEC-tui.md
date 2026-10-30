@@ -59,7 +59,9 @@ SPEC-core config alanlarının formu: dil (döngü), notes_dir, editör, varsay�
 senkron açık/kapalı, remote, dal, idle süresi, yazar adı/e-posta; remote https ise **token** alanı (maskeli;
 "kasada kayıtlı ✓" göstergesi, Kaydet/Sil). Kaydet → doğrula → `config.toml` atomik yazılır → uygulanır
 (dil anında; notes_dir değişirse liste yeniden yüklenir; senkron açıldıysa `enable` akışı, hata satır içinde).
-Vazgeç → değişiklikler atılır.
+Vazgeç → değişiklikler atılır. AutoSync yalnız `sync_restart_needed` (etkin/remote/dal/idle/notes_dir) true ise yeniden
+kurulur; önce `stop(exit_timeout)` ile düzgün durdurulur (T36). Açılışta config yükleme uyarıları alt çubuk iletisinde
+görünür; `Enter` ile not açma yolu `NoteStore::absolute_path`'ten geçer.
   - Sapma (T23): `Kaydet` düğme satırında `Enter` ile kaydedilir, `Esc` vazgeçer (değişiklik varsa "Değişiklikler atılsın mı?" onayı, varsayılan "Vazgeç"). Sapma (T28): token satırı 12 config satırının ardında (Kaydet düğmesinden önce) ve yalnız https remote iken görünür; `Enter` yazılan token'ı kasaya kaydeder, `Ctrl-D` siler, `Kaydet` yazılmış ama kaydedilmemiş token'ı da `enable`'dan önce kasaya yazar. `enable` akışı senkron açılırken ya da açıkken remote değişince çalışır; origin farklıysa "değiştirilsin mi?" onayı (varsayılan "Vazgeç"), hata formda satır içi. Kullanıcı `config.toml`'u bozuksa kaydedilmez (`note config set` ile aynı kural).
 
 ## Yenileme ve senkron

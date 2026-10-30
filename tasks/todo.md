@@ -364,6 +364,10 @@
   - [x] Çakışma kopyasının adı 255 bayta sığar (kök UTF-8 güvenli kısaltılır)
   - [x] Yazılamayan uzak yol ve harf büyüklüğü çakışması `sync.remote_invalid_paths` ile reddedilir
   - [x] Windows kasası `CRED_PERSIST_LOCAL_MACHINE` (token etki alanında dolaşmaz; eski kayıt okunurken çevrilir)
+- [x] GUI/TUI takibi: `absolute_path` ve `normalize_line_endings` çağrı noktalarına geçiş.
+- [x] GUI/TUI/uyarı bulguları: PDF görsel yükleme (UNC/NTLM) · ayar kaydında çalışan senkronu öldürme · klasör silme
+  onay sayısı · O(n²) CRLF · `absolute_path` (TUI `Enter`, GUI PDF) · config uyarılarının görünürlüğü · `try_write`
+  rescan tavanı (ponytail notu).
 - **Doğrulama:** tüm testler Windows + `F` · **Bağımlılık:** T35 · **Model:** opus · **Boyut:** M
 
 ### ✅ Son kontrol noktası

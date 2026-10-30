@@ -49,8 +49,9 @@ Eşleşme yokken arama kutusunda `Enter` → sorgu ilk satır olacak şekilde ye
 Ağaç bağlam menüsü: Yeni klasör, Yeniden adlandır, Sil (doluysa not sayısıyla onay; kalıcı silme uyarısı).
 Not taşıma `Ctrl+M` diyaloğuyla (sürükle-bırak v1'de yok).
 - **Uygulama notları (T31):** klasör adı istemi ve silme onayı `deciders` üzerinden geçer; silme onayında varsayılan
-  düğme *Vazgeç*. Klasör silmede sayım not sayısıdır; notsuz görünen klasörde not olmayan dosya çıkarsa dosya
-  sayısıyla ikinci onay istenir. Gösterilen not etkilenen klasördeyse önce `flush()`, vazgeçilirse hiçbir şey
+  düğme *Vazgeç*. Klasör silmede onaydaki sayı `remove_folder(force=false)`'ın `NotEmpty {count}` değeridir (gizli/geçersiz adlı
+  dosyalar dahil, `.keep` hariç; T36); sonra zorla silinir. Listede not yoksa önce sade "boş klasör" onayı sorulur
+  (boş klasör onaysız silinmesin); gizli dosya çıkarsa yalnız o durumda sayıyla ikinci onay gelir. Gösterilen not etkilenen klasördeyse önce `flush()`, vazgeçilirse hiçbir şey
   kaydedilmez. `Ctrl+M` yalnız klasörü seçtirir (ad/tip kilitli). Arama modu düğmesi mevcut modu gösterir; arama
   kutusunda `Tab` modu çevirir. İçerik modunda boş sorgu tüm notları listeler; editör vurgusu düzenlemede,
   sorgu/mod değişiminde silinir ve aynı (not, sorgu) için yedek taramada yeniden kaydırılmaz.
@@ -67,13 +68,20 @@ Kaydet/Geri al düğmeleri; kaydet `config.toml`'u atomik yazar. Dil değişikli
   değişiminde önce açık not kaydedilir, sonra liste yeni dizine bağlanır. Senkron açma/`remote` değişimi `enable`
   akışını (uyuşmazlıkta onay: `deciders.confirm_replace_origin`) başarıyla bitirmeden config yazılmaz. "Bağlantıyı test
   et": `enable` UI iş parçacığında, tek `sync_now` işçide. Durum çubuğu: `senkron kapalı` / `⟳` / `✓ SS:DD` / `⚠ hata`;
-  `F5` `request_now`; her yazma/taşıma/silme/oluşturma `notify_changed`; kapanışta (kayıt akışından sonra) `stop(exit_timeout)`.
+  `F5` `request_now`; ayar kaydı AutoSync'i yalnız `sync.enabled/remote/branch/idle_seconds` ya da `notes_dir` değişince
+  yeniden kurar (editör/yazar değişimi çalışan senkronu öldürmez), yeniden kurmadan önce bekleme imleciyle
+  `stop(exit_timeout)` çağrılır (T36); her yazma/taşıma/silme/oluşturma `notify_changed`; kapanışta (kayıt akışından sonra) `stop(exit_timeout)`.
 
 ## PDF dışa aktarma
 - `Ctrl+E` → dosya diyaloğu. `md` → `QTextDocument::setMarkdown`; diğer tipler → `setPlainText` + eş aralıklı font.
   `QPdfWriter`, A4, 15 mm kenar boşluğu; Türkçe glifler sistem fontuyla gömülür.
 - **Başsız mod:** `notes-gui --export-pdf <girdi> <çıktı>` → pencere açmadan dışa aktarır; çıkış 0/1, hata stderr'e (i18n).
   `QT_QPA_PLATFORM=offscreen` ile çalışır (CLI bunu kullanır).
+- **Güvenilmez içerik (T36):** `md` HTML'siz (`MarkdownNoHTML`) çözülür ve `strip_images` her görsel parçasını alt
+  metniyle (yoksa `[görsel]`) değiştirir: `file://sunucu/...` Windows'ta UNC'ye gidip NTLM özeti sızdırırdı (SPEC §9: ağ
+  çağrısı yok), `file:///...` yerel görseli PDF'e gömerdi. Girdi yolu `NoteStore::absolute_path`'ten (bağ denetimi) geçer.
+- **Açılış uyarıları (T36):** config yükleme uyarıları (bozuk `config.toml`, geçersiz değer, ayıklanan kimlik bilgisi)
+  durum çubuğunda gösterilir (`show_config_warnings`).
 
 ## Diğer
 - Sistem temasını (açık/koyu) izler. Tüm eylemler klavyeyle erişilebilir; widget'ların erişilebilir adları i18n.
