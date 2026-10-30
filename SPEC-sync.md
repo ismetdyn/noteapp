@@ -21,7 +21,7 @@ std::expected<bool, core::Error> retry_rejected_push(const std::function<std::ex
 
 class SyncLock {                                        // <durum>/sync.lock; RAII, yalnız kendi kilidini siler
 public:
-    static std::expected<SyncLock, core::Error> acquire(const std::filesystem::path&, std::chrono::minutes stale_after);   // canlı+taze → sync.busy
+    static std::expected<SyncLock, core::Error> acquire(const std::filesystem::path&, std::chrono::minutes stale_after);   // canlı sahip → sync.busy
 };
 
 class SyncService {
@@ -76,8 +76,10 @@ bool has_token(std::string_view host);
 Init sırasında notes reposuna `.gitignore` yazılır: `.noteapp/` ve `.*.tmp`. Dal: `config.sync.branch` (varsayılan `main`).
 
 ### Senkron döngüsü (`sync_now`)
-1. **Kilit:** `<durum>/sync.lock` (PID + zaman). Canlı başka süreç tutuyorsa `sync.busy` (çağıran sonra dener);
-   süreci ölmüş ya da `tuning.sync_stale_lock_minutes`'dan (10 dk) eski kilit bayat sayılır.
+1. **Kilit:** `<durum>/sync.lock` (PID + zaman). Canlı başka süreç tutuyorsa, kilit ne kadar eski olursa olsun
+   `sync.busy` (çağıran sonra dener; devralmak canlı sürecin altındaki `.git/*.lock`'ları silerdi). Sahibi ölmüşse
+   bayattır; PID okunamıyorsa (yarım/bozuk dosya) `tuning.sync_stale_lock_minutes`'dan (10 dk) eskiyse bayattır.
+   Bilinen sınır: PID yeniden kullanılırsa ilgisiz canlı süreç çıkana dek kilit meşgul görünür.
 2. **Commit:** tüm değişiklikler (ekleme/silme dahil) sahnelenir; değişiklik varsa commit atılır.
    Mesaj: i18n `sync.commit_message` (`{count}` dosya, `{host}`, zaman). Yazar: config → git global config →
    `OS_kullanıcı@host`.

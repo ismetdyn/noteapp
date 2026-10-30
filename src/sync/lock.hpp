@@ -13,9 +13,9 @@ namespace noteapp::sync {
 // yıkıcıda — hâlâ bizimse — silinir.
 class SyncLock {
 public:
-    // Canlı bir süreç tutuyor ve kilit `stale_after`'dan gençse Error{"sync.busy", {pid}}. Bayat kilit
-    // (sahibi ölmüş ya da eski) devralınır ve loglanır: asılı kalmış bir senkron sonsuza dek engellemesin
-    // (SPEC-sync döngü 1, tuning.sync_stale_lock_minutes). Dizin yoksa oluşturulur.
+    // Sahibi canlıysa yaşı ne olursa olsun Error{"sync.busy", {pid}}. Bayat kilit (sahibi ölmüş; ya da sahibi
+    // okunamıyor ve `stale_after`'dan eski, tuning.sync_stale_lock_minutes) devralınır ve loglanır (SPEC-sync
+    // döngü 1). Sahibi okunamayan genç kilit de meşguldür. Dizin yoksa oluşturulur.
     static std::expected<SyncLock, core::Error> acquire(const std::filesystem::path& file,
                                                         std::chrono::minutes stale_after);
 
@@ -25,7 +25,7 @@ public:
     SyncLock& operator=(const SyncLock&) = delete;
     ~SyncLock();
 
-    // Bayat bir kilit devralındı: önceki sahip yarıda kalmış (öldürülmüş/çökmüş/asılı) olabilir; çağıran
+    // Bayat bir kilit devralındı: önceki sahip yarıda kalmış (öldürülmüş/çökmüş) olabilir; çağıran
     // onun artıklarını (libgit2 kilitleri, yarım merge) temizler.
     bool took_over() const { return took_over_; }
 

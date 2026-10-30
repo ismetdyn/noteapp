@@ -103,7 +103,12 @@ std::expected<SyncLock, core::Error> SyncLock::acquire(const fs::path& file,
         const std::string existing = read_text(file);
         const long long pid = owner_pid(existing);
         const bool fresh = !ec && fs::file_time_type::clock::now() - modified < stale_after;
-        if (attempt > 0 || (fresh && (pid == 0 || process_alive(pid))))
+        // Sahibi canlıysa yaşına bakılmaz: devralmak canlı sürecin altındaki `.git/*.lock`'ları silerdi. Yaş
+        // yalnız sahibi okunamayan (yarım yazılmış/bozuk) kilit içindir.
+        // ponytail: PID yeniden kullanılırsa ilgisiz canlı süreç, çıkana dek kilidi "meşgul" tutar; gerekirse
+        // kilide süreç başlama zamanı da yazılır.
+        const bool owner_known = pid > 0;
+        if (attempt > 0 || (owner_known ? process_alive(pid) : fresh))
             return std::unexpected(
                 core::Error{core::Error::Code::Io, "sync.busy", {{"pid", std::to_string(pid)}}});
 
