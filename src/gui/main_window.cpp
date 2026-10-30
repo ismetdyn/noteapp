@@ -1013,7 +1013,12 @@ void MainWindow::fail(const core::Error& error) {
 }
 
 void MainWindow::start_sync() {
-    auto_sync_.reset();
+    if (auto_sync_) {
+        // Yıkıcı stop(0) çağırır ve süren birleştirmeyi öldürürdü: önce bekleyen son senkron bitsin.
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        stop_sync(std::chrono::seconds(config_.tuning.exit_timeout_seconds));
+        QApplication::restoreOverrideCursor();
+    }
     if (!config_.sync.enabled)
         return show_sync_status({}, false);
     // Çağrı İŞÇİ iş parçacığından gelir: durum kopyalanıp UI iş parçacığına kuyruklanır. AutoSync bu
@@ -1023,6 +1028,7 @@ void MainWindow::start_sync() {
             QMetaObject::invokeMethod(
                 this, [this, status, running] { show_sync_status(status, running); }, Qt::QueuedConnection);
         });
+    ++sync_restarts_;
     show_sync_status({}, true);
     auto_sync_->start();
 }
@@ -1082,7 +1088,11 @@ void MainWindow::apply_settings(const core::Config& before, const core::Config& 
     }
     update_header();
     rescan();
-    if (before.sync != after.sync || before.notes_dir != after.notes_dir)
+    // AutoSync yalnız bu alanları kurulurken okur; yazar adı/e-postasını `note sync --background` config'ten
+    // taze okur, değişince çalışan senkronu öldürmek gerekmez.
+    if (before.sync.enabled != after.sync.enabled || before.sync.remote != after.sync.remote ||
+        before.sync.branch != after.sync.branch || before.sync.idle_seconds != after.sync.idle_seconds ||
+        before.notes_dir != after.notes_dir)
         start_sync();
     if (before.language != after.language)
         deciders.info(text("gui.restart_needed"));

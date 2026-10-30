@@ -93,6 +93,8 @@ public:
     // Durum çubuğu: kapalı / ⟳ / ✓ SS:DD / ⚠ hata. Arka plan çağrısı kuyruktan bu işleve gelir.
     void show_sync_status(const sync::SyncStatus& status, bool running);
     std::size_t sync_requests() const { return sync_requests_; }
+    // Test kancası: kurulan AutoSync sayısı (ayar kaydı gereksiz yere yeniden kurmamalı).
+    std::size_t sync_restarts() const { return sync_restarts_; }
     // Test kancası: Q_OBJECT'siz olduğundan findChild ile bulunamaz.
     SettingsPage* settings_page() const { return settings_; }
     // Test kancası: başarılı NoteStore::write sayısı (autosave birleşmesini ölçer).
@@ -173,6 +175,7 @@ private:
     QString type_box_for_;   // tip kutusunun son doldurulduğu yol (gereksiz yeniden doldurmayı önler)
 
     std::size_t sync_requests_ = 0;
+    std::size_t sync_restarts_ = 0;
     SettingsPage* settings_ = nullptr;
     QLabel* sync_label_ = nullptr;
 

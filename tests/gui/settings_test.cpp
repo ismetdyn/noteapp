@@ -380,3 +380,31 @@ TEST_CASE_FIXTURE(SettingsFixture, "revert restores the saved values") {
     button(*window, "revertButton")->click();
     CHECK(window->findChild<QLineEdit*>("field_editor")->text() != "emacs");
 }
+
+TEST_CASE_FIXTURE(SettingsFixture,
+                  "saving unrelated settings keeps the running sync, a branch change restarts it") {
+    add_note("a.md", "# a\n");
+    const fs::path remote = make_bare("remote.git");
+    auto window = make_window_wired();
+    auto* label = window->findChild<QLabel*>("syncLabel");
+    REQUIRE(label);
+    window->findChild<QCheckBox*>("field_sync.enabled")->setChecked(true);
+    set_text(*window, "sync.remote", to_q(remote));
+    set_text(*window, "sync.author_name", "Test Yazar");
+    set_text(*window, "sync.author_email", "test@noteapp.invalid");
+    button(*window, "saveButton")->click();
+    REQUIRE(wait_for([&] { return label->text().startsWith(QString::fromUtf8("\xE2\x9C\x93")); }));
+    CHECK(window->sync_restarts() == 1);
+
+    // Editör ve yazar bilgisi AutoSync'i ilgilendirmez: çalışan süreç öldürülmemeli.
+    set_text(*window, "editor", "vim");
+    set_text(*window, "sync.author_name", "Başka Yazar");
+    button(*window, "saveButton")->click();
+    CHECK(get("editor") == "vim");
+    CHECK(window->sync_restarts() == 1);
+
+    set_text(*window, "sync.branch", "other");
+    button(*window, "saveButton")->click();
+    CHECK(get("sync.branch") == "other");
+    CHECK(window->sync_restarts() == 2);
+}

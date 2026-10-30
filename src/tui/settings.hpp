@@ -107,4 +107,9 @@ private:
 // Satır etiketi (katalog: tui.settings_<anahtar>, noktalar altçizgi).
 std::string settings_label(const SettingsState::Row& row);
 
+// Çalışan AutoSync'in yeniden kurulması gerekir mi? Yalnız kurulurken okunan alanlar (etkin/remote/dal/boşta
+// süresi/notes_dir) sayılır. Yazar adı/e-postasını `note sync --background` config'ten taze okur; editör gibi
+// ilgisiz bir ayar için süren birleştirmeyi öldürmek gerekmez.
+bool sync_restart_needed(const core::Config& before, const core::Config& after);
+
 }  // namespace noteapp::tui

@@ -357,7 +357,7 @@ int main() {
     // alanına dokunulmaz: yeniden tarama iş parçacığı onu okur ve ayar ekranından değişmez.
     const auto apply_settings = [&](const core::Config& next) {
         const bool dir_changed = next.notes_dir != config.notes_dir;
-        const core::SyncConfig old_sync = config.sync;
+        const bool restart_sync = noteapp::tui::sync_restart_needed(config, next);
         config.language = next.language;
         config.notes_dir = next.notes_dir;
         config.editor = next.editor;
@@ -366,14 +366,20 @@ int main() {
         config.types = next.types;
         config.sync = next.sync;
         core::init_i18n(config.language);
-        // AutoSync süreleri ve depo yolu kurulurken okunur: ayar değiştiyse yeniden kurulur; kapandıysa
-        // yıkılır.
-        if (!config.sync.enabled) {
+        // AutoSync süreleri ve depo yolu kurulurken okunur: ilgili ayar değiştiyse yeniden kurulur;
+        // kapandıysa yıkılır. Yıkıcı stop(0) çağırıp süren birleştirmeyi öldürürdü: önce düzgün durdurulur.
+        const auto stop_auto_sync = [&] {
+            if (!auto_sync)
+                return;
+            auto_sync->stop(std::chrono::seconds(config.tuning.exit_timeout_seconds));
             auto_sync.reset();
+        };
+        if (!config.sync.enabled) {
+            stop_auto_sync();
             sync_indicator.disable();
             show_sync();
-        } else if (!auto_sync || dir_changed || config.sync != old_sync) {
-            auto_sync.reset();
+        } else if (!auto_sync || restart_sync) {
+            stop_auto_sync();
             start_auto_sync();
         }
         if (dir_changed) {

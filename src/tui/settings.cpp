@@ -376,4 +376,10 @@ std::string settings_label(const SettingsState::Row& row) {
     return core::tr("tui.settings_" + key);
 }
 
+bool sync_restart_needed(const core::Config& before, const core::Config& after) {
+    return before.sync.enabled != after.sync.enabled || before.sync.remote != after.sync.remote ||
+           before.sync.branch != after.sync.branch || before.sync.idle_seconds != after.sync.idle_seconds ||
+           before.notes_dir != after.notes_dir;
+}
+
 }  // namespace noteapp::tui

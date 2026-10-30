@@ -403,3 +403,21 @@ TEST_CASE("an origin mismatch asks to replace it; declining changes nothing, acc
     CHECK(saved->sync.enabled);
     CHECK(has(config_text(), "enabled = true"));
 }
+
+TEST_CASE("sync_restart_needed ignores editor and author changes but not sync wiring changes") {
+    const core::Config base = core::parse_config("").config;
+    const auto changed = [&](auto edit) {
+        core::Config next = base;
+        edit(next);
+        return tui::sync_restart_needed(base, next);
+    };
+    CHECK_FALSE(tui::sync_restart_needed(base, base));
+    CHECK_FALSE(changed([](core::Config& c) { c.editor = "vim"; }));
+    CHECK_FALSE(changed([](core::Config& c) { c.sync.author_name = "Baska"; }));
+    CHECK_FALSE(changed([](core::Config& c) { c.sync.author_email = "b@example.invalid"; }));
+    CHECK(changed([](core::Config& c) { c.sync.enabled = !c.sync.enabled; }));
+    CHECK(changed([](core::Config& c) { c.sync.remote = "https://example.invalid/r.git"; }));
+    CHECK(changed([](core::Config& c) { c.sync.branch = "baska"; }));
+    CHECK(changed([](core::Config& c) { c.sync.idle_seconds += 1; }));
+    CHECK(changed([](core::Config& c) { c.notes_dir /= "alt"; }));
+}
