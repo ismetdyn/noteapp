@@ -350,6 +350,10 @@
 - **Biriken borç (yol boyunca not edildi):** `first_non_empty_line` kuralı `core/note_store.cpp` ve `tui/save_dialog.cpp`'de
   iki kopya → core'dan dışa aç, TUI kullansın · ~~`NoteStore::list()` önbelleği thread-safe değil~~ (T35'te önbellek
   kalktı; TUI'nin `list_mutex`'i artık yalnız store'un yeniden kurulmasını korur).
+- [x] Çekirdek + CLI review bulguları: atomik yazımda izin/ACL · `save_config` `[tuning]` · `NoteStore::absolute_path`
+  (edit/export) · 8.3 kısa adlar · ayrılmış aygıt adları · terminal kaçış temizliği · süreç sertleştirme ·
+  `sync.remote` kimlik bilgisi · `normalize_line_endings` dışa açıldı (POSIX dalları `F`'de doğrulanacak).
+- [ ] GUI/TUI takibi: `absolute_path` ve `normalize_line_endings` çağrı noktalarına geçiş.
 - **Doğrulama:** tüm testler Windows + `F` · **Bağımlılık:** T35 · **Model:** opus · **Boyut:** M
 
 ### ✅ Son kontrol noktası
