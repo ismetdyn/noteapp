@@ -177,7 +177,8 @@ Kapatmak: `note sync off` (repo ve geçmiş olduğu gibi kalır); token'ı silme
   `$OutputEncoding = [Text.Encoding]::UTF8` çalıştır; mümkünse Windows Terminal kullan.
 - **`sync.ssh_host_unknown`:** host anahtarı henüz bilinmiyor; bir kez `ssh -T git@github.com` çalıştırıp onayla.
 - **Linux'ta `sync.keychain_unavailable` (Secret Service yok):** token düz dosyaya yazılmaz; ortama ver:
-  `export NOTEAPP_GIT_TOKEN=<token>`.
+  `export NOTEAPP_GIT_TOKEN=<token>`. Bu token yalnız `NOTEAPP_GIT_TOKEN_HOST` adresine (varsayılan `github.com`)
+  gönderilir; başka bir sunucu için bu değişkeni de ayarlayın.
 - **`cli.gui_not_installed`:** `note export --pdf` yanındaki `notes-gui`'yi bulamadı; `cmake --install` ile üçünü
   aynı `bin`'e kur.
 - **Senkron kilitli (`sync.busy`):** başka bir senkron sürüyor; bekle ya da tekrar dene. Ayrıntı için log

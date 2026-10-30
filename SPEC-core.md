@@ -142,7 +142,7 @@ rescan_seconds = 5
 autosave_ms = 1000
 exit_timeout_seconds = 10
 log_max_bytes = 1048576   # log.txt bu boyutu aşınca log.1.txt'ye döner
-sync_stale_lock_minutes = 10   # bundan eski sync.lock, sahibi yaşasa bile bayat sayılır (SPEC-sync döngü 1)
+sync_stale_lock_minutes = 10   # okunamayan sync.lock bundan eskiyse bayat; sahibi canlı kilit devralınmaz (SPEC-sync)
 sync_timeout_seconds = 120     # AutoSync bir `note sync --background` sürecini en çok bu kadar bekler (SPEC-sync karar 3)
 ```
 - Varsayılanlar `resources/defaults.toml`'dan (gömülü) gelir; dosya yoksa varsayılanlarla çalışılır, ilk

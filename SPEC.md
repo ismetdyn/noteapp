@@ -51,7 +51,7 @@ Bağımlılık yönü tek yönlü; döngü yok. `cli` → `gui` arasında **link
 | GUI + PDF | Qt 6 Widgets (+ QtGui `QPdfWriter`) — Windows'ta 6.12.0 `mingw_64` kiti | ≥ 6.8 (LTS) | LGPLv3 (dinamik link) | sistem (Qt Online Installer) |
 | Config / i18n | toml++ (`TOML_EXCEPTIONS=0`) | v3.4.0 | MIT | FetchContent |
 | Git senkron | libgit2 (`USE_SSH=exec`, HTTPS: WinHTTP / OpenSSL / SecureTransport) | v1.9.7 | GPLv2 + linking exception | FetchContent |
-| Sır saklama | hrantzsch/keychain (Win Credential Manager / libsecret / macOS Keychain) | v1.3.1 | MIT | FetchContent |
+| Sır saklama | Windows: Credential Manager API (`CRED_PERSIST_LOCAL_MACHINE`); Linux/macOS: hrantzsch/keychain (libsecret / Keychain) | v1.3.1 | MIT | sistem / FetchContent |
 | Test | doctest | v2.5.3 | MIT | FetchContent |
 | Fuzzy algoritma | fzy algoritması (jhawthorn/fzy) — C++'ta yeniden yazım | ref. v1.1 | MIT | — |
 
