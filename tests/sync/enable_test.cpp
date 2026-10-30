@@ -504,3 +504,79 @@ TEST_CASE("a .gitignore that is a link is neither read nor replaced") {
     CHECK_FALSE(is_plain_file(a / ".gitignore"));  // bağ yerinde, üzerine yazılmadı
     CHECK_FALSE(fs::exists(a / ".git"));
 }
+
+// Bu işletim sisteminde yazılamayan uzak yol: genel git hatası yerine ne yapılacağını söyleyen hata. Yalnız
+// Windows: aux.md Linux'ta geçerli bir addır.
+#ifdef _WIN32
+TEST_CASE("a clone of a remote path invalid on this OS is sync.remote_invalid_paths and names the path") {
+    const SyncFixture fx;
+    commit_entries(fx.remote(), {{"aux.md", "aygıt adı\n"}, {"not.md", "not\n"}});
+    const fs::path b = fx.root() / u8"B notları";
+    fs::create_directories(b);
+    const auto result = enable(b, utf8(fx.remote()));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message_key == "sync.remote_invalid_paths");
+    CHECK(result.error().args == noteapp::core::Args{{"path", "aux.md"}});
+    CHECK(entries(b).empty());
+}
+
+TEST_CASE("a sync pulling a path invalid on this OS is sync.remote_invalid_paths; nothing local is lost") {
+    const SyncFixture fx;
+    const fs::path a = fx.make_clone(u8"A notları");
+    write_file(a / "not.md", "x\n");
+    SyncService sync_a(SyncFixture::config_for(a));
+    REQUIRE(sync_a.sync_now().has_value());
+    commit_entries(fx.remote(), {{"aux.md", "aygıt adı\n"}});
+
+    SUBCASE("fast-forward") {
+        const auto head = ref_id(a, "HEAD");
+        const auto result = sync_a.sync_now();
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().message_key == "sync.remote_invalid_paths");
+        CHECK(ref_id(a, "HEAD") == head);
+    }
+    SUBCASE("merge") {
+        write_file(a / "yerel.md", "yerel\n");
+        const auto result = sync_a.sync_now();
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().message_key == "sync.remote_invalid_paths");
+        CHECK(read_file(a / "yerel.md") == "yerel\n");
+        CHECK(head_commit(a).parents == 1);
+    }
+    CHECK(git_repository_state(open_repository(a).get()) == GIT_REPOSITORY_STATE_NONE);
+    CHECK(read_file(a / "not.md") == "x\n");
+    CHECK_FALSE(fs::exists(a / "aux.md"));
+}
+
+// Checkout burada hata vermez: iki not tek dosyaya düşer, biri sessizce kaybolur ve sonraki commit onu ezer.
+TEST_CASE("two remote names that differ only in case are refused on a case-insensitive disk") {
+    struct Row {
+        const char* upper;
+        const char* lower;
+    };
+    for (const Row row : {Row{"Not.md", "not.md"}, Row{"Çalışma.md", "çalışma.md"}}) {
+        CAPTURE(row.lower);
+        const SyncFixture fx;
+        const fs::path a = fx.make_clone(u8"A notları");
+        write_file(a / "yerel.md", "yerel\n");
+        SyncService sync_a(SyncFixture::config_for(a));
+        REQUIRE(sync_a.sync_now().has_value());
+        commit_entries(fx.remote(), {{row.upper, "büyük\n"}, {row.lower, "küçük\n"}});
+
+        const fs::path b = fx.root() / u8"B notları";
+        fs::create_directories(b);
+        const auto cloned = enable(b, utf8(fx.remote()));
+        REQUIRE_FALSE(cloned.has_value());
+        CHECK(cloned.error().message_key == "sync.remote_invalid_paths");
+        CHECK(cloned.error().args == noteapp::core::Args{{"path", row.lower}});
+        CHECK(entries(b).empty());
+
+        const auto head = ref_id(a, "HEAD");
+        const auto pulled = sync_a.sync_now();
+        REQUIRE_FALSE(pulled.has_value());
+        CHECK(pulled.error().message_key == "sync.remote_invalid_paths");
+        CHECK(ref_id(a, "HEAD") == head);
+        CHECK(entries(a) == std::set<std::string>{".git", "yerel.md"});
+    }
+}
+#endif

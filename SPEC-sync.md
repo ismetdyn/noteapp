@@ -87,6 +87,9 @@ Init sırasında notes reposuna `.gitignore` yazılır: `.noteapp/` ve `.*.tmp`.
 4. **Birleştirme analizi:**
    - güncel → 5'e geç;
    - fast-forward → `GIT_CHECKOUT_SAFE` ile checkout + ref ilerletme;
+   - uzak ağaç bu sisteme yazılamıyorsa → `sync.remote_invalid_paths` {path}, yerel hiçbir şey değişmez: libgit2'nin
+     reddettiği ad (Windows'ta `aux.md`) ya da `core.ignorecase` açıkken yalnız harf büyüklüğüyle ayrılan iki yol
+     (checkout hata vermeden birini kaybederdi; Windows'ta Unicode, macOS'ta yalnız ASCII denetlenir);
    - ortak ata yok (ilgisiz geçmiş) → `sync.unrelated_histories`, merge'e hiç başlanmaz (ilk kurulum `enable`'ın işi);
    - normal → merge. **Çakışan her dosya için:** yerel sürüm yerinde kalır; uzak sürüm
      `<ad> (conflict YYYY-MM-DD HHMM).<uzantı>` olarak yanına yazılır; silme/değiştirme çakışmasında

@@ -19,6 +19,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -26,7 +27,16 @@
 #include <toml++/toml.hpp>
 #include <vector>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <cctype>
 #include <cerrno>
 #include <fcntl.h>
 #include <pwd.h>
@@ -492,6 +502,72 @@ std::expected<void, core::Error> abort_merge(git_repository* repo, const std::ve
     return {};
 }
 
+// Checkout hatası: uzak ağaçta bu işletim sisteminde yazılamayan bir yol varsa (Windows'ta aux.md, sonu
+// noktalı ad; libgit2 protectNTFS) kullanıcının yapabileceği bir şey söyleyen hata, yoksa genel git hatası.
+// libgit2 yolu yalnız ileti içinde verir.
+core::Error checkout_failure() {
+    const git_error* last = git_error_last();
+    constexpr std::string_view kInvalidPath = "invalid path '";
+    const std::string_view message = last->message;
+    const auto start = message.find(kInvalidPath);
+    if (last->klass != GIT_ERROR_CHECKOUT || start == std::string_view::npos)
+        return git_failure();
+    const std::string_view rest = message.substr(start + kInvalidPath.size());
+    return sync_error("sync.remote_invalid_paths", {{"path", std::string(rest.substr(0, rest.rfind('\'')))}});
+}
+
+// Yolun harf büyüklüğünden bağımsız anahtarı.
+fs::path::string_type fold_case(const std::string& path) {
+    fs::path::string_type text = path_from_utf8(path).native();
+#ifdef _WIN32
+    // Değişmez yerel ayar NTFS'in harf tablosuna en yakınıdır (Türkçe i/İ kuralı yok; Ç/ç eşlenir).
+    const int size = static_cast<int>(text.size());
+    LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, text.data(), size, text.data(), size, nullptr,
+                  nullptr, 0);
+#else
+    // ponytail: yalnız ASCII (duyarsız disk burada yalnız macOS); gerekirse CFStringFold.
+    std::ranges::transform(text, text.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+#endif
+    return text;
+}
+
+// Büyük/küçük harf duyarsız diskte yalnız harf büyüklüğüyle ayrılan iki yol tek dosyaya düşer: checkout hata
+// vermez, biri sessizce kaybolur, sonraki commit onu diğerinin içeriğiyle ezer. Uzak ağaç baştan reddedilir.
+std::expected<void, core::Error> check_case_collisions(git_repository* repo,
+                                                       const git_annotated_commit* their) {
+    git_config* config_raw = nullptr;
+    TRY_GIT(git_repository_config(&config_raw, repo));
+    const GitConfig config(config_raw);
+    if (int ignore_case = 0;
+        git_config_get_bool(&ignore_case, config.get(), "core.ignorecase") < 0 || !ignore_case)
+        return {};
+
+    git_commit* commit_raw = nullptr;
+    TRY_GIT(git_commit_lookup(&commit_raw, repo, git_annotated_commit_id(their)));
+    const Commit commit(commit_raw);
+    git_tree* tree_raw = nullptr;
+    TRY_GIT(git_commit_tree(&tree_raw, commit.get()));
+    const Tree tree(tree_raw);
+    struct Walk {
+        std::set<fs::path::string_type> seen;
+        std::string collision;
+    } walk;
+    const auto visit = [](const char* root, const git_tree_entry* entry, void* payload) -> int {
+        if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB)
+            return 0;
+        auto& state = *static_cast<Walk*>(payload);
+        const std::string path = std::string(root) + git_tree_entry_name(entry);
+        if (!state.seen.insert(fold_case(path)).second && state.collision.empty())
+            state.collision = path;
+        return 0;
+    };
+    TRY_GIT(git_tree_walk(tree.get(), GIT_TREEWALK_PRE, visit, &walk));
+    if (!walk.collision.empty())
+        return std::unexpected(sync_error("sync.remote_invalid_paths", {{"path", walk.collision}}));
+    return {};
+}
+
 // Ayrışmış geçmiş: üç yollu merge → çakışma çözümü → iki ebeveynli commit. Ortak ata yoksa (ilgisiz geçmiş)
 // hiçbir şeye dokunmadan hata: ilk kurulum enable'ın işi. Dönüş: değişen dosya sayısı.
 std::expected<int, core::Error> merge_diverged(git_repository* repo, const std::string& branch,
@@ -524,7 +600,8 @@ std::expected<int, core::Error> merge_diverged(git_repository* repo, const std::
     checkout.checkout_strategy =
         GIT_CHECKOUT_SAFE | GIT_CHECKOUT_USE_OURS | GIT_CHECKOUT_DONT_OVERWRITE_IGNORED;
     const git_annotated_commit* heads[] = {their};
-    TRY_GIT(git_merge(repo, heads, 1, &merge_options, &checkout));  // hata verirse kendi durumunu temizler
+    if (git_merge(repo, heads, 1, &merge_options, &checkout) < 0)  // hata verirse kendi durumunu temizler
+        return std::unexpected(checkout_failure());
 
     // Bundan sonraki bir hata merge'ü geri alır: depo MERGE durumunda kalsaydı her senkron repo_busy_state
     // ile dururdu.
@@ -563,6 +640,8 @@ std::expected<int, core::Error> integrate(git_repository* repo, const std::strin
     TRY_GIT(git_merge_analysis(&analysis, &preference, repo, heads, 1));
     if (analysis & GIT_MERGE_ANALYSIS_UP_TO_DATE)
         return 0;
+    if (auto stored = check_case_collisions(repo, their.get()); !stored)
+        return std::unexpected(stored.error());
     if (!(analysis & (GIT_MERGE_ANALYSIS_FASTFORWARD | GIT_MERGE_ANALYSIS_UNBORN)))
         return merge_diverged(repo, branch, their.get(), sync, copies, hooks);
 
@@ -587,7 +666,8 @@ std::expected<int, core::Error> integrate(git_repository* repo, const std::strin
     git_checkout_options checkout;
     TRY_GIT(git_checkout_options_init(&checkout, GIT_CHECKOUT_OPTIONS_VERSION));
     checkout.checkout_strategy = GIT_CHECKOUT_SAFE | GIT_CHECKOUT_DONT_OVERWRITE_IGNORED;
-    TRY_GIT(git_checkout_tree(repo, reinterpret_cast<const git_object*>(target.get()), &checkout));
+    if (git_checkout_tree(repo, reinterpret_cast<const git_object*>(target.get()), &checkout) < 0)
+        return std::unexpected(checkout_failure());
 
     // Dal ref'i karşılaştır-ve-değiştir ile taşınır; HEAD dala sembolik bağlı olduğundan onunla gelir.
     git_reference* moved = nullptr;

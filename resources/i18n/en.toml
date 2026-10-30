@@ -338,4 +338,5 @@ ssh_host_unknown = "The SSH host key of {host} is not known yet; run 'ssh -T git
 ssh_unavailable = "SSH is not available: 'ssh-keygen' was not found. Install OpenSSH or use an HTTPS remote with an access token"
 keychain_unavailable = "The system keychain is not available ({detail}); the token is never stored in a plain file. Set NOTEAPP_GIT_TOKEN instead"
 timeout = "The sync did not finish within {seconds} seconds and was stopped; it will be retried on the next sync"
+remote_invalid_paths = "The remote contains a file name this system cannot store: '{path}' (a reserved name, or two names that differ only in case). Rename it on the device where it was created, then sync again; your local notes were not changed"
 gitignore_not_regular = "'{path}' is a link or not a regular file; for safety it is neither read nor changed. Replace it with a regular file, then try again"
