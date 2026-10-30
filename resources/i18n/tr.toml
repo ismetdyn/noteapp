@@ -226,6 +226,7 @@ sync_ok = "✓ {time}"
 sync_error = "⚠ {detail}"
 replace_origin_title = "Uzak adres değiştirilsin mi?"
 replace_origin = "Değiştir"
+pdf_image_placeholder = "[görsel]"
 
 [cli]
 saved = "Kaydedildi: {path} ({type}, {how})"

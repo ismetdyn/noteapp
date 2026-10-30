@@ -226,6 +226,7 @@ sync_ok = "✓ {time}"
 sync_error = "⚠ {detail}"
 replace_origin_title = "Replace sync remote?"
 replace_origin = "Replace"
+pdf_image_placeholder = "[image]"
 
 [cli]
 saved = "Saved: {path} ({type}, {how})"
