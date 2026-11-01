@@ -450,6 +450,9 @@ LoadedConfig parse_config(std::string_view user_toml) {
         return loaded;
     }
     apply(*defaults, loaded.config, loaded.warnings);
+    // İzole ortam gerçek ~/notes'a yazmasın; kullanıcının açık değeri aşağıda yine kazanır.
+    if (auto isolated = isolated_notes_dir())
+        loaded.config.notes_dir = std::move(*isolated);
 
     // Kısmi uygulama yok: sözdizimi hatalı dosya bütünüyle yok sayılır (yarım yapılandırma şaşırtır).
     if (auto user = parse_table(user_toml, error))

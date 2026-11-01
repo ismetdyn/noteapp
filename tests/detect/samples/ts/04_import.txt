@@ -1,0 +1,7 @@
+import { Component } from '@angular/core';
+
+export interface Props {
+  title: string;
+}
+
+export const size: number = 3;

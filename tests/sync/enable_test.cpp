@@ -1,6 +1,7 @@
 #include "core/error.hpp"
 #include "core/file_stat.hpp"
 #include "core/i18n.hpp"
+#include "core/migration.hpp"
 #include "core/paths.hpp"
 #include "sync/lock.hpp"
 #include "sync/sync_service.hpp"
@@ -24,7 +25,7 @@ using namespace noteapp::sync_test;
 
 namespace {
 
-const std::string kGitignore = ".noteapp/\n.*.tmp\n";
+const std::string kGitignore = ".noteapp/\n.*.tmp\ngraph/*.aside-*\n";
 
 std::optional<std::string> origin_url(const fs::path& dir) {
     const Repository repo = open_repository(dir);
@@ -64,9 +65,9 @@ std::set<std::string> entries(const fs::path& dir) {
 
 // Uzak depoya, enable'dan bağımsız olarak (eski usul klon + senkron) bir not yollar.
 void seed_remote(const SyncFixture& fx) {
-    const fs::path seed = fx.make_clone(u8"tohum");
-    write_file(seed / u8"klasör" / u8"ilk not.md", "# İlk\nçğıöşü\n");
-    const auto synced = SyncService(SyncFixture::config_for(seed)).sync_now();
+    const Device seed(fx, "tohum");
+    seed.put("klasör/ilk not.md", "# İlk\nçğıöşü\n");
+    const auto synced = seed.sync();
     REQUIRE_MESSAGE(synced.has_value(), describe(synced));
 }
 
@@ -158,7 +159,7 @@ TEST_CASE("sync_now checks the remote before touching anything: unknown SSH host
 TEST_CASE("after replacing origin with an empty remote the next sync pushes the whole history there") {
     const SyncFixture fx;
     const fs::path a = fx.make_clone(u8"A notları");
-    write_file(a / "not.md", "x\n");
+    put_note("not.md", "x\n");
     SyncService sync_a(SyncFixture::config_for(a));
     REQUIRE(sync_a.sync_now().has_value());
     const fs::path other = fx.root() / u8"yeni uzak.git";
@@ -184,7 +185,7 @@ TEST_CASE(
         CAPTURE(utf8(dir));
         const auto result = enable(dir, utf8(fx.remote()));
         REQUIRE_MESSAGE(result.has_value(), describe(result));
-        CHECK(read_file(dir / u8"klasör" / u8"ilk not.md") == "# İlk\nçğıöşü\n");
+        CHECK(fs::is_directory(dir / "graph"));
         CHECK(ref_id(dir, "HEAD") == ref_id(fx.remote(), "refs/heads/main"));
         CHECK(origin_url(dir) == utf8(fx.remote()));
         CHECK(read_file(dir / ".gitignore") == kGitignore);
@@ -196,15 +197,15 @@ TEST_CASE(
 // bir kurulumdan): klasör boş sayılır ama SAFE checkout o dosyanın üzerine yazamazdı.
 TEST_CASE("enable row 3 with a leftover .gitignore: the clone keeps the remote's and adds the local lines") {
     const SyncFixture fx;
-    const fs::path a = fx.root() / u8"A notları";
-    write_file(a / "not.md", "A\n");
-    REQUIRE(enable(a, utf8(fx.remote())).has_value());  // uzak: .gitignore + not.md
+    const Device a(fx, "A notları", false);
+    a.put("not.md", "A\n");
+    REQUIRE(a.enable(utf8(fx.remote())).has_value());  // uzak: .gitignore + .gitattributes + günlük
     const fs::path b = fx.root() / u8"B notları";
     write_file(b / ".gitignore", "*.bak\r\n.noteapp/\n");
 
     const auto result = enable(b, utf8(fx.remote()));
     REQUIRE_MESSAGE(result.has_value(), describe(result));
-    CHECK(read_file(b / "not.md") == "A\n");
+    CHECK(fs::is_directory(b / "graph"));
     CHECK(read_file(b / ".gitignore") == kGitignore + "*.bak\n");
     CHECK(ref_id(b, "HEAD") == ref_id(fx.remote(), "refs/heads/main"));
 }
@@ -212,10 +213,7 @@ TEST_CASE("enable row 3 with a leftover .gitignore: the clone keeps the remote's
 TEST_CASE("a leftover hidden file the clone would overwrite fails the enable; it and .gitignore stay as they "
           "were") {
     const SyncFixture fx;
-    const fs::path a = fx.root() / u8"A notları";
-    write_file(a / "not.md", "A\n");
-    write_file(a / ".ayar", "uzak ayar\n");
-    REQUIRE(enable(a, utf8(fx.remote())).has_value());
+    commit_entries(fx.remote(), {{".ayar", "uzak ayar\n"}});
     const fs::path b = fx.root() / u8"B notları";
     write_file(b / ".ayar", "yerel ayar\n");
     write_file(b / ".gitignore", "*.bak\n");
@@ -227,32 +225,48 @@ TEST_CASE("a leftover hidden file the clone would overwrite fails the enable; it
     CHECK_FALSE(fs::exists(b / ".git"));
 }
 
-TEST_CASE("enable row 3, empty remote: init, a first commit with only .gitignore, push") {
+TEST_CASE("enable row 3, empty remote: init, a first commit with only the carrier setup, push") {
     const SyncFixture fx;
     const fs::path b = fx.root() / u8"B notları";
     const auto result = enable(b, utf8(fx.remote()));
     REQUIRE_MESSAGE(result.has_value(), describe(result));
     CHECK(commit_count(b) == 1);
-    CHECK(tree_files(fx.remote(), "refs/heads/main") == std::set<std::string>{".gitignore"});
+    CHECK(tree_files(fx.remote(), "refs/heads/main") ==
+          std::set<std::string>{".gitattributes", ".gitignore"});
     CHECK(ref_id(fx.remote(), "refs/heads/main") == ref_id(b, "HEAD"));
     CHECK(read_file(b / ".gitignore") == kGitignore);
 }
 
-TEST_CASE("enable row 4: notes and an empty remote: init, .gitignore, commit everything, push") {
+TEST_CASE("enable row 4: notes and an empty remote: init, carriers, this device's log, push") {
     const SyncFixture fx;
     const fs::path a = fx.root() / u8"A notları";
-    write_file(a / u8"ilk not.md", "bir\n");
-    write_file(a / u8"klasör" / u8"ikinci.md", "iki\r\n");
+    put_note("ilk not.md", "bir\n");
+    put_note("klasör/ikinci.md", "iki\r\n");
     write_file(a / ".noteapp" / "index", "dahili\n");  // .gitignore: .noteapp/
     write_file(a / u8".ilk not.md.tmp", "yarım\n");    // .gitignore: .*.tmp
 
     const auto result = enable(a, utf8(fx.remote()));
     REQUIRE_MESSAGE(result.has_value(), describe(result));
     CHECK(commit_count(a) == 1);
-    CHECK(tree_files(a, "HEAD") == std::set<std::string>{".gitignore", "ilk not.md", "klasör/ikinci.md"});
+    const auto files = tree_files(a, "HEAD");
+    CHECK(files.size() == 3);
+    CHECK(files.contains(".gitignore"));
+    CHECK(files.contains(".gitattributes"));
+    CHECK(std::ranges::count_if(files, [](const std::string& f) { return f.starts_with("graph/"); }) == 1);
     CHECK(ref_id(fx.remote(), "refs/heads/main") == ref_id(a, "HEAD"));
     CHECK(read_file(a / ".gitignore") == kGitignore);
-    CHECK(read_file(a / u8"klasör" / u8"ikinci.md") == "iki\r\n");
+}
+
+TEST_CASE("enable with old files waiting for migration sets up the repository but commits no plain file") {
+    const SyncFixture fx;
+    const fs::path a = fx.root() / u8"A notları";
+    write_file(a / "eski.md", "eski\n");
+    const auto result = enable(a, utf8(fx.remote()));
+    REQUIRE_MESSAGE(result.has_value(), describe(result));
+    CHECK(tree_files(a, "HEAD") == std::set<std::string>{".gitattributes", ".gitignore"});
+    CHECK(read_file(a / "eski.md") == "eski\n");
+    CHECK(SyncService(SyncFixture::config_for(a)).sync_now().error().code ==
+          noteapp::core::Error::Code::MigrationRequired);
 }
 
 TEST_CASE("enable row 5: notes on both sides is sync.both_non_empty and nothing changes") {
@@ -284,12 +298,13 @@ TEST_CASE("a non-hidden empty folder makes the notes folder non-empty") {
 TEST_CASE("an existing .gitignore keeps its content and only gets the missing lines") {
     const SyncFixture fx;
     const fs::path a = fx.root() / u8"A notları";
-    write_file(a / "not.md", "x\n");
+    put_note("not.md", "x\n");
     write_file(a / ".gitignore", "*.bak\r\n.noteapp/");  // CRLF, son satırda satır sonu yok
     const auto result = enable(a, utf8(fx.remote()));
     REQUIRE_MESSAGE(result.has_value(), describe(result));
-    CHECK(read_file(a / ".gitignore") == "*.bak\r\n.noteapp/\n.*.tmp\n");
-    CHECK(tree_files(a, "HEAD") == std::set<std::string>{".gitignore", "not.md"});
+    CHECK(read_file(a / ".gitignore") == "*.bak\r\n.noteapp/\n.*.tmp\ngraph/*.aside-*\n");
+    CHECK(tree_files(a, "HEAD").contains(".gitattributes"));
+    CHECK_FALSE(tree_files(a, "HEAD").contains("not.md"));
 }
 
 TEST_CASE("a remote without sync.branch is sync.remote_branch_missing and nothing is created") {
@@ -386,39 +401,6 @@ TEST_CASE("enable holds the sync lock: while a sync runs it is sync.busy and cre
     CHECK(entries(a) == std::set<std::string>{"not.md"});
 }
 
-TEST_CASE("acceptance 8: A enables an empty remote, B enables against it, then sync_now works both ways") {
-    const SyncFixture fx;
-    const fs::path a = fx.root() / u8"A notları";
-    const fs::path b = fx.root() / u8"B notları";
-    write_file(a / u8"ilk not.md", "A'nın notu\n");
-    SyncService sync_a(SyncFixture::config_for(a));
-    SyncService sync_b(SyncFixture::config_for(b));
-    const auto enabled_a = sync_a.enable(utf8(fx.remote()));
-    REQUIRE_MESSAGE(enabled_a.has_value(), describe(enabled_a));
-    const auto enabled_b = sync_b.enable(utf8(fx.remote()));
-    REQUIRE_MESSAGE(enabled_b.has_value(), describe(enabled_b));
-    CHECK(read_file(b / u8"ilk not.md") == "A'nın notu\n");
-
-    write_file(b / u8"klasör" / u8"B notu.md", "B'nin notu\n");
-    auto result_b = sync_b.sync_now();
-    REQUIRE_MESSAGE(result_b.has_value(), describe(result_b));
-    CHECK(result_b->committed == 1);
-    CHECK(result_b->pushed);
-
-    write_file(a / u8"ilk not.md", "A'nın notu, düzenlendi\n");
-    const auto result_a = sync_a.sync_now();
-    REQUIRE_MESSAGE(result_a.has_value(), describe(result_a));
-    CHECK(result_a->pulled == 1);
-    CHECK(result_a->pushed);
-    CHECK(read_file(a / u8"klasör" / u8"B notu.md") == "B'nin notu\n");
-
-    result_b = sync_b.sync_now();
-    REQUIRE_MESSAGE(result_b.has_value(), describe(result_b));
-    CHECK(read_file(b / u8"ilk not.md") == "A'nın notu, düzenlendi\n");
-    CHECK(ref_id(a, "HEAD") == ref_id(b, "HEAD"));
-    CHECK(result_b->conflict_copies.empty());
-}
-
 // Uzak depodaki bir bağ (120000) notes_dir dışını gösterebilir: gerçek bağ olarak çıkarılsaydı
 // `.gitignore -> ../gizli.txt`'nin hedefi okunup yeniden commit'lenirdi (sızıntı).
 namespace {
@@ -446,7 +428,10 @@ TEST_CASE("remote symlinks are checked out as plain files holding the link text;
     SyncService sync_b(SyncFixture::config_for(b));
     const auto enabled = sync_b.enable(utf8(fx.remote()));
     REQUIRE_MESSAGE(enabled.has_value(), describe(enabled));
-    write_file(b / "yeni.md", "yeni\n");
+    // Uzakta düz dosya var (bag.md, not.md): önce geçiş; bağ metni not olur, hedefi okunmaz.
+    const auto migrated = noteapp::core::migrate_legacy_notes(b, noteapp::core::data_dir());
+    REQUIRE_MESSAGE(migrated.has_value(), describe(migrated));
+    put_note("yeni.md", "yeni\n");
     const auto synced = sync_b.sync_now();
     REQUIRE_MESSAGE(synced.has_value(), describe(synced));
 
@@ -474,7 +459,7 @@ TEST_CASE("a repository opened for sync gets core.symlinks=false even if it was 
         REQUIRE_GIT(git_config_set_bool(config, "core.symlinks", 1));  // ör. Linux'ta git ile kurulmuş
         git_config_free(config);
     }
-    write_file(a / "not.md", "x\n");
+    put_note("not.md", "x\n");
     const auto first = SyncService(SyncFixture::config_for(a)).sync_now();
     REQUIRE_MESSAGE(first.has_value(), describe(first));
     commit_entries(fx.remote(), {{"bag.md", "../gizli.txt", GIT_FILEMODE_LINK}});
@@ -523,7 +508,7 @@ TEST_CASE("a clone of a remote path invalid on this OS is sync.remote_invalid_pa
 TEST_CASE("a sync pulling a path invalid on this OS is sync.remote_invalid_paths; nothing local is lost") {
     const SyncFixture fx;
     const fs::path a = fx.make_clone(u8"A notları");
-    write_file(a / "not.md", "x\n");
+    put_note("not.md", "x\n");
     SyncService sync_a(SyncFixture::config_for(a));
     REQUIRE(sync_a.sync_now().has_value());
     commit_entries(fx.remote(), {{"aux.md", "aygıt adı\n"}});
@@ -536,15 +521,15 @@ TEST_CASE("a sync pulling a path invalid on this OS is sync.remote_invalid_paths
         CHECK(ref_id(a, "HEAD") == head);
     }
     SUBCASE("merge") {
-        write_file(a / "yerel.md", "yerel\n");
+        put_note("yerel.md", "yerel\n");
         const auto result = sync_a.sync_now();
         REQUIRE_FALSE(result.has_value());
         CHECK(result.error().message_key == "sync.remote_invalid_paths");
-        CHECK(read_file(a / "yerel.md") == "yerel\n");
+        CHECK(note_body_here("yerel.md") == "yerel\n");
         CHECK(head_commit(a).parents == 1);
     }
     CHECK(git_repository_state(open_repository(a).get()) == GIT_REPOSITORY_STATE_NONE);
-    CHECK(read_file(a / "not.md") == "x\n");
+    CHECK(note_body_here("not.md") == "x\n");
     CHECK_FALSE(fs::exists(a / "aux.md"));
 }
 
@@ -558,7 +543,7 @@ TEST_CASE("two remote names that differ only in case are refused on a case-insen
         CAPTURE(row.lower);
         const SyncFixture fx;
         const fs::path a = fx.make_clone(u8"A notları");
-        write_file(a / "yerel.md", "yerel\n");
+        put_note("yerel.md", "yerel\n");
         SyncService sync_a(SyncFixture::config_for(a));
         REQUIRE(sync_a.sync_now().has_value());
         commit_entries(fx.remote(), {{row.upper, "büyük\n"}, {row.lower, "küçük\n"}});
@@ -576,7 +561,7 @@ TEST_CASE("two remote names that differ only in case are refused on a case-insen
         REQUIRE_FALSE(pulled.has_value());
         CHECK(pulled.error().message_key == "sync.remote_invalid_paths");
         CHECK(ref_id(a, "HEAD") == head);
-        CHECK(entries(a) == std::set<std::string>{".git", "yerel.md"});
+        CHECK(entries(a) == std::set<std::string>{".git", ".gitattributes", ".gitignore", "graph"});
     }
 }
 #endif

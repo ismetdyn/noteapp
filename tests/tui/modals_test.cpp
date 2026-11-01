@@ -1,5 +1,6 @@
 #include "core/i18n.hpp"
 #include "core/note_store.hpp"
+#include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 #include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
@@ -213,8 +214,8 @@ TEST_CASE("move_note moves to a new folder and type") {
     const auto moved = tui::move_note(store, path("work/plan.md"), {"archive/2026", "plan-v2", "txt"});
     REQUIRE(moved.has_value());
     CHECK(moved->string() == "archive/2026/plan-v2.txt");
-    CHECK(test::slurp(notes.path() / "archive" / "2026" / "plan-v2.txt") == "içerik");
-    CHECK_FALSE(std::filesystem::exists(notes.path() / "work" / "plan.md"));
+    CHECK(test::note_body(notes.path(), "archive/2026/plan-v2.txt") == "içerik");
+    CHECK_FALSE(test::note_exists(notes.path(), "work/plan.md"));
 }
 
 TEST_CASE("move_note onto an existing note fails and leaves both files") {
@@ -226,8 +227,8 @@ TEST_CASE("move_note onto an existing note fails and leaves both files") {
     const auto moved = tui::move_note(store, path("a.md"), {"", "b", "md"});
     REQUIRE_FALSE(moved.has_value());
     CHECK(moved.error().code == core::Error::Code::AlreadyExists);
-    CHECK(test::slurp(notes.path() / "a.md") == "A");
-    CHECK(test::slurp(notes.path() / "b.md") == "B");
+    CHECK(test::note_body(notes.path(), "a.md") == "A");
+    CHECK(test::note_body(notes.path(), "b.md") == "B");
 }
 
 TEST_CASE("move_note to the same path is a no-op") {
@@ -237,7 +238,7 @@ TEST_CASE("move_note to the same path is a no-op") {
     const auto moved = tui::move_note(store, path("w/a.md"), {"w", "a", "md"});
     REQUIRE(moved.has_value());
     CHECK(*moved == path("w/a.md"));
-    CHECK(test::slurp(notes.path() / "w" / "a.md") == "A");
+    CHECK(test::note_body(notes.path(), "w/a.md") == "A");
 }
 
 TEST_CASE("delete removes only the confirmed note") {
@@ -246,6 +247,6 @@ TEST_CASE("delete removes only the confirmed note") {
     REQUIRE(store.create({"", "a", "md", "A"}).has_value());
     REQUIRE(store.create({"", "b", "md", "B"}).has_value());
     REQUIRE(store.remove(path("a.md")).has_value());
-    CHECK_FALSE(std::filesystem::exists(notes.path() / "a.md"));
-    CHECK(test::slurp(notes.path() / "b.md") == "B");
+    CHECK_FALSE(test::note_exists(notes.path(), "a.md"));
+    CHECK(test::note_body(notes.path(), "b.md") == "B");
 }

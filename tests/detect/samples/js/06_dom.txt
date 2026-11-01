@@ -1,0 +1,5 @@
+document.addEventListener('click', (event) => {
+  let target = event.target;
+  if (target === null) return;
+  window.alert('ok');
+});

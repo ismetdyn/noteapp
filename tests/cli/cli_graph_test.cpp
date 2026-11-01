@@ -1,0 +1,603 @@
+// Geçiş ve dışa aktarma uçtan uca (G6): gerçek `note` ikilisi, eski düzen klasörü.
+#include "core/note_store.hpp"
+#include "graph/graph.hpp"
+#include "support/cli_sandbox.hpp"
+#include "support/note_seed.hpp"
+
+#include <doctest/doctest.h>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <string>
+
+using namespace noteapp::test;
+namespace fs = std::filesystem;
+
+namespace {
+
+void write_plain(const fs::path& file, std::string_view bytes) {
+    fs::create_directories(file.parent_path());
+    std::ofstream(file, std::ios::binary) << bytes;
+}
+
+// Dizindeki düz dosyalar: göreli yol → bayt.
+std::map<std::string, std::string> tree_of(const fs::path& dir) {
+    std::map<std::string, std::string> files;
+    for (const auto& entry : fs::recursive_directory_iterator(dir))
+        if (entry.is_regular_file())
+            files[entry.path().lexically_relative(dir).generic_string()] = slurp(entry.path());
+    return files;
+}
+
+std::string exact_bytes() {
+    std::string bytes = "\xEF\xBB\xBF"
+                        "bir\r\niki\n";
+    bytes += '\0';
+    bytes += "\xFF\xFE son \x80";
+    return bytes;
+}
+
+void seed_old_layout(const Sandbox& box) {
+    write_plain(box.notes() / "plan.md", "plan\n");
+    write_plain(box.notes() / "work" / "crlf.txt", "a\r\nb\r\n");
+    write_plain(box.notes() / "work" / "ham.bin", exact_bytes());
+    write_plain(box.notes() / "work" / "alt" / "uzantisiz", "uzantisiz\n");
+    write_plain(box.notes() / "bos" / ".keep", "");
+    write_plain(box.notes() / ".trash" / "eski.md", "çöp\n");
+    write_plain(box.notes() / ".git" / "config", "[core]\n");  // not değil: gizli
+    write_plain(box.notes() / ".gizli", "not değil");
+}
+
+}  // namespace
+
+TEST_CASE("old-layout notes and no graph: every write is refused with a clear message, reads say why") {
+    const Sandbox box("en");
+    seed_old_layout(box);
+
+    const auto add = box.run({"x"});
+    CHECK(add.exit_code != 0);
+    CHECK(add.err.find("note graph migrate") != std::string::npos);
+    CHECK_FALSE(box.has_any_note());
+
+    const auto list = box.run({"ls"});
+    CHECK(list.err.find("note graph migrate") != std::string::npos);
+    CHECK(tree_of(box.notes()).at("plan.md") == "plan\n");
+}
+
+TEST_CASE("migrate imports byte for byte, backs up first, keeps old files and tells how to remove them") {
+    const Sandbox box("en");
+    seed_old_layout(box);
+    const auto before = tree_of(box.notes());
+
+    const auto migrated = box.run({"graph", "migrate"});
+    REQUIRE_MESSAGE(migrated.exit_code == 0, migrated.err);
+    CHECK(migrated.out.find("Migrated 5 notes") != std::string::npos);
+    CHECK(migrated.out.find("NOT deleted") != std::string::npos);
+    CHECK(tree_of(box.notes()) == before);  // eski veriye dokunulmadı
+
+    CHECK(box.body("work/ham.bin") == exact_bytes());
+    CHECK(box.body("work/crlf.txt") == "a\r\nb\r\n");
+    CHECK(box.body("work/alt/uzantisiz") == "uzantisiz\n");
+    CHECK(note_in_trash(box.data(), "eski.md"));
+    CHECK(folder_exists(box.data(), "bos"));
+
+    const noteapp::core::NoteStore store(box.data());
+    for (const noteapp::core::NoteMeta& meta : store.list_meta())
+        CHECK(meta.origin == "unknown");
+
+    // Yedek, baytlarıyla.
+    bool found_backup = false;
+    for (const auto& entry : fs::directory_iterator(box.data()))
+        if (entry.path().filename().string().starts_with("migration-backup-")) {
+            found_backup = true;
+            CHECK(slurp(entry.path() / "notes" / "work" / "ham.bin") == exact_bytes());
+            CHECK(slurp(entry.path() / "trash" / "eski.md") == "çöp\n");
+        }
+    CHECK(found_backup);
+
+    // Kapı açıldı.
+    const auto add = box.run({"-n", "yeni", "metin"});
+    CHECK_MESSAGE(add.exit_code == 0, add.err);
+}
+
+TEST_CASE("migrate twice changes nothing: same notes, no new operations") {
+    const Sandbox box("en");
+    seed_old_layout(box);
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    const auto first = box.run({"graph", "export", "--format", "jsonl"});
+    REQUIRE(first.exit_code == 0);
+    const auto again = box.run({"graph", "migrate"});
+    REQUIRE_MESSAGE(again.exit_code == 0, again.err);
+    CHECK(again.out.find("Migrated 0 notes (5 already there)") != std::string::npos);
+    CHECK(box.run({"graph", "export", "--format", "jsonl"}).out == first.out);
+}
+
+TEST_CASE("a file over 60 MiB is skipped by name: original untouched, gate open, exit 0") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "iyi.md", "iyi\n");
+    const fs::path huge = box.notes() / "dev.bin";
+    // resize_file MinGW + Wine'da çöküyor (mingw-crt checkfreespace): gerçekten yazılır.
+    write_plain(huge, std::string(std::size_t{61} * 1024U * 1024U, 'x'));
+
+    const auto migrated = box.run({"graph", "migrate"});
+    CHECK_MESSAGE(migrated.exit_code == 0, migrated.err);
+    CHECK(migrated.err.find("dev.bin") != std::string::npos);
+    CHECK(fs::file_size(huge) == std::uintmax_t{61} * 1024U * 1024U);
+    CHECK(box.body("iyi.md") == "iyi\n");
+    CHECK(box.run({"-n", "n", "metin"}).exit_code == 0);
+}
+
+TEST_CASE("link in the old tree is never followed and is reported") {
+    const Sandbox box("en");
+    const TempDir outside;
+    write_plain(outside.path() / "gizli.md", "gizli");
+    write_plain(box.notes() / "iyi.md", "iyi\n");
+    REQUIRE(make_dir_link(outside.path(), box.notes() / "bag"));
+
+    const auto migrated = box.run({"graph", "migrate"});
+    REQUIRE_MESSAGE(migrated.exit_code == 0, migrated.err);
+    CHECK(migrated.err.find("bag") != std::string::npos);
+    CHECK_FALSE(box.exists("bag/gizli.md"));
+    CHECK(box.body("iyi.md") == "iyi\n");
+}
+
+TEST_CASE("note export --all output is byte-identical to the originals") {
+    const Sandbox box("en");
+    seed_old_layout(box);
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    const TempDir out;
+    const fs::path target = out.path() / "cikti";
+    const auto exported = box.run({"export", "--all", utf8(target)});
+    REQUIRE_MESSAGE(exported.exit_code == 0, exported.err);
+
+    auto expected = tree_of(box.notes());
+    expected.erase(".git/config");
+    expected.erase(".gizli");
+    expected.erase("bos/.keep");
+    CHECK(tree_of(target) == expected);
+    CHECK(fs::is_directory(target / "bos"));
+}
+
+TEST_CASE("note export --all never overwrites and never goes through a link") {
+    const Sandbox box("en");
+    box.put("var.md", "yeni");
+    box.put("bagli/not.md", "içeride");
+    const TempDir out;
+    const TempDir outside;
+    const fs::path target = out.path() / "cikti";
+    write_plain(target / "var.md", "eski");
+    REQUIRE(make_dir_link(outside.path(), target / "bagli"));
+
+    const auto exported = box.run({"export", "--all", utf8(target)});
+    CHECK(exported.exit_code == 1);
+    CHECK(exported.err.find("var.md") != std::string::npos);
+    CHECK(exported.err.find("bagli") != std::string::npos);
+    CHECK(slurp(target / "var.md") == "eski");
+    CHECK(fs::is_empty(outside.path()));
+}
+
+TEST_CASE("a hostile name from a remote device cannot escape note export --all") {
+    const Sandbox box("en");
+    box.put("gercek.md", "x");
+    {
+        auto raw = noteapp::graph::Graph::open(box.data() / "graph.db");
+        REQUIRE(raw.has_value());
+        auto txn = raw->write();
+        REQUIRE(txn.has_value());
+        for (const char* name : {"../../kacis", ".ssh/id", "CON", "a/../../b"}) {
+            const auto id = noteapp::graph::new_node_id();
+            REQUIRE(txn->put_node(id).has_value());
+            REQUIRE(txn->add_label(id, "Note").has_value());
+            REQUIRE(txn->set_property(id, "name", noteapp::graph::Value{std::string(name)}).has_value());
+            REQUIRE(txn->set_property(id, "type", noteapp::graph::Value{std::string("md")}).has_value());
+            REQUIRE(txn->set_property(id, "body", noteapp::graph::Value{noteapp::graph::Bytes{"kötü"}})
+                        .has_value());
+        }
+        REQUIRE(txn->commit().has_value());
+    }
+    const TempDir out;
+    const fs::path target = out.path() / "a" / "b" / "cikti";
+    const auto exported = box.run({"export", "--all", utf8(target)});
+    CHECK(exported.exit_code == 1);  // ulaşılamayan notlar raporlanır
+    const auto tree = tree_of(out.path());
+    CHECK(tree.size() == 1);
+    CHECK(tree.contains("a/b/cikti/gercek.md"));
+}
+
+TEST_CASE(
+    "graph export and import rebuild the same graph elsewhere, exact bytes, and repeat without writing") {
+    const Sandbox box("en");
+    box.put("work/ham.bin", exact_bytes());
+    box.put("hedef.md", std::string(1000, 'x'));
+    box.put("work/kaynak.md", "bak [[hedef]]\n");
+    noteapp::core::NoteStore source(box.data());
+    REQUIRE(source.create_folder("bos").has_value());
+    const TempDir out;
+    const fs::path dump = out.path() / "dump.jsonl";
+    const auto exported = box.run({"graph", "export", "--format", "jsonl", "-o", utf8(dump)});
+    REQUIRE_MESSAGE(exported.exit_code == 0, exported.err);
+
+    const Sandbox other("en");
+    const auto imported = other.run({"graph", "import", utf8(dump)});
+    REQUIRE_MESSAGE(imported.exit_code == 0, imported.err);
+    CHECK(other.body("work/ham.bin") == exact_bytes());
+    CHECK(other.body("hedef.md") == std::string(1000, 'x'));
+    CHECK(folder_exists(other.data(), "bos"));
+    const auto links = other.run({"query", "--json", "MATCH (a:Note)-[:LINKS_TO]->(b:Note) RETURN b.name"});
+    CHECK(links.out.find("hedef") != std::string::npos);
+
+    const auto again = other.run({"graph", "export", "--format", "jsonl"});
+    const auto second = other.run({"graph", "import", utf8(dump)});
+    REQUIRE(second.exit_code == 0);
+    CHECK(other.run({"graph", "export", "--format", "jsonl"}).out == again.out);
+    CHECK(slurp(dump) == again.out);
+}
+
+// Değişiklik senkronla yayılır: sessiz üzerine yazma bütün cihazlardaki notu değiştirirdi.
+TEST_CASE("graph import refuses to change an existing id without --overwrite, names it and keeps the note") {
+    const Sandbox box("en");
+    box.put("not.md", "ilk\n");
+    const TempDir out;
+    const fs::path dump = out.path() / "dump.jsonl";
+    REQUIRE(box.run({"graph", "export", "--format", "jsonl", "-o", utf8(dump)}).exit_code == 0);
+    {
+        noteapp::core::NoteStore store(box.data());
+        const auto path = *noteapp::core::NotePath::parse("not.md");
+        const auto current = store.read(path);
+        REQUIRE(current.has_value());
+        REQUIRE(store.write(path, "degisti\n", current->revision).has_value());
+    }
+
+    const auto refused = box.run({"graph", "import", utf8(dump)});
+    CHECK(refused.exit_code == 1);
+    CHECK(refused.err.find("Refused") != std::string::npos);
+    CHECK(box.body("not.md") == "degisti\n");
+
+    const auto overwritten = box.run({"graph", "import", "--overwrite", utf8(dump)});
+    CHECK_MESSAGE(overwritten.exit_code == 0, overwritten.err);
+    CHECK(box.body("not.md") == "ilk\n");
+    CHECK(box.run({"graph", "import", "--yok", utf8(dump)}).exit_code == 2);
+}
+
+TEST_CASE("graph import refuses labels, edge types and property keys the note view would not accept") {
+    const Sandbox box("en");
+    const TempDir out;
+    const fs::path dump = out.path() / "d.jsonl";
+    const std::string header = "{\"k\":\"noteapp-graph\",\"v\":1}\n";
+    const std::string id = "00000000000000000000000000000001";
+    const std::string node = "{\"k\":\"node\",\"id\":\"" + id + "\",\"labels\":[],\"props\":{}}\n";
+    SUBCASE("label") {
+        write_plain(dump,
+                    header + "{\"k\":\"node\",\"id\":\"" + id + "\",\"labels\":[\"../x\"],\"props\":{}}\n");
+    }
+    SUBCASE("key") {
+        write_plain(dump, header + "{\"k\":\"node\",\"id\":\"" + id +
+                              "\",\"labels\":[],\"props\":{\"a/b\":{\"s\":\"x\"}}}\n");
+    }
+    SUBCASE("edge type") {
+        write_plain(dump, header + node +
+                              "{\"k\":\"edge\",\"id\":\"00000000000000000000000000000002\",\"src\":\"" + id +
+                              "\",\"type\":\"a/b\",\"dst\":\"" + id + "\",\"props\":{}}\n");
+    }
+    const auto refused = box.run({"graph", "import", utf8(dump)});
+    CHECK(refused.exit_code == 1);
+    CHECK(refused.err.find("Line ") != std::string::npos);
+}
+
+#ifndef _WIN32
+TEST_CASE("graph export -o creates a private new file, follows no link and overwrites nothing") {
+    const Sandbox box("en");
+    box.put("not.md", "gizli\n");
+    const TempDir out;
+    const fs::path dump = out.path() / "dump.jsonl";
+    REQUIRE(box.run({"graph", "export", "--format", "jsonl", "-o", utf8(dump)}).exit_code == 0);
+    CHECK((fs::status(dump).permissions() & fs::perms::mask) ==
+          (fs::perms::owner_read | fs::perms::owner_write));
+
+    const std::string first = slurp(dump);
+    CHECK(box.run({"graph", "export", "--format", "jsonl", "-o", utf8(dump)}).exit_code != 0);
+    CHECK(slurp(dump) == first);
+
+    const fs::path victim = out.path() / "kurban.txt";
+    write_plain(victim, "dokunma");
+    fs::create_symlink(victim, out.path() / "bag");
+    CHECK(box.run({"graph", "export", "--format", "jsonl", "-o", utf8(out.path() / "bag")}).exit_code != 0);
+    CHECK(slurp(victim) == "dokunma");
+}
+
+TEST_CASE("export --all writes private files in private new directories and leaves an existing root alone") {
+    const Sandbox box("en");
+    box.put("alt/not.md", "gizli\n");
+    const TempDir out;
+    const fs::path fresh = out.path() / "yeni" / "cikti";
+    REQUIRE(box.run({"export", "--all", utf8(fresh)}).exit_code == 0);
+    const auto mode = [](const fs::path& path) { return fs::status(path).permissions() & fs::perms::mask; };
+    CHECK(mode(out.path() / "yeni") == fs::perms::owner_all);
+    CHECK(mode(fresh) == fs::perms::owner_all);
+    CHECK(mode(fresh / "alt") == fs::perms::owner_all);
+    CHECK(mode(fresh / "alt" / "not.md") == (fs::perms::owner_read | fs::perms::owner_write));
+
+    const fs::path existing = out.path() / "var";
+    fs::create_directories(existing);
+    fs::permissions(existing, static_cast<fs::perms>(0755), fs::perm_options::replace);
+    REQUIRE(box.run({"export", "--all", utf8(existing)}).exit_code == 0);
+    CHECK(mode(existing) == static_cast<fs::perms>(0755));
+    CHECK(mode(existing / "alt") == fs::perms::owner_all);
+}
+#endif
+
+TEST_CASE("graph import reports a bad line with its number and leaves the store usable") {
+    const Sandbox box("en");
+    const TempDir out;
+    const fs::path dump = out.path() / "bad.jsonl";
+    write_plain(
+        dump,
+        "{\"k\":\"noteapp-graph\",\"v\":1}\n{\"k\":\"node\",\"id\":\"zz\",\"labels\":[],\"props\":{}}\n");
+    const auto refused = box.run({"graph", "import", utf8(dump)});
+    CHECK(refused.exit_code == 1);
+    CHECK(refused.err.find("Line 2") != std::string::npos);
+    write_plain(dump, "bu json değil\n");
+    CHECK(box.run({"graph", "import", utf8(dump)}).exit_code == 1);
+    CHECK(box.run({"-n", "n", "metin"}).exit_code == 0);
+}
+
+TEST_CASE("graph usage errors exit 2") {
+    const Sandbox box("en");
+    CHECK(box.run({"graph"}).exit_code == 2);
+    CHECK(box.run({"graph", "yok"}).exit_code == 2);
+    CHECK(box.run({"graph", "export"}).exit_code == 2);
+    CHECK(box.run({"graph", "import"}).exit_code == 2);
+    CHECK(box.run({"export", "--all"}).exit_code == 2);
+    CHECK(box.run({"export", "--all", "d", "--pdf", "x"}).exit_code == 2);
+}
+
+TEST_CASE("note export --all also writes the trash under .trash; old trash comes back byte for byte") {
+    const Sandbox box("en");
+    seed_old_layout(box);
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    const TempDir out;
+    const fs::path target = out.path() / "cikti";
+    const auto exported = box.run({"export", "--all", utf8(target)});
+    REQUIRE_MESSAGE(exported.exit_code == 0, exported.err);
+    CHECK(slurp(target / ".trash" / "eski.md") == "çöp\n");
+}
+
+TEST_CASE("note export --all lists unreachable notes, exits non-zero; graph export keeps their bytes") {
+    const Sandbox box("en");
+    box.put("gercek.md", "x");
+    {
+        auto raw = noteapp::graph::Graph::open(box.data() / "graph.db");
+        REQUIRE(raw.has_value());
+        auto txn = raw->write();
+        REQUIRE(txn.has_value());
+        const auto id = noteapp::graph::new_node_id();
+        REQUIRE(txn->put_node(id).has_value());
+        REQUIRE(txn->add_label(id, "Note").has_value());
+        REQUIRE(txn->set_property(id, "name", noteapp::graph::Value{std::string("CON")}).has_value());
+        REQUIRE(txn->set_property(id, "type", noteapp::graph::Value{std::string("md")}).has_value());
+        REQUIRE(txn->set_property(id, "body", noteapp::graph::Value{noteapp::graph::Bytes{"kurtarilacak"}})
+                    .has_value());
+        REQUIRE(txn->commit().has_value());
+    }
+    const TempDir out;
+    const auto exported = box.run({"export", "--all", utf8(out.path() / "cikti")});
+    CHECK(exported.exit_code == 1);
+    CHECK(exported.err.find("CON.md") != std::string::npos);
+    CHECK(exported.err.find("note graph export") != std::string::npos);
+    const auto dump = box.run({"graph", "export", "--format", "jsonl"});
+    REQUIRE(dump.exit_code == 0);
+    CHECK(dump.out.find("a3VydGFyaWxhY2Fr") != std::string::npos);  // base64("kurtarilacak")
+}
+
+TEST_CASE("graph import: oversized line, huge array, bad base64, edge without a node are refused with a line "
+          "number") {
+    const Sandbox box("en");
+    const TempDir out;
+    const fs::path dump = out.path() / "d.jsonl";
+    const std::string header = "{\"k\":\"noteapp-graph\",\"v\":1}\n";
+    const std::string node =
+        "{\"k\":\"node\",\"id\":\"00000000000000000000000000000001\",\"labels\":[],\"props\":{}}\n";
+
+    SUBCASE("line over the limit") {
+        std::string big = header;
+        big.append(std::size_t{129} * 1024U * 1024U, ' ');
+        write_plain(dump, big + "\n");
+    }
+    SUBCASE("array with millions of items") {
+        std::string big = header + "{\"k\":\"node\",\"labels\":[";
+        for (int i = 0; i < 4000000; ++i)
+            big += "1,";
+        write_plain(dump, big + "1]}\n");
+    }
+    SUBCASE("bad base64") {
+        write_plain(dump, header + "{\"k\":\"node\",\"id\":\"00000000000000000000000000000001\",\"labels\":[]"
+                                   ",\"props\":{\"x\":{\"b\":\"@@@@\"}}}\n");
+    }
+    SUBCASE("edge to a missing node") {
+        write_plain(dump, header + node +
+                              "{\"k\":\"edge\",\"id\":\"00000000000000000000000000000002\",\"src\":"
+                              "\"00000000000000000000000000000001\",\"type\":\"T\",\"dst\":"
+                              "\"00000000000000000000000000000009\",\"props\":{}}\n");
+    }
+    const auto refused = box.run({"graph", "import", utf8(dump)});
+    CHECK(refused.exit_code == 1);
+    CHECK(refused.err.find("Line ") != std::string::npos);
+}
+
+TEST_CASE("the status file cannot put escape sequences on the terminal") {
+    const Sandbox box("en");
+    const fs::path status = box.notes().parent_path() / "state" / "sync-status.toml";
+    write_plain(status,
+                "pushed_seq = 0\n[last_error]\nkey = \"sync.push_rejected\"\n[last_error.args]\nbranch = "
+                "\"main\"\ndetail = \"\\u001b]52;c;ZXZpbA==\\u0007kirli\"\n"
+                "[[log_issues]]\nkey = \"sync.push_rejected\"\n[log_issues.args]\nbranch = \"main\"\ndetail "
+                "= \"\\u001b[31mkirli2\"\n");
+    const auto shown = box.run({"sync", "status"});
+    CHECK(shown.out.find("kirli") != std::string::npos);
+    CHECK(shown.out.find('\x1B') == std::string::npos);
+    CHECK(shown.out.find('\x07') == std::string::npos);
+}
+
+#ifdef __linux__
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+namespace {
+
+// stdout ve stderr gerçek terminal: isatty dalı böyle sınanır.
+std::string run_in_pty(const std::vector<std::string>& args) {
+    const int master = posix_openpt(O_RDWR | O_NOCTTY);
+    REQUIRE(master >= 0);
+    REQUIRE(grantpt(master) == 0);
+    REQUIRE(unlockpt(master) == 0);
+    const std::string slave = ptsname(master);
+    const pid_t child = fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        setsid();
+        const int fd = open(slave.c_str(), O_RDWR);
+        dup2(fd, 0);
+        dup2(fd, 1);
+        dup2(fd, 2);
+        std::vector<char*> argv;
+        std::string exe = NOTEAPP_NOTE_EXE;
+        argv.push_back(exe.data());
+        std::vector<std::string> copy = args;
+        for (std::string& arg : copy)
+            argv.push_back(arg.data());
+        argv.push_back(nullptr);
+        execv(exe.c_str(), argv.data());
+        _exit(127);
+    }
+    std::string output;
+    char buffer[4096];
+    while (true) {
+        const ssize_t got = read(master, buffer, sizeof buffer);
+        if (got <= 0)
+            break;
+        output.append(buffer, static_cast<std::size_t>(got));
+    }
+    close(master);
+    int status = 0;
+    waitpid(child, &status, 0);
+    return output;
+}
+
+}  // namespace
+
+TEST_CASE("names from sync are sanitized on a terminal and stay byte-exact in a pipe") {
+    const Sandbox box("en");
+    const std::string evil = "kotu\xC2\x9D"
+                             "52;c;ZXZpbA==\xC2\x9C.md";
+    box.put(evil, "içerik\n");
+
+    for (const std::vector<std::string>& args :
+         {std::vector<std::string>{"ls"}, std::vector<std::string>{"show", "kotu"}}) {
+        const std::string terminal = run_in_pty(args);
+        CHECK(terminal.find("52;c;ZXZpbA==") != std::string::npos);
+        CHECK(terminal.find("\xC2\x9D") == std::string::npos);
+    }
+    CHECK(box.run({"ls"}).out.find(evil) != std::string::npos);  // boru: bayt bayt
+}
+#endif
+
+#ifdef __linux__
+#include <grp.h>
+#include <sys/stat.h>
+
+namespace {
+
+struct Unprivileged {
+    int exit_code = -1;
+    std::string err;
+};
+
+// chmod 000 kökte işe yaramaz (konteyner): dosya gerçekten okunamasın diye süreç yetkisiz koşar.
+Unprivileged run_unprivileged(const Sandbox& box, const std::vector<std::string>& args) {
+    constexpr uid_t kNobody = 65534;
+    const fs::path home = box.notes().parent_path();
+    if (geteuid() == 0) {
+        REQUIRE(chown(home.c_str(), kNobody, kNobody) == 0);
+        for (const auto& entry : fs::recursive_directory_iterator(home))
+            REQUIRE(lchown(entry.path().c_str(), kNobody, kNobody) == 0);
+    }
+    const fs::path err_file = fs::temp_directory_path() / ("noteapp-err-" + std::to_string(getpid()));
+    const pid_t child = fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        if (geteuid() == 0 && (setgroups(0, nullptr) != 0 || setgid(kNobody) != 0 || setuid(kNobody) != 0))
+            _exit(126);
+        const int fd = open(err_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        dup2(fd, 2);
+        std::vector<char*> argv;
+        std::string exe = NOTEAPP_NOTE_EXE;
+        argv.push_back(exe.data());
+        std::vector<std::string> copy = args;
+        for (std::string& arg : copy)
+            argv.push_back(arg.data());
+        argv.push_back(nullptr);
+        execv(exe.c_str(), argv.data());
+        _exit(127);
+    }
+    int status = 0;
+    waitpid(child, &status, 0);
+    Unprivileged result{WIFEXITED(status) ? WEXITSTATUS(status) : -1, slurp(err_file)};
+    fs::remove(err_file);
+    return result;
+}
+
+}  // namespace
+
+TEST_CASE(
+    "an unreadable file stops migration by default; --skip-failed names it, keeps it and opens the gate") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "iyi.md", "iyi\n");
+    const fs::path bad = box.notes() / "okunamaz.md";
+    write_plain(bad, "x");
+    fs::permissions(bad, fs::perms::none, fs::perm_options::replace);
+
+    const auto failed = run_unprivileged(box, {"graph", "migrate"});
+    CHECK_MESSAGE(failed.exit_code == 1, failed.err);
+    CHECK(failed.err.find("NOT migrated: okunamaz.md") != std::string::npos);
+    CHECK(run_unprivileged(box, {"-n", "n", "metin"}).exit_code != 0);  // kapı kapalı
+
+    const auto skipped = run_unprivileged(box, {"graph", "migrate", "--skip-failed"});
+    CHECK_MESSAGE(skipped.exit_code == 0, skipped.err);
+    CHECK(skipped.err.find("NOT migrated: okunamaz.md") != std::string::npos);
+    CHECK(fs::exists(bad));
+    CHECK(run_unprivileged(box, {"-n", "n", "metin"}).exit_code == 0);
+    CHECK(box.run({"graph", "migrate", "--yok"}).exit_code == 2);
+}
+
+TEST_CASE("a file too deep for the store stops migration; --skip-failed names it, keeps it, opens the gate") {
+    const Sandbox box("en");
+    std::string deep = "d";
+    for (int i = 1; i < 129; ++i)
+        deep += "/d";
+    deep += "/derin.md";
+    write_plain(box.notes() / deep, "derin\n");
+
+    const auto failed = box.run({"graph", "migrate"});
+    CHECK_MESSAGE(failed.exit_code == 1, failed.err);
+    CHECK(failed.err.find("NOT migrated: " + deep) != std::string::npos);
+    CHECK(failed.err.find("too deep") != std::string::npos);
+
+    const auto skipped = box.run({"graph", "migrate", "--skip-failed"});
+    CHECK_MESSAGE(skipped.exit_code == 0, skipped.err);
+    CHECK(fs::exists(box.notes() / deep));
+    CHECK(box.run({"-n", "n", "metin"}).exit_code == 0);
+}
+
+TEST_CASE("an unreadable file left in place: fixing it and migrating again finishes the import") {
+    const Sandbox box("en");
+    const fs::path bad = box.notes() / "okunamaz.md";
+    write_plain(bad, "x\n");
+    fs::permissions(bad, fs::perms::none, fs::perm_options::replace);
+    CHECK(run_unprivileged(box, {"graph", "migrate"}).exit_code == 1);
+    fs::permissions(bad, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
+    const auto done = run_unprivileged(box, {"graph", "migrate"});
+    CHECK_MESSAGE(done.exit_code == 0, done.err);
+    CHECK(box.body("okunamaz.md") == "x\n");
+}
+#endif

@@ -24,7 +24,7 @@ int main(int argc, char* argv[]) {
     const auto start = std::chrono::steady_clock::now();
     const core::LoadedConfig loaded = core::load_config();
     core::init_i18n(loaded.config.language);
-    const core::NoteStore store(loaded.config.notes_dir, loaded.config.tuning.slug_max_length);
+    const core::NoteStore store = core::NoteStore::for_config(loaded.config);
     tui::TuiState state;
     state.set_notes(store.list());
     tui::PreviewCache preview;

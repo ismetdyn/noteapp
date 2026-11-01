@@ -10,6 +10,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <vector>
 
 using namespace noteapp::detect;
 namespace fs = std::filesystem;
@@ -17,6 +18,10 @@ namespace fs = std::filesystem;
 namespace {
 
 const Options kOpts{"md", 0.5, 64 * 1024};
+
+const std::vector<std::string> kAllTypes{
+    "c",        "cpp", "css",        "csv", "dockerfile", "env", "go",  "html", "ini", "java", "js",  "json",
+    "makefile", "md",  "properties", "py",  "rs",         "sh",  "sql", "toml", "ts",  "txt",  "xml", "yaml"};
 
 std::string read_file(const fs::path& p) {
     std::ifstream in(p, std::ios::binary);
@@ -58,7 +63,7 @@ TEST_CASE("corpus: top-1 accuracy is at least 90 percent") {
     std::ostringstream table;
     for (const auto& [type, t] : tally) {
         char line[64];
-        std::snprintf(line, sizeof line, "%-5s %2d/%-2d %5.1f%%\n", type.c_str(), t.hit, t.total,
+        std::snprintf(line, sizeof line, "%-10s %2d/%-2d %5.1f%%\n", type.c_str(), t.hit, t.total,
                       100.0 * t.hit / t.total);
         table << line;
     }
@@ -66,8 +71,55 @@ TEST_CASE("corpus: top-1 accuracy is at least 90 percent") {
     MESSAGE("accuracy per type:\n"
             << table.str() << "overall " << hit << "/" << total << " = " << overall * 100 << "%\n"
             << (misses.str().empty() ? "" : "misses:\n") << misses.str());
-    CHECK(tally.size() == 8);
+    CHECK(tally.size() == kAllTypes.size());
+    for (const auto& name : kAllTypes) {
+        CHECK_MESSAGE(tally[name].total >= 5, name);  // SPEC-detect kabul 1: tip başına en az 5 örnek
+        // Tek bir tip genel ortalamanın arkasına saklanmasın.
+        CHECK_MESSAGE(tally[name].hit * 100 >= tally[name].total * 80, name);
+    }
     CHECK(overall >= 0.90);
+}
+
+TEST_CASE("must-pass: env, properties, ini and shell are told apart") {
+    CHECK(type_of("DB_HOST=localhost\nDB_PORT=5432\n") == "env");
+    CHECK(type_of("# prod\nexport API_URL=https://a\nTIMEOUT=3\n") == "env");
+    CHECK(type_of("server.port=8080\nserver.host=a\n") == "properties");
+    CHECK(type_of("server.port: 8080\nserver.host: a\n") == "properties");
+    CHECK(type_of("[db]\nhost=a\nport=1\n") == "ini");
+    CHECK(type_of("A=1\necho \"$A\"\n") == "sh");
+    CHECK(type_of("name=a\ntarget=$name\ncp \"$target\" /tmp\n") == "sh");
+}
+
+TEST_CASE("must-pass: prose with colons or equals stays prose") {
+    CHECK(type_of("Note: the meeting moved to Friday because the room was taken.\n"
+                  "Reminder: bring the printed budget with you.\n") == "txt");
+    CHECK(type_of("Not: yarın toplantı var\nDurum: devam ediyor\n") == "txt");
+    CHECK(type_of("Formül şöyle: a = b + c demek.\nYani toplam = fiyat kere adet olur.\n") == "txt");
+}
+
+TEST_CASE("must-pass: yaml and toml are told apart from ini and properties") {
+    CHECK(type_of("services:\n  web:\n    image: a\n") == "yaml");
+    CHECK(type_of("---\nname: a\n") == "yaml");
+    CHECK(type_of("[package]\nname = \"a\"\nversion = \"1\"\n") == "toml");
+    CHECK(type_of("title = \"a\"\ncount = 3\n") == "toml");
+}
+
+TEST_CASE("must-pass: markup and code families") {
+    CHECK(type_of("<?xml version=\"1.0\"?>\n<a/>\n") == "xml");
+    CHECK(type_of("<!doctype html>\n<p>a</p>\n") == "html");
+    CHECK(type_of("body {\n  color: red;\n}\n") == "css");
+    CHECK(type_of("function f() {\n  return 1;\n}\n") == "js");
+    CHECK(type_of("interface A {\n  id: number;\n}\n") == "ts");
+    CHECK(type_of("SELECT a\nFROM b;\n") == "sql");
+    CHECK(type_of("#include <stdio.h>\nint main(void) { return 0; }\n") == "c");
+    CHECK(type_of("package main\n\nfunc main() {\n}\n") == "go");
+    CHECK(type_of("fn main() {\n    println!(\"a\");\n}\n") == "rs");
+    CHECK(type_of("FROM a:1\nRUN b\n") == "dockerfile");
+    CHECK(type_of("all: a\n\tcc a\n") == "makefile");
+}
+
+TEST_CASE("structural decisions keep the shebang first") {
+    CHECK(type_of("#!/bin/sh\nA=1\nB=2\n") == "sh");
 }
 
 TEST_CASE("must-pass: markdown with a fenced cpp block is md") {
@@ -124,11 +176,11 @@ TEST_CASE("single line or empty input falls back to default_type") {
     CHECK(suggest("x", Options{"md", 0.5, 1024}).type == "md");
 }
 
-TEST_CASE("ranked holds all 8 types sorted by score and confidence is in [0,1]") {
+TEST_CASE("ranked holds all types sorted by score and confidence is in [0,1]") {
     for (const char* text : {"#include <a>\nint main() {}\n", "a,b\n1,2\n", "düz yazı\nikinci satır\n",
                              "# Başlık\n- madde\n- madde\n", "x\n"}) {
         const auto s = suggest(text, kOpts);
-        REQUIRE(s.ranked.size() == 8);
+        REQUIRE(s.ranked.size() == kAllTypes.size());
         CHECK(std::is_sorted(s.ranked.begin(), s.ranked.end(),
                              [](const Candidate& a, const Candidate& b) { return a.score > b.score; }));
         CHECK(s.confidence >= 0.0);
@@ -137,7 +189,7 @@ TEST_CASE("ranked holds all 8 types sorted by score and confidence is in [0,1]")
         for (const auto& c : s.ranked)
             names.push_back(c.type);
         std::sort(names.begin(), names.end());
-        CHECK(names == std::vector<std::string>{"cpp", "csv", "java", "json", "md", "py", "sh", "txt"});
+        CHECK(names == kAllTypes);
     }
 }
 
@@ -158,6 +210,6 @@ TEST_CASE("max_scan_bytes never splits a UTF-8 sequence or crashes") {
     const std::string text = "çğış çğış çğış\nöüşçı öüşçı\nsatır üç\n";
     for (std::size_t n = 0; n <= text.size() + 2; ++n) {
         const auto s = suggest(text, Options{"md", 0.5, n});
-        CHECK(s.ranked.size() == 8);
+        CHECK(s.ranked.size() == kAllTypes.size());
     }
 }

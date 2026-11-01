@@ -1,0 +1,4 @@
+# app
+app.name=notes
+! legacy comment style
+app.version=1.2.3

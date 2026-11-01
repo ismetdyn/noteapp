@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
-# Fedora'da derleme + tüm testler (Docker). Kullanım: scripts/check-fedora.sh
-# Kaynak salt-okunur bağlanır; derleme dizini ve FetchContent önbelleği adlı bir Docker biriminde kalır.
+# Fedora'da derleme + tüm testler (Docker, yoksa rootless Podman). Kullanım: scripts/check-fedora.sh
+# Kaynak salt-okunur bağlanır; derleme dizini ve FetchContent önbelleği adlı bir konteyner biriminde kalır.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-image=noteapp-fedora
-docker build -t "$image" -f docker/fedora.Containerfile docker
+source scripts/container-engine.sh
 
-# Git Bash yolları Windows biçimine çevirip docker argümanlarını bozmasın.
+image=noteapp-fedora
+"$engine" build -t "$image" -f docker/fedora.Containerfile docker
+
+# Git Bash yolları Windows biçimine çevirip konteyner argümanlarını bozmasın.
 export MSYS_NO_PATHCONV=1
 source_dir="$(pwd -W 2>/dev/null || pwd)"
 
-docker run --rm \
-    -v "$source_dir:/src:ro" \
+# :z SELinux etiketi: Fedora'da etiketsiz bağlanan kaynak konteynerde okunamaz.
+"$engine" run --rm \
+    -v "$source_dir:/src:ro,z" \
     -v noteapp-fedora-build:/build \
-    -e QT_QPA_PLATFORM=offscreen \
     "$image" bash -c 'cmake --preset linux-gcc-debug -B /build \
         && cmake --build /build \
         && ctest --test-dir /build --output-on-failure'

@@ -2,6 +2,7 @@
 // Debug süreleri anlamsızdır ve günlük ctest'i yavaşlatırdı. Gürültülü makinede (virüs tarayıcı) tek ölçüm
 // yanıltır; eşikler birkaç koşunun medyanına uygulanır.
 #include "core/note_store.hpp"
+#include "core/paths.hpp"
 #include "core/process.hpp"
 #include "detect/detect.hpp"
 #include "search/content_index.hpp"
@@ -23,7 +24,12 @@
 #include <vector>
 
 #ifdef NOTEAPP_PERF_GUI
+#include "core/i18n.hpp"
+#include "gui/gui_state.hpp"
 #include "gui/note_list_model.hpp"
+#include "gui/view.hpp"
+
+#include <imgui.h>
 #endif
 
 using namespace noteapp;
@@ -57,11 +63,6 @@ std::vector<core::NoteInfo> generated_notes(const std::string& stem) {
     return notes;
 }
 
-void write_file(const fs::path& file, const std::string& content) {
-    fs::create_directories(file.parent_path());
-    std::ofstream(file, std::ios::binary) << content;
-}
-
 std::string render_text(const tui::TuiState& state) {
     constexpr int kWidth = 120;
     constexpr int kHeight = 40;
@@ -84,7 +85,7 @@ TEST_CASE("quick add: note \"x\" writes the note within 200 ms (median of 7)") {
         CHECK(code == 0);
     }
     MESSAGE("quick add: median " << median(samples) << " ms, first " << samples.front() << " ms");
-    CHECK(std::distance(fs::directory_iterator(box.notes()), fs::directory_iterator()) == 7);
+    CHECK(core::NoteStore(box.data()).list().size() == 7);
     CHECK(median(samples) <= 200.0);
 }
 
@@ -94,9 +95,13 @@ TEST_CASE("quick add: note \"x\" writes the note within 200 ms (median of 7)") {
 // kadar duvar saatine uygulanır.
 TEST_CASE("TUI startup proxy: fresh process with 5000 notes on disk within 500 ms (median of 5)") {
     const test::Sandbox box;
+    std::vector<core::ImportedNote> seeded;
     for (int i = 0; i < kNotes; ++i)
-        write_file(box.notes() / ("folder" + std::to_string(i % 40)) / ("note-" + std::to_string(i) + ".md"),
-                   "# note " + std::to_string(i) + "\n");
+        seeded.push_back(core::ImportedNote{
+            core::NotePath::parse("folder" + std::to_string(i % 40) + "/note-" + std::to_string(i) + ".md")
+                .value(),
+            "# note " + std::to_string(i) + "\n"});
+    test::bulk_seed(box.data(), seeded);
     const fs::path result = box.notes().parent_path() / "probe.txt";
 
     std::vector<double> wall, inside;
@@ -126,12 +131,14 @@ TEST_CASE("TUI: per-keystroke filter with 5000 notes within 50 ms") {
         tui::TuiState state;
         state.set_notes(generated_notes("note-"));
         CHECK(render_text(state).find("5000/5000") != std::string::npos);
+        state.handle(tui::Key::Char, "/");  // yazı yalnız Arama odağında süzer
         double worst = 0;
         for (const char c : std::string("note-42"))
             worst = std::max(worst, time_ms([&] {
                                  state.handle(tui::Key::Char, std::string(1, c));
                                  (void)render_text(state);
                              }));
+        CHECK(state.query() == "note-42");  // ölçüm gerçekten süzdü
         CHECK_FALSE(state.rows().empty());
         worst_per_run.push_back(worst);
     }
@@ -141,7 +148,7 @@ TEST_CASE("TUI: per-keystroke filter with 5000 notes within 50 ms") {
 
 #ifdef NOTEAPP_PERF_GUI
 // SPEC.md §10/3 + SPEC-gui kabul 7: arama kutusunda tuş başına liste güncellemesi ≤ 50 ms; görünür satırların
-// data() çağrıları (liste çizimi) dahil.
+// verisi (liste çizimi) dahil.
 TEST_CASE("GUI: per-keystroke model update with 5000 notes within 50 ms") {
     std::vector<double> worst_per_run;
     for (int run = 0; run < kRuns; ++run) {
@@ -153,15 +160,55 @@ TEST_CASE("GUI: per-keystroke model update with 5000 notes within 50 ms") {
             query.push_back(c);
             worst = std::max(worst, time_ms([&] {
                                  model.set_query(query);
-                                 for (int row = 0; row < std::min(model.rowCount(), 40); ++row)
-                                     (void)model.index(row).data(gui::NoteListModel::HighlightRole);
+                                 for (int row = 0; row < std::min(model.row_count(), 40); ++row) {
+                                     (void)model.display(row);
+                                     (void)model.highlights(row);
+                                 }
                              }));
         }
-        CHECK(model.rowCount() > 0);
+        CHECK(model.row_count() > 0);
         worst_per_run.push_back(worst);
     }
     MESSAGE("GUI keystroke (model + visible rows): median of worst " << median(worst_per_run) << " ms");
     CHECK(median(worst_per_run) <= 50.0);
+}
+
+// Plan riski: InputTextMultiline tamponu her karede işler. Tuş gecikmesi = karakter + kare (yazılımsal çizim,
+// en kötü durum). Sınır SPEC §10/3'ün tuş başına 50 ms'i; aşılırsa kullanıcıya sorulur, gizli çözüm eklenmez.
+TEST_CASE("GUI: typing in a 1 MB note stays within 50 ms per keystroke") {
+    const test::TempDir home;
+    const test::ScopedEnv home_env("NOTEAPP_HOME", test::utf8(home.path()));
+    core::init_i18n("en");
+    core::Config config = core::load_config().config;
+    config.notes_dir = home.path() / "notes";
+    fs::create_directories(config.notes_dir);
+    std::string note;
+    constexpr std::size_t kNoteBytes = 1024 * 1024;
+    while (note.size() < kNoteBytes)
+        note += "satır çğıİöşü lorem ipsum dolor sit amet consectetur\n";
+    test::upsert_note(core::data_dir(), "big.txt", note);
+
+    gui::GuiState state(config);
+    auto view = gui::View::create(state);
+    REQUIRE(view.has_value());
+    state.request_focus(gui::FocusRequest::Editor);
+    for (int frame = 0; frame < 3; ++frame)
+        (*view)->draw_frame();
+    REQUIRE((*view)->editor_active());
+
+    std::vector<double> samples;
+    for (int key = 0; key < 50; ++key) {
+        samples.push_back(time_ms([&] {
+            ImGui::GetIO().AddInputCharactersUTF8("x");
+            (*view)->draw_frame();
+        }));
+    }
+    CHECK(state.dirty());
+    const double idle_frame = time_ms([&] { (*view)->draw_frame(); });
+    MESSAGE("GUI 1 MB note: keystroke median " << median(samples) << " ms, worst "
+                                               << *std::ranges::max_element(samples) << " ms, plain frame "
+                                               << idle_frame << " ms");
+    CHECK(median(samples) <= 50.0);
 }
 #endif
 
@@ -180,14 +227,18 @@ TEST_CASE("content search: 5000 notes of ~5 KB, warm search within 100 ms") {
     }
     words[0] = "proje";
     words[1] = "bütçe";
+    std::vector<core::ImportedNote> seeded;
     for (int n = 0; n < kNotes; ++n) {
         std::string text;
         while (text.size() < 5000) {
             text += words[rng() % words.size()];
             text += (rng() % 12 == 0) ? '\n' : ' ';
         }
-        write_file(dir.path() / ("d" + std::to_string(n % 50)) / ("n" + std::to_string(n) + ".md"), text);
+        seeded.push_back(core::ImportedNote{
+            core::NotePath::parse("d" + std::to_string(n % 50) + "/n" + std::to_string(n) + ".md").value(),
+            std::move(text)});
     }
+    test::bulk_seed(dir.path(), seeded);
 
     search::ContentIndex index{store, 10 * 1024 * 1024};
     const double cold = time_ms([&] { index.refresh(); });

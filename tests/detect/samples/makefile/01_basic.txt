@@ -1,0 +1,4 @@
+all: app
+
+app: main.o
+	cc -o app main.o

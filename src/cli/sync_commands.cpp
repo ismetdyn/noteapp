@@ -1,6 +1,7 @@
 // note sync … (SPEC-cli "Komutlar"/"Senkron", SPEC-sync). Senkron hataları çıkış 4.
 #include "cli/commands.hpp"
 #include "cli/confirm.hpp"
+#include "cli/highlight.hpp"
 #include "core/error.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
@@ -44,7 +45,7 @@ using Values = std::vector<std::pair<std::string, std::string>>;
 constexpr std::chrono::milliseconds kBusyRetryInterval{500};
 
 int sync_fail(const core::Error& error) {
-    std::cerr << core::format_error(error) << '\n';
+    std::cerr << sanitize_for_terminal(core::format_error(error)) << '\n';
     return kExitSync;
 }
 
@@ -75,12 +76,13 @@ std::string local_time(std::chrono::system_clock::time_point when) {
 int save_values(core::Config& config, const Values& values) {
     for (const auto& [key, value] : values) {
         if (const auto set = core::set_config_value(config, key, value); !set) {
-            std::cerr << core::format_error(set.error()) << '\n' << core::tr("cli.config_not_saved") << '\n';
+            std::cerr << sanitize_for_terminal(core::format_error(set.error())) << '\n'
+                      << core::tr("cli.config_not_saved") << '\n';
             return kExitUsage;
         }
     }
     if (const auto saved = core::save_config(config); !saved) {
-        std::cerr << core::format_error(saved.error()) << '\n';
+        std::cerr << sanitize_for_terminal(core::format_error(saved.error())) << '\n';
         return kExitInternal;
     }
     return kExitOk;
@@ -175,7 +177,10 @@ int sync_foreground(const core::Config& config) {
                            {"conflicts", std::to_string(result->conflict_copies.size())}})
               << '\n';
     for (const core::NotePath& copy : result->conflict_copies)
-        std::cout << core::tr("cli.sync_conflict_copy", {{"path", copy.string()}}) << '\n';
+        std::cout << sanitize_for_terminal(core::tr("cli.sync_conflict_copy", {{"path", copy.string()}}))
+                  << '\n';
+    for (const core::Error& issue : result->log_issues)
+        std::cerr << sanitize_for_terminal(core::format_error(issue)) << '\n';
     return kExitOk;
 }
 
@@ -217,8 +222,16 @@ int sync_status(const core::Config& config) {
     else
         std::cout << core::tr("cli.sync_status_never") << '\n';
     if (status.last_error)
-        std::cout << core::tr("cli.sync_status_last_error",
-                              {{"error", core::format_error(*status.last_error)}})
+        std::cout << sanitize_for_terminal(core::tr("cli.sync_status_last_error",
+                                                    {{"error", core::format_error(*status.last_error)}}))
+                  << '\n';
+    for (const core::Error& issue : status.log_issues)
+        std::cout << sanitize_for_terminal(core::format_error(issue)) << '\n';
+    for (const sync::DeviceLogHead& head : status.heads)
+        std::cout << sanitize_for_terminal(
+                         core::tr("cli.sync_status_head", {{"device", head.device},
+                                                           {"log", std::to_string(head.log_seq)},
+                                                           {"applied", std::to_string(head.applied_seq)}}))
                   << '\n';
     return kExitOk;
 }
@@ -226,7 +239,7 @@ int sync_status(const core::Config& config) {
 // Uzak adresin onayı gerekiyor (origin farklı): terminalde sorulur, değilse --replace yönlendirmesi.
 std::expected<void, core::Error> confirm_and_replace(sync::SyncService& service, const std::string& remote,
                                                      const core::Error& mismatch, bool& declined) {
-    std::cerr << core::format_error(mismatch) << '\n';
+    std::cerr << sanitize_for_terminal(core::format_error(mismatch)) << '\n';
     if (!stdin_is_tty()) {
         std::cerr << core::tr("cli.sync_replace_hint", {{"remote", sync::without_userinfo(remote)}}) << '\n';
         declined = true;
@@ -290,7 +303,7 @@ int sync_toggle(bool on) {
         if (const auto enabled = sync::SyncService(*fresh).enable(fresh->sync.remote); !enabled) {
             if (enabled.error().message_key != "sync.remote_mismatch")
                 return sync_fail(enabled.error());
-            std::cerr << core::format_error(enabled.error()) << '\n'
+            std::cerr << sanitize_for_terminal(core::format_error(enabled.error())) << '\n'
                       << core::tr("cli.sync_replace_hint",
                                   {{"remote", sync::without_userinfo(fresh->sync.remote)}})
                       << '\n';

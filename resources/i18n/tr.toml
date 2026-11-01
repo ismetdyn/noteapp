@@ -15,6 +15,11 @@ process_not_found = "Program bulunamadı: {program}"
 process_spawn_failed = "'{program}' başlatılamadı: {reason}"
 process_unsafe_argument = "Argüman, cmd.exe için güvensiz karakterler içerdiği için reddedildi: {argument}"
 process_empty_command = "Komut boş"
+query_invalid = "{key} için geçersiz arama değeri '{value}': {reason}"
+migration_required = "'note graph migrate' çalıştırın: {path} içindeki notlar eski düzende, o zamana dek hiçbir şey kaydedilmez"
+graph_too_new = "Bu veritabanı daha yeni bir sürümle yazılmış, açılamıyor: {path}"
+graph_corrupt = "Not veritabanı bozuk ya da noteapp veritabanı değil: {path}"
+edit_kept = "Düzenlemeniz nota KAYDEDİLMEDİ. {file} dosyasında duruyor ({detail})"
 
 [reason]
 empty = "yol boş"
@@ -50,6 +55,17 @@ must_be_table = "bir tablo olmalı"
 must_not_be_empty = "boş olmamalı"
 must_be_language = "auto, tr veya en olmalı"
 remote_has_credentials = "kullanıcı adı ya da token içermemeli; token'ı 'note sync login' ile kaydedin"
+must_be_sort_field = "name, size, updated ya da created olmalı; başına '-' gelebilir"
+must_be_size_bound = ">1mb ya da <10kb biçiminde olmalı (birimler: b, kb, mb, gb)"
+must_be_age_or_date = "7d, >2026-10-01 ya da <2026-10-01 biçiminde olmalı"
+must_be_sync_state = "synced, modified, new, conflict_copy ya da sync_off olmalı"
+must_be_folder = "not klasörü içinde geçerli bir klasör olmalı"
+too_large = "60 MiB sınırından büyük"
+unreadable = "okunamıyor"
+verify_failed = "kaydedilen baytlar farklı"
+exists = "orada zaten bir dosya var"
+invalid_folder = "klasör adı geçersiz ya da çok derin"
+too_many_collisions = "bu adı çok fazla not paylaşıyor"
 
 [config]
 unknown_key = "Bilinmeyen ayar '{key}' yok sayıldı"
@@ -60,11 +76,49 @@ defaults_unusable = "Yerleşik varsayılanlar kullanılamıyor"
 remote_credentials_stripped = "'{key}' içindeki kullanıcı adı ya da token yok sayıldı; dosyadan silin, token için 'note sync login' kullanın"
 
 [tui]
-query_placeholder = "sorgu"
 mode_name = "[ad]"
 mode_content = "[içerik]"
 sync_off = "senkron kapalı"
-key_hints = "Enter aç  Tab içerik  ^O yeni  ^R taşı  ^D sil  ^S senkron  F1 yardım  F2 ayar  Esc çık"
+status_lines = "{count} satır"
+frame_list = "LİSTE"
+frame_review = "İNCELEME"
+frame_edit = "DÜZENLE"
+key_hints_list = "T çöp  Space detay  o sırala  v sütun  f ara  ? yardım  Enter düzenle  → önizle  / süz  n yeni  a ekle  d çöpe at  u geri al  F2 ad değiştir  PgDn sayfa  c kopya  q çık  D kalıcı sil  E harici  r taşı  s senkron  Alt+→ detay  I tümü  < > genişlik  z yakınlaştır  Tab içerik  , ayar"
+key_hints_search = "Enter tut  Esc kapat  ↑↓ seç  Tab içerik  F1 yardım  ^O yeni  ^R taşı  ^D çöp  ^S senkron  F9 ayar"
+key_hints_preview = "← liste  e düzenle  ↑↓ kaydır  / bul  n/N sonraki  c kopya  q çık  g/G baş/son  J/K 5 satır  ^U/^D yarım sayfa  F2 ad değiştir  z yakınlaştır  < > genişlik  E harici  F1 yardım  , ayar"
+key_hints_editor = "Ctrl+S kaydet  Ctrl+Q çık  Ctrl+F bul  Ctrl+Z geri al  F1 yardım  Ctrl+Y yinele  ^X kes  ^C kopyala  ^V yapıştır  F9 ayar"
+key_hints_editor_readonly = "Ctrl+Q çık  ↑↓ kaydır  Ctrl+F bul  ^C kopyala  F1 yardım"
+find_label = "Bul:"
+note_find_hints = "Enter tut  ↑↓ sonraki  Esc temizle"
+editor_find_hints = "Enter/F3 sonraki  ^P önceki  Esc kapat"
+new_note_header = "Yeni not"
+new_note_label = "Farklı kaydet:"
+new_note_hints = "Enter kaydet  Esc geri  klasör/ad.uzantı"
+editor_not_found = "Eşleşme yok"
+editor_saved = "Kaydedildi"
+editor_no_changes = "Kaydedilecek değişiklik yok"
+editor_save_failed = "Kaydedilemedi, metniniz burada duruyor: {detail}"
+editor_saved_copy = "Kopya olarak kaydedildi: {path}"
+editor_saved_new = "Yeni not olarak kaydedildi: {path}"
+editor_deleted_on_disk = "Diskte silindi: ^S yeni not olarak kaydeder"
+editor_changed_on_disk = "Diskte değişti: ^S ne yapılacağını sorar"
+editor_readonly_binary = "Salt okunur: ikili dosya"
+editor_readonly_utf8 = "Salt okunur: geçerli UTF-8 değil"
+editor_readonly_nul = "Salt okunur: NUL baytı içeriyor"
+editor_readonly_large = "Salt okunur: {limit} MiB'den büyük, başı gösteriliyor"
+editor_untitled = "yeni not"
+editor_leave_title = "Kaydedilmemiş değişiklik"
+editor_leave_question = "'{path}' kaydedilsin mi?"
+editor_choice_save = "Kaydet"
+editor_conflict_title = "Diskte değişti"
+editor_conflict_question = "'{path}' siz düzenlerken diskte değişti."
+editor_choice_copy = "Benimkini kopya olarak kaydet"
+editor_choice_load = "Disktekini yükle (benimki gider)"
+editor_choice_overwrite = "Benimkini disktekinin üstüne yaz"
+editor_exit_saved = "Kaydedilmemiş metin kaydedildi: {path}"
+editor_exit_kept = "'{path}' kaydedilemedi ({detail}). Metniniz şurada: {temp}"
+editor_exit_lost = "'{path}' kaydedilemedi, kopya da alınamadı: {detail}"
+new_row_hints = "ad yaz  Enter oluştur ve düzenle  Esc vazgeç"
 too_small = "Pencere çok küçük (en az 60x15)"
 binary_preview = "(ikili dosya - önizleme yok)"
 not_yet = "Henüz kullanılamıyor"
@@ -88,23 +142,110 @@ deleted = "Silindi: {path}"
 help_title = "Tuşlar"
 help_hints = "↑/↓ PgUp/PgDn kaydır  Esc/F1/q kapat"
 help_body = """
-yazı          sorguya göre notları süzer
-↑ ↓  ^P ^N    listede gezinir
-PgUp PgDn     önizlemeyi kaydırır
-Tab           ad / içerik aramasını değiştirir
-Enter         notu açar (eşleşme yoksa yeni not)
-^O            boş yeni not
-^R            taşı / yeniden adlandır / tip değiştir
-^D            sil (önce sorar)
-^S            şimdi senkronla
-F2            ayarlar
-F1            bu yardım
-Esc           sorguyu temizler, boşsa çıkar
-^C            çık
+Liste
+/             ara: yazdıkça notları süz
+↑ ↓  k j      gezin, sağ panel izler
+g G           ilk / son not
+→ l           önizle
+Enter e       sağ panelde düzenle
+E             harici editörde aç ($EDITOR)
+F2            yol ve adı değiştir (altta)
+n ^O          yeni not: tam ekran editör
+a             yeni not: ad listenin başında
+c             notun tamamını kopyala
+f             ad ve içerikte ara, argümanlar da
+d ^D          çöpe at, sormaz  u geri al
+D             kalıcı sil (önce sorar)
+T             çöp kutusu (aşağıda)
+Space i I     satır ayrıntısı (aşağıda)
+PgUp PgDn     listede sayfa sayfa gez
+o  v          sıralama, sağ sütun (aşağıda)
+r             taşı / ad ya da tip değiştir
+s             şimdi senkronla
+Tab           ad / içerik araması
+< >           panel genişliği  z yakınlaştır
+?             bu yardım
+q             çık
+Esc           süzgeci temizle
+Arama (girdi altta)
+yazı          listeyi süz
+↑ ↓  ^P ^N    seçimi gez
+Enter         seçimi tut (eşleşme yoksa yeni not)
+Tab           ad / içerik araması
+Esc           kapat, süzgeç kalır
+Liste ve arama
+^P ^N         seçimi gez
+PgUp PgDn     sayfa sayfa gez
+^O yeni  ^R taşı  ^D çöpe at  ^S senkron
+Çöp kutusu (T ya da üstte çöp: N tıkla)
+u             seçili notu geri getir
+D             kalıcı sil (önce sorar)
+E             tümünü boşalt (önce sorar)
+↑ ↓  k j      gez, sağda içerik salt okunur
+PgUp PgDn     sağ paneli kaydır
+Esc q T       listeye dön
+Satır ayrıntısı
+▸ ▾           kapalı / açık; işarete tıkla
+Space i       seçili satırı aç / kapat
+I             tüm satırları aç / kapat
+Alt+→ Alt+←   aç / kapat
+              boyut, tarih, senkron, kaynak
+Sıralama ve sütun
+o             n ad  u güncelleme  c oluşturma
+              s boyut  r ters  Esc vazgeç
+v             sağ sütunu sırayla değiştir
+Süzme argümanları (/ ve f)
+sort:-size    büyükten küçüğe (- ters çevirir)
+type:md       tipe göre
+in:work/      klasörde
+size:>1mb     boyuta göre
+updated:7d    son 7 günde değişen
+sync:modified senkron durumuna göre
+Önizleme (salt okunur)
+↑ ↓           kaydır; basılı tutunca hızlanır
+k j  J K      1 satır, 5 satır
+^U ^D         yarım sayfa
+PgUp PgDn     sayfa sayfa kaydır
+F2            yol ve adı değiştir
+g G           baş / son
+c             notun tamamını kopyala
+e Enter       üstteki satırdan düzenle
+E             harici editör ($EDITOR)
+/             notta bul (I = ı = i)
+n N           sonraki / önceki eşleşme
+← h Esc       listeye dön (Esc önce aramayı siler)
+q             çık
+< >           panel genişliği  z yakınlaştır
+Editör (sağ panel): her tuş metne gider
+^S kaydet  ^Q kapat (kaydedilmediyse sorar)
+Esc aramayı kapatır, seçimi kaldırır
+^Z geri  ^Y yinele
+^Space tamamlama listesi  Tab/→ öneriyi al
+Yazım denetimi: md, txt; PATH'te hunspell gerekir
+^F bul: Enter/F3 sonraki  ^P önceki  Esc kapat
+^X kes  ^C kopyala  ^V yapıştır
+Seçim yoksa satır kesilir/kopyalanır
+Shift+ok seç  Home End
+^Home ^End  PgUp PgDn  F1 F9
+^C ^X ^V sistem panosunu kullanır:
+wl-copy, xclip/xsel, pbcopy, Win32;
+kopyada yedek OSC 52 (75 KB).
+Terminalden yapıştırma yazar gibi gelir.
+Fare
+Bölücüyü sürükle: panel genişliği
+Tekerlek: işaretçinin altını kaydırır
+Satıra ya da panele tıkla
+▸ ▾ tıkla: satır ayrıntısı
+Üstte çöp: N tıkla: çöp kutusu
+REVIEW'da sürükle: seç ve kopyala
+Shift+sürükle terminal metnini seçer
+Her yerde
+F1 yardım  F9 ayarlar (Liste, önizleme: ,)
+^C çık (editörde kopyalar)
 """
 settings_title = "Ayarlar"
 settings_language = "Dil"
-settings_notes_dir = "Not klasörü"
+settings_notes_dir = "Senkron ve geçiş klasörü"
 settings_editor = "Editör"
 settings_default_type = "Varsayılan tip"
 settings_default_folder = "Varsayılan klasör"
@@ -126,8 +267,56 @@ token_none = "yok"
 settings_token_hints = "Enter token kaydet  ^D token sil  ↑/↓ gez  Esc iptal"
 settings_confirm_replace = "origin '{current}' yerine '{remote}' kullanılsın mı?"
 replace_yes = "Değiştir"
-sync_disabled_hint = "Senkron kapalı: F2 ile açın"
+sync_disabled_hint = "Senkron kapalı: F9 ile açın"
 sync_exiting = "Son senkron tamamlanıyor..."
+completion_title = "Tamamla"
+completion_hints = "↑↓ gez  Enter ekle  Esc kapat"
+mode_global = "[tümü]"
+mode_trash = "[çöp]"
+global_label = "Tümü>"
+key_hints_global = "Enter aç  Esc kapat  ↑↓ seç  F1 yardım"
+key_hints_trash = "u geri getir  D kalıcı sil  E boşalt  Esc/q geri  ↑↓ seç  ? yardım  PgUp PgDn kaydır  Alt+→ detay  z yakınlaştır"
+trash_title = "ÇÖP KUTUSU"
+totals = "Toplam {total} not"
+totals_matches = " · {count} eşleşme"
+totals_page = " · sayfa {page}/{pages}"
+rename_label = "Yeni yol:"
+rename_hints = "Enter kaydet  Esc vazgeç"
+trash_indicator = "çöp: {count}"
+confirm_empty_trash = "Çöpteki {count} not kalıcı silinsin mi? Bu işlem geri alınamaz."
+empty_trash_title = "Çöpü boşalt"
+trash_emptied = "Çöp boşaltıldı"
+sort_menu = "Sırala: n ad  u güncelleme  c oluşturma  s boyut  r ters  Esc vazgeç"
+sort_name = "ad"
+sort_updated = "güncelleme"
+sort_created = "oluşturma"
+sort_size = "boyut"
+query_error = "{column}: {detail}"
+meta_unknown = "bilinmiyor"
+meta_size = "boyut: {value}"
+meta_updated = "güncelleme: {value}"
+meta_created = "oluşturma: {value}"
+meta_sync = "senkron: {value}"
+meta_origin = "kaynak: {value}"
+sync_state_synced = "senkron"
+sync_state_modified = "değişti"
+sync_state_new = "yeni"
+sync_state_conflict = "çakışma kopyası"
+trashed = "Çöpe atıldı: {path}  (u geri alır)"
+restored = "Geri alındı: {path}"
+nothing_to_restore = "Bu oturumda geri alınacak not yok"
+confirm_purge = "'{path}' çöpten kalıcı silinsin mi?"
+clipboard_copied = "{size} panoya kopyalandı"
+clipboard_copied_terminal = "{size} terminal panosuna gönderildi (OSC 52)"
+clipboard_too_large = "{size} terminal panosu için fazla büyük (en çok {limit}); yalnız notes içinde kaldı"
+clipboard_binary = "Kopyalanmadı: metin NUL baytı içeriyor"
+copy_refused_binary = "Kopyalanmadı: ikili not"
+copy_refused_utf8 = "Kopyalanmadı: not geçerli UTF-8 değil"
+paste_no_tool = "Pano aracı bulunamadı: Ctrl+Shift+V ile yapıştırın"
+paste_internal = "Pano aracı yok: notes panosu yapıştırıldı; sistem panosu için Ctrl+Shift+V"
+paste_unavailable = "Sistem panosu boş ya da kullanılamıyor"
+paste_binary = "Yapıştırılmadı: panoda ikili veri var"
+paste_too_large = "Yapıştırılmadı: pano {limit} sınırından büyük"
 
 [gui]
 tab_notes = "Notlar"
@@ -142,10 +331,6 @@ a11y_search = "Not ara"
 a11y_folders = "Klasörler"
 a11y_notes = "Not listesi"
 a11y_editor = "Not içeriği"
-usage_export_pdf = "kullanım: notes-gui --export-pdf <girdi> <çıktı>"
-export_input_unreadable = "girdi okunamadı: {path}: {detail}"
-export_output_unopenable = "çıktı açılamadı: {path}: {detail}"
-export_output_unwritable = "çıktı yazılamadı: {path}: {detail}"
 a11y_type = "Not tipi"
 a11y_error = "Doğrulama hatası"
 untitled = "Adsız"
@@ -179,13 +364,30 @@ close_discard = "At"
 new_folder = "Yeni klasör"
 rename_folder = "Yeniden adlandır"
 delete_folder = "Klasörü sil"
-delete_note = "Notu sil"
+delete_note = "Kalıcı sil"
+trash_note = "Çöpe at"
+trash_title = "Çöp kutusu"
+trash_restore = "Geri getir"
+trash_purge = "Kalıcı sil"
+trash_empty = "Boşalt"
+trash_back = "Geri"
+trash_empty_hint = "Çöp kutusu boş."
+trash_count_label = "Çöpte {count} not"
+trashed = "Çöpe atıldı: {path}"
+restored = "Geri getirildi: {path}"
+undo_trash = "Geri al"
+confirm_purge = "'{path}' çöpten kalıcı olarak silinsin mi? Bu işlem geri alınamaz."
+confirm_empty_trash = "Çöpteki {count} not kalıcı olarak silinsin mi? Bu işlem geri alınamaz."
+toolbar_trash = "Çöp ({count})"
+toolbar_trash_tip = "Çöp kutusunu aç / kapat: geri getir, kalıcı sil, boşalt"
 move_note = "Klasöre taşı"
 delete = "Sil"
 folder_name = "Klasör adı"
 new_folder_title = "Yeni klasör"
 rename_folder_title = "Klasörü yeniden adlandır"
 op_failed = "İşlem başarısız: {detail}"
+confirm_overwrite = "'{path}' zaten var. Değiştirilsin mi?"
+overwrite = "Değiştir"
 export_dialog_title = "PDF olarak dışa aktar"
 exported = "Dışa aktarıldı: {path}"
 confirm_delete_title = "Silmeyi onayla"
@@ -196,9 +398,9 @@ mode_name = "Ad"
 mode_content = "İçerik"
 a11y_mode = "Arama modu: ad veya içerik"
 browse = "Gözat..."
-browse_title = "Not klasörünü seç"
+browse_title = "Senkron ve geçiş klasörünü seç"
 setting_language = "Dil"
-setting_notes_dir = "Not klasörü"
+setting_notes_dir = "Senkron ve geçiş klasörü"
 setting_editor = "Editör komutu"
 setting_default_type = "Varsayılan tip"
 setting_default_folder = "Varsayılan klasör"
@@ -218,6 +420,20 @@ token_label = "Erişim token'ı"
 token_save = "Token'ı kaydet"
 token_clear = "Token'ı sil"
 token_stored = "kasada kayıtlı"
+token_none = "yok"
+token_state = "Durum: {state}"
+token_https_only = "Token yalnız https uzak adreslerde kullanılır."
+settings_group_general = "Genel"
+settings_group_sync = "Senkron"
+settings_unsaved = "Kaydedilmemiş değişiklikler"
+language_auto = "Sistem dili"
+language_tr = "Türkçe"
+language_en = "English"
+setting_hint_editor = "Boşsa $VISUAL, sonra $EDITOR kullanılır."
+setting_hint_sync_remote = "Örnek: https://github.com/kisi/notlar.git ya da git@github.com:kisi/notlar.git"
+setting_hint_sync_idle_seconds = "Son değişiklikten bu kadar saniye sonra senkronlanır."
+close_settings_title = "Kaydedilmemiş ayarlar"
+close_settings_text = "Ayarlarda kaydedilmemiş değişiklikler var."
 test_connection = "Bağlantıyı test et"
 test_ok = "✓ Bağlandı ve senkronlandı"
 test_failed = "⚠ {detail}"
@@ -226,7 +442,19 @@ sync_ok = "✓ {time}"
 sync_error = "⚠ {detail}"
 replace_origin_title = "Uzak adres değiştirilsin mi?"
 replace_origin = "Değiştir"
-pdf_image_placeholder = "[görsel]"
+toolbar_new_note = "Yeni not"
+toolbar_new_note_tip = "Yeni not (Ctrl+N)"
+toolbar_new_folder_tip = "Seçili klasörün içinde yeni klasör"
+toolbar_delete_tip = "Seçili notu çöpe at (Del); kalıcı silmek için Shift+Del"
+toolbar_move = "Taşı"
+toolbar_move_tip = "Klasöre taşı (Ctrl+M)"
+toolbar_export = "PDF'e aktar"
+toolbar_export_tip = "PDF olarak dışa aktar (Ctrl+E)"
+empty_list_hint = "Gösterilecek not yok. Oluşturmak için Ctrl+N'e ya da Yeni not düğmesine basın."
+
+[pdf]
+image_placeholder = "[görsel]"
+render_failed = "PDF oluşturulamadı (libharu hatası {detail})"
 
 [cli]
 saved = "Kaydedildi: {path} ({type}, {how})"
@@ -252,8 +480,7 @@ binary_note = "İkili not gösterilemez: {path}"
 ls_usage = "Kullanım: note ls [SORGU] [-f KLASÖR]"
 show_usage = "Kullanım: note show SORGU"
 edit_usage = "Kullanım: note edit SORGU"
-export_usage = "Kullanım: note export --pdf SORGU|YOL [-o ÇIKTI]"
-gui_not_installed = "notes-gui bulunamadı; PDF dışa aktarma için grafik arayüzü de kurun"
+export_usage = "Kullanım: note export --pdf SORGU|YOL [-o ÇIKTI] | note export --all DİZİN"
 exported = "Dışa aktarıldı: {path}"
 find_usage = "Kullanım: note find TERİM... [--limit N]"
 find_no_match = "'{query}' geçen not yok"
@@ -271,6 +498,10 @@ help_rm = "note rm YOL [-y]   Notu siler (yalnız tam yol); onay ister, terminal
 help_mv = "note mv KAYNAK HEDEF   Notu taşır veya yeniden adlandırır; uzantı değişimi tip değişimidir; klasörler oluşur"
 help_export = "note export --pdf YOL [-o ÇIKTI]   Notu PDF olarak dışa aktarır"
 help_sync = "note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]   Hemen senkronlar ya da senkronu yönetir; login erişim token'ını stdin'den ekosuz okuyup sistem anahtar kasasına yazar"
+help_query = "note query [--write] [--json] [--param ANAHTAR=DEĞER]... CYPHER   Graph veritabanında Cypher sorgusu çalıştırır (--write olmadan salt okunur); tablo veya JSON yazar"
+query_usage = "Kullanım: note query [--write] [--json] [--param ANAHTAR=DEĞER]... CYPHER"
+query_no_database = "{path} konumunda graph veritabanı yok; 'note query --write' oluşturur"
+query_bad_param = "--param düz adlı ANAHTAR=DEĞER ister, verilen: '{param}'"
 help_config = "note config path | list | get ANAHTAR | set ANAHTAR DEĞER   Ayarları yönetir (types virgülle ayrılmış liste alır)"
 help = """
 Kullanım:
@@ -288,6 +519,7 @@ Kullanım:
   note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]
                                                             Hemen senkronlar ya da senkronu yönetir
   note config path | list | get ANAHTAR | set ANAHTAR DEĞER Ayarları yönetir
+  note query [--write] [--json] [--param ANAHTAR=DEĞER]... CYPHER Graph veritabanında Cypher sorgusu çalıştırır
   note --help | help KOMUT | --version                      Yardımı veya sürümü gösterir
 
 Komut adıyla aynı metni not etmek için: 'note -- ls'.
@@ -317,6 +549,22 @@ sync_login_no_host = "Host verilmedi ve uzak depo ayarlanmamış: 'note sync log
 sync_token_prompt = "{host} için erişim token'ı (yazılanlar görünmez): "
 sync_login_done = "{host} token'ı sistem anahtar kasasına kaydedildi"
 sync_logout_done = "{host} token'ı silindi"
+sync_status_head = "{device} cihazı: günlük {log}, uygulanan {applied}"
+graph_usage = "Kullanım: note graph migrate [--skip-failed] | note graph export --format jsonl [-o DOSYA] | note graph import [--overwrite] DOSYA"
+graph_bad_line = "İçe aktarmanın {line}. satırı geçersiz ({reason}); önceki partilerin değişikliği kalır, başka bir şey uygulanmadı"
+graph_imported = "{nodes} düğüm ve {edges} kenar içe aktarıldı"
+graph_import_refused = "Reddedildi: {id} farklı içerikle zaten var; --overwrite üzerine yazar"
+migrate_summary = "{imported} not geçirildi ({unchanged} zaten vardı), {folders} klasör. Yedek: {backup}"
+migrate_skipped = "Atlandı, dosya yerinde kalıyor: {path} ({reason})"
+migrate_failed = "GEÇİRİLMEDİ: {path} ({reason})"
+migrate_incomplete = "Geçiş tamamlanmadı: yazma reddedilmeye devam eder, eski dosyalara dokunulmadı. Yukarıdaki dosyaları düzeltip 'note graph migrate' komutunu yeniden çalıştırın"
+migrate_remove_repo = "Eski dosyalar SİLİNMEDİ, senkron da onlara dokunmaz. Notlarınızı denetleyin (note export --all DİZİN), sonra şunlarla kaldırın: git -C {path} rm -r -- <dosyalar>, git -C {path} commit -m 'eski notlar kaldirildi', note sync"
+migrate_remove_plain = "Eski dosyalar SİLİNMEDİ. Notlarınızı denetleyin (note export --all DİZİN); sonra {path} içindeki eski dosyaları kendiniz silebilirsiniz"
+export_all_done = "{count} not {path} dizinine çıkarıldı"
+export_all_refused = "Çıkarılmadı: {path} ({reason})"
+help_graph = "note graph migrate | export --format jsonl [-o DOSYA] | import DOSYA   Eski düz dosya notları içe aktar; tüm graph'ı JSON satırları olarak çıkar ya da yükle"
+migrate_backup_hint = "Yedek {path} altında (özel). Gerekmediğinde kendiniz silin: rm -r {path}"
+export_all_unreachable = "Çıkarılmadı, güvenli yolu yok: {name} (kimlik {id}, {reason}). Baytları şurada: note graph export --format jsonl"
 
 [sync]
 commit_message = "{host} cihazından senkron, {time} (değişen dosya: {count})"
@@ -341,3 +589,32 @@ keychain_unavailable = "Sistem anahtar kasası kullanılamıyor ({detail}); toke
 timeout = "Senkron {seconds} saniye içinde bitmedi ve durduruldu; bir sonraki senkronda yeniden denenecek"
 remote_invalid_paths = "Uzak depoda bu sistemin saklayamadığı bir dosya adı var: '{path}' (ayrılmış bir ad ya da yalnız harf büyüklüğüyle ayrılan iki ad). Adı, oluşturulduğu cihazda değiştirin, ardından yeniden senkronlayın; yerel notlarınız değiştirilmedi"
 gitignore_not_regular = "'{path}' bir bağ ya da düz olmayan bir dosya; güvenlik için okunmaz ve değiştirilmez. Yerine düz bir dosya koyun, ardından yeniden deneyin"
+log_stalled = "{device} cihazının notları {seq}. değişiklikte durdu ({reason}); diğer notlar eşitlenmeye devam eder"
+log_bad_frame = "{device} cihazından gelen bozuk bir değişiklik uygulanmadı (değişiklik {seq}, {reason})"
+log_partial_tail = "{device} cihazının günlüğü yarım bir değişiklikle bitiyor ({valid}/{total} bayt); sonraki senkronda tamamlanır"
+log_omitted = "{count} günlük sorunu daha listelenmedi"
+log_set_aside = "Bu cihazın günlüğü veritabanıyla uyuşmadı; {path} olarak saklandı ve yeniden yazıldı ({reason})"
+log_dir_not_regular = "'{path}' bir bağ ya da klasör değil (uzak bir commit onu dosyayla değiştirmiş olabilir). Notlarınız veritabanında güvende; kenara alın ya da depoda düzeltin, sonra yeniden eşitleyin"
+conflict_unresolved = "'{path}' çakışması çözülemedi ({detail}); iki sürüm de veritabanında duruyor, senkron sürüyor"
+
+[graph]
+cypher_syntax = "Sorgu söz dizimi hatası, satır {line}, sütun {col}: {what}"
+cypher_unsupported = "Desteklenmiyor, satır {line}, sütun {col}: {what}"
+cypher_read_only = "Bu sorgu yazar (satır {line}, sütun {col}); --write ile çalıştırın"
+cypher_missing_param = "${name} parametresi eksik, satır {line}, sütun {col}; --param ile verin"
+cypher_arithmetic = "Aritmetik hata, satır {line}, sütun {col}: {reason}"
+cypher_bad_count = "SKIP ve LIMIT negatif olmayan tam sayı ister (satır {line}, sütun {col})"
+cypher_bad_target = "Bu değer düğüm veya kenar değil (satır {line}, sütun {col})"
+cypher_not_storable = "Bu değer özellik olarak saklanamaz (satır {line}, sütun {col})"
+cypher_merge_conflict = "MERGE aynı kimlikle değişmiş bir varlık buldu (satır {line}, sütun {col}); üstüne yazılmadı"
+cypher_merge_null = "MERGE özelliği {key} null (satır {line}, sütun {col})"
+cypher_aggregate_type = "Bu toplama sayı ister (satır {line}, sütun {col})"
+limit_exceeded = "Sorgu sınırı aşıldı: {limit}"
+invalid_argument = "Geçersiz graph işlemi: {reason}"
+not_found = "Graph'ta bulunamadı: {what}"
+corrupt = "Graph veritabanı bozuk veya graph veritabanı değil: {reason}"
+schema_too_new = "Graph veritabanı noteapp'in daha yeni bir sürümüyle oluşturulmuş"
+storage_error = "Graph veritabanı hatası"
+txn_poisoned = "İşlem başarısız oldu, geri alındı"
+wal_unavailable = "Graph veritabanı yazma günlüğünü açamadı"
+bad_frame = "Geçersiz işlem günlüğü çerçevesi: {reason}"

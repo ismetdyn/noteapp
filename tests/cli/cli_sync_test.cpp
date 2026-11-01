@@ -144,13 +144,33 @@ TEST_CASE("note sync runs in the foreground and prints a summary") {
     const Sandbox box("en");
     const BareRemote remote;
     REQUIRE(box.run({"sync", "init", remote.arg()}).exit_code == 0);
-    std::ofstream(box.notes() / "elle.md", std::ios::binary) << "elle yazıldı\n";
+    box.put("elle.md", "elle yazıldı\n");
 
     const auto result = box.run({"sync"});
     CHECK_MESSAGE(result.exit_code == 0, result.err);
     CHECK(result.out.find("1 committed") != std::string::npos);
     CHECK(result.out.find(", pushed,") != std::string::npos);
     CHECK(remote.commits() == 2);
+}
+
+TEST_CASE("note sync counts a trashed note once and does not count the trash folder") {
+    const Sandbox box("en");
+    const BareRemote remote;
+    REQUIRE(box.run({"sync", "init", remote.arg()}).exit_code == 0);
+    box.put("elle.md", "elle yazıldı\n");
+    REQUIRE(box.run({"sync"}).exit_code == 0);
+
+    noteapp::core::NoteStore store(box.data());
+    REQUIRE(store.trash(*noteapp::core::NotePath::parse("elle.md")).has_value());
+    const auto trashed = box.run({"sync"});
+    CHECK_MESSAGE(trashed.exit_code == 0, trashed.err);
+    CHECK(trashed.out.find("1 committed") != std::string::npos);
+
+    REQUIRE(store.purge(*noteapp::core::NotePath::parse("elle.md")).has_value());
+    const auto purged = box.run({"sync"});
+    CHECK_MESSAGE(purged.exit_code == 0, purged.err);
+    CHECK(purged.out.find("0 committed") != std::string::npos);
+    CHECK(purged.out.find(", pushed,") != std::string::npos);
 }
 
 TEST_CASE("a sync error exits 4; --background prints nothing, on success or error") {
@@ -168,7 +188,7 @@ TEST_CASE("a sync error exits 4; --background prints nothing, on success or erro
 
     const BareRemote remote;
     REQUIRE(box.run({"sync", "init", remote.arg()}).exit_code == 0);
-    std::ofstream(box.notes() / "not.md", std::ios::binary) << "x\n";
+    box.put("not.md", "x\n");
     const auto ok = box.run({"sync", "--background"});
     CHECK(ok.exit_code == 0);
     CHECK(ok.out.empty());
@@ -180,7 +200,7 @@ TEST_CASE("--background waits for a sync that holds the lock instead of dropping
     const Sandbox box("en");
     const BareRemote remote;
     REQUIRE(box.run({"sync", "init", remote.arg()}).exit_code == 0);
-    std::ofstream(box.notes() / "sonra.md", std::ios::binary) << "kilit bırakılınca\n";
+    box.put("sonra.md", "kilit bırakılınca\n");
 
     // Bu süreç, notu görmemiş başka bir senkron gibi kilidi tutar ve biraz sonra bırakır.
     std::optional held(
@@ -204,7 +224,7 @@ TEST_CASE("--background gives up on a held lock within a third of sync_timeout_s
     const BareRemote remote;
     REQUIRE(box.run({"sync", "init", remote.arg()}).exit_code == 0);
     append_config(box, "[tuning]\nsync_timeout_seconds = 6\n");
-    std::ofstream(box.notes() / "bekleyen.md", std::ios::binary) << "x\n";
+    box.put("bekleyen.md", "x\n");
 
     const auto held =
         noteapp::sync::SyncLock::acquire(state_dir(box) / "sync.lock", std::chrono::minutes(10));

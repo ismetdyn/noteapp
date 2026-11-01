@@ -10,8 +10,7 @@
       "hidden": true,
       "inherits": "base",
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
-      "cacheVariables": { "CMAKE_CXX_COMPILER": "g++", "CMAKE_PREFIX_PATH": "$env{NOTEAPP_QT_DIR}" },
-      "environment": { "PATH": "$env{NOTEAPP_QT_DIR}/bin;$penv{PATH}" }
+      "cacheVariables": { "CMAKE_CXX_COMPILER": "g++" }
     },
     {
       "name": "linux",
@@ -27,8 +26,17 @@
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
       "cacheVariables": { "CMAKE_CXX_COMPILER": "clang++" }
     },
+    {
+      "name": "windows-cross",
+      "hidden": true,
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "toolchainFile": "${sourceDir}/cmake/toolchains/mingw-w64-x86_64.cmake"
+    },
     { "name": "windows-mingw-debug", "inherits": ["windows", "debug"] },
     { "name": "windows-mingw-release", "inherits": ["windows", "release"] },
+    { "name": "windows-cross-debug", "inherits": ["windows-cross", "debug"] },
+    { "name": "windows-cross-release", "inherits": ["windows-cross", "release"] },
     { "name": "linux-gcc-debug", "inherits": ["linux", "debug"] },
     { "name": "linux-gcc-release", "inherits": ["linux", "release"] },
     { "name": "macos-clang-debug", "inherits": ["macos", "debug"] },
@@ -37,6 +45,8 @@
   "buildPresets": [
     { "name": "windows-mingw-debug", "configurePreset": "windows-mingw-debug" },
     { "name": "windows-mingw-release", "configurePreset": "windows-mingw-release" },
+    { "name": "windows-cross-debug", "configurePreset": "windows-cross-debug" },
+    { "name": "windows-cross-release", "configurePreset": "windows-cross-release" },
     { "name": "linux-gcc-debug", "configurePreset": "linux-gcc-debug" },
     { "name": "linux-gcc-release", "configurePreset": "linux-gcc-release" },
     { "name": "macos-clang-debug", "configurePreset": "macos-clang-debug" },
@@ -46,6 +56,8 @@
     { "name": "test-base", "hidden": true, "output": { "outputOnFailure": true } },
     { "name": "windows-mingw-debug", "inherits": "test-base", "configurePreset": "windows-mingw-debug" },
     { "name": "windows-mingw-release", "inherits": "test-base", "configurePreset": "windows-mingw-release" },
+    { "name": "windows-cross-debug", "inherits": "test-base", "configurePreset": "windows-cross-debug" },
+    { "name": "windows-cross-release", "inherits": "test-base", "configurePreset": "windows-cross-release" },
     { "name": "linux-gcc-debug", "inherits": "test-base", "configurePreset": "linux-gcc-debug" },
     { "name": "linux-gcc-release", "inherits": "test-base", "configurePreset": "linux-gcc-release" },
     { "name": "macos-clang-debug", "inherits": "test-base", "configurePreset": "macos-clang-debug" },

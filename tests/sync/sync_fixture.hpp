@@ -5,8 +5,12 @@
 // "kullanılmayan fonksiyon" uyarısı çıkmasın.
 #include "core/config.hpp"
 #include "core/error.hpp"
+#include "core/note_store.hpp"
+#include "core/paths.hpp"
 #include "core/process.hpp"
+#include "support/note_seed.hpp"
 #include "sync/git_runtime.hpp"
+#include "sync/sync_service.hpp"
 
 #include <doctest/doctest.h>
 #include <expected>
@@ -309,6 +313,46 @@ private:
     // Ortamdan sonra kurulur: libgit2 config arama yollarını init sırasında tahmin eder.
     sync::GitRuntime runtime_;
     fs::path remote_ = root_.path() / u8"uzak depo.git";
+};
+
+// Geçerli NOTEAPP_HOME'un deposuna not (tek cihazlı testler). İki cihaz için Device.
+inline void put_note(std::string_view path, std::string_view bytes) {
+    test::upsert_note(core::data_dir(), path, bytes);
+}
+
+inline std::string note_body_here(std::string_view path) {
+    return test::note_body(core::data_dir(), path);
+}
+
+// Bir cihaz: kendi NOTEAPP_HOME'u (graph.db, kilit, durum) ve notes_dir'i. Senkron çağrısı süresince ortam
+// ona çevrilir: in-process iki klon, gerçekte iki makinedir.
+struct Device {
+    fs::path home;
+    fs::path notes;
+
+    Device(const SyncFixture& fixture, const std::string& name, bool clone = true)
+        : home(fixture.root() / ("home-" + name)),
+          notes(clone ? fixture.make_clone(fs::path(name).u8string()) : fixture.root() / name) {
+        fs::create_directories(home);
+    }
+    core::Config config() const { return SyncFixture::config_for(notes); }
+    core::NoteStore store() const { return core::NoteStore(home / "data"); }
+    void put(std::string_view path, std::string_view bytes) const {
+        test::upsert_note(home / "data", path, bytes);
+    }
+    std::string body(std::string_view path) const { return test::note_body(home / "data", path); }
+    std::expected<sync::SyncResult, Error> sync(const sync::SyncTestHooks& hooks = {}) const {
+        const EnvGuard guard("NOTEAPP_HOME", home);
+        return sync::SyncService(config()).sync_now(hooks);
+    }
+    std::expected<void, Error> enable(const std::string& remote, bool replace = false) const {
+        const EnvGuard guard("NOTEAPP_HOME", home);
+        return sync::SyncService(config()).enable(remote, replace);
+    }
+    sync::SyncStatus status() const {
+        const EnvGuard guard("NOTEAPP_HOME", home);
+        return sync::SyncService(config()).status();
+    }
 };
 
 }  // namespace noteapp::sync_test

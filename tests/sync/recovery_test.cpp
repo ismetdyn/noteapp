@@ -34,7 +34,7 @@ void leave_git_locks(const fs::path& repo) {
 // İlk senkronu yapılmış klon: HEAD ve uzak dal aynı commit'te.
 fs::path synced_clone(const SyncFixture& fx) {
     const fs::path a = fx.make_clone(u8"A");
-    write_file(a / "not.md", "ortak\n");
+    put_note("not.md", "ortak\n");
     const auto first = SyncService(SyncFixture::config_for(a)).sync_now();
     REQUIRE_MESSAGE(first.has_value(), describe(first));
     return a;
@@ -45,7 +45,7 @@ fs::path synced_clone(const SyncFixture& fx) {
 TEST_CASE("after a killed sync the next one removes the libgit2 locks it left behind and syncs") {
     const SyncFixture fx;
     const fs::path a = fx.make_clone(u8"A");
-    write_file(a / "not.md", "x\n");
+    put_note("not.md", "x\n");
     leave_git_locks(a);
     leave_dead_sync_lock();
 
@@ -60,7 +60,7 @@ TEST_CASE("after a killed sync the next one removes the libgit2 locks it left be
 TEST_CASE("libgit2 locks are left alone when no stale sync lock was taken over") {
     const SyncFixture fx;
     const fs::path a = fx.make_clone(u8"A");
-    write_file(a / "not.md", "x\n");
+    put_note("not.md", "x\n");
     write_file(a / ".git" / "index.lock", "");  // ör. kullanıcının o an çalışan git komutu
 
     const auto result = SyncService(SyncFixture::config_for(a)).sync_now();
@@ -72,14 +72,14 @@ TEST_CASE("a merge a killed sync left without conflicts in the index is closed a
     const SyncFixture fx;
     const fs::path a = synced_clone(fx);
     write_file(a / ".git" / "MERGE_HEAD", *ref_id(a, "HEAD") + "\n");
-    write_file(a / "yeni.md", "yeni\n");
+    put_note("yeni.md", "yeni\n");
     leave_dead_sync_lock();
 
     const auto result = SyncService(SyncFixture::config_for(a)).sync_now();
     REQUIRE_MESSAGE(result.has_value(), describe(result));
     CHECK_FALSE(fs::exists(a / ".git" / "MERGE_HEAD"));
     CHECK(result->committed == 1);
-    CHECK(read_file(a / "yeni.md") == "yeni\n");
+    CHECK(note_body_here("yeni.md") == "yeni\n");
     CHECK(ref_id(fx.remote(), "refs/heads/main") == ref_id(a, "HEAD"));
 }
 
@@ -94,7 +94,7 @@ TEST_CASE("an interrupted merge with conflicts in the index is undone; the note 
         git_index_entry ours{}, theirs{};
         for (auto [entry, text] : {std::pair{&ours, "bizim\n"}, std::pair{&theirs, "onların\n"}}) {
             REQUIRE_GIT(git_blob_create_from_buffer(&entry->id, repo.get(), text, std::strlen(text)));
-            entry->path = "not.md";
+            entry->path = ".gitignore";
             entry->mode = GIT_FILEMODE_BLOB;
         }
         REQUIRE_GIT(git_index_conflict_add(index.get(), nullptr, &ours, &theirs));
@@ -103,10 +103,12 @@ TEST_CASE("an interrupted merge with conflicts in the index is undone; the note 
     write_file(a / ".git" / "MERGE_HEAD", *ref_id(a, "HEAD") + "\n");
     leave_dead_sync_lock();
     const auto head = ref_id(a, "HEAD");
+    const std::string ignore_before = read_file(a / ".gitignore");
 
     const auto result = SyncService(SyncFixture::config_for(a)).sync_now();
     REQUIRE_MESSAGE(result.has_value(), describe(result));
     CHECK_FALSE(fs::exists(a / ".git" / "MERGE_HEAD"));
     CHECK(ref_id(a, "HEAD") == head);
-    CHECK(read_file(a / "not.md") == "ortak\n");
+    CHECK(read_file(a / ".gitignore") == ignore_before);
+    CHECK(note_body_here("not.md") == "ortak\n");
 }

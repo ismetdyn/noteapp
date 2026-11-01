@@ -1,0 +1,10 @@
+package store
+
+type Note struct {
+	ID   int
+	Name string
+}
+
+func (n Note) Title() string {
+	return n.Name
+}

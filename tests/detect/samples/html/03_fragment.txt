@@ -1,0 +1,4 @@
+<div class="card">
+  <h2>Başlık</h2>
+  <p>Metin</p>
+</div>

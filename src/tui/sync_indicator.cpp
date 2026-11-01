@@ -47,7 +47,9 @@ void SyncIndicator::disable() {
 
 void SyncIndicator::set_status(const sync::SyncStatus& status, bool running) {
     last_success_ = status.last_success;
-    last_error_ = status.last_error;
+    last_error_ = status.last_error
+                      ? status.last_error
+                      : (status.log_issues.empty() ? std::nullopt : std::optional(status.log_issues.front()));
     if (running || (!last_error_ && !last_success_))
         state_ = State::Running;
     else

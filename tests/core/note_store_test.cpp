@@ -1,62 +1,34 @@
 #include "core/file_stat.hpp"
 #include "core/note_store.hpp"
+#include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 
 #include <algorithm>
 #include <chrono>
-#include <cstdlib>
 #include <doctest/doctest.h>
 #include <fstream>
-#include <iterator>
-#include <optional>
-#include <random>
 #include <thread>
-
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#endif
 
 using namespace noteapp::core;
 using noteapp::test::make_dir_link;
+using noteapp::test::seed_note;
+using noteapp::test::TempDir;
 namespace fs = std::filesystem;
 using namespace std::chrono_literals;
 
 namespace {
 
-// Her test kendi geçici kökünü alır; çıkışta (başarısız testte de) silinir.
-class TempDir {
-public:
-    TempDir() {
-        std::random_device rd;
-        path_ = fs::temp_directory_path() / ("noteapp-test-" + std::to_string(rd()) + std::to_string(rd()));
-    }
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path_, ec);
-    }
-    const fs::path& path() const { return path_; }
-
-private:
-    fs::path path_;
-};
-
-void put(const fs::path& file, std::string_view bytes) {
-    fs::create_directories(file.parent_path());
-    std::ofstream out(file, std::ios::binary);
-    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-}
-
-std::string slurp(const fs::path& file) {
-    std::ifstream in(file, std::ios::binary);
-    return std::string(std::istreambuf_iterator<char>(in), {});
+void put(NoteStore& store, std::string_view path, std::string_view bytes) {
+    REQUIRE(seed_note(store, path, bytes));
 }
 
 NotePath np(std::string_view s) {
     return *NotePath::parse(s);
+}
+
+std::string body(const NoteStore& store, std::string_view path) {
+    const auto content = store.read(np(path));
+    return content ? content->text : std::string("<yok>");
 }
 
 std::string arg(const Error& e, std::string_view key) {
@@ -67,23 +39,7 @@ std::string arg(const Error& e, std::string_view key) {
     return {};
 }
 
-// Reddin gerekçesi (InvalidPath ise reason, değilse mesaj anahtarı); başarıda "ok". REQUIRE yerine: sonraki
-// "kök dışı dosya değişmedi" denetimleri işlem yanlışlıkla başarılı olduğunda da koşsun.
-template <typename T> std::string refusal(const std::expected<T, Error>& result) {
-    if (result)
-        return "ok";
-    return result.error().code == Error::Code::InvalidPath ? arg(result.error(), "reason")
-                                                           : result.error().message_key;
-}
-
 const auto kNow = std::chrono::system_clock::time_point{} + std::chrono::hours(24 * 365 * 56);
-
-// Ardından gelen iki yazım (aralarında 50 ms) aynı takvim saniyesine düşsün: saniye çözünürlüklü mtime
-// (MinGW libstdc++ last_write_time) bu testlerde farkı rastlantıyla değil, her seferinde kaçırır.
-void wait_for_second_start() {
-    while (std::chrono::system_clock::now().time_since_epoch() % 1s > 300ms)
-        std::this_thread::sleep_for(5ms);
-}
 
 }  // namespace
 
@@ -101,7 +57,8 @@ TEST_CASE("create writes a note and creates root and folders as needed") {
     auto created = store.create({"a/b", "plan", "md", "merhaba"}, kNow);
     REQUIRE(created.has_value());
     CHECK(created->string() == "a/b/plan.md");
-    CHECK(slurp(tmp.path() / "notes" / "a" / "b" / "plan.md") == "merhaba");
+    CHECK(body(store, "a/b/plan.md") == "merhaba");
+    CHECK(store.folders() == std::vector<std::string>{"a", "a/b"});
 }
 
 TEST_CASE("create puts a root note when folder is empty") {
@@ -110,7 +67,7 @@ TEST_CASE("create puts a root note when folder is empty") {
     auto created = store.create({"", "plan", "txt", "x"}, kNow);
     REQUIRE(created.has_value());
     CHECK(created->string() == "plan.txt");
-    CHECK(fs::exists(tmp.path() / "plan.txt"));
+    CHECK(store.folders().empty());
 }
 
 TEST_CASE("create rejects invalid folder, name and type") {
@@ -170,8 +127,8 @@ TEST_CASE("create never overwrites: collisions get -2, -3") {
     CHECK(first->string() == "plan.md");
     CHECK(second->string() == "plan-2.md");
     CHECK(third->string() == "plan-3.md");
-    CHECK(slurp(tmp.path() / "plan.md") == "bir");
-    CHECK(slurp(tmp.path() / "plan-2.md") == "iki");
+    CHECK(body(store, "plan.md") == "bir");
+    CHECK(body(store, "plan-2.md") == "iki");
 }
 
 TEST_CASE("create normalizes CRLF to LF") {
@@ -179,7 +136,39 @@ TEST_CASE("create normalizes CRLF to LF") {
     NoteStore store(tmp.path());
     auto created = store.create({"", "plan", "md", "a\r\nb\r\n"}, kNow);
     REQUIRE(created.has_value());
-    CHECK(slurp(tmp.path() / "plan.md") == "a\nb\n");
+    CHECK(body(store, "plan.md") == "a\nb\n");
+}
+
+TEST_CASE("create_exact keeps CRLF and a BOM byte for byte and returns the note's revision") {
+    TempDir tmp;
+    NoteStore store(tmp.path());
+    const std::string bytes = "\xEF\xBB\xBF"
+                              "a\r\nb\nc\r\n";
+    auto created = store.create_exact({"klasör", "plan", "md", bytes}, kNow);
+    REQUIRE(created.has_value());
+    CHECK(created->path.string() == "klasör/plan.md");
+    CHECK(body(store, "klasör/plan.md") == bytes);
+    CHECK(created->revision == store.read(created->path)->revision);
+    CHECK(store.write(created->path, "yeni", created->revision).has_value());
+}
+
+TEST_CASE("create_exact never overwrites: collisions get -2 and the first note is untouched") {
+    TempDir tmp;
+    NoteStore store(tmp.path());
+    REQUIRE(store.create_exact({"", "plan", "md", "bir\r\n"}, kNow).has_value());
+    auto second = store.create_exact({"", "plan", "md", "iki\r\n"}, kNow);
+    REQUIRE(second.has_value());
+    CHECK(second->path.string() == "plan-2.md");
+    CHECK(body(store, "plan.md") == "bir\r\n");
+    CHECK(body(store, "plan-2.md") == "iki\r\n");
+}
+
+TEST_CASE("create_exact validates like create and writes nothing when it refuses") {
+    TempDir tmp;
+    NoteStore store(tmp.path() / "yeni");
+    CHECK(store.create_exact({"../x", "plan", "md", ""}, kNow).error().code == Error::Code::InvalidPath);
+    CHECK(store.create_exact({"", "a/b", "md", ""}, kNow).error().code == Error::Code::InvalidPath);
+    CHECK_FALSE(fs::exists(tmp.path() / "yeni"));
 }
 
 TEST_CASE("read returns NotFound for a missing note") {
@@ -192,10 +181,10 @@ TEST_CASE("read returns NotFound for a missing note") {
     CHECK(arg(result.error(), "path") == "yok.md");
 }
 
-TEST_CASE("read returns Io when the path is a directory") {
+TEST_CASE("read returns Io when the path is a folder") {
     TempDir tmp;
-    fs::create_directories(tmp.path() / "d.md");
     NoteStore store(tmp.path());
+    REQUIRE(store.create_folder("d.md").has_value());
     auto result = store.read(np("d.md"));
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().code == Error::Code::Io);
@@ -208,97 +197,76 @@ TEST_CASE("write round-trips a UTF-8 BOM and CRLF byte-exactly") {
     TempDir tmp;
     const std::string original = "\xEF\xBB\xBF"
                                  "satır bir\r\nsatır iki\r\n";
-    put(tmp.path() / "bom.md", original);
     NoteStore store(tmp.path());
+    put(store, "bom.md", original);
     auto read = store.read(np("bom.md"));
     REQUIRE(read.has_value());
     CHECK(read->text == original);
-    auto written = store.write(np("bom.md"), read->text, read->mtime);
+    auto written = store.write(np("bom.md"), read->text + "x", read->revision);
     REQUIRE(written.has_value());
-    CHECK(slurp(tmp.path() / "bom.md") == original);
+    CHECK(body(store, "bom.md") == original + "x");
 }
 
-TEST_CASE("write replaces the content and returns the new mtime") {
+TEST_CASE("write replaces the content and returns the new revision") {
     TempDir tmp;
-    put(tmp.path() / "n.md", "eski");
     NoteStore store(tmp.path());
+    put(store, "n.md", "eski");
     auto read = store.read(np("n.md"));
     REQUIRE(read.has_value());
-    auto written = store.write(np("n.md"), "yeni içerik", read->mtime);
+    auto written = store.write(np("n.md"), "yeni içerik", read->revision);
     REQUIRE(written.has_value());
-    CHECK(slurp(tmp.path() / "n.md") == "yeni içerik");
-    CHECK(*written == stat_file(tmp.path() / "n.md")->mtime);
-    // Dönen mtime ile ardışık kayıt dış değişiklik sayılmaz.
+    CHECK(body(store, "n.md") == "yeni içerik");
+    CHECK(*written == store.read(np("n.md"))->revision);
+    // Dönen revizyonla ardışık kayıt dış değişiklik sayılmaz.
     CHECK(store.write(np("n.md"), "üçüncü", *written).has_value());
-    CHECK(slurp(tmp.path() / "n.md") == "üçüncü");
+    CHECK(body(store, "n.md") == "üçüncü");
 }
 
-TEST_CASE("write refuses when the file changed externally") {
+TEST_CASE("write refuses when the note changed in another process") {
     TempDir tmp;
-    put(tmp.path() / "n.md", "eski");
     NoteStore store(tmp.path());
+    NoteStore other(tmp.path());
+    put(store, "n.md", "eski");
     auto read = store.read(np("n.md"));
     REQUIRE(read.has_value());
-    fs::last_write_time(tmp.path() / "n.md", read->mtime + std::chrono::seconds(5));
-    auto written = store.write(np("n.md"), "yeni", read->mtime);
+    REQUIRE(other.write(np("n.md"), "dış", other.read(np("n.md"))->revision).has_value());
+    auto written = store.write(np("n.md"), "yeni", read->revision);
     REQUIRE_FALSE(written.has_value());
     CHECK(written.error().code == Error::Code::ModifiedExternally);
-    CHECK(slurp(tmp.path() / "n.md") == "eski");
+    CHECK(body(store, "n.md") == "dış");
 }
 
-TEST_CASE("mtimes are sub-second precise: writes 50 ms apart differ in read() and list()") {
+TEST_CASE("a same-size edit within the same millisecond window still trips the revision") {
     TempDir tmp;
-    const fs::path file = tmp.path() / "n.md";
     NoteStore store(tmp.path());
-    wait_for_second_start();
-    put(file, "abcd");
-    const auto first_read = store.read(np("n.md"));
-    const auto first_list = store.list();
-    std::this_thread::sleep_for(50ms);
-    put(file, "wxyz");
-    const auto second_read = store.read(np("n.md"));
-    const auto second_list = store.list();
-    REQUIRE((first_read && second_read));
-    REQUIRE((first_list.size() == 1 && second_list.size() == 1));
-    CHECK(second_read->mtime != first_read->mtime);
-    CHECK(second_list.front().mtime != first_list.front().mtime);
-}
-
-TEST_CASE("write refuses a same-size external edit made within the same second as the read") {
-    TempDir tmp;
-    const fs::path file = tmp.path() / "n.md";
-    NoteStore store(tmp.path());
-    wait_for_second_start();
-    put(file, "abcd");
+    NoteStore other(tmp.path());
+    put(store, "n.md", "abcd");
     const auto read = store.read(np("n.md"));
     REQUIRE(read.has_value());
-    std::this_thread::sleep_for(50ms);
-    put(file, "wxyz");  // dış editör: aynı boyut, aynı saniye
-    const auto written = store.write(np("n.md"), "benim", read->mtime);
+    REQUIRE(other.write(np("n.md"), "wxyz", other.read(np("n.md"))->revision).has_value());  // aynı boyut
+    const auto written = store.write(np("n.md"), "benim", read->revision);
     REQUIRE_FALSE(written.has_value());
     CHECK(written.error().code == Error::Code::ModifiedExternally);
-    CHECK(slurp(file) == "wxyz");
+    CHECK(body(store, "n.md") == "wxyz");
 }
 
-TEST_CASE("list(), read(), write() and stat_file() report the same mtime for the same file") {
+TEST_CASE("list(), read() and write() report the same revision for the same note") {
     TempDir tmp;
-    put(tmp.path() / "n.md", "eski");
     NoteStore store(tmp.path());
+    put(store, "n.md", "eski");
     const auto read = store.read(np("n.md"));
     REQUIRE(read.has_value());
+    CHECK(store.list().front().revision == read->revision);
     CHECK(store.list().front().mtime == read->mtime);
-    const auto written = store.write(np("n.md"), "yeni", read->mtime);
+    const auto written = store.write(np("n.md"), "yeni", read->revision);
     REQUIRE(written.has_value());
-    const auto stat = stat_file(tmp.path() / "n.md");
-    REQUIRE(stat.has_value());
-    CHECK(stat->mtime == *written);
-    CHECK(store.list().front().mtime == *written);
-    CHECK(store.read(np("n.md"))->mtime == *written);
+    CHECK(store.list().front().revision == *written);
+    CHECK(store.read(np("n.md"))->revision == *written);
 }
 
 TEST_CASE("stat_file reports kind and size and does not follow symlinks") {
     TempDir tmp;
-    put(tmp.path() / "f.md", "abc");
+    std::ofstream(tmp.path() / "f.md", std::ios::binary) << "abc";
     const auto file = stat_file(tmp.path() / "f.md");
     REQUIRE(file.has_value());
     CHECK((file->regular && !file->directory && !file->symlink));
@@ -321,79 +289,10 @@ TEST_CASE("stat_file reports kind and size and does not follow symlinks") {
 TEST_CASE("write to a missing note is NotFound") {
     TempDir tmp;
     NoteStore store(tmp.path());
-    auto written = store.write(np("yok.md"), "x", fs::file_time_type{});
+    auto written = store.write(np("yok.md"), "x", Revision{});
     REQUIRE_FALSE(written.has_value());
     CHECK(written.error().code == Error::Code::NotFound);
 }
-
-TEST_CASE("failed write leaves the original intact and no .tmp behind") {
-    TempDir tmp;
-    // Hedef bir dizin: geçici dosya yazılır ama üzerine yer değiştirme başarısız olur.
-    fs::create_directories(tmp.path() / "d.md");
-    put(tmp.path() / "d.md" / "icerik.txt", "korunmalı");
-    NoteStore store(tmp.path());
-    auto written = store.write(np("d.md"), "x", stat_file(tmp.path() / "d.md")->mtime);
-    REQUIRE_FALSE(written.has_value());
-    CHECK(written.error().code == Error::Code::Io);
-    CHECK(fs::is_directory(tmp.path() / "d.md"));
-    CHECK(slurp(tmp.path() / "d.md" / "icerik.txt") == "korunmalı");
-    for (const auto& entry : fs::directory_iterator(tmp.path())) {
-        CAPTURE(entry.path().string());
-        CHECK(entry.path().extension() != ".tmp");
-    }
-}
-
-TEST_CASE("successful write leaves no .tmp behind") {
-    TempDir tmp;
-    put(tmp.path() / "n.md", "eski");
-    NoteStore store(tmp.path());
-    REQUIRE(store.write(np("n.md"), "yeni", stat_file(tmp.path() / "n.md")->mtime).has_value());
-    int files = 0;
-    for (const auto& entry : fs::directory_iterator(tmp.path())) {
-        (void)entry;
-        ++files;
-    }
-    CHECK(files == 1);
-}
-
-// Atomik yazım geçici dosyayı hedefin üzerine taşır; hedefin izinleri/öznitelikleri tek kayıtta kaybolmamalı
-// (senkron da her kayıtta bir mod değişikliği commit'lerdi).
-#ifdef _WIN32
-TEST_CASE("write keeps the file's attributes: a hidden note stays hidden") {
-    TempDir tmp;
-    put(tmp.path() / "n.md", "eski");
-    const std::wstring file = (tmp.path() / "n.md").wstring();
-    REQUIRE(SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE));
-    NoteStore store(tmp.path());
-
-    REQUIRE(store.write(np("n.md"), "yeni", stat_file(tmp.path() / "n.md")->mtime).has_value());
-    CHECK(slurp(tmp.path() / "n.md") == "yeni");
-    CHECK((GetFileAttributesW(file.c_str()) & FILE_ATTRIBUTE_HIDDEN) != 0);
-    int files = 0;
-    for (const auto& entry : fs::directory_iterator(tmp.path())) {
-        CAPTURE(entry.path().string());
-        ++files;
-    }
-    CHECK(files == 1);  // geçici dosya kalmadı
-}
-#else
-TEST_CASE("write keeps the file's permission bits") {
-    TempDir tmp;
-    for (const fs::perms mode : {fs::perms::owner_read | fs::perms::owner_write,
-                                 fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec |
-                                     fs::perms::others_read | fs::perms::others_exec,
-                                 fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_all}) {
-        CAPTURE(static_cast<int>(mode));
-        put(tmp.path() / "n.md", "eski");
-        fs::permissions(tmp.path() / "n.md", mode, fs::perm_options::replace);
-        NoteStore store(tmp.path());
-
-        REQUIRE(store.write(np("n.md"), "yeni", stat_file(tmp.path() / "n.md")->mtime).has_value());
-        CHECK(slurp(tmp.path() / "n.md") == "yeni");
-        CHECK(fs::status(tmp.path() / "n.md").permissions() == mode);
-    }
-}
-#endif
 
 TEST_CASE("handles Turkish file and folder names") {
     TempDir tmp;
@@ -404,26 +303,20 @@ TEST_CASE("handles Turkish file and folder names") {
     auto read = store.read(*created);
     REQUIRE(read.has_value());
     CHECK(read->text == "içerik ğüşiöç");
-    REQUIRE(store.write(*created, "yeni", read->mtime).has_value());
+    REQUIRE(store.write(*created, "yeni", read->revision).has_value());
     auto listed = store.list();
     REQUIRE(listed.size() == 1);
     CHECK(listed[0].path.string() == "klasör/toplantı.md");
     CHECK(store.folders() == std::vector<std::string>{"klasör"});
 }
 
-TEST_CASE("list is recursive, skips hidden entries and sorts by mtime descending") {
+TEST_CASE("list is recursive and sorts by update time descending") {
     TempDir tmp;
-    put(tmp.path() / "old.md", "o");
-    put(tmp.path() / "sub" / "new.md", "n");
-    put(tmp.path() / "mid.md", "m");
-    put(tmp.path() / ".hidden.md", "h");
-    put(tmp.path() / ".git" / "config.md", "g");
-    put(tmp.path() / "sub" / ".keep", "");
-    const auto base = fs::last_write_time(tmp.path() / "old.md");
-    fs::last_write_time(tmp.path() / "old.md", base - std::chrono::hours(2));
-    fs::last_write_time(tmp.path() / "mid.md", base - std::chrono::hours(1));
-    fs::last_write_time(tmp.path() / "sub" / "new.md", base);
     NoteStore store(tmp.path());
+    const auto now = std::chrono::system_clock::now();
+    REQUIRE(store.create({"", "old", "md", "o"}, now - 2h).has_value());
+    REQUIRE(store.create({"sub", "new", "md", "n"}, now).has_value());
+    REQUIRE(store.create({"", "mid", "md", "m"}, now - 1h).has_value());
     auto listed = store.list();
     REQUIRE(listed.size() == 3);
     CHECK(listed[0].path.string() == "sub/new.md");
@@ -432,15 +325,11 @@ TEST_CASE("list is recursive, skips hidden entries and sorts by mtime descending
     CHECK(listed[0].size == 1);
 }
 
-TEST_CASE("list breaks mtime ties by path ascending") {
+TEST_CASE("list breaks time ties by path ascending") {
     TempDir tmp;
-    put(tmp.path() / "b.md", "1");
-    put(tmp.path() / "a.md", "1");
-    // İkisi de açıkça atanır: mtime artık saniye altı, yazım anındaki değerler eşit çıkmaz.
-    const auto t = fs::last_write_time(tmp.path() / "a.md");
-    fs::last_write_time(tmp.path() / "a.md", t);
-    fs::last_write_time(tmp.path() / "b.md", t);
     NoteStore store(tmp.path());
+    REQUIRE(store.create({"", "b", "md", "1"}, kNow).has_value());
+    REQUIRE(store.create({"", "a", "md", "1"}, kNow).has_value());
     auto listed = store.list();
     REQUIRE(listed.size() == 2);
     CHECK(listed[0].path.string() == "a.md");
@@ -455,149 +344,19 @@ TEST_CASE("looks_binary: a NUL byte within the first 8 KB marks binary content")
     CHECK_FALSE(looks_binary(std::string(8192, 'x') + '\0'));  // 8 KB'tan sonra: ikili sayılmaz
 }
 
-TEST_CASE("list includes binary files") {
+TEST_CASE("list includes binary notes") {
     TempDir tmp;
-    put(tmp.path() / "text.md", "düz metin");
-    put(tmp.path() / "bin.dat", std::string("ab\0cd", 5));
     NoteStore store(tmp.path());
+    put(store, "text.md", "düz metin");
+    put(store, "bin.dat", std::string("ab\0cd", 5));
     CHECK(store.list().size() == 2);
 }
 
-TEST_CASE("list skips directory links and does not descend into them") {
+TEST_CASE("folders lists nested folders sorted") {
     TempDir tmp;
-    const fs::path root = tmp.path() / "notes";
-    put(root / "a.md", "a");
-    put(tmp.path() / "outside" / "secret.md", "gizli");
-    if (!make_dir_link(tmp.path() / "outside", root / "link")) {
-        MESSAGE("dizin bağı oluşturulamadı, atlandı");
-        return;
-    }
-    NoteStore store(root);
-    const auto listed = store.list();
-    REQUIRE(listed.size() == 1);
-    CHECK(listed.front().path.string() == "a.md");
-}
-
-TEST_CASE("list skips files whose names fail NotePath validation") {
-    TempDir tmp;
-    put(tmp.path() / "ok.md", "x");
-    put(tmp.path() / "trailing.", "x");  // Windows kırpar; Unix'te yol doğrulamasında elenir
     NoteStore store(tmp.path());
-    auto listed = store.list();
-    REQUIRE_FALSE(listed.empty());
-    for (const auto& info : listed) {
-        CHECK(NotePath::parse(info.path.string()).has_value());
-    }
-}
-
-TEST_CASE("folders lists nested non-hidden directories sorted") {
-    TempDir tmp;
-    fs::create_directories(tmp.path() / "b" / "c");
-    fs::create_directories(tmp.path() / "a");
-    fs::create_directories(tmp.path() / ".git" / "objects");
-    fs::create_directories(tmp.path() / "a" / ".cache");
-    put(tmp.path() / "file.md", "x");
-    NoteStore store(tmp.path());
+    REQUIRE(store.create_folder("b/c").has_value());
+    REQUIRE(store.create_folder("a").has_value());
+    put(store, "file.md", "x");
     CHECK(store.folders() == std::vector<std::string>{"a", "b", "b/c"});
-}
-
-// T16d: Windows'ta junction yetki istemez ve MinGW libstdc++ onu bağ saymaz (is_symlink false,
-// weakly_canonical çözmez); bağ testleri bu yüzden atlanmaz, bağ kurulamazsa düşer.
-TEST_CASE("read, write and create through a directory link to outside the root are refused") {
-    TempDir tmp;
-    const fs::path root = tmp.path() / "notes";
-    const fs::path outside = tmp.path() / "outside";
-    put(outside / "secret.md", "gizli");
-    put(outside / "sub" / "x.md", "x");
-    fs::create_directories(root);
-    REQUIRE(make_dir_link(outside, root / "link"));
-    NoteStore store(root);
-
-    CHECK(refusal(store.read(np("link/secret.md"))) == "link");
-    CHECK(refusal(store.write(np("link/secret.md"), "ezildi", stat_file(outside / "secret.md")->mtime)) ==
-          "link");
-    CHECK(slurp(outside / "secret.md") == "gizli");
-    CHECK(refusal(store.create({"link", "yeni", "md", "x"}, kNow)) == "link");
-    CHECK(refusal(store.create({"link/alt", "yeni", "md", "x"}, kNow)) == "link");
-    CHECK_FALSE(fs::exists(outside / "yeni.md"));
-    CHECK_FALSE(fs::exists(outside / "alt"));
-
-    CHECK(store.list().empty());     // bağ listelenmez, içine inilmez
-    CHECK(store.folders().empty());  // "link" ve "link/sub" görünmez
-}
-
-#ifdef _WIN32
-namespace {
-
-// Birimin 8.3 kısa adı (ör. ".git" → "GIT~1"); 8.3 kapalıysa ya da ad zaten kısaysa nullopt.
-std::optional<std::string> short_alias(const fs::path& path) {
-    std::wstring buffer(MAX_PATH, L'\0');
-    const DWORD n = GetShortPathNameW(path.c_str(), buffer.data(), static_cast<DWORD>(buffer.size()));
-    if (n == 0 || n >= buffer.size())
-        return std::nullopt;
-    buffer.resize(n);
-    const std::u8string name = fs::path(buffer).filename().u8string();
-    if (name == path.filename().u8string())
-        return std::nullopt;
-    return std::string(name.begin(), name.end());
-}
-
-}  // namespace
-
-// 8.3 kısa adı gizli adı gizler: "GIT~1/config" NotePath'ten geçer ama ".git/config"tir.
-TEST_CASE("8.3 short names of hidden entries are refused like the hidden names themselves") {
-    TempDir tmp;
-    put(tmp.path() / ".git" / "config", "[core]");
-    put(tmp.path() / ".gitignore", "*.tmp");
-    const auto git = short_alias(tmp.path() / ".git");
-    const auto ignore = short_alias(tmp.path() / ".gitignore");
-    if (!git || !ignore) {
-        MESSAGE("8.3 kısa adları bu birimde kapalı; test atlandı");
-        return;
-    }
-    NoteStore store(tmp.path());
-
-    CHECK(refusal(store.read(np(*git + "/config"))) == "hidden");
-    CHECK(refusal(store.write(np(*git + "/config"), "ezildi",
-                              stat_file(tmp.path() / ".git" / "config")->mtime)) == "hidden");
-    CHECK(refusal(store.remove(np(*git + "/config"))) == "hidden");
-    CHECK(refusal(store.create({*git, "yeni", "md", "x"}, kNow)) == "hidden");
-    CHECK(refusal(store.read(np(*ignore))) == "hidden");
-    CHECK(refusal(store.remove(np(*ignore))) == "hidden");
-    CHECK(refusal(store.remove_folder(*git, true)) == "hidden");
-
-    CHECK(slurp(tmp.path() / ".git" / "config") == "[core]");
-    CHECK(slurp(tmp.path() / ".gitignore") == "*.tmp");
-    CHECK_FALSE(fs::exists(tmp.path() / ".git" / "yeni.md"));
-}
-#endif
-
-// Dosyayı kendisi açan çağıranlar (editör, PDF dışa aktarma) yolu kökle elle birleştirmez: aynı kapıdan
-// geçer.
-TEST_CASE("absolute_path applies the same checks as read: absolute inside the root, refused through a link") {
-    TempDir tmp;
-    const fs::path root = tmp.path() / "notes";
-    const fs::path outside = tmp.path() / "outside";
-    put(outside / "secret.md", "gizli");
-    put(root / "a" / "n.md", "n");
-    REQUIRE(make_dir_link(outside, root / "link"));
-    NoteStore store(root);
-
-    const auto inside = store.absolute_path(np("a/n.md"));
-    REQUIRE(inside.has_value());
-    CHECK(inside->is_absolute());
-    CHECK(slurp(*inside) == "n");
-    CHECK(store.absolute_path(np("yeni/yok.md")).has_value());  // create gibi: var olması gerekmez
-    CHECK(refusal(store.absolute_path(np("link/secret.md"))) == "link");
-}
-
-TEST_CASE("a link to a folder inside the root is refused too: notes never live behind a link") {
-    TempDir tmp;
-    put(tmp.path() / "real" / "n.md", "n");
-    REQUIRE(make_dir_link(tmp.path() / "real", tmp.path() / "alias"));
-    NoteStore store(tmp.path());
-
-    CHECK(refusal(store.read(np("alias/n.md"))) == "link");
-    CHECK(store.read(np("real/n.md")).has_value());
-    CHECK(store.folders() == std::vector<std::string>{"real"});
 }

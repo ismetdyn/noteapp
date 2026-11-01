@@ -39,9 +39,9 @@ private:
 
 TEST_CASE("ls without a query lists relative paths by mtime descending") {
     const Sandbox box;
-    put(box.notes() / "old.md", "o", 300);
-    put(box.notes() / "work" / "mid.txt", "m", 200);
-    put(box.notes() / "new.md", "n", 100);
+    box.put("old.md", "o", 300);
+    box.put("work/mid.txt", "m", 200);
+    box.put("new.md", "n", 100);
 
     const auto result = box.run({"ls"});
     CHECK(result.exit_code == 0);
@@ -57,9 +57,9 @@ TEST_CASE("ls with no notes prints nothing and exits 0") {
 
 TEST_CASE("ls with a query follows rank_notes order and drops non-matches (SPEC-cli acceptance 6)") {
     const Sandbox box;
-    put(box.notes() / "my-long-text-generator.md", "x");
-    put(box.notes() / "meeting.md", "x");
-    put(box.notes() / "unrelated.md", "x");
+    box.put("my-long-text-generator.md", "x");
+    box.put("meeting.md", "x");
+    box.put("unrelated.md", "x");
 
     const auto result = box.run({"ls", "mtg"});
     CHECK(result.exit_code == 0);
@@ -68,8 +68,8 @@ TEST_CASE("ls with a query follows rank_notes order and drops non-matches (SPEC-
 
 TEST_CASE("ls folds Turkish letters: ogrenci finds Öğrenci.md") {
     const Sandbox box;
-    put(box.notes() / "Öğrenci.md", "x");
-    put(box.notes() / "baska.md", "x");
+    box.put("Öğrenci.md", "x");
+    box.put("baska.md", "x");
 
     const auto result = box.run({"ls", "ogrenci"});
     CHECK(result.exit_code == 0);
@@ -78,10 +78,10 @@ TEST_CASE("ls folds Turkish letters: ogrenci finds Öğrenci.md") {
 
 TEST_CASE("ls -f restricts to the folder subtree and validates the folder") {
     const Sandbox box;
-    put(box.notes() / "work" / "a.md", "a", 30);
-    put(box.notes() / "work" / "2026" / "b.md", "b", 20);
-    put(box.notes() / "workshop.md", "w", 10);
-    put(box.notes() / "other" / "c.md", "c", 5);
+    box.put("work/a.md", "a", 30);
+    box.put("work/2026/b.md", "b", 20);
+    box.put("workshop.md", "w", 10);
+    box.put("other/c.md", "c", 5);
 
     const auto scoped = box.run({"ls", "-f", "work"});
     CHECK(scoped.exit_code == 0);
@@ -99,7 +99,7 @@ TEST_CASE("ls -f restricts to the folder subtree and validates the folder") {
 TEST_CASE("show prints the raw content byte-exact and names the chosen path on stderr") {
     const Sandbox box;
     const std::string raw = "satır 1\r\nçğ\n\n";
-    put(box.notes() / "work" / "plan.md", raw);
+    box.put("work/plan.md", raw);
 
     const auto result = box.run({"show", "pln"});
     CHECK(result.exit_code == 0);
@@ -111,7 +111,7 @@ TEST_CASE("show prints the raw content byte-exact and names the chosen path on s
 TEST_CASE("show keeps control bytes byte-exact when stdout is not a terminal") {
     const Sandbox box;
     const std::string raw = "pano\x1b]52;c;ZXZpbA==\x07\r\n\xC2\x9B[31m\x7f";
-    put(box.notes() / "k.md", raw);
+    box.put("k.md", raw);
 
     const auto result = box.run({"show", "k.md"});
     CHECK(result.exit_code == 0);
@@ -120,9 +120,9 @@ TEST_CASE("show keeps control bytes byte-exact when stdout is not a terminal") {
 
 TEST_CASE("an exact relative path beats a better fuzzy score and prints no chosen line") {
     const Sandbox box;
-    put(box.notes() / "plan.md", "tam");
-    put(box.notes() / "work" / "plan.md.md", "bulanik");
-    put(box.notes() / "work" / "plan.md", "hedef");
+    box.put("plan.md", "tam");
+    box.put("work/plan.md.md", "bulanik");
+    box.put("work/plan.md", "hedef");
 
     const auto exact = box.run({"show", "work/plan.md"});
     CHECK(exact.exit_code == 0);
@@ -133,7 +133,7 @@ TEST_CASE("an exact relative path beats a better fuzzy score and prints no chose
 TEST_CASE("no match exits 1 for show and edit; bad usage exits 2") {
     const Sandbox box;
     const EditorEnv env;
-    put(box.notes() / "a.md", "a");
+    box.put("a.md", "a");
 
     const auto shown = box.run({"show", "zzzz"});
     CHECK(shown.exit_code == 1);
@@ -146,7 +146,7 @@ TEST_CASE("no match exits 1 for show and edit; bad usage exits 2") {
 
 TEST_CASE("show refuses a binary note with exit 1") {
     const Sandbox box;
-    put(box.notes() / "blob.bin", std::string("ab\0cd", 5));
+    box.put("blob.bin", std::string("ab\0cd", 5));
 
     const auto result = box.run({"show", "blob.bin"});
     CHECK(result.exit_code == 1);
@@ -157,22 +157,22 @@ TEST_CASE("edit opens the best match in the editor and the file changes") {
     const Sandbox box;
     const EditorEnv env;
     const ScopedEnv content("FAKE_EDITOR_CONTENT", "yeni içerik");
-    put(box.notes() / "work" / "plan.md", "eski");
+    box.put("work/plan.md", "eski");
 
     const auto result = box.run({"edit", "plan"});
     CHECK(result.exit_code == 0);
     CHECK(result.err == "Seçilen: work/plan.md\n");
-    CHECK(slurp(box.notes() / "work" / "plan.md") == "yeni içerik");
+    CHECK(box.body("work/plan.md") == "yeni içerik");
 }
 
 TEST_CASE("edit maps editor failures to exit 3 and leaves the note alone") {
     const Sandbox box;
     const EditorEnv env;
     const ScopedEnv exit_code("FAKE_EDITOR_EXIT", "7");
-    put(box.notes() / "a.md", "a");
+    box.put("a.md", "a");
 
     CHECK(box.run({"edit", "a.md"}).exit_code == 3);
-    CHECK(slurp(box.notes() / "a.md") == "a");
+    CHECK(box.body("a.md") == "a");
 }
 
 TEST_CASE("edit never opens a note through a directory link") {
@@ -190,7 +190,7 @@ TEST_CASE("edit never opens a note through a directory link") {
 
 TEST_CASE("ls and show messages follow the language") {
     const Sandbox box("en");
-    put(box.notes() / "a.md", "a");
+    box.put("a.md", "a");
 
     CHECK(box.run({"show", "a"}).err == "Chosen: a.md\n");
     CHECK(box.run({"show", "zzz"}).err.find("No note matches") != std::string::npos);

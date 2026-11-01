@@ -24,6 +24,10 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `note sync` · `sync status` · `sync on\|off` · `sync init REMOTE [--replace]` | Senkron yönetimi (aşağıda) |
 | `note sync login [HOST]` · `sync logout [HOST]` | Token'ı ekosuz stdin'den okuyup kasaya yazar / siler |
 | `note config path\|list\|get ANAHTAR\|set ANAHTAR DEĞER` | Config yönetimi |
+| `note query [--write] [--json] [--param K=D]… CYPHER` | Graph sorgusu (aşağıda) |
+| `note graph migrate [--skip-failed]` | Eski düz dosyaları içe aktar ([SPEC-graph.md](SPEC-graph.md)) |
+| `note graph export --format jsonl [-o DOSYA]`, `note graph import [--overwrite] DOSYA` | Tüm graph'ı JSON satırları olarak çıkar ya da yükle |
+| `note export --all DİZİN` | Tüm notları bayt bayt düz dosya olarak çıkar |
 | `note --help` · `note help KOMUT` · `note --version` | Yardım (i18n) |
 
 - Alt komut adıyla aynı metinde not eklemek için: `note -- ls`.
@@ -36,8 +40,8 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 
 ## Hızlı ekleme kuralları
 
-- **Tip:** `-t` verildiyse o; yoksa `detect::suggest` (tek satır → `default_type`).
-- **Ad:** `-n` (NotePath kurallarıyla doğrulanır) yoksa içerikten slug. **Klasör:** `-f`, yoksa `default_folder`.
+- **Tip:** `-n`'de yazılan uzantı (`-n deneme.cpp`, `a.tar.gz`, `notlar.v2`: değiştirilmez, üstüne eklenmez; SPEC-tui "Uzantı kuralı"); yoksa `-t`; yoksa `detect::suggest` (tek satır → `default_type`).
+- **Ad:** `-n` (NotePath kurallarıyla doğrulanır, slug uygulanmaz) yoksa içerikten slug. **Klasör:** `-f`, yoksa `default_folder`.
 - **Editör akışı:** OS geçici dizininde `noteapp-<rastgele>.<default_type>` oluşturulur → editör açılır →
   kapanınca okunur. Boş/yalnız boşluk → "iptal edildi", çıkış 1, dosya oluşmaz. Kayıt başarısız olursa geçici
   dosya **silinmez** ve yolu yazdırılır (veri kaybı yok); başarıdaysa silinir. `-e` ile metin argümanları geçici
@@ -65,14 +69,26 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 
 ## PDF dışa aktarma
 
-`note` kendi dizinindeki `notes-gui`'yi `--export-pdf <mutlak-girdi> <çıktı>` argümanlarıyla ve
-`QT_QPA_PLATFORM=offscreen` ortamıyla çağırır (link bağımlılığı yok). Bulunamazsa `cli.gui_not_installed`.
-Varsayılan çıktı: geçerli dizinde `<ad>.pdf`; `-o` geçerli dizine göredir. `--pdf` zorunludur. Çocuğun çıkışı
-0 değilse `note` 3 ile çıkar (GUI'nin yerelleştirilmiş hata satırı stderr'e ulaşır). Not önce `NoteStore::read`
-ile okunur ve girdi yolu `NoteStore::absolute_path`'ten gelir: okuma/yol hatasında (bağ ardında, okunamayan)
-`notes-gui` hiç başlatılmaz, hata türüne göre çıkılır (T36). `note edit` de editöre `absolute_path`'i verir.
-**Test dikişi:** `NOTEAPP_GUI_EXE` ortam değişkeni `notes-gui` yolunu geçersiz kılar (derleme ağacında `note` ve
-`notes-gui` yan yana değildir; var olmayan yol "GUI kurulu değil" durumunu simüle eder). Kullanıcı arayüzü değildir.
+`note` PDF'i süreç içinde `noteapp_pdf` ile üretir (`pdf::export_pdf`); `notes-gui` ve ekran gerekmez, GUI'siz
+derlemede de çalışır. Girdi `NoteStore::read` ile okunur;
+PDF yalnız bu baytlardan üretilir, dosya yeniden açılmaz. Okuma/yol hatasında hata türüne göre çıkılır (T36).
+Binary (ikili) not reddedilir, çıkış 1. `pdf::export_pdf` hatasında çıkış kodu hata türünden gelir (ör. yazılamayan
+çıktı: 3, yarım PDF bırakılmaz). Başarıda `cli.exported` satırı stdout'a yazılır.
+Varsayılan çıktı: geçerli dizinde `<ad>.pdf`; `-o` geçerli dizine göredir. `--pdf` zorunludur, yoksa kullanım hatası (2).
+Kapsam: A4, 15 mm; Markdown (`.md`) için başlık, kalın/italik, liste, kod, alıntı, bağlantı metni, GFM tablo; diğer
+tipler düz metin (eş aralıklı). Yalnız soldan sağa yazı: Arapça/İbranice ve karmaşık shaping yok, Türkçe tam desteklenir.
+Gömülü DejaVu'da olmayan glifler (CJK vb.) için PDF çıktısı doğrulanmadı; BMP dışı kod noktaları (emoji) `U+FFFD` olur. Görseller alt
+metne (yoksa `pdf.image_placeholder`) iner; hiçbir görsel/bağlantı hedefine istek yapılmaz.
+
+## Graph sorgusu
+
+`note query` uygulamanın deposu `<veri dizini>/graph.db` üzerinde çalışır. Dosya yoksa çıkış 1; yalnız
+`--write` oluşturur. `--write` olmadan yazan sorgu çıkış 2. Söz dizimi, desteklenmeyen öğe, eksik parametre, geçersiz
+`--param`: 2. Çalışma anı hatası ve aşılan sınır: 1. Bozuk veya yeni sürüm dosya, G/Ç: 3. Dil: [SPEC-graph](SPEC-graph.md).
+`--param k=v`: `null`, `true`, `false`, tam sayı, sonlu ondalık otomatik; `k="12"`, `inf`, `nan` ve aralık dışı sayı (`1e999`) metindir. Değer sorgu metnine girmez.
+Tablo her zaman terminal için temizlenir (hücrede `\n` ve `\t` görünür kaçış olur, `bytes` `<bytes:N>`). `--json`:
+`{"columns":[…],"rows":[[…]]}`; denetim karakterleri `\uXXXX`, `bytes` `{"$bytes":"<base64>"}`, zaman
+`{"$timestamp":ms}`, düğüm ve kenar `{"$node":"<hex>"}`, `{"$edge":"<hex>"}`.
 
 ## Çıkış kodları
 `0` başarı · `1` kullanıcı kaynaklı (iptal, bulunamadı, onay verilmedi) · `2` kullanım hatası ·
@@ -95,10 +111,20 @@ Argüman ayrıştırma elle yazılır (ek kütüphane yok). Windows'ta UTF-8 arg
 7. `note mv a.md a.java` tipi değiştirir; hedef varsa ezmez, çıkış 1.
 8. `note sync login` token'ı ekrana yansıtmaz, kasaya yazar; config/logda token yok.
 9. `note config set language en` sonrası mesajlar İngilizce.
-10. `notes-gui` yokken `note export --pdf` anlaşılır hata ve çıkış 3 verir.
+10. ~~`notes-gui` yokken `note export --pdf` anlaşılır hata ve çıkış 3 verir.~~ **EMEKLİ (2026-10-31):** `note` artık
+    `notes-gui` çağırmaz. Karşılığı: `note export --pdf` eşleşmesiz sorguda çıkış 1, `--pdf`'siz kullanım hatası,
+    yazılamayan çıktıda çıkış 3 ve artık dosya yok (`tests/cli/cli_export_test.cpp`).
 
 **Elle:** Windows Terminal ve Fedora'da `edit`/`micro`/`nano`/`vim` ile editör akışı; Türkçe karakterli argümanlar.
 
 ## Kapsam dışı
 Kabuk tamamlama (bash/zsh/PowerShell), etkileşimli seçici (fzf benzeri seçim TUI'nin işi), `mkdir/rmdir` komutları
 (klasör `-f`/`mv` ile örtük oluşur; klasör silme TUI/GUI'de).
+
+## Değişiklik 2026-10-31
+- **MODIFIED** PDF dışa aktarma: `note`, `noteapp_pdf`'e doğrudan link olur ve PDF'i süreç içinde üretir. Neden: GUI'siz
+  derlemede ve ekransız sunucuda çalışsın (`tasks/plan-imgui.md` davranış 5).
+- **REMOVED** `notes-gui --export-pdf` çağrısı, `QT_QPA_PLATFORM` ortamı, `NOTEAPP_GUI_EXE` test dikişi ve `cli.gui_not_installed` hatası.
+- **REMOVED** Kabul 10 (`notes-gui` yokken çıkış 3): emekli, numara korundu; karşılığı kabul 10 satırında.
+- **MODIFIED** PDF içeriği: yalnız soldan sağa basit metin; Markdown kapsamı yukarıda (davranış 6). Çıktı artık Qt yerine libharu + md4c ile üretilir.
+

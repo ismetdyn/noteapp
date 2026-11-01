@@ -3,6 +3,7 @@
 #include "core/i18n.hpp"
 #include "core/text.hpp"
 #include "search/fuzzy.hpp"
+#include "tui/editor_session.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -50,14 +51,16 @@ bool has_separator(std::string_view s) {
 }
 
 // NoteStore::create'in reddedeceği her şeyi diyalogda yakalar: kullanıcı hatayı kaydetmeden önce görür.
+// Adda yazılan uzantı Tip alanını geçer (SaveDialogState::submit): o zaman Tip alanı denetlenmez.
 std::optional<core::Error> validate(const std::string& folder, const std::string& name,
                                     const std::string& type) {
-    if (type.empty() || type.find('.') != std::string::npos || has_separator(type))
+    const bool typed_extension = !core::split_typed_name(name).extension.empty();
+    if (!typed_extension && (type.empty() || type.find('.') != std::string::npos || has_separator(type)))
         return invalid("invalid_type", type);
     if (has_separator(name))
         return invalid("invalid_name", name);
     if (!name.empty())
-        if (auto path = core::NotePath::parse(name + "." + type); !path)
+        if (auto path = core::NotePath::parse(typed_extension ? name : name + "." + type); !path)
             return path.error();
     if (!folder.empty())
         if (auto path = core::NotePath::parse(folder); !path)
@@ -69,9 +72,9 @@ std::optional<core::Error> validate(const std::string& folder, const std::string
 
 SaveDialogState::SaveDialogState(SaveDialogInit init)
     : init_(std::move(init)),
-      name_(init_.move
-                ? init_.name
-                : core::slugify(core::first_non_empty_line(init_.content), init_.now, init_.slug_max_length)),
+      name_(init_.move ? init_.name
+                       : core::slugify(core::note_name_source(init_.content, init_.suggestion.type),
+                                       init_.now, init_.slug_max_length)),
       folder_(init_.folder), type_(init_.move ? init_.type : init_.suggestion.type) {
     refresh_suggestions();
 }
@@ -169,7 +172,9 @@ SaveDialogState::Outcome SaveDialogState::submit() {
         error_ = core::format_error(*problem);
         return Outcome::Editing;
     }
-    request_ = {folder_, name_, type_};
+    const core::TypedName typed = core::split_typed_name(name_);
+    request_ = {folder_, std::string(typed.stem),
+                typed.extension.empty() ? type_ : std::string(typed.extension)};
     return Outcome::Submit;
 }
 
@@ -259,6 +264,9 @@ SaveDialogInit move_dialog_init(const core::NotePath& current, std::vector<std::
     init.type = to_utf8(file.extension());
     if (!init.type.empty())
         init.type.erase(0, 1);  // baştaki nokta
+    // `a.tar.gz`: gövde de uzantı gibi görünür; adın tamamı gösterilir, yazılmış sayılır ve aynen kalır.
+    if (!core::split_typed_name(init.name).extension.empty())
+        init.name = to_utf8(file.filename());
     init.folder = initial_folder(&current, "");
     init.folders = std::move(folders);
     init.types = std::move(types);
@@ -304,6 +312,123 @@ std::expected<core::NotePath, core::Error> save_new_note(core::NoteStore& store,
         std::filesystem::remove(temp_file, ec);  // not kaydedildi: artık geçici kopyaya gerek yok
     }
     return created;
+}
+
+namespace {
+
+bool is_utf8_continuation(char c) {
+    return (static_cast<unsigned char>(c) & 0xC0) == 0x80;
+}
+
+std::size_t next_code_point(std::string_view text, std::size_t at) {
+    if (at >= text.size())
+        return text.size();
+    ++at;
+    while (at < text.size() && is_utf8_continuation(text[at]))
+        ++at;
+    return at;
+}
+
+std::size_t previous_code_point(std::string_view text, std::size_t at) {
+    if (at == 0)
+        return 0;
+    --at;
+    while (at > 0 && is_utf8_continuation(text[at]))
+        --at;
+    return at;
+}
+
+// Son yol bileşenindeki son noktanın yeri; uzantı yoksa metnin sonu.
+std::size_t stem_end(std::string_view path) {
+    const std::size_t slash = path.rfind('/');
+    const std::size_t dot = path.rfind('.');
+    const bool has_extension =
+        dot != std::string_view::npos && (slash == std::string_view::npos || dot > slash);
+    return has_extension ? dot : path.size();
+}
+
+}  // namespace
+
+RenameState::RenameState(core::NotePath from)
+    : from_(std::move(from)), text_(from_.string()), cursor_(stem_end(text_)) {}
+
+RenameState::Outcome RenameState::handle(Key key, std::string_view text) {
+    switch (key) {
+    case Key::Enter:
+        return Outcome::Submit;
+    case Key::Escape:
+        return Outcome::Cancelled;
+    case Key::Left:
+        cursor_ = previous_code_point(text_, cursor_);
+        return Outcome::Editing;
+    case Key::Right:
+        cursor_ = next_code_point(text_, cursor_);
+        return Outcome::Editing;
+    case Key::Home:
+        cursor_ = 0;
+        return Outcome::Editing;
+    case Key::End:
+        cursor_ = text_.size();
+        return Outcome::Editing;
+    case Key::Backspace: {
+        const std::size_t start = previous_code_point(text_, cursor_);
+        text_.erase(start, cursor_ - start);
+        cursor_ = start;
+        error_.clear();
+        return Outcome::Editing;
+    }
+    case Key::Delete:
+        text_.erase(cursor_, next_code_point(text_, cursor_) - cursor_);
+        error_.clear();
+        return Outcome::Editing;
+    case Key::Char:
+        if (!text.empty() && static_cast<unsigned char>(text.front()) >= 0x20) {
+            text_.insert(cursor_, text);
+            cursor_ += text.size();
+            error_.clear();
+        }
+        return Outcome::Editing;
+    default:
+        return Outcome::Editing;
+    }
+}
+
+NewRowState::Outcome NewRowState::handle(Key key, std::string_view text) {
+    switch (key) {
+    case Key::Char:
+        if (is_printable(text)) {
+            text_.append(text);
+            error_.clear();
+        }
+        return Outcome::Editing;
+    case Key::Backspace:
+        pop_code_point(text_);
+        error_.clear();
+        return Outcome::Editing;
+    case Key::Enter:
+        return is_blank(text_) ? Outcome::Cancelled : Outcome::Submit;
+    case Key::Escape:
+        return Outcome::Cancelled;
+    default:
+        return Outcome::Editing;
+    }
+}
+
+std::expected<core::CreatedNote, core::Error> create_named_note(core::NoteStore& store, std::string_view name,
+                                                                std::string_view default_folder,
+                                                                std::string_view default_type,
+                                                                std::size_t slug_max_length) {
+    const auto now = std::chrono::system_clock::now();
+    auto parsed = parse_draft_name(name, default_folder, now, slug_max_length);
+    if (!parsed)
+        return std::unexpected(parsed.error());
+    std::string type = parsed->type.empty() ? std::string(default_type) : std::move(parsed->type);
+    return store.create_exact(core::NewNote{.folder = std::move(parsed->folder),
+                                            .name = std::move(parsed->stem),
+                                            .type = std::move(type),
+                                            .content = {},
+                                            .exact_name = true},
+                              now);
 }
 
 }  // namespace noteapp::tui

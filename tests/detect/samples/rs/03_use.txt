@@ -1,0 +1,8 @@
+use std::collections::HashMap;
+use std::fs;
+
+fn count() -> usize {
+    let mut m = HashMap::new();
+    m.insert(1, 2);
+    m.len()
+}

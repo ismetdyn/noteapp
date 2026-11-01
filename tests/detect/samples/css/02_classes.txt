@@ -1,0 +1,7 @@
+.card {
+  padding: 4px 8px;
+}
+
+.card:hover {
+  background: #eee;
+}

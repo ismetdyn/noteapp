@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="tr">
+  <body>
+    <h1>Merhaba</h1>
+  </body>
+</html>

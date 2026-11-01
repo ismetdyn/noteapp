@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <optional>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <stdlib.h>  // _wgetenv
@@ -140,8 +141,51 @@ fs::path state_dir() {
 #endif
 }
 
+fs::path data_dir() {
+    if (auto root = env_path("NOTEAPP_HOME"))
+        return *root / "data";
+#ifdef _WIN32
+    return app_dir_under(env_path("LOCALAPPDATA").value_or(home_dir() / "AppData" / "Local"));
+#elif defined(__APPLE__)
+    return app_dir_under(home_dir() / "Library" / "Application Support");
+#else
+    return app_dir_under(env_path("XDG_DATA_HOME").value_or(home_dir() / ".local" / "share"));
+#endif
+}
+
+std::error_code create_private_directories(const fs::path& dir) {
+    std::error_code ec;
+    // Eksik her ara dizin de özel: umask'la açılan üst, altındakini listelenebilir kılardı.
+    std::vector<fs::path> missing;
+    for (fs::path at = dir; !at.empty() && !fs::exists(at, ec); at = at.parent_path()) {
+        missing.push_back(at);
+        if (at == at.parent_path())
+            break;
+    }
+    for (auto it = missing.rbegin(); it != missing.rend(); ++it) {
+        fs::create_directory(*it, ec);
+        if (ec)
+            return ec;
+#ifndef _WIN32
+        fs::permissions(*it, fs::perms::owner_all, fs::perm_options::replace, ec);
+        if (ec)
+            return ec;
+#endif
+    }
+#ifndef _WIN32
+    fs::permissions(dir, fs::perms::owner_all, fs::perm_options::replace, ec);
+#endif
+    return ec;
+}
+
 fs::path config_file() {
     return config_dir() / "config.toml";
+}
+
+std::optional<fs::path> isolated_notes_dir() {
+    if (auto root = env_path("NOTEAPP_HOME"))
+        return *root / "notes";
+    return std::nullopt;
 }
 
 fs::path expand_user_path(std::string_view text) {

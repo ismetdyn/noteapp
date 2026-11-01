@@ -1,0 +1,4 @@
+# local
+export TOKEN_FILE=/run/token
+CACHE_DIR=/var/cache/app
+DEBUG=0

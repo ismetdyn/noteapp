@@ -2,6 +2,7 @@
 #include "core/i18n.hpp"
 #include "core/note_store.hpp"
 #include "core/text.hpp"
+#include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 #include "tui/save_dialog.hpp"
 #include "tui/tui_state.hpp"
@@ -383,7 +384,7 @@ TEST_CASE("save_new_note creates the note and deletes the temp file") {
     const auto saved = tui::save_new_note(store, *temp, {"work", "plan", "java"}, "merhaba\nçok güzel");
     REQUIRE(saved.has_value());
     CHECK(saved->string() == "work/plan.java");
-    CHECK(test::slurp(notes.path() / "work" / "plan.java") == "merhaba\nçok güzel");
+    CHECK(test::note_body(notes.path(), "work/plan.java") == "merhaba\nçok güzel");
     CHECK_FALSE(std::filesystem::exists(*temp));
 }
 
@@ -409,4 +410,111 @@ TEST_CASE("is_blank treats whitespace-only text as empty") {
     CHECK(tui::is_blank(""));
     CHECK(tui::is_blank(" \t\r\n "));
     CHECK_FALSE(tui::is_blank(" a "));
+}
+
+TEST_CASE("save dialog: a suggestion missing from an older types list stays selectable") {
+    // Eski config.toml'daki kısa liste öneriyi düşürmemeli; ←/→ yine listeye girer, listede olmayan tip
+    // kaydedilir.
+    auto init = make_init();
+    init.types = {"md", "txt"};
+    init.suggestion = {"env", 0.9, {}, true};
+    SaveDialogState dialog(std::move(init));
+    CHECK(dialog.type() == "env");
+    CHECK_FALSE(dialog.type_label().empty());
+    CHECK(dialog.handle(Key::Enter) == SaveDialogState::Outcome::Submit);
+    CHECK(dialog.request().type == "env");
+    dialog.handle(Key::Tab);
+    dialog.handle(Key::Tab);
+    REQUIRE(dialog.focus() == SaveDialogState::Field::Type);
+    dialog.handle(Key::Right);
+    CHECK(dialog.type() == "md");
+}
+
+TEST_CASE("a: Enter creates the empty note and a typed extension is never touched") {
+    const test::TempDir dir;
+    core::NoteStore store(dir.path());
+    const std::pair<std::string_view, std::string_view> cases[] = {
+        {"deneme.cpp", "deneme.cpp"},
+        {"deneme.xyz", "deneme.xyz"},
+        {"a.tar.gz", "a.tar.gz"},
+        {"notlar.v2", "notlar.v2"},
+        {"rapor.PDF", "rapor.PDF"},
+        {"iş/alt/kod.java", "iş/alt/kod.java"},
+        {"bos", "varsayilan/bos.txt"},
+        {"Toplantı Notu", "varsayilan/toplanti-notu.txt"},
+        {"Toplantı Notu.CPP", "varsayilan/toplanti-notu.CPP"},
+        {"v1.2 son", "varsayilan/v1.2-son.txt"},
+    };
+    for (const auto& [typed, expected] : cases) {
+        CAPTURE(typed);
+        const std::string folder = std::string(typed).find('.') == std::string::npos ||
+                                           std::string(typed).find(' ') != std::string::npos
+                                       ? "varsayilan"
+                                       : "";
+        const auto created = tui::create_named_note(store, typed, folder, "txt", core::kDefaultSlugMaxLength);
+        REQUIRE(created);
+        CHECK(created->path.string() == expected);
+        const auto read = store.read(created->path);
+        REQUIRE(read);
+        CHECK(read->text.empty());
+    }
+}
+
+TEST_CASE("a: a name that is taken is an error, never -2; an invalid name is an error, nothing is written") {
+    const test::TempDir dir;
+    core::NoteStore store(dir.path());
+    REQUIRE(tui::create_named_note(store, "a.md", "", "md", core::kDefaultSlugMaxLength));
+    const auto again = tui::create_named_note(store, "a.md", "", "md", core::kDefaultSlugMaxLength);
+    REQUIRE_FALSE(again);
+    CHECK(again.error().code == core::Error::Code::AlreadyExists);
+    for (const std::string_view bad : {"../x.md", "a/../b.md", ".env", "CON.txt", "a?.md"}) {
+        CAPTURE(bad);
+        CHECK_FALSE(tui::create_named_note(store, bad, "", "md", core::kDefaultSlugMaxLength));
+    }
+    CHECK(store.list().size() == 1);
+}
+
+TEST_CASE("r: a typed extension wins over the Type field and is never appended to") {
+    const test::TempDir dir;
+    core::NoteStore store(dir.path());
+    test::upsert_note(dir.path(), "a.md", "x");
+    const core::NotePath from = core::NotePath::parse("a.md").value();
+    SaveDialogState d(tui::move_dialog_init(from, {}, {"md", "txt"}, 60));
+    backspaces(d, 1);
+    type(d, "deneme.cpp");
+    REQUIRE(d.handle(Key::Enter) == Outcome::Submit);
+    const auto moved = tui::move_note(store, from, d.request());
+    REQUIRE(moved);
+    CHECK(moved->string() == "deneme.cpp");
+}
+
+TEST_CASE("r: a multi-dot note opens with its whole name and stays the same on Enter") {
+    const test::TempDir dir;
+    core::NoteStore store(dir.path());
+    test::upsert_note(dir.path(), "a.tar.gz", "x");
+    const core::NotePath from = core::NotePath::parse("a.tar.gz").value();
+    SaveDialogState d(tui::move_dialog_init(from, {}, {"md", "txt"}, 60));
+    CHECK(d.name() == "a.tar.gz");
+    REQUIRE(d.handle(Key::Enter) == Outcome::Submit);
+    CHECK(tui::move_note(store, from, d.request()) == from);
+    backspaces(d, 8);
+    type(d, "b.zip.xyz");
+    REQUIRE(d.handle(Key::Enter) == Outcome::Submit);
+    const auto moved = tui::move_note(store, from, d.request());
+    REQUIRE(moved);
+    CHECK(moved->string() == "b.zip.xyz");
+}
+
+TEST_CASE("r: without a typed extension the Type field still decides") {
+    const test::TempDir dir;
+    core::NoteStore store(dir.path());
+    test::upsert_note(dir.path(), "a.md", "x");
+    const core::NotePath from = core::NotePath::parse("a.md").value();
+    SaveDialogState d(tui::move_dialog_init(from, {}, {"md", "txt"}, 60));
+    backspaces(d, 1);
+    type(d, "yeni");
+    REQUIRE(d.handle(Key::Enter) == Outcome::Submit);
+    const auto moved = tui::move_note(store, from, d.request());
+    REQUIRE(moved);
+    CHECK(moved->string() == "yeni.md");
 }

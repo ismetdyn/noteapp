@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -22,6 +23,10 @@ struct FileStat {
 
 // Sembolik bağı izlemez (bağın kendi bilgisi döner).
 std::expected<FileStat, std::error_code> stat_file(const std::filesystem::path& path);
+
+// Dosyanın doğum zamanı (Linux statx btime, Windows oluşturma zamanı, macOS st_birthtime); bağı izlemez.
+// Dosya sistemi vermiyorsa boş.
+std::optional<std::filesystem::file_time_type> file_birth_time(const std::filesystem::path& path);
 
 struct ScannedFile {
     std::string relative;  // köke göre, '/' ayırıcılı UTF-8

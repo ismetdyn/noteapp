@@ -1,0 +1,552 @@
+// G4b: düşmanca ya da sadece büyük veride depo durmaz; sınır aşımı raporlanır, kilitlenme ya da kayıp olmaz.
+#include "core/file_stat.hpp"
+#include "core/migration.hpp"
+#include "core/note_store.hpp"
+#include "core/note_sync.hpp"
+#include "graph/graph.hpp"
+#include "support/note_seed.hpp"
+#include "support/test_support.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <doctest/doctest.h>
+#include <fstream>
+#include <string>
+#include <vector>
+
+using namespace noteapp::core;
+using noteapp::test::seed_note;
+using noteapp::test::TempDir;
+namespace fs = std::filesystem;
+namespace graph = noteapp::graph;
+
+namespace {
+
+NotePath np(const std::string& text) {
+    return *NotePath::parse(text);
+}
+
+void write_plain(const fs::path& file, std::string_view bytes) {
+    fs::create_directories(file.parent_path());
+    std::ofstream(file, std::ios::binary) << bytes;
+}
+
+graph::Graph open_raw(const fs::path& dir) {
+    fs::create_directories(dir);
+    auto opened = graph::Graph::open(dir / "graph.db");
+    REQUIRE(opened.has_value());
+    return std::move(*opened);
+}
+
+graph::NodeId raw_note(graph::WriteTxn& txn, const std::string& name, const std::string& type,
+                       std::string body) {
+    const graph::NodeId id = graph::new_node_id();
+    REQUIRE(txn.put_node(id).has_value());
+    REQUIRE(txn.add_label(id, "Note").has_value());
+    REQUIRE(txn.set_property(id, "name", graph::Value{name}).has_value());
+    REQUIRE(txn.set_property(id, "type", graph::Value{type}).has_value());
+    REQUIRE(txn.set_property(id, "body", graph::Value{graph::Bytes{std::move(body)}}).has_value());
+    return id;
+}
+
+#ifndef _WIN32
+unsigned mode_of(const fs::path& path) {
+    return static_cast<unsigned>(fs::status(path).permissions()) & 0777U;
+}
+#endif
+
+}  // namespace
+
+// İşlem başına sınır not sayısına değil işleme bağlıdır: yoksa bağlantılı 1000 not geçişi kalıcı olarak
+// kilitlerdi.
+TEST_CASE(
+    "migration of 1000 notes with 70 links each finishes; folder removal and empty_trash also batch by ops") {
+    const TempDir notes;
+    const TempDir data;
+    for (int n = 0; n < 1000; ++n) {
+        std::string body;
+        for (int link = 1; link <= 70; ++link)
+            body += "[[n" + std::to_string((n + link) % 1000) + "]] ";
+        write_plain(notes.path() / "d" / ("n" + std::to_string(n) + ".md"), body);
+    }
+    const auto report = migrate_legacy_notes(notes.path(), data.path());
+    REQUIRE_MESSAGE(report.has_value(),
+                    (report ? "" : report.error().message_key + " " + report.error().args.back().second));
+    CHECK(report->complete);
+    CHECK(report->imported == 1000);
+    {
+        auto raw = open_raw(data.path());
+        const auto links = raw.query("MATCH (a:Note)-[:LINKS_TO]->(b:Note) RETURN count(*) AS c");
+        REQUIRE(links.has_value());
+        CHECK(std::get<std::int64_t>(links->rows.at(0).at(0).v) == 70000);
+    }
+    NoteStore store(data.path());
+    SUBCASE("remove_folder force") {
+        const auto removed = store.remove_folder("d", true);
+        REQUIRE_MESSAGE(removed.has_value(), (removed ? "" : removed.error().args.back().second));
+        CHECK(store.list().empty());
+    }
+    SUBCASE("empty_trash") {
+        for (const NoteInfo& info : store.list())
+            REQUIRE(store.trash(info.path).has_value());
+        const auto emptied = store.empty_trash();
+        REQUIRE_MESSAGE(emptied.has_value(), (emptied ? "" : emptied.error().args.back().second));
+        CHECK(store.list_trash()->empty());
+    }
+}
+
+namespace {
+
+void check_deep_folder_chain(int depth) {
+    const TempDir dir;
+    {
+        auto raw = open_raw(dir.path());
+        std::optional<graph::NodeId> parent;
+        graph::NodeId last;
+        for (int done = 0; done < depth;) {
+            auto txn = raw.write();
+            REQUIRE(txn.has_value());
+            for (int i = 0; i < 5000 && done < depth; ++i, ++done) {
+                const graph::NodeId id = graph::new_node_id();
+                REQUIRE(txn->put_node(id).has_value());
+                REQUIRE(txn->add_label(id, "Folder").has_value());
+                REQUIRE(txn->set_property(id, "name", graph::Value{std::string("d")}).has_value());
+                if (parent)
+                    REQUIRE(txn->put_edge(graph::new_edge_id(), id, "CHILD_OF", *parent).has_value());
+                parent = id;
+                last = id;
+            }
+            REQUIRE(txn->commit().has_value());
+        }
+        auto txn = raw.write();
+        REQUIRE(txn.has_value());
+        const graph::NodeId deep = raw_note(*txn, "derin", "md", "x");
+        REQUIRE(txn->put_edge(graph::new_edge_id(), deep, "IN_FOLDER", last).has_value());
+        raw_note(*txn, "sig", "md", "y");
+        REQUIRE(txn->commit().has_value());
+    }
+    NoteStore store(dir.path());
+    const auto notes = store.list();
+    REQUIRE(notes.size() == 1);
+    CHECK(notes.front().path.string() == "sig.md");
+    const auto lost = store.unreachable();
+    REQUIRE(lost.size() == 1);
+    CHECK(lost.front().name == "derin.md");
+}
+
+}  // namespace
+
+// Özyineleme 60.000 derinlikte yığını taşırırdı: açılışta çöker, graph.db silinse de günlükten geri gelir.
+TEST_CASE("a very deep folder chain neither crashes nor hides shallow notes; notes too deep are reported") {
+    check_deep_folder_chain(60000);
+}
+
+// Kurulumu uzun: elle `--no-skip --test-case='a 200k*'`.
+TEST_CASE("a 200k CHILD_OF chain neither crashes nor hides shallow notes" * doctest::skip()) {
+    check_deep_folder_chain(200000);
+}
+
+TEST_CASE("many notes on one name take linear suffixes up to the limit; the rest are reported, not hidden") {
+    const TempDir dir;
+    constexpr int kCount = 3000;
+    {
+        auto raw = open_raw(dir.path());
+        auto txn = raw.write();
+        REQUIRE(txn.has_value());
+        for (int i = 0; i < kCount; ++i)
+            raw_note(*txn, "ayni", "md", std::to_string(i));
+        REQUIRE(txn->commit().has_value());
+    }
+    NoteStore store(dir.path());
+    const auto notes = store.list();
+    CHECK(notes.size() == 1001);
+    CHECK(store.unreachable().size() == kCount - 1001);
+    CHECK(store.read(np("ayni-1001.md")).has_value());
+}
+
+namespace {
+
+struct Heads {
+    TempDir logs;
+    TempDir a_dir;
+    TempDir b_dir;
+    graph::Graph a = open_raw(a_dir.path());
+    graph::Graph b = open_raw(b_dir.path());
+};
+
+std::vector<fs::path> export_log(graph::Graph& source, const fs::path& dir) {
+    REQUIRE(source.export_log(dir).has_value());
+    std::vector<fs::path> logs;
+    for (const auto& entry : fs::directory_iterator(dir))
+        logs.push_back(entry.path());
+    return logs;
+}
+
+}  // namespace
+
+// Silinmiş not atıldığı yolla listede görünür ama adı gizli: kopyanın adı NotePath'ten geçemezdi, tüm ingest
+// düşerdi.
+TEST_CASE("a conflict on a note whose name cannot make a path gets a safe copy and ingest goes on") {
+    Heads h;
+    graph::NodeId note;
+    {
+        auto txn = h.a.write();
+        REQUIRE(txn.has_value());
+        note = raw_note(*txn, "gecerli", "md", "ilk");
+        REQUIRE(txn->commit().has_value());
+    }
+    REQUIRE(h.b.ingest_logs(export_log(h.a, h.logs.path())).has_value());
+    const auto write_body = [&](graph::Graph& device, const std::string& body) {
+        auto txn = device.write();
+        REQUIRE(txn.has_value());
+        REQUIRE(txn->set_property(note, "body", graph::Value{graph::Bytes{body}}).has_value());
+        REQUIRE(txn->commit().has_value());
+    };
+    write_body(h.a, "a sürümü");
+    write_body(h.b, "b sürümü");
+    REQUIRE(h.a.export_log(h.logs.path()).has_value());
+    REQUIRE(h.b.export_log(h.logs.path()).has_value());
+    std::vector<fs::path> logs;
+    for (const auto& entry : fs::directory_iterator(h.logs.path()))
+        logs.push_back(entry.path());
+    REQUIRE(h.a.ingest_logs(logs).has_value());
+    {  // motorla ingest edildi, çözülmedi; ad gizli, çöp yolu geçerli
+        auto txn = h.a.write();
+        REQUIRE(txn.has_value());
+        REQUIRE(txn->set_property(note, "name", graph::Value{std::string(".x")}).has_value());
+        REQUIRE(txn->set_property(note, "deleted_at", graph::Value{graph::Timestamp{1000}}).has_value());
+        REQUIRE(txn->set_property(note, "trashed_from", graph::Value{std::string("ok.md")}).has_value());
+        const graph::NodeId other = raw_note(*txn, "diger", "md", "kalir");
+        static_cast<void>(other);
+        REQUIRE(txn->commit().has_value());
+    }
+    NoteStore store(h.a_dir.path());
+    REQUIRE(store.list_trash()->size() == 1);
+    const std::vector<fs::path> none;
+    const auto ingested = ingest_note_logs(store, none);
+    REQUIRE_MESSAGE(ingested.has_value(), (ingested ? "" : ingested.error().message_key));
+    CHECK(ingested->conflict_copies.size() == 1);
+    CHECK(ingested->unresolved.empty());
+    const auto copy = store.read(ingested->conflict_copies.front());
+    REQUIRE(copy.has_value());
+    CHECK((copy->text == "a sürümü" || copy->text == "b sürümü"));
+}
+
+namespace {
+
+std::string deep_folder(std::size_t depth) {
+    std::string path = "d";
+    for (std::size_t i = 1; i < depth; ++i)
+        path += "/d";
+    return path;
+}
+
+// Tam `bytes` uzunluğunda geçerli klasör yolu: bileşenler ad sınırının (255) altında.
+std::string long_folder(std::size_t bytes) {
+    constexpr std::size_t kComponent = 200;
+    std::string path;
+    while (bytes - path.size() > kComponent + 1)
+        path += std::string(kComponent, 'k') + "/";
+    return path + std::string(bytes - path.size(), 'k');
+}
+
+bool has_reason(const Error& error, std::string_view reason) {
+    return std::ranges::any_of(
+        error.args, [&](const auto& arg) { return arg.first == "reason" && arg.second == reason; });
+}
+
+void check_refused(const std::expected<NotePath, Error>& created) {
+    REQUIRE_FALSE(created.has_value());
+    CHECK(created.error().code == Error::Code::InvalidPath);
+    CHECK(has_reason(created.error(), "invalid_folder"));
+}
+
+void check_nothing_invisible(const NoteStore& store) {
+    CHECK(store.list().empty());
+    CHECK(store.folders().empty());
+    CHECK(store.unreachable().empty());
+}
+
+}  // namespace
+
+// Görüntü bu klasörleri çözemez: başarı dönen kayıt görünmez, sonraki kayıt NotFound alıp yeni görünmez düğüm
+// üretirdi.
+TEST_CASE("a note in a folder deeper than the limit is refused and nothing invisible is created") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    check_refused(store.create(NewNote{deep_folder(129), "n", "md", "metin"}));
+    check_nothing_invisible(store);
+
+    const auto at_limit = store.create(NewNote{deep_folder(128), "n", "md", "metin"});
+    REQUIRE(at_limit.has_value());
+    CHECK(store.read(*at_limit)->text == "metin");
+    CHECK(store.unreachable().empty());
+}
+
+TEST_CASE("a note under a folder path over the byte limit is refused and nothing invisible is created") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    check_refused(store.create(NewNote{long_folder(4097), "n", "md", "metin"}));
+    check_nothing_invisible(store);
+
+    // Sınır klasör yolundadır: tam sınırdaki klasörün notu görünür, toplam yol 4096'yı aşsa da.
+    const auto at_limit = store.create(NewNote{long_folder(4096), "n", "md", "metin"});
+    REQUIRE(at_limit.has_value());
+    CHECK(store.read(*at_limit)->text == "metin");
+    CHECK(store.unreachable().empty());
+}
+
+TEST_CASE("create_folder and move refuse an over-limit folder; the moved note stays where it was") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    const auto folder = store.create_folder(deep_folder(129));
+    REQUIRE_FALSE(folder.has_value());
+    CHECK(has_reason(folder.error(), "invalid_folder"));
+    check_nothing_invisible(store);
+
+    REQUIRE(seed_note(store, "n.md", "metin"));
+    check_refused(store.move(np("n.md"), np(deep_folder(129) + "/n.md")));
+    check_refused(store.move(np("n.md"), np(long_folder(4097) + "/n.md")));
+    CHECK(store.read(np("n.md"))->text == "metin");
+    CHECK(store.folders().empty());
+    CHECK(store.unreachable().empty());
+}
+
+TEST_CASE("a folder rename that pushes a descendant over a limit is refused and changes nothing") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    const std::string deep_note = "top/" + deep_folder(127) + "/n.md";
+    REQUIRE(seed_note(store, deep_note, "derin"));
+    const std::string long_note = "t/" + long_folder(4094) + "/m.md";
+    REQUIRE(seed_note(store, long_note, "uzun"));
+    REQUIRE(store.unreachable().empty());
+
+    for (const auto& [from, to] : {std::pair{"top", "x/top"}, std::pair{"t", "tt"}}) {
+        const auto renamed = store.rename_folder(from, to);
+        REQUIRE_FALSE(renamed.has_value());
+        CHECK(has_reason(renamed.error(), "invalid_folder"));
+    }
+    CHECK(store.read(np(deep_note))->text == "derin");
+    CHECK(store.read(np(long_note))->text == "uzun");
+    CHECK(store.unreachable().empty());
+    CHECK_FALSE(std::ranges::contains(store.folders(), std::string("x")));
+
+    // Aynı derinlikte ad değişikliği sınırı aşmaz.
+    REQUIRE(store.rename_folder("top", "pot").has_value());
+    CHECK(store.read(np("pot/" + deep_folder(127) + "/n.md"))->text == "derin");
+}
+
+TEST_CASE(
+    "migration reports an over-limit file as failed, leaves it in place and creates nothing invisible") {
+    const TempDir notes;
+    const TempDir data;
+    write_plain(notes.path() / "iyi.md", "iyi");
+    const std::string deep = deep_folder(129) + "/derin.md";
+    const fs::path deep_file = notes.path() / deep;
+    write_plain(deep_file, "derin");
+
+    const auto stopped = migrate_legacy_notes(notes.path(), data.path());
+    REQUIRE(stopped.has_value());
+    CHECK_FALSE(stopped->complete);
+    CHECK(stopped->imported == 1);
+    CHECK(std::ranges::any_of(stopped->failed, [&](const SkippedFile& file) {
+        return file.path == deep && file.reason == "invalid_folder";
+    }));
+    CHECK(legacy_notes_pending(notes.path(), data.path()));
+    {
+        const NoteStore store(data.path());
+        CHECK(store.read(np("iyi.md"))->text == "iyi");
+        CHECK(store.unreachable().empty());
+    }
+
+    const auto skipped = migrate_legacy_notes(notes.path(), data.path(), {.skip_failed = true});
+    REQUIRE(skipped.has_value());
+    CHECK(skipped->complete);
+    CHECK(std::ranges::any_of(skipped->failed, [&](const SkippedFile& file) { return file.path == deep; }));
+    CHECK(fs::exists(deep_file));
+    CHECK(NoteStore(data.path()).unreachable().empty());
+}
+
+// Bayt doğrulaması düğüme bakar, yola değil: düğüm güvenli yola çıkamıyorsa dosya geçmiş sayılmaz.
+TEST_CASE("migration reports a file whose verified node is unreachable instead of marking it done") {
+    const TempDir notes;
+    const TempDir data;
+    write_plain(notes.path() / "x.md", "metin");
+    {
+        auto raw = open_raw(data.path());
+        const std::string key = "live/x.md";
+        const graph::NodeId id = graph::derive_node_id("migrated-note", std::as_bytes(std::span(key)));
+        auto txn = raw.write();
+        REQUIRE(txn.has_value());
+        REQUIRE(txn->put_node(id).has_value());
+        REQUIRE(txn->add_label(id, "Note").has_value());
+        REQUIRE(txn->set_property(id, "name", graph::Value{std::string(".gizli")}).has_value());
+        REQUIRE(txn->set_property(id, "type", graph::Value{std::string("md")}).has_value());
+        REQUIRE(txn->set_property(id, "body", graph::Value{graph::Bytes{std::string("metin")}}).has_value());
+        REQUIRE(txn->commit().has_value());
+    }
+    const auto report = migrate_legacy_notes(notes.path(), data.path());
+    REQUIRE(report.has_value());
+    CHECK_FALSE(report->complete);
+    REQUIRE(report->failed.size() == 1);
+    CHECK(report->failed.front().path == "x.md");
+    CHECK(report->failed.front().reason == "invalid_name");
+    CHECK(legacy_notes_pending(notes.path(), data.path()));
+}
+
+namespace {
+
+// Üç cihazın eşzamanlı gövdeleri aynı nottadır; hepsi birleşince iki kaybeden olur.
+struct ThreeHeads {
+    TempDir logs;
+    TempDir dirs[3];
+    graph::Graph devices[3] = {open_raw(dirs[0].path()), open_raw(dirs[1].path()), open_raw(dirs[2].path())};
+    std::vector<fs::path> all_logs;
+
+    explicit ThreeHeads(const std::vector<std::string>& bodies) {
+        graph::NodeId note;
+        {
+            auto txn = devices[0].write();
+            REQUIRE(txn.has_value());
+            note = raw_note(*txn, "not", "md", "ilk");
+            REQUIRE(txn->commit().has_value());
+        }
+        REQUIRE(devices[0].export_log(logs.path()).has_value());
+        std::vector<fs::path> first;
+        for (const auto& entry : fs::directory_iterator(logs.path()))
+            first.push_back(entry.path());
+        for (std::size_t i = 1; i < bodies.size(); ++i)
+            REQUIRE(devices[i].ingest_logs(first).has_value());
+        for (std::size_t i = 0; i < bodies.size(); ++i) {
+            auto txn = devices[i].write();
+            REQUIRE(txn.has_value());
+            REQUIRE(txn->set_property(note, "body", graph::Value{graph::Bytes{bodies[i]}}).has_value());
+            REQUIRE(txn->commit().has_value());
+            REQUIRE(devices[i].export_log(logs.path()).has_value());
+        }
+        for (const auto& entry : fs::directory_iterator(logs.path()))
+            all_logs.push_back(entry.path());
+    }
+};
+
+}  // namespace
+
+TEST_CASE("two large losers of one conflict each get their own transaction: 40 MiB bodies, nothing lost") {
+    const std::vector<std::string> bodies{std::string(40U << 20U, 'a'), std::string(40U << 20U, 'b'),
+                                          std::string(40U << 20U, 'c')};
+    ThreeHeads h(bodies);
+    const TempDir target;
+    NoteStore store(target.path());
+    const auto ingested = ingest_note_logs(store, h.all_logs);
+    REQUIRE_MESSAGE(ingested.has_value(), (ingested ? "" : ingested.error().message_key));
+    CHECK(ingested->conflict_copies.size() == 2);
+    CHECK(ingested->unresolved.empty());
+    std::vector<std::size_t> sizes;
+    for (const NoteInfo& info : store.list())
+        sizes.push_back(info.size);
+    CHECK(std::ranges::count(sizes, std::size_t{40U << 20U}) == 3);
+}
+
+TEST_CASE("a conflict whose copy cannot fit a frame is reported and other notes still resolve") {
+    // Gövde çerçeveye ancak sığar; kopyanın ek işlemleri sınırı aşar.
+    const std::size_t near_limit = (std::size_t{64} << 20U) - 300;
+    const std::vector<std::string> bodies{std::string(near_limit, 'a'), std::string(near_limit, 'b')};
+    ThreeHeads h(bodies);
+    const TempDir target;
+    NoteStore store(target.path());
+    const auto ingested = ingest_note_logs(store, h.all_logs);
+    REQUIRE_MESSAGE(ingested.has_value(), (ingested ? "" : ingested.error().message_key));
+    CHECK(ingested->unresolved.size() == 1);
+    CHECK(ingested->conflict_copies.empty());
+    CHECK(store.list().size() == 1);
+    // Kaybeden head yerinde durur: ikinci ingest yine dener, yine bildirir, durmaz.
+    const auto again = ingest_note_logs(store, h.all_logs);
+    REQUIRE(again.has_value());
+    CHECK(again->unresolved.size() == 1);
+}
+
+#ifndef _WIN32
+TEST_CASE(
+    "the database, its WAL and SHM and the data directory are private, also when they already existed") {
+    const TempDir root;
+    const fs::path dir = root.path() / "veri";
+    {
+        NoteStore store(dir);
+        REQUIRE(seed_note(store, "n.md", "gizli"));
+        CHECK(mode_of(dir) == 0700U);
+        CHECK(mode_of(dir / "graph.db") == 0600U);
+        CHECK(mode_of(dir / "graph.db-wal") == 0600U);
+        CHECK(mode_of(dir / "graph.db-shm") == 0600U);
+    }
+    // Eski sürümün umask'la bıraktığı dosyalar açılışta daralır.
+    for (const char* name : {"graph.db", "graph.db-wal", "graph.db-shm"})
+        if (fs::exists(dir / name))
+            fs::permissions(dir / name, static_cast<fs::perms>(0644), fs::perm_options::replace);
+    fs::permissions(dir, static_cast<fs::perms>(0755), fs::perm_options::replace);
+    NoteStore again(dir);
+    REQUIRE(seed_note(again, "m.md", "x"));
+    CHECK(mode_of(dir) == 0700U);
+    for (const char* name : {"graph.db", "graph.db-wal", "graph.db-shm"})
+        if (fs::exists(dir / name))
+            CHECK_MESSAGE(mode_of(dir / name) == 0600U, name);
+}
+
+TEST_CASE("the migration backup is private however open the source files were") {
+    const TempDir notes;
+    const TempDir data;
+    write_plain(notes.path() / "alt" / "a.md", "a");
+    fs::permissions(notes.path() / "alt" / "a.md", static_cast<fs::perms>(0644), fs::perm_options::replace);
+    const auto report = migrate_legacy_notes(notes.path(), data.path());
+    REQUIRE(report.has_value());
+    CHECK(mode_of(report->backup) == 0700U);
+    for (const auto& entry : fs::recursive_directory_iterator(report->backup))
+        CHECK_MESSAGE(mode_of(entry.path()) == (entry.is_directory() ? 0700U : 0600U),
+                      noteapp::test::utf8(entry.path()));
+}
+#endif
+
+#ifdef __linux__
+#include <fcntl.h>
+#include <sys/stat.h>
+
+// Dosya sistemi doğum zamanı veriyorsa created_at odur; mtime ileri alınmış dosyada ikisi ayrılır. Geçiş anı
+// asla değil.
+TEST_CASE("migration takes created_at from the file's birth time where the filesystem has one") {
+    const TempDir notes;
+    const TempDir data;
+    const fs::path file = notes.path() / "n.md";
+    write_plain(file, "x");
+    const auto later = fs::file_time_type::clock::now() + std::chrono::hours(48);
+    fs::last_write_time(file, later);
+    struct statx info{};
+    REQUIRE(statx(AT_FDCWD, file.c_str(), AT_SYMLINK_NOFOLLOW, STATX_BTIME, &info) == 0);
+    const auto report = migrate_legacy_notes(notes.path(), data.path());
+    REQUIRE(report.has_value());
+    const auto metas = NoteStore(data.path()).list_meta();
+    REQUIRE(metas.size() == 1);
+    REQUIRE(metas[0].created_at.has_value());
+    const auto created = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::file_clock::to_sys(*metas[0].created_at).time_since_epoch());
+    if ((info.stx_mask & STATX_BTIME) != 0) {
+        CHECK(created.count() == info.stx_btime.tv_sec);
+        CHECK(*metas[0].created_at < metas[0].updated_at);
+    } else {
+        MESSAGE("dosya sistemi doğum zamanı vermiyor: mtime'a düşer");
+        CHECK(*metas[0].created_at == metas[0].updated_at);
+    }
+}
+#endif
+
+TEST_CASE("a backdated file: created_at is never after the last change and never the migration time") {
+    const TempDir notes;
+    const TempDir data;
+    const fs::path file = notes.path() / "eski.md";
+    write_plain(file, "x");
+    const auto old = fs::file_time_type::clock::now() - std::chrono::days(400);
+    fs::last_write_time(file, old);
+    REQUIRE(migrate_legacy_notes(notes.path(), data.path()).has_value());
+    const auto metas = NoteStore(data.path()).list_meta();
+    REQUIRE(metas.size() == 1);
+    REQUIRE(metas[0].created_at.has_value());
+    CHECK(*metas[0].created_at <= metas[0].updated_at);
+}

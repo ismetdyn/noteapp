@@ -1,0 +1,4 @@
+type Result = { ok: boolean; value?: string };
+export function f(x: string): Result {
+  return { ok: true, value: x };
+}

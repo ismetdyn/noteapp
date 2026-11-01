@@ -1,0 +1,360 @@
+#include "tui/editor_view.hpp"
+
+#include "core/i18n.hpp"
+#include "core/text.hpp"
+#include "tui/display_text.hpp"
+#include "tui/view.hpp"
+
+#include <algorithm>
+#include <ftxui/screen/string.hpp>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace noteapp::tui {
+
+namespace {
+
+// Soru pencerelerinin iç genişliği; en küçük pencerede (60) kenarlara sığar.
+constexpr int kPromptWidth = 52;
+constexpr std::string_view kHintGap = "  ";
+constexpr std::string_view kFieldGap = "  ";
+constexpr std::string_view kEncodingName =
+    "UTF-8";  // tampon her zaman UTF-8'dir; geçersiz not salt-okunur açılır
+constexpr std::string_view kBomMark = "BOM";
+constexpr std::string_view kPastEndMark = "~";
+constexpr int kInfoBarPadding = 4;  // kenar boşlukları + ad ile alanlar arası
+// Parlak siyah: 16 ANSI içinde hem açık hem koyu temada satırı metni bozmadan ayırır.
+const ftxui::Color kCurrentLineBackground = ftxui::Color::GrayDark;
+
+enum class CellStyle { Plain, Highlight, Inverted };
+
+// Bir hücrenin görünüşü: arama ve seçim her zaman sözdizimi renginin önüne geçer.
+struct CellLook {
+    CellStyle style = CellStyle::Plain;
+    TokenKind token = TokenKind::Plain;
+    bool misspelled = false;
+    bool operator==(const CellLook&) const = default;
+};
+
+// Yalnız 16 ANSI rengi: açık ve koyu terminalde de okunur. Sarı arama vurgusuna ayrılmıştır.
+ftxui::Element token_styled(ftxui::Element element, TokenKind token) {
+    using namespace ftxui;
+    switch (token) {
+    case TokenKind::Plain:
+        return element;
+    case TokenKind::Comment:
+        return element | color(Color::Green);
+    case TokenKind::String:
+    case TokenKind::Value:
+        return element | color(Color::Magenta);
+    case TokenKind::Number:
+    case TokenKind::Constant:
+        return element | color(Color::RedLight);
+    case TokenKind::Type:
+    case TokenKind::Code:
+        return element | color(Color::Cyan);
+    case TokenKind::Keyword:
+    case TokenKind::Key:
+    case TokenKind::Tag:
+        return element | color(Color::BlueLight);
+    case TokenKind::Heading:
+        return element | bold | color(Color::BlueLight);
+    case TokenKind::Emphasis:
+        return element | bold;
+    }
+    return element;
+}
+
+ftxui::Element styled(std::string run, CellLook look) {
+    using namespace ftxui;
+    Element element = text(std::move(run));
+    if (look.misspelled)
+        element = element | underlined;
+    switch (look.style) {
+    case CellStyle::Highlight:
+        return element | bold | color(Color::Yellow);
+    case CellStyle::Inverted:
+        return element | inverted;
+    case CellStyle::Plain:
+        break;
+    }
+    return token_styled(std::move(element), look.token);
+}
+
+bool is_misspelled(std::size_t offset, const RowPaint& paint) {
+    return std::ranges::any_of(paint.misspelled, [offset](const ByteRange& range) {
+        return offset >= range.begin && offset < range.end;
+    });
+}
+
+std::size_t first_code_point_bytes(std::string_view text) {
+    std::size_t length = 1;
+    while (length < text.size() && (static_cast<unsigned char>(text[length]) & 0xC0) == 0x80)
+        ++length;
+    return length;
+}
+
+// Gölge öneri: ilk harf imlecin altında, tümü soluk ve panele kırpılır (sarmaya girmez, metin değildir).
+void append_ghost(ftxui::Elements& parts, std::string_view ghost, int room) {
+    using namespace ftxui;
+    const std::string safe = terminal_safe(ghost);
+    std::string_view rest = safe;
+    const std::size_t first = first_code_point_bytes(rest);
+    parts.push_back(text(std::string(rest.substr(0, first))) | dim | focusCursorBlock);
+    int used = string_width(std::string(rest.substr(0, first)));
+    rest.remove_prefix(first);
+    std::string shown;
+    while (!rest.empty()) {
+        const std::string_view next = rest.substr(0, first_code_point_bytes(rest));
+        used += string_width(std::string(next));
+        if (used > room)
+            break;
+        shown += next;
+        rest.remove_prefix(next.size());
+    }
+    if (!shown.empty())
+        parts.push_back(text(std::move(shown)) | dim);
+}
+
+// Aralıklar sıralıdır ve satır soldan sağa çizilir: geri dönmeyen imleç satır başına doğrusal kalır.
+class TokenCursor {
+public:
+    TokenCursor(std::span<const SyntaxSpan> spans, std::size_t origin) : spans_(spans), origin_(origin) {}
+    TokenKind at(std::size_t offset) {
+        const std::size_t local = offset - origin_;
+        while (next_ < spans_.size() && spans_[next_].end <= local)
+            ++next_;
+        return next_ < spans_.size() && spans_[next_].begin <= local ? spans_[next_].kind : TokenKind::Plain;
+    }
+
+private:
+    std::span<const SyntaxSpan> spans_;
+    std::size_t origin_;
+    std::size_t next_ = 0;
+};
+
+CellStyle style_at(std::size_t offset, const RowPaint& paint) {
+    const auto inside = [offset](const ByteRange& range) {
+        return offset >= range.begin && offset < range.end;
+    };
+    if (paint.selection && inside(*paint.selection))
+        return CellStyle::Inverted;
+    return std::ranges::any_of(paint.highlights, inside) ? CellStyle::Highlight : CellStyle::Plain;
+}
+
+// Numara sağa yaslı; sarılan satırın devamında boş kalır. Satır numarası metin değildir: tampona ve imleç
+// hesabına girmez.
+ftxui::Element gutter_cell(const EditorBuffer& buffer, const VisualRow& row, int width, bool current) {
+    using namespace ftxui;
+    const bool first_row = row.begin == buffer.line_start(row.line);
+    std::string label = first_row ? std::to_string(row.line + 1) + " " : std::string{};
+    label.insert(0, static_cast<std::size_t>(std::max(width - static_cast<int>(label.size()), 0)), ' ');
+    return current ? text(std::move(label)) | bold : text(std::move(label)) | dim;
+}
+
+std::string status_notice(const EditorSession& session) {
+    if (!session.message().empty())
+        return session.message();
+    if (session.deleted_on_disk())
+        return core::tr("tui.editor_deleted_on_disk");
+    if (session.changed_on_disk())
+        return core::tr("tui.editor_changed_on_disk");
+    return {};
+}
+
+ftxui::Elements choice_rows(std::initializer_list<std::string> labels, int selected) {
+    using namespace ftxui;
+    Elements rows;
+    int index = 0;
+    for (const std::string& label : labels) {
+        Element row = text("[ " + label + " ]");
+        rows.push_back(index == selected ? row | inverted : row);
+        ++index;
+    }
+    return rows;
+}
+
+ftxui::Element prompt_box(const std::string& title, const std::string& question, ftxui::Elements choices) {
+    using namespace ftxui;
+    Elements body = {paragraph(question) | bold, text("")};
+    for (Element& choice : choices)
+        body.push_back(std::move(choice));
+    return window(text(" " + title + " ") | bold, vbox(std::move(body))) | size(WIDTH, EQUAL, kPromptWidth) |
+           clear_under;
+}
+
+// fzf-tab gibi: sorgu üstte, süzülmüş adaylar altında; yazı metne değil sorguya gider.
+ftxui::Element completion_box(const EditorSession& session) {
+    using namespace ftxui;
+    Elements body = {hbox({text("> ") | bold, text(terminal_safe(session.completion_query())), text("▏")})};
+    const std::vector<std::string>& items = session.completion_items();
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        Element row = text(terminal_safe(items[i]));
+        body.push_back(i == session.completion_selected() ? row | inverted : row);
+    }
+    if (items.empty())
+        body.push_back(text(core::tr("tui.editor_not_found")) | dim);
+    body.push_back(text(core::tr("tui.completion_hints")) | dim);
+    return window(text(" " + core::tr("tui.completion_title") + " ") | bold, vbox(std::move(body))) |
+           size(WIDTH, EQUAL, kPromptWidth) | clear_under;
+}
+
+}  // namespace
+
+int terminal_cell_width(char32_t code_point) {
+    return ftxui::string_width(core::encode_utf8(std::u32string_view(&code_point, 1)));
+}
+
+ftxui::Element paint_row(const EditorBuffer& buffer, const VisualRow& row, const RowPaint& paint) {
+    ftxui::Elements parts;
+    std::string run;
+    CellLook run_look;
+    TokenCursor tokens(paint.syntax, paint.syntax_origin);
+    int cell = 0;
+    for (std::size_t at = row.begin; at < row.end;) {
+        const Glyph glyph = buffer.glyph_at(at, cell);
+        const CellLook look{style_at(at, paint), tokens.at(at), is_misspelled(at, paint)};
+        const bool at_cursor = paint.cursor && at == *paint.cursor;
+        if ((look != run_look || at_cursor) && !run.empty()) {
+            parts.push_back(styled(std::move(run), run_look));
+            run.clear();
+        }
+        if (at_cursor) {
+            parts.push_back(styled(glyph.shown, look) | ftxui::focusCursorBlock);
+        } else {
+            run_look = look;
+            run += glyph.shown;
+        }
+        cell += glyph.cells;
+        at = glyph.next;
+    }
+    if (!run.empty())
+        parts.push_back(styled(std::move(run), run_look));
+    // Satır sonu imleci: kaydırılan satırın bitiş ofseti zaten sonraki görsel satırın başında çizilir.
+    if (paint.cursor && *paint.cursor == row.end && row.last_of_line) {
+        if (paint.ghost.empty())
+            parts.push_back(ftxui::text(" ") | ftxui::focusCursorBlock);
+        else
+            append_ghost(parts, paint.ghost, paint.columns - cell);
+    }
+    // Boş hbox yükseklik almaz: boş satır pencereden düşmesin.
+    if (parts.empty())
+        parts.push_back(ftxui::text(" "));
+    return ftxui::hbox(std::move(parts));
+}
+
+ftxui::Element editor_pane(const EditorSession& session, bool show_cursor, SpellChecker* spell) {
+    using namespace ftxui;
+    const EditorBuffer& buffer = *session.buffer();
+    const int gutter = session.gutter_width();
+    const std::size_t current_line = buffer.cursor_line();
+    const bool editing = show_cursor && session.mode() == EditorSession::Mode::Editing;
+    const std::optional<std::size_t> cursor = editing ? std::optional(buffer.cursor()) : std::nullopt;
+    Elements rows;
+    std::vector<SyntaxSpan> spans;
+    std::vector<ByteRange> misspelled;
+    std::optional<std::size_t> spans_line;  // sarılan satır aynı aralıkları yeniden hesaplamasın
+    const bool check_spelling = spell && spellcheck_applies_to(session.shown_type());
+    for (const VisualRow& row : buffer.visible_rows(session.columns(), session.rows())) {
+        if (spans_line != row.line) {
+            spans = session.syntax_spans(row.line);
+            spans_line = row.line;
+            misspelled.clear();
+            if (check_spelling)
+                misspelled = spell->misspelled(buffer.line_text(row.line));
+            for (ByteRange& range : misspelled) {
+                range.begin += buffer.line_start(row.line);
+                range.end += buffer.line_start(row.line);
+            }
+        }
+        const RowPaint paint{
+            cursor,     buffer.selection(), session.find_matches(), spans, buffer.line_start(row.line),
+            misspelled, session.ghost(),    session.columns()};
+        const bool current = row.line == current_line;
+        Element line =
+            hbox({gutter_cell(buffer, row, gutter, current), paint_row(buffer, row, paint), filler()});
+        rows.push_back(current ? std::move(line) | bgcolor(kCurrentLineBackground) : std::move(line));
+    }
+    while (static_cast<int>(rows.size()) < session.rows())
+        rows.push_back(text(std::string(kPastEndMark)) | dim);
+    return vbox(std::move(rows));
+}
+
+ftxui::Element editor_info_bar(const EditorSession& session, int width) {
+    using namespace ftxui;
+    const EditorBuffer& buffer = *session.buffer();
+    const TextPosition position = buffer.position();
+    std::string fields = session.shown_type() + std::string(kFieldGap) + std::string(kEncodingName) +
+                         std::string(kFieldGap) + (buffer.uses_crlf() ? "CRLF" : "LF");
+    if (session.has_bom())
+        fields += std::string(kFieldGap) + std::string(kBomMark);
+    fields += std::string(kFieldGap) + std::to_string(position.line + 1) + ":" +
+              std::to_string(position.column + 1) + std::string(kFieldGap) +
+              core::tr("tui.status_lines", {{"count", std::to_string(buffer.line_count())}});
+    // Alan bilgisi yerinde kalır; sığmazsa dosya adının sonu görünür (uzantı ve ad ayırt edici kısımdır).
+    const std::string name =
+        (session.path() ? session.path()->string() : "[" + session.display_name() + "]") +
+        (session.dirty() ? std::string(kDirtyMark) : "");
+    const int room = width - string_width(fields) - kInfoBarPadding;
+    const std::string shown = tail_code_points(name, static_cast<std::size_t>(std::max(room, 1)));
+    return hbox({text(" " + shown), filler(), text(fields + " ")}) | inverted;
+}
+
+ftxui::Element editor_status_bar(const EditorSession& session, int width) {
+    using namespace ftxui;
+    if (session.mode() == EditorSession::Mode::NamePrompt) {
+        // Klasörsüz ad buraya yazılır: kullanıcı nereye kaydedeceğini görsün.
+        const std::string folder = session.name_folder();
+        const std::string label =
+            core::tr("tui.new_note_label") + (folder.empty() ? std::string{} : " " + folder + "/");
+        return input_bar(label, session.name_input(), core::tr("tui.new_note_hints"), width, {},
+                         session.message());
+    }
+    if (session.mode() == EditorSession::Mode::Find)
+        return input_bar(core::tr("tui.find_label"), session.find_query(), core::tr("tui.editor_find_hints"),
+                         width, session.find_label(), session.message());
+
+    const bool read_only = session.read_only() != EditorSession::ReadOnly::No;
+    const std::string notice = status_notice(session);
+    Elements cells;
+    int used = 0;
+    if (!notice.empty()) {
+        Element shown = text(notice) | bold;
+        cells.push_back(session.message_is_error() ? shown | color(Color::Red) : shown);
+        used += string_width(notice) + static_cast<int>(kHintGap.size());
+    }
+    // Hata ya da ileti varken kısayol sığdığı kadar yanında kalır; kelime ortasında kesilmez.
+    const std::string hints = fit_hints(
+        core::tr(read_only ? "tui.key_hints_editor_readonly" : "tui.key_hints_editor"), width - used);
+    if (!hints.empty())
+        cells.push_back(text((notice.empty() ? "" : std::string(kHintGap)) + hints) | dim);
+    return hbox(std::move(cells));
+}
+
+ftxui::Element editor_modal(const EditorSession& session) {
+    switch (session.mode()) {
+    case EditorSession::Mode::LeavePrompt:
+        return prompt_box(core::tr("tui.editor_leave_title"),
+                          core::tr("tui.editor_leave_question", {{"path", session.display_name()}}),
+                          choice_rows({core::tr("tui.editor_choice_save"), core::tr("tui.discard_yes"),
+                                       core::tr("tui.discard_no")},
+                                      static_cast<int>(session.leave_choice())));
+    case EditorSession::Mode::ConflictPrompt:
+        return prompt_box(core::tr("tui.editor_conflict_title"),
+                          core::tr("tui.editor_conflict_question", {{"path", session.path()->string()}}),
+                          choice_rows({core::tr("tui.editor_choice_copy"), core::tr("tui.editor_choice_load"),
+                                       core::tr("tui.editor_choice_overwrite"), core::tr("tui.discard_no")},
+                                      static_cast<int>(session.conflict_choice())));
+    case EditorSession::Mode::Editing:
+    case EditorSession::Mode::Find:
+    case EditorSession::Mode::NamePrompt:
+        break;
+    case EditorSession::Mode::Complete:
+        return completion_box(session);
+    }
+    return nullptr;
+}
+
+}  // namespace noteapp::tui

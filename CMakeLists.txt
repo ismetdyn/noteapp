@@ -1,14 +1,24 @@
 cmake_minimum_required(VERSION 3.28)
 project(noteapp VERSION 0.1.0 LANGUAGES CXX)
 
-option(NOTEAPP_BUILD_GUI "notes-gui (Qt 6) derlensin" ON)
+option(NOTEAPP_BUILD_GUI "notes-gui (SDL3 + Dear ImGui) derlensin" ON)
 option(NOTEAPP_BUILD_TESTS "Testler derlensin" ON)
+option(NOTEAPP_BUILD_FUZZ "libFuzzer hedefleri (clang, ASan/UBSan; tests/graph/fuzz)" OFF)
+
+if(NOTEAPP_BUILD_FUZZ)
+    # Tüm hedefler aynı sanitizer'la: kütüphanede kaçan taşma hedefte görünsün. Kapsam izleme yalnız motorda.
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g -O1)
+    add_link_options(-fsanitize=address,undefined)
+endif()
 
 # C++20 modülleri kullanılmıyor; tarama yalnız derlemeyi yavaşlatır.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 include(cmake/Dependencies.cmake)
 include(cmake/EmbedResources.cmake)
+if(MINGW)
+    include(cmake/toolchains/mingw-delay-load.cmake)
+endif()
 
 # Dil standardı ve uyarılar yalnız bizim hedeflerimize uygulanır; üçüncü parti kodun uyarıları build'i kırmamalı.
 function(noteapp_target_defaults target)
@@ -19,16 +29,26 @@ function(noteapp_target_defaults target)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
+    # libstdc++, libgcc, winpthreads statik: ikili MinGW DLL'i olmadan kopyala-çalıştır açılır.
+    if(MINGW)
+        target_link_options(${target} PRIVATE -static "-L${NOTEAPP_DELAY_LOAD_DIR}")
+    endif()
 endfunction()
 
+add_subdirectory(src/graph)
 add_subdirectory(src/core)
 add_subdirectory(src/detect)
 add_subdirectory(src/search)
 add_subdirectory(src/sync)
+add_subdirectory(src/pdf)
 add_subdirectory(src/cli)
 add_subdirectory(src/tui)
 if(NOTEAPP_BUILD_GUI)
     add_subdirectory(src/gui)
+endif()
+
+if(NOTEAPP_BUILD_FUZZ)
+    add_subdirectory(tests/graph/fuzz)
 endif()
 
 if(NOTEAPP_BUILD_TESTS)

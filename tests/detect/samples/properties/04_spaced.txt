@@ -1,0 +1,3 @@
+app.title = Not Defteri
+app.locale = tr_TR
+mail.smtp.auth = true

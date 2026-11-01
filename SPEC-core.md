@@ -5,7 +5,7 @@
 ## Amaç
 
 Tüm ön yüzlerin (cli/tui/gui) ve `search`/`sync`'in üzerine oturduğu ortak çekirdek: not deposu, yol
-güvenliği, atomik yazma, config, i18n, editör başlatma, platform dizinleri, log. Qt'ye bağımlı değildir.
+güvenliği, atomik yazma, config, i18n, editör başlatma, platform dizinleri, log. Hiçbir GUI araç takımına bağımlı değildir.
 
 ## Arayüz (taslak)
 
@@ -114,7 +114,7 @@ taşıma, silme, klasör işlemleri) iki kural uygular:
 - `folders()` bağları listelemez, içlerine inmez.
 
 ### Silme
-`remove` dosyayı kalıcı siler (çöp kutusu yok; senkron açıksa geçmişte kalır). Onay sorumluluğu ön yüzdedir.
+`remove` dosyayı kalıcı siler (senkron açıksa geçmişte kalır; çöp kutusu için `trash`, bkz. Değişiklik 2026-11-01). Onay sorumluluğu ön yüzdedir.
 
 ### Config (`config.toml`)
 ```toml
@@ -201,4 +201,56 @@ Medium: geçici dizinde NoteStore (oluştur/yaz/taşı/sil/klasör, sembolik ba�
 `run_editor` testi, test için derlenen `fake-editor` yardımcı programıyla.
 
 ## Kapsam dışı
-Çöp kutusu, dosya izleme (ön yüzlerin işi), etiket/front-matter, şifreleme.
+Dosya izleme (ön yüzlerin işi), etiket/front-matter, şifreleme.
+
+## Değişiklik 2026-10-31
+- **MODIFIED** Amaç: "Qt'ye bağımlı değildir" cümlesi GUI araç takımından bağımsızlık olarak genelleştirildi. Davranış değişmedi;
+  GUI'nin Qt'den SDL3 + Dear ImGui'ye geçişi için bkz. [SPEC.md](SPEC.md) ve [SPEC-gui.md](SPEC-gui.md).
+
+## Değişiklik 2026-11-02 (G4)
+Bu bölüm yukarıdaki "Yazma", "Listeleme", "Klasörler", "Yol güvenliği" ve "Çöp kutusu"nun dosya sistemi ayrıntılarını geçersiz kılar. `SPEC-graph.md` bağlayıcıdır.
+- **MODIFIED** `NoteStore(dizin, slug)` `<dizin>/graph.db` üzerinde çalışır; uygulama `NoteStore::for_config(config)` ile `data_dir()`'i kullanır. Kopyalar tek bağlantıyı paylaşır, thread-safe'tir. Okuma veritabanını kurmaz.
+- **ADDED** `core::data_dir()`: `NOTEAPP_HOME/data`, `$XDG_DATA_HOME/noteapp`, macOS Application Support, Windows `%LOCALAPPDATA%\noteapp`.
+- **Uygulama şeması:** `Note {name, type, body, created_at, updated_at, origin, deleted_at, trashed_from}`, `Folder {name}`, `IN_FOLDER`, `CHILD_OF`, `LINKS_TO`. `Tag` bu turda yok, sonraya bırakıldı. Motor nottan habersizdir: bunların hepsi core'dadır (`note_snapshot.cpp`, `note_write.cpp`).
+- **Yol okuma kuralı (saf fonksiyon, her cihazda aynı):**
+  - Klasör kimliği `derive_id(üst, ad, tuz)`; aynı klasörü iki cihaz aynı düğüme getirir. Yeniden adlandırma tek yazmadır, altındakilere dokunmaz. Eski adla yeni klasör sonraki tuzu alır.
+  - Birden çok `IN_FOLDER` ya da `CHILD_OF` (eşzamanlı taşıma): en büyük kenar kimliği geçerlidir. Kenar kimliği UUIDv7'dir, yani en son taşıma. Sonraki taşıma hepsini siler.
+  - `CHILD_OF` döngüsü: döngüdeki en küçük kimlikli klasörün üst kenarı yok sayılır, kök altına düşer.
+  - Aynı yolda iki not: eski not (`created_at`, eşitlikte kimlik) yolu alır, diğeri `-2`, `-3`. Ek saklanmaz.
+  - Ad ve yol `NotePath` kapısından geçer, ad `/` içeremez. Geçemeyen düğüm listelenmez, loglanır, veride kalır (`note graph export`).
+- **MODIFIED** `ModifiedExternally`: mtime yerine `Revision` (gövdeyi yazan dot). `NoteInfo.mtime` artık `updated_at`'tır, yalnız sıralama ve gösterim içindir. `write` yeni `Revision` döner. Başka süreç aynı notu yazdıysa çakışma akışı çalışır.
+- **MODIFIED** Aynı baytları `write` işlem üretmez, revizyon değişmez.
+- **ADDED** Dış değişiklik tespiti `Graph::data_version()` (`PRAGMA data_version`): değişiklik yokken `list()` tüm notları okumaz (5.000 notta 0,3 ms), varsa 25 ms.
+- **MODIFIED** `.trash` yerine `deleted_at`, API aynı. Silme gövdenin her head'ini görmüş olmalı, görmediği farklı baytlı düzenleme kazanır (saf okuma kuralı, `ReadTxn::saw`). `trashed_from` atıldığı yolu tutar: klasör silinmiş olsa da geri yükleme oraya döner.
+- **MODIFIED** `absolute_path` kalktı. Dosya isteyen araç `edit_in_temp_file` kullanır: özel dosya (`create_private_temp_file`, 0600, 0700 dizin), bağ okunmaz, çakışma denetimiyle geri yazma, sonra silme. Kayıt başarısızsa dosya kalır, hata yolunu söyler (`error.edit_kept`). Bilinen sınır: süreç öldürülürse dosya `<durum>/tmp` altında kalır.
+- **MODIFIED** `.keep` emekli: boş klasör `Folder` düğümüdür. `remove_folder` yalnız canlı notları sayar.
+- **MODIFIED** Not boyutu: tek çerçeve 64 MiB (SPEC-graph). Daha büyük not hata verir; geçişte 60 MiB üstü dosya atlanır ve raporlanır.
+- **ADDED** `LINKS_TO`: `[[hedef]]`, `[[hedef|takma]]`, `[[hedef#başlık]]`, kayıtla aynı işlemde. Çözüm sırası yol, uzantısız yol, dosya adı, yalın ad. Hedef yazma anında çözülür: sonradan oluşan hedef, kaynak yeniden kaydedilene ya da `note graph migrate`'e kadar bağlanmaz. Not başına en çok 1024 bağlantı.
+- **ADDED** `created_at`, `origin` gerçek değerdir, `origin` derleme platformu sabitidir (`windows`, `linux`, `macos`, `android`; geçişte `unknown`). `origin:` ve `created:` araması çalışır.
+- **MODIFIED** `tuning.autosave_ms` 1000'den 3000'e. Ölçüm (30 dakikalık benzetim, `tests/perf/note_store_perf_test.cpp`): 2 KiB notta 1 sn'de 119 kayıt 462 KiB, 3 sn'de 57 kayıt 217 KiB; 20 KiB notta 2,6 MiB'den 1,26 MiB'ye. Nedenselliğe dokunmaz. Bedel: kapanmadan öldürülen GUI son 3 sn'yi kaybeder (kapanış ve not geçişi yine kaydeder).
+- **ADDED** `Error::Code::MigrationRequired`; `health()` depo sorununu ön yüze söyler. Eski not bekleyen dizinde tüm yazmalar reddedilir.
+- **Performans (Release, 5.000 not, 2 KB):** `note "x"` 36 ms (sınır 200), açılış 44 ms (300), tuş başına liste 2 ms (50).
+
+## Değişiklik 2026-11-01
+- **ADDED** Çöp kutusu (T55a, kullanıcı kararı: senkronlanır, `<notes_dir>/.trash/` altında):
+  `NoteStore::trash(path) -> TrashItem`, `list_trash()`, `restore(item) -> NotePath`, `purge(item)`, `empty_trash()`.
+  `TrashItem {NotePath path; file_time_type trashed_at; uintmax_t size}`; `path` `.trash`'e göre göreli, notun yoludur.
+  - **Taşıma:** bayt değişmez, `.trash/<yol>`'a ezmeyen atomik rename (`move_no_replace`). Çöpte ad doluysa `create()`'in
+    biçimiyle `-2`, `-3`… (`a.tar.gz` → `a.tar-2.gz`); `restore` canlı ağaçta aynı kuralla ad seçer, asla ezmez.
+    Klasörler yeniden oluşur; çöpte boş kalan klasörler budanır. Yan dosya olmadığından `x-2.md` geri yüklenince
+    `x.md` değil `x-2.md` olur (bilinen sınır).
+  - **Atılma anı = dosyanın mtime'ı (seçim):** `trash` rename'den sonra mtime'ı o ana çeker. Addaki ek yerine bu seçildi:
+    yol `.trash/<yol>` olarak kalır, iki cihazın aynı notu atması çakışma üretmez, geri yükleme ad çözmek zorunda kalmaz.
+    Bedeli: git mtime taşımaz, diğer cihazda `trashed_at` notun oraya indiği andır; geri yüklenen notun mtime'ı atılma
+    anıdır. Mtime yazılamazsa uyarı loglanır, not yine çöptedir.
+  - **Görünürlük:** `.trash` noktalı olduğundan `list()`, `folders()`, arama ve klasör silme sayımı onu görmez; `NotePath::parse`
+    reddeder, bu beş işlev dışında ona yol yoktur. `remove` kalıcı silmeye devam eder.
+  - **Bağ kuralı:** `.trash`'in kendisi dahil her bileşen `resolve` kuralından geçer (`reason = link`); `list_trash` ve
+    `empty_trash` `.trash` bağsa reddeder; içinde bağ varsa `empty_trash` hiçbir şey silmez (`reason = contains_link`).
+  - Aynı adlı bir dosyanın (`.trash/a`) altına not atılamaz, canlı ağaçta dosya olan bir yolun altına geri yüklenemez: `Io`,
+    hiçbir şey değişmez (`move` ile aynı sınır).
+- **ADDED** `NoteMeta {path, size, updated_at, created_at?, origin?, sync_status}`, `SyncState {Synced, Modified, New, ConflictCopy,
+  SyncOff}`, `NoteStore::list_meta()`. `created_at` ve `origin` depolama kararına kadar boştur; dosya sisteminin doğum
+  zamanından üretilmez. `sync_status`'u `sync::fill_sync_status` doldurur (SPEC-sync).
+- **ADDED** `error.query_invalid`, `reason.must_be_{sort_field,size_bound,age_or_date,sync_state,folder}` katalog anahtarları (SPEC-search).
+- **MODIFIED** Kapsam dışı: "Çöp kutusu" çıkarıldı.

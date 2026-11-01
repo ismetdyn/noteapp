@@ -1,0 +1,4 @@
+select *
+from notes n
+join tags t on t.note_id = n.id
+where t.name = 'a';

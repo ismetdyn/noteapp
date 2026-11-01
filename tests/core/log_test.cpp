@@ -2,6 +2,7 @@
 #include "core/paths.hpp"
 #include "support/test_support.hpp"
 
+#include <algorithm>
 #include <doctest/doctest.h>
 #include <fstream>
 #include <regex>
@@ -90,4 +91,19 @@ TEST_CASE("concurrent logging from several threads keeps every line intact") {
         ++count;
     }
     CHECK(count == 100);
+}
+
+TEST_CASE("control bytes in a message never reach log.txt raw") {
+    const TempDir dir;
+    const ScopedEnv home("NOTEAPP_HOME", dir.path().u8string());
+    log_warn("ad \x1B[31mkirmizi\x07 \xC2\x9B c1 \xFF son\nikinci");
+    const std::string text = slurp(state_dir() / "log.txt");
+    CHECK(text.find('\x1B') == std::string::npos);
+    CHECK(text.find('\x07') == std::string::npos);
+    CHECK(text.find("\xC2\x9B") == std::string::npos);
+    CHECK(text.find('\xFF') == std::string::npos);
+    CHECK(text.find("\\x1b[31mkirmizi") != std::string::npos);
+    CHECK(std::ranges::count(text, '\n') == 1);
+    log_warn("türkçe ığ düz");
+    CHECK(slurp(state_dir() / "log.txt").find("türkçe ığ düz") != std::string::npos);
 }

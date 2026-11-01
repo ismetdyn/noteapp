@@ -1,0 +1,7 @@
+#ifndef A_H
+#define A_H
+
+int add(int a, int b);
+void reset(void);
+
+#endif

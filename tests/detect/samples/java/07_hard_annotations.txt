@@ -1,0 +1,6 @@
+package a.b;
+
+@Entity
+public class Note {
+    private String title;
+}

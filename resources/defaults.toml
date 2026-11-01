@@ -6,7 +6,7 @@ notes_dir = "~/notes"
 editor = ""              # boş: $VISUAL -> $EDITOR -> platform varsayılanı
 default_type = "md"
 default_folder = ""      # hızlı notların klasörü ("" = kök)
-types = ["md", "txt", "csv", "cpp", "java", "py", "json", "sh"]
+types = ["md", "txt", "csv", "cpp", "java", "py", "json", "sh", "env", "properties", "yaml", "toml", "ini", "xml", "html", "css", "js", "ts", "sql", "c", "go", "rs", "dockerfile", "makefile"]
 
 [sync]
 enabled = false
@@ -23,7 +23,7 @@ min_confidence = 0.5          # tip tespitinde kabul eşiği (0..1)
 max_scan_bytes = 65536        # tip tespitinde taranan en çok bayt
 max_note_bytes = 10485760     # bundan büyük notlar düzenlenmez/aranmaz (10 MiB)
 rescan_seconds = 5            # GUI/TUI dizin yeniden tarama aralığı
-autosave_ms = 1000            # GUI otomatik kayıt gecikmesi
+autosave_ms = 3000            # GUI otomatik kayıt gecikmesi
 exit_timeout_seconds = 10     # çıkışta bekleyen senkron için üst sınır
 log_max_bytes = 1048576       # log.txt bu boyutu aşınca log.1.txt'ye döner (1 MiB)
 sync_stale_lock_minutes = 10  # okunamayan senkron kilidi bundan eskiyse bayat sayılır; sahibi canlı kilit devralınmaz

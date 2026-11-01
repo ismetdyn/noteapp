@@ -1,0 +1,3 @@
+Select a color from the menu.
+Update the list when you are done.
+Create a table of the results for the report.

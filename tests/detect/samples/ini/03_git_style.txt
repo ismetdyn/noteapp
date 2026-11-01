@@ -1,0 +1,5 @@
+[core]
+	repositoryformatversion = 0
+	bare = false
+[remote "origin"]
+	url = git@example.org:a/b.git

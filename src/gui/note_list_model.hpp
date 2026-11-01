@@ -4,8 +4,6 @@
 #include "core/note_store.hpp"
 #include "search/content_index.hpp"
 
-#include <QAbstractListModel>
-#include <QList>
 #include <cstddef>
 #include <optional>
 #include <span>
@@ -19,40 +17,39 @@ namespace noteapp::gui {
 bool same_listing(std::span<const core::NoteInfo> a, std::span<const core::NoteInfo> b);
 
 // Süzülmüş not listesi: klasör kapsamı + ad modunda fuzzy sıralama (boş sorguda mtime azalan).
-class NoteListModel : public QAbstractListModel {
+class NoteListModel {
 public:
-    enum Role {
-        PathRole = Qt::UserRole + 1,  // QString: göreli yol
-        HighlightRole,                // QList<int>: DisplayRole metnindeki vurgulanacak UTF-16 birimleri
-    };
-
-    explicit NoteListModel(QObject* parent = nullptr) : QAbstractListModel(parent) {}
-
-    // Listeleme değiştiyse modeli sıfırlar ve true döner; aynıysa dokunmaz.
+    // Listeleme değiştiyse yeniden süzer ve true döner; aynıysa dokunmaz.
     bool set_notes(std::vector<core::NoteInfo> notes);
     void set_query(std::string query);
     // Göreli klasör yolu ('/' ayırıcılı); "" = tümü. Yalnız alt ağaçtaki notlar kalır.
     void set_folder(std::string folder);
 
-    // İçerik modu: sıralamayı ContentIndex yapar (MainWindow); model yalnız sırayı ve sayıları gösterir.
+    // İçerik modu: sıralamayı ContentIndex yapar (GuiState); model yalnız sırayı ve sayıları gösterir.
     // nullopt = ad modu (fuzzy). Klasör kapsamı dışındaki sonuçlar düşer.
     void set_content_results(std::optional<std::vector<search::ContentResult>> results);
 
+    int row_count() const { return static_cast<int>(rows_.size()); }
     const core::NoteInfo& note_at(int row) const {
         return scope_[rows_[static_cast<std::size_t>(row)].scope_index];
     }
-    // Yol listede yoksa geçersiz indeks.
-    QModelIndex index_of(const core::NotePath& path) const;
+    // Satırın metni: yol; içerik modunda "yol  (N)", N = eşleşen satır sayısı.
+    std::string display(int row) const;
+    // Yol metnindeki vurgulanacak kod noktalarının bayt ofsetleri (artan).
+    const std::vector<std::size_t>& highlights(int row) const {
+        return rows_[static_cast<std::size_t>(row)].byte_positions;
+    }
+    // Yol listede yoksa -1.
+    int index_of(const core::NotePath& path) const;
     std::size_t total() const { return notes_.size(); }
-
-    int rowCount(const QModelIndex& parent = {}) const override;
-    QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
+    // Satırlar her yeniden kurulduğunda artar: "yalnız değişimde sıfırla" kuralını ölçer.
+    std::size_t resets() const { return resets_; }
 
 private:
     struct Row {
         std::size_t scope_index;
-        std::vector<std::size_t> byte_positions;  // yol UTF-8'inde bayt ofseti
-        std::size_t hits = 0;                     // içerik modunda eşleşen satır sayısı
+        std::vector<std::size_t> byte_positions;
+        std::size_t hits = 0;  // içerik modunda eşleşen satır sayısı
     };
 
     void rebuild_scope();
@@ -64,6 +61,7 @@ private:
     std::string query_;
     std::string folder_;
     std::optional<std::vector<search::ContentResult>> content_;
+    std::size_t resets_ = 0;
 };
 
 }  // namespace noteapp::gui

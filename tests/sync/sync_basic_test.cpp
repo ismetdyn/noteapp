@@ -155,81 +155,7 @@ TEST_CASE("retry_rejected_push does not retry other errors") {
     CHECK(result.error().message_key == "sync.git_failed");
 }
 
-TEST_CASE("acceptance 1: a note from A reaches B and B's own new note goes back to A, nothing lost") {
-    const SyncFixture fx;
-    const fs::path a = fx.make_clone(u8"A notları");
-    const fs::path b = fx.make_clone(u8"B notları");
-    const std::string first = "# İlk not\nçğıöşü ÇĞİÖŞÜ\n";
-    write_file(a / u8"ilk not.md", first);
-
-    SyncService sync_a(SyncFixture::config_for(a));
-    auto result_a = sync_a.sync_now();
-    REQUIRE_MESSAGE(result_a.has_value(), describe(result_a));
-    CHECK(result_a->committed == 1);
-    CHECK(result_a->pulled == 0);
-    CHECK(result_a->pushed);
-    CHECK(result_a->conflict_copies.empty());
-    CHECK(ref_id(fx.remote(), "refs/heads/main") == ref_id(a, "refs/heads/main"));
-
-    const CommitInfo commit = head_commit(a);
-    CHECK(commit.author_name == "Test Yazar");
-    CHECK(commit.author_email == "test@noteapp.invalid");
-    CHECK(commit.parents == 0);
-    CHECK_FALSE(commit.message.empty());
-    CHECK(commit.message.find('{') == std::string::npos);  // yer tutucular dolduruldu
-
-    // B doğmamış daldan başlar: uzak dal hızlı ileri sarılır.
-    SyncService sync_b(SyncFixture::config_for(b));
-    auto result_b = sync_b.sync_now();
-    REQUIRE_MESSAGE(result_b.has_value(), describe(result_b));
-    CHECK(result_b->committed == 0);
-    CHECK(result_b->pulled == 1);
-    CHECK_FALSE(result_b->pushed);
-    CHECK(read_file(b / u8"ilk not.md") == first);
-
-    const std::string second = "B'nin notu\n";
-    write_file(b / u8"klasör" / u8"ikinci.md", second);  // B'nin commit'lenmemiş yeni notu
-    result_b = sync_b.sync_now();
-    REQUIRE_MESSAGE(result_b.has_value(), describe(result_b));
-    CHECK(result_b->committed == 1);
-    CHECK(result_b->pushed);
-
-    result_a = sync_a.sync_now();
-    REQUIRE_MESSAGE(result_a.has_value(), describe(result_a));
-    CHECK(result_a->committed == 0);
-    CHECK(result_a->pulled == 1);
-    CHECK(read_file(a / u8"klasör" / u8"ikinci.md") == second);
-    CHECK(read_file(a / u8"ilk not.md") == first);
-    CHECK(read_file(b / u8"klasör" / u8"ikinci.md") == second);
-    CHECK(ref_id(a, "HEAD") == ref_id(b, "HEAD"));
-}
-
-TEST_CASE("deletions are committed and propagate to the other clone") {
-    const SyncFixture fx;
-    const fs::path a = fx.make_clone(u8"A");
-    const fs::path b = fx.make_clone(u8"B");
-    write_file(a / "x.md", "x\n");
-    write_file(a / "y.md", "y\n");
-    SyncService sync_a(SyncFixture::config_for(a));
-    SyncService sync_b(SyncFixture::config_for(b));
-    REQUIRE(sync_a.sync_now().has_value());
-    REQUIRE(sync_b.sync_now().has_value());
-    REQUIRE(fs::exists(b / "x.md"));
-
-    fs::remove(a / "x.md");
-    const auto result_a = sync_a.sync_now();
-    REQUIRE_MESSAGE(result_a.has_value(), describe(result_a));
-    CHECK(result_a->committed == 1);
-    CHECK(result_a->pushed);
-
-    const auto result_b = sync_b.sync_now();
-    REQUIRE_MESSAGE(result_b.has_value(), describe(result_b));
-    CHECK(result_b->pulled == 1);
-    CHECK_FALSE(fs::exists(b / "x.md"));
-    CHECK(read_file(b / "y.md") == "y\n");
-}
-
-TEST_CASE("nothing to do: no commit and no push, also for an empty repository and remote") {
+TEST_CASE("nothing to do: the first sync sets up the carriers, later ones commit and push nothing") {
     const SyncFixture fx;
     const fs::path a = fx.make_clone(u8"A");
     SyncService sync_a(SyncFixture::config_for(a));
@@ -238,11 +164,9 @@ TEST_CASE("nothing to do: no commit and no push, also for an empty repository an
     REQUIRE_MESSAGE(result.has_value(), describe(result));
     CHECK(result->committed == 0);
     CHECK(result->pulled == 0);
-    CHECK_FALSE(result->pushed);
-    CHECK(commit_count(a) == 0);
-    CHECK_FALSE(ref_id(fx.remote(), "refs/heads/main").has_value());
+    CHECK(commit_count(a) == 1);  // .gitignore + .gitattributes
 
-    write_file(a / "not.md", "içerik\n");
+    put_note("not.md", "içerik\n");
     REQUIRE(sync_a.sync_now().has_value());
     const auto remote_head = ref_id(fx.remote(), "refs/heads/main");
     REQUIRE(remote_head.has_value());
@@ -252,43 +176,14 @@ TEST_CASE("nothing to do: no commit and no push, also for an empty repository an
     CHECK(result->committed == 0);
     CHECK(result->pulled == 0);
     CHECK_FALSE(result->pushed);
-    CHECK(commit_count(a) == 1);
-    CHECK(ref_id(fx.remote(), "refs/heads/main") == remote_head);
-}
-
-TEST_CASE("a push the remote keeps rejecting is retried, then reported; the local commit is kept") {
-    const SyncFixture fx;
-    const fs::path a = fx.make_clone(u8"A");
-    write_file(a / "bir.md", "1\n");
-    SyncService sync_a(SyncFixture::config_for(a));
-    REQUIRE(sync_a.sync_now().has_value());
-    const auto remote_head = ref_id(fx.remote(), "refs/heads/main");
-
-    // Uzak dalın kilidi tutulursa yerel taşıma ref'i güncelleyemez ve push'u ref bazında reddeder.
-    const fs::path remote_lock = fx.remote() / "refs" / "heads" / "main.lock";
-    write_file(remote_lock, "");
-    write_file(a / "iki.md", "2\n");
-    const auto result = sync_a.sync_now();
-    REQUIRE_FALSE(result.has_value());
-    CHECK(result.error().message_key == "sync.push_rejected");
-    CHECK(ref_id(fx.remote(), "refs/heads/main") == remote_head);
     CHECK(commit_count(a) == 2);
-    CHECK(read_file(a / "iki.md") == "2\n");
-    REQUIRE(sync_a.status().last_error.has_value());
-    CHECK(sync_a.status().last_error->message_key == "sync.push_rejected");
-
-    fs::remove(remote_lock);
-    const auto retried = sync_a.sync_now();
-    REQUIRE_MESSAGE(retried.has_value(), describe(retried));
-    CHECK(retried->committed == 0);
-    CHECK(retried->pushed);
-    CHECK(ref_id(fx.remote(), "refs/heads/main") == ref_id(a, "refs/heads/main"));
+    CHECK(ref_id(fx.remote(), "refs/heads/main") == remote_head);
 }
 
 TEST_CASE("status file records the last success and keeps it when a later sync fails") {
     const SyncFixture fx;
     const fs::path a = fx.make_clone(u8"A");
-    write_file(a / "not.md", "x\n");
+    put_note("not.md", "x\n");
     SyncService sync_a(SyncFixture::config_for(a));
     CHECK_FALSE(sync_a.status().last_success.has_value());
     CHECK_FALSE(sync_a.status().last_error.has_value());
@@ -329,7 +224,7 @@ TEST_CASE("a notes folder that is not a git repository is sync.not_initialized")
 TEST_CASE("acceptance 6: sync_now is sync.busy while another live process holds the lock") {
     const SyncFixture fx;
     const fs::path a = fx.make_clone(u8"A");
-    write_file(a / "not.md", "x\n");
+    put_note("not.md", "x\n");
     SyncService sync_a(SyncFixture::config_for(a));
     {
         const auto held = SyncLock::acquire(noteapp::core::state_dir() / "sync.lock", kStaleAfter);
@@ -348,7 +243,7 @@ TEST_CASE("acceptance 6: sync_now is sync.busy while another live process holds 
 TEST_CASE("sync_now takes the stale age of a garbled lock from tuning.sync_stale_lock_minutes") {
     const SyncFixture fx;
     const fs::path a = fx.make_clone(u8"A");
-    write_file(a / "not.md", "x\n");
+    put_note("not.md", "x\n");
     const fs::path file = noteapp::core::state_dir() / "sync.lock";
     write_file(file, "bozuk içerik");
     fs::last_write_time(file, fs::file_time_type::clock::now() - std::chrono::minutes(2));
@@ -371,26 +266,11 @@ TEST_CASE("HEAD on another branch than sync.branch is refused without touching a
         const Repository repo = open_repository(a);
         REQUIRE_GIT(git_repository_set_head(repo.get(), "refs/heads/baska"));
     }
-    write_file(a / "not.md", "x\n");
+    put_note("not.md", "x\n");
     const auto result = SyncService(SyncFixture::config_for(a)).sync_now();
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().message_key == "sync.branch_mismatch");
     CHECK(commit_count(a) == 0);
-}
-
-TEST_CASE("CRLF and LF files round-trip byte-exact A -> R -> B despite a global core.autocrlf=true") {
-    const SyncFixture fx;  // global config'te autocrlf=true
-    const fs::path a = fx.make_clone(u8"A");
-    const fs::path b = fx.make_clone(u8"B");
-    const std::string crlf = "satır 1\r\nsatır 2\r\n";
-    const std::string lf = "satır 1\nsatır 2\n";
-    write_file(a / "crlf.txt", crlf);
-    write_file(a / "lf.txt", lf);
-    REQUIRE(SyncService(SyncFixture::config_for(a)).sync_now().has_value());
-    const auto result = SyncService(SyncFixture::config_for(b)).sync_now();
-    REQUIRE_MESSAGE(result.has_value(), describe(result));
-    CHECK(read_file(b / "crlf.txt") == crlf);
-    CHECK(read_file(b / "lf.txt") == lf);
 }
 
 TEST_CASE("every sync message key exists in the catalog") {

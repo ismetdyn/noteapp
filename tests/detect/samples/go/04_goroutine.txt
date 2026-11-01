@@ -1,0 +1,8 @@
+package a
+
+func run(c chan int) {
+	go func() {
+		c <- 1
+	}()
+	defer close(c)
+}

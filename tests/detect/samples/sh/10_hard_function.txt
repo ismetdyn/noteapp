@@ -1,0 +1,4 @@
+log() {
+  printf '%s\n' "$1" >&2
+}
+log start

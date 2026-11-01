@@ -1,0 +1,4 @@
+title = "notes"
+count = 3
+ratio = 0.5
+enabled = true

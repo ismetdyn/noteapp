@@ -2,31 +2,29 @@
 
 #include "core/config.hpp"
 #include "core/error.hpp"
-#include "gui/main_window.hpp"
 
-#include <QString>
-#include <QWidget>
 #include <expected>
 #include <functional>
 #include <map>
 #include <string>
 #include <string_view>
 #include <thread>
-
-class QLabel;
-class QLineEdit;
-class QPushButton;
+#include <vector>
 
 namespace noteapp::gui {
 
-// Sayfanın MainWindow'a bağlandığı yerler (sayfa pencereyi tanımaz).
+struct Deciders;
+
+// Sayfanın GuiState'e bağlandığı yerler (sayfa onu tanımaz).
 struct SettingsHost {
     // notes_dir değişmeden önce açık notu kaydeder; false = kaydedilemedi, ayar kaydı iptal olur.
     std::function<bool()> flush;
-    // Kaydedilen config'i canlı uygular (liste, tip kutusu, autosave, senkron).
+    // Kaydedilen config'i canlı uygular (liste, autosave, senkron).
     std::function<void(const core::Config& before, const core::Config& after)> applied;
     // "Bağlantıyı test et" senkronu bitti (çekilen notlar listeye yansısın).
     std::function<void()> synced;
+    // İşçi iş parçacığından UI iş parçacığına iş aktarır.
+    std::function<void(std::function<void()>)> post;
 };
 
 // OS kasası dikişi: testler gerçek anahtarlığa yazmaz.
@@ -36,48 +34,66 @@ struct TokenStore {
     std::function<std::expected<void, core::Error>(std::string_view host)> clear;
 };
 
-// Ayarlar sekmesi: config_entries'teki 12 anahtarın formu + token satırı + bağlantı testi.
-// Doğrulama set_config_value'dadır (CLI/yükleyiciyle aynı kurallar); burada kopyalanmaz.
-class SettingsPage : public QWidget {
+// Ayarlar formunun modeli (ImGui bilmez): config_entries'teki 12 anahtar + token satırı + bağlantı testi.
+// Doğrulama set_config_value'dadır (CLI/yükleyiciyle aynı kurallar); burada kopyalanmaz. Deciders
+// GuiState'indir, onunla yaşar.
+class SettingsPage {
 public:
-    SettingsPage(core::Config config, const Deciders& deciders, SettingsHost host, QWidget* parent = nullptr);
-    ~SettingsPage() override;
+    SettingsPage(core::Config config, const Deciders& deciders, SettingsHost host);
+    ~SettingsPage();
+    SettingsPage(const SettingsPage&) = delete;
+    SettingsPage& operator=(const SettingsPage&) = delete;
 
     TokenStore tokens;  // üretimde sync/auth kasası; testler değiştirir
+    std::string token;  // maskeli alanın tamponu; kasaya yazılınca silinir, config'e ve loga girmez
+
+    const std::vector<std::string>& keys() const { return keys_; }                // form sırası
+    std::string& field(const std::string& key) { return fields_.at(key).value; }  // ImGui doğrudan yazar
+    void field_edited(const std::string& key);                                    // field'a yazdıktan sonra
+    void set_field(const std::string& key, std::string value);
+    const std::string& field_error(const std::string& key) const { return fields_.at(key).error; }
+    const std::string& global_error() const { return global_error_; }
+    const std::vector<std::string>& types() const { return applied_.types; }
+    // Form kayıtlı değerlerden farklı mı. Token dahil değil: kendi düğmesiyle anında kasaya gider.
+    bool has_changes() const;
+
+    bool token_enabled() const { return token_enabled_; }
+    bool token_stored() const { return token_stored_; }
+    const std::string& test_result() const { return test_result_; }
+    bool testing() const { return testing_; }
 
     void save();             // Kaydet
     void revert();           // Geri al: alanlar kaydedilmiş değerlere döner
     void test_connection();  // enable (gerekirse) + tek senkron, işçi iş parçacığında
-
-private:
-    struct Field;
-    void build_ui();
-    void load(const core::Config& config);
-    std::string value_of(const std::string& key) const;
-    void show_error(const std::string& key, const QString& message);
-    void clear_errors();
-    void refresh_token_row();
+    void browse_notes_dir();
     void save_token();
     void clear_token();
-    // Formdaki değişen anahtarları `target`'a uygular; her alanın hatası satır içi gösterilir. false = hata
-    // var.
+
+private:
+    struct Field {
+        std::string value;
+        std::string error;
+    };
+
+    void load(const core::Config& config);
+    void clear_errors();
+    void refresh_token_row();
+    // Formdaki değişen anahtarları `target`'a uygular; her alanın hatası kendi altında. false = hata var.
     bool apply_form(core::Config& target);
     // enable akışı: uyuşmazlıkta karar sorulur. Boş metin = başarılı; yoksa gösterilecek hata.
-    QString enable_sync(const core::Config& candidate);
+    std::string enable_sync(const core::Config& candidate);
     // Kayıt reddedilirken: kullanıcı config'i bozuksa (söz dizimi/okunamıyor) o uyarıyı verir.
-    std::expected<core::Config, QString> load_config_for_update() const;
+    std::expected<core::Config, std::string> load_config_for_update() const;
 
     core::Config applied_;
     const Deciders& deciders_;
     SettingsHost host_;
-    std::map<std::string, Field*> fields_;
-    QLabel* global_error_ = nullptr;
-    QLineEdit* token_edit_ = nullptr;
-    QPushButton* token_save_ = nullptr;
-    QPushButton* token_clear_ = nullptr;
-    QLabel* token_state_ = nullptr;
-    QPushButton* test_button_ = nullptr;
-    QLabel* test_result_ = nullptr;
+    std::vector<std::string> keys_;
+    std::map<std::string, Field> fields_;
+    std::string global_error_;
+    std::string test_result_;
+    bool token_enabled_ = false;
+    bool token_stored_ = false;
     bool testing_ = false;
     std::thread worker_;  // bağlantı testi senkronu; yıkıcı bekler (sync_now zaman aşımıyla sınırlı)
 };

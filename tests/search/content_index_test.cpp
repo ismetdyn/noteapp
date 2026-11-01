@@ -1,4 +1,5 @@
 #include "search/content_index.hpp"
+#include "support/note_seed.hpp"
 
 #include <chrono>
 #include <doctest/doctest.h>
@@ -28,9 +29,9 @@ struct TempDir {
         std::error_code ec;
         fs::remove_all(path, ec);
     }
-    void write(const std::string& rel, const std::string& content) const {
-        fs::create_directories((path / rel).parent_path());
-        std::ofstream(path / rel, std::ios::binary) << content;
+    void write(const std::string& rel, const std::string& content,
+               std::chrono::system_clock::time_point when = std::chrono::system_clock::now()) const {
+        noteapp::test::upsert_note(path, rel, content, when);
     }
 };
 
@@ -47,13 +48,6 @@ std::vector<ContentResult> find(Fixture& f, std::string_view q, std::size_t limi
 
 std::string slice(const Hit& h, std::size_t i) {
     return h.snippet.substr(h.ranges[i].first, h.ranges[i].second - h.ranges[i].first);
-}
-
-// Ardından gelen iki yazım (aralarında 50 ms) aynı takvim saniyesine düşsün: saniye çözünürlüklü mtime
-// farkı rastlantıyla değil, her seferinde kaçırır.
-void wait_for_second_start() {
-    while (std::chrono::system_clock::now().time_since_epoch() % 1s > 300ms)
-        std::this_thread::sleep_for(5ms);
 }
 
 }  // namespace
@@ -168,14 +162,11 @@ TEST_CASE("content: only the first three hit lines are returned but all are coun
 
 TEST_CASE("content: results ordered by hit count, then mtime, then path; limit applied") {
     Fixture f;
-    f.dir.write("b.md", "x\n");
-    f.dir.write("a.md", "x\n");
-    f.dir.write("many.md", "x\nx\n");
-    f.dir.write("new.md", "x\n");
-    auto base = fs::file_time_type::clock::now();
-    fs::last_write_time(f.dir.path / "new.md", base);
-    fs::last_write_time(f.dir.path / "a.md", base - std::chrono::hours{1});
-    fs::last_write_time(f.dir.path / "b.md", base - std::chrono::hours{1});
+    const auto base = std::chrono::system_clock::now();
+    f.dir.write("b.md", "x\n", base - std::chrono::hours{1});
+    f.dir.write("a.md", "x\n", base - std::chrono::hours{1});
+    f.dir.write("many.md", "x\nx\n", base - std::chrono::hours{2});
+    f.dir.write("new.md", "x\n", base);
     auto r = find(f, "x");
     REQUIRE(r.size() == 4);
     CHECK(r[0].path.string() == "many.md");
@@ -216,19 +207,18 @@ TEST_CASE("content: refresh rereads only changed files and drops deleted ones") 
     CHECK(f.index.read_count() == 4);
     CHECK(f.index.search("degisti", 10).size() == 1);
 
-    fs::remove(f.dir.path / "b.md");
+    noteapp::test::erase_note(f.dir.path, "b.md");
     f.index.refresh();
     CHECK(f.index.read_count() == 4);
     CHECK(f.index.search("beta", 10).empty());
     CHECK(f.index.search("gama", 10).size() == 1);
 }
 
-TEST_CASE("content: same-size edit is detected through mtime") {
+TEST_CASE("content: same-size edit is detected through the revision") {
     Fixture f;
     f.dir.write("a.md", "alfa\n");
     f.index.refresh();
     f.dir.write("a.md", "beta\n");
-    fs::last_write_time(f.dir.path / "a.md", fs::file_time_type::clock::now() + std::chrono::hours{1});
     f.index.refresh();
     CHECK(f.index.read_count() == 2);
     CHECK(f.index.search("beta", 10).size() == 1);
@@ -236,10 +226,8 @@ TEST_CASE("content: same-size edit is detected through mtime") {
 
 TEST_CASE("content: same-size edit within the same second is detected") {
     Fixture f;
-    wait_for_second_start();
     f.dir.write("a.md", "alfa\n");
     f.index.refresh();
-    std::this_thread::sleep_for(50ms);
     f.dir.write("a.md", "beta\n");
     f.index.refresh();
     CHECK(f.index.read_count() == 2);

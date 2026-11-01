@@ -1,0 +1,7 @@
+# settings
+language = "auto"        # auto | tr | en
+types = ["md", "txt"]
+
+[sync]
+enabled = false
+idle_seconds = 30

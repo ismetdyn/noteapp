@@ -219,7 +219,7 @@ TEST_CASE("a missing note executable is reported in the status, not thrown") {
 TEST_CASE("end to end: AutoSync runs the real `note sync --background` and the note reaches the remote") {
     const SyncFixture fx;
     const fs::path a = fx.make_clone(u8"A");
-    write_file(a / "not.md", "arka plan\n");
+    put_note("not.md", "arka plan\n");
     std::string notes = utf8(a);
     write_file(noteapp::core::config_file(), "language = \"en\"\nnotes_dir = \"" + notes +
                                                  "\"\n[sync]\nenabled = true\nauthor_name = \"Test\"\n"

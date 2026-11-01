@@ -75,3 +75,35 @@ Medium: geçici dizinde ContentIndex (refresh/silme/ikili dosya); performans tes
 
 ## Kapsam dışı
 Kalıcı indeks, regex araması, fzf genişletilmiş sözdizimi (`^`, `$`, `!`, `'`), bulanık içerik araması.
+
+## Değişiklik 2026-11-01
+- **ADDED** Sorgu argümanları (T55a), `search/query.hpp`: saf `parse_query(string) -> expected<ParsedQuery{text, filters, sort}, QueryError>`,
+  `apply(filters, sort, notes, now = now()) -> vector<size_t>` (`notes` sıraları, kararlı), `sort_notes`.
+
+  | Argüman | Biçim |
+  |---|---|
+  | `sort:` | `name` (dosya adı, katlanmış) `size` `updated` `created`; `-` öneki azalan; birden çoksa sonuncusu |
+  | `type:` | son uzantı, noktasız (`type:md`) |
+  | `in:` | klasör öneki, tam bileşen (`in:work/` = `in:work`; `workshop/` eşleşmez); değer `NotePath` kuralından geçer, `.trash` reddedilir |
+  | `size:` | `>` ya da `<` zorunlu, kesin sınır; tam sayı + `b kb mb gb` (1024 tabanlı), birimsiz = bayt |
+  | `updated:` `created:` | `7d` son 7 gün (1–36500); `>YYYY-MM-DD` o günden sonra, `<YYYY-MM-DD` o günden önce (gün yerel saattir, 1970–2200) |
+  | `origin:` | tam eşleşme, katlanmış |
+  | `sync:` | `synced modified new conflict_copy sync_off` |
+
+  - Kalan sözcükler `text`'tir, tırnaklarıyla: `parse_terms` aynı metni görür. Değer tırnaklanabilir (`in:"iş notları/"`); tamamı tırnaklı
+    sözcük anahtar değildir. Anahtar ve değerler katlama kurallarıyla karşılaştırılır (`SORT:-SİZE`).
+  - Bilinmeyen anahtar (`foo:bar`, `http://x`) düz metindir. Bilinen anahtarın geçersiz değeri metne düşmez: `QueryError {begin, end, error}`,
+    `[begin, end)` değerin bayt aralığı (boş değerde tüm sözcük), `error` `format_error` ile gösterilir.
+  - Filtreler AND'dir, aynı anahtar da (`size:>1kb size:<2kb` aralıktır, `type:md type:txt` boş döner). Bilinmeyen `created`/`origin` filtreye takılır;
+    `sort:created`'da bilinmeyenler iki yönde de sondadır.
+  - `apply` argümanlarına göre saftır; tek ortam girdisi saat dilimidir (`mktime`, gün sınırı kullanıcının günü olsun diye).
+- **ADDED** Genel arama (T55a), `search/global_search.hpp`: `search_all(query, notes, content_index, limit = 200, now) ->
+  expected<vector<GlobalHit{index, path, name_matched, content_matched, name_positions, content_hits, best_line}>, QueryError>`.
+  - Not başına tek sonuç. Argümanlar önce süzer; metnin her terimi yolda fuzzy (puanlar toplanır, konumlar birleşir) **ya da** tümü notta tam
+    metin (mevcut AND kuralı) geçmelidir: terimin biri adda biri içerikte olan not eşleşmez.
+  - Sıra: güçlü ad (karakter başına fzy puanı ≥ 0,5; puan → kısa yol → mtime) → içerik (eşleşen satır → mtime) → zayıf ad. `sort:` verilirse o sıra,
+    eşitlikte bu sıra. Metin yoksa süzülmüş liste, eşleşme bilgisi yok.
+  - Limit güçlü adlarla dolacaksa `limit/4` içerik ve zayıf sonuçlara ayrılır, kullanılmayan pay adlara kalır. Kesit yalnız dönen sonuçlar için üretilir.
+  - `best_line`: en çok farklı terim → en çok geçiş → en erken satır. `ContentIndex`'e `count_matches` ve `best_hit` eklendi; `search` davranışı aynı.
+- **ADDED** Kabul: 5.000 notta `apply` ≤ 20 ms; 5.000 × ~5 KB notta sıcak `search_all` ve değişiklik yokken `refresh` + `list_meta` ayrı ayrı ≤ 100 ms
+  (`tests/perf/query_perf_test.cpp`, Release). Ölçüm (T55a, konteyner): `apply` 1,3 ms; `search_all` 18–31 ms (en kötü tek harf `e`, 200 kesit); `refresh` + `list_meta` 47 ms.

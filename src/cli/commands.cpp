@@ -58,6 +58,13 @@ bool stdin_is_tty() {
 
 namespace {
 
+bool stdout_is_tty();
+
+// Terminale temizlenmiş, boruya bayt bayt (highlight.hpp sözleşmesi).
+std::string terminal_or_bytes(std::string_view text) {
+    return stdout_is_tty() ? sanitize_for_terminal(text) : std::string(text);
+}
+
 bool stdout_is_tty() {
 #ifdef _WIN32
     return is_console(STD_OUTPUT_HANDLE);
@@ -101,7 +108,7 @@ int exit_code_for(const core::Error& error) {
 }  // namespace
 
 int fail(const core::Error& error) {
-    std::cerr << core::format_error(error) << '\n';
+    std::cerr << sanitize_for_terminal(core::format_error(error)) << '\n';
     return exit_code_for(error);
 }
 
@@ -122,9 +129,14 @@ std::string read_file(const fs::path& file) {
 // Tip/ad/klasör kuralları hızlı ekleme ile aynıdır. Başarıda tek satır yazdırır, hatada hatayı döner.
 std::optional<core::Error> save_note(const ParsedArgs& args, const core::Config& config,
                                      const std::string& content) {
-    const bool chosen = args.type.has_value();
+    // Adda yazılan uzantı -t'yi ve detect'i geçer; değiştirilmez, üstüne eklenmez.
+    const std::string name = args.name.value_or("");
+    const core::TypedName typed = core::split_typed_name(name);
+    const bool chosen = args.type.has_value() || !typed.extension.empty();
     std::string type;
-    if (chosen) {
+    if (!typed.extension.empty()) {
+        type = typed.extension;
+    } else if (args.type) {
         type = *args.type;
     } else {
         const detect::Options options{config.default_type, config.tuning.min_confidence,
@@ -132,15 +144,16 @@ std::optional<core::Error> save_note(const ParsedArgs& args, const core::Config&
         type = detect::suggest(content, options).type;
     }
 
-    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    core::NoteStore store = core::NoteStore::for_config(config);
     const auto created = store.create(
-        core::NewNote{args.folder.value_or(config.default_folder), args.name.value_or(""), type, content});
+        core::NewNote{args.folder.value_or(config.default_folder), std::string(typed.stem), type, content});
     if (!created)
         return created.error();
 
-    std::cout << core::tr("cli.saved", {{"path", created->string()},
-                                        {"type", type},
-                                        {"how", core::tr(chosen ? "cli.how_chosen" : "cli.how_detected")}})
+    std::cout << sanitize_for_terminal(core::tr(
+                     "cli.saved", {{"path", created->string()},
+                                   {"type", type},
+                                   {"how", core::tr(chosen ? "cli.how_chosen" : "cli.how_detected")}}))
               << '\n';
     start_background_sync(config, args.no_sync);
     return std::nullopt;
@@ -236,7 +249,7 @@ std::expected<core::NoteInfo, int> pick_best_note(const core::NoteStore& store, 
         return std::unexpected(kExitUser);
     }
     const core::NoteInfo& best = notes[ranked.front().index];
-    std::cerr << core::tr("cli.chosen", {{"path", best.path.string()}}) << '\n';
+    std::cerr << sanitize_for_terminal(core::tr("cli.chosen", {{"path", best.path.string()}})) << '\n';
     return best;
 }
 
@@ -370,16 +383,18 @@ int run_rm(const ParsedArgs& args, const core::Config& config) {
     const auto path = core::NotePath::parse(paths.front());
     if (!path)
         return fail(path.error());
-    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    core::NoteStore store = core::NoteStore::for_config(config);
     if (const auto found = store.read(*path); !found)
         return fail(found.error());
 
     if (!yes) {
         if (!stdin_is_tty()) {
-            std::cerr << core::tr("cli.rm_needs_yes", {{"path", path->string()}}) << '\n';
+            std::cerr << sanitize_for_terminal(core::tr("cli.rm_needs_yes", {{"path", path->string()}}))
+                      << '\n';
             return kExitUser;
         }
-        std::cerr << core::tr("cli.confirm_delete", {{"path", path->string()}}) << std::flush;
+        std::cerr << sanitize_for_terminal(core::tr("cli.confirm_delete", {{"path", path->string()}}))
+                  << std::flush;
         std::string answer;
         if (!std::getline(std::cin, answer) || !is_delete_confirmed(answer)) {
             std::cerr << core::tr("cli.delete_not_confirmed") << '\n';
@@ -388,7 +403,7 @@ int run_rm(const ParsedArgs& args, const core::Config& config) {
     }
     if (const auto removed = store.remove(*path); !removed)
         return fail(removed.error());
-    std::cout << core::tr("cli.removed", {{"path", path->string()}}) << '\n';
+    std::cout << sanitize_for_terminal(core::tr("cli.removed", {{"path", path->string()}})) << '\n';
     start_background_sync(config, no_sync);
     return kExitOk;
 }
@@ -413,7 +428,7 @@ int run_mv(const ParsedArgs& args, const core::Config& config) {
     if (!to)
         return fail(to.error());
 
-    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    core::NoteStore store = core::NoteStore::for_config(config);
     if (const auto moved = store.move(*from, *to); !moved)
         return fail(moved.error());
     std::cout << core::tr("cli.moved", {{"from", from->string()}, {"to", to->string()}}) << '\n';
@@ -437,13 +452,13 @@ int run_ls(const ParsedArgs& args, const core::Config& config) {
         prefix = folder->string() + "/";  // "work/" eşleşir, "workshop.md" eşleşmez
     }
 
-    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    core::NoteStore store = core::NoteStore::for_config(config);
     std::vector<core::NoteInfo> notes = store.list();
     std::erase_if(notes, [&](const core::NoteInfo& n) { return !n.path.string().starts_with(prefix); });
     // Boş sorguda rank_notes saf mtime azalan sıradır; ayrı bir yol gerekmez.
     const std::string query = parsed->positional.empty() ? "" : parsed->positional.front();
     for (const search::Ranked& r : search::rank_notes(query, notes))
-        std::cout << notes[r.index].path.string() << '\n';
+        std::cout << terminal_or_bytes(notes[r.index].path.string()) << '\n';
     return kExitOk;
 }
 
@@ -455,7 +470,7 @@ int run_show(const ParsedArgs& args, const core::Config& config) {
         std::cerr << core::tr("cli.show_usage") << '\n';
         return kExitUsage;
     }
-    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    core::NoteStore store = core::NoteStore::for_config(config);
     const auto note = pick_best_note(store, parsed->positional.front());
     if (!note)
         return note.error();
@@ -463,7 +478,8 @@ int run_show(const ParsedArgs& args, const core::Config& config) {
     if (!content)
         return fail(content.error());
     if (core::looks_binary(content->text)) {
-        std::cerr << core::tr("cli.binary_note", {{"path", note->path.string()}}) << '\n';
+        std::cerr << sanitize_for_terminal(core::tr("cli.binary_note", {{"path", note->path.string()}}))
+                  << '\n';
         return kExitUser;
     }
     // Terminalde kaçış dizileri etkisizleşir; boruya/dosyaya içerik bayt bayt gider.
@@ -484,20 +500,21 @@ int run_edit(const ParsedArgs& args, const core::Config& config) {
         std::cerr << core::tr("cli.edit_usage") << '\n';
         return kExitUsage;
     }
-    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    core::NoteStore store = core::NoteStore::for_config(config);
     const auto note = pick_best_note(store, parsed->positional.front());
     if (!note)
         return note.error();
-    // Yol kökle elle birleştirilmez: listelemeyle editör arasında araya bağ girdiyse de reddedilir.
-    const auto file = store.absolute_path(note->path);
-    if (!file)
-        return fail(file.error());
-    std::error_code ec;
-    const auto before = fs::last_write_time(*file, ec);
-    if (const auto edited = core::run_editor(config, *file); !edited)
-        return fail(edited.error());
+    // Editör dosya ister: not özel geçici dosyaya çıkar, çakışma denetimiyle geri yazılır, dosya silinir.
+    const auto changed =
+        store.edit_in_temp_file(note->path, [&](const fs::path& file) -> std::expected<void, core::Error> {
+            if (const auto edited = core::run_editor(config, file); !edited)
+                return std::unexpected(edited.error());
+            return {};
+        });
+    if (!changed)
+        return fail(changed.error());
     // Kaydetmeden kapatılan editör için ağa çıkılmaz.
-    if (const auto after = fs::last_write_time(*file, ec); ec || after != before)
+    if (*changed)
         start_background_sync(config, no_sync);
     return kExitOk;
 }
@@ -540,7 +557,7 @@ int run_find(const ParsedArgs& args, const core::Config& config) {
         return kExitUsage;
     }
 
-    core::NoteStore store(config.notes_dir, config.tuning.slug_max_length);
+    core::NoteStore store = core::NoteStore::for_config(config);
     search::ContentIndex index(store, config.tuning.max_note_bytes);
     index.refresh();
     const auto results = index.search(query, limit);
@@ -581,6 +598,10 @@ int run_reserved(const ParsedArgs& args, const core::Config& config) {
         return run_sync(args, config);
     if (args.command == "export")
         return run_export(args, config);
+    if (args.command == "query")
+        return run_query(args);
+    if (args.command == "graph")
+        return run_graph(args, config);
     std::cerr << core::tr("cli.not_implemented", {{"command", args.command}}) << '\n';
     return kExitUsage;
 }

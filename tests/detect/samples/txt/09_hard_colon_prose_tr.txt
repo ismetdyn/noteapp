@@ -1,0 +1,3 @@
+Not: yarın toplantı var
+Durum: devam ediyor
+Sonuç: herkes kabul etti

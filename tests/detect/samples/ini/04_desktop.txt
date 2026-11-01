@@ -1,0 +1,4 @@
+[Desktop Entry]
+Name=Notes
+Exec=notes %f
+Type=Application

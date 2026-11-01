@@ -3,10 +3,12 @@ add_library(noteapp_sync
     auto_sync.cpp
     git_runtime.cpp
     lock.cpp
-    sync_service.cpp)
+    note_status.cpp
+    sync_service.cpp
+    text_merge.cpp)
 target_include_directories(noteapp_sync PUBLIC ${PROJECT_SOURCE_DIR}/src)
 # libgit2'nin hedef adı libgit2package'dir (libgit2 adı iç OBJECT kütüphanesine ait).
-target_link_libraries(noteapp_sync PUBLIC noteapp_core libgit2package)
+target_link_libraries(noteapp_sync PUBLIC noteapp_core noteapp_graph libgit2package)
 if(WIN32)
     target_link_libraries(noteapp_sync PRIVATE advapi32)  # CredWriteW / CredReadW / CredDeleteW
 else()

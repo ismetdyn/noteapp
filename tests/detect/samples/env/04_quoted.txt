@@ -1,0 +1,4 @@
+APP_NAME="note app"
+GREETING='merhaba dünya'
+EMPTY=
+WITH_REF=${APP_NAME}-prod

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<notes>
+  <note id="1">a</note>
+</notes>

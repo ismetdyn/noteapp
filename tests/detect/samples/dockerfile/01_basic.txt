@@ -1,0 +1,4 @@
+FROM fedora:44
+RUN dnf install -y gcc
+COPY . /src
+CMD ["/src/app"]

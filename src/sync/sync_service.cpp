@@ -4,10 +4,15 @@
 #include "core/file_stat.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
+#include "core/migration.hpp"
+#include "core/note_store.hpp"
+#include "core/note_sync.hpp"
 #include "core/paths.hpp"
 #include "core/process.hpp"
+#include "graph/graph.hpp"
 #include "sync/auth.hpp"
 #include "sync/lock.hpp"
+#include "sync/text_merge.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -50,6 +55,10 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr const char* kRemoteName = "origin";
+constexpr std::string_view kLogDir = "graph";  // <notes_dir>/graph/<cihaz>.oplog (SPEC-graph)
+constexpr std::size_t kLogHexBytes = 32;
+constexpr std::size_t kLogNameBytes = kLogHexBytes + std::string_view(".oplog").size();
+constexpr std::size_t kMaxReportedIssues = 20;  // durum dosyası büyümesin; kalanı sayı olarak bildirilir
 constexpr std::string_view kBranchPrefix = "refs/heads/";
 constexpr std::string_view kPushRejected = "sync.push_rejected";
 constexpr std::size_t kMaxFileNameBytes = 255;  // Linux NAME_MAX; Windows'un 255 UTF-16 birimi de sığar
@@ -83,6 +92,8 @@ core::Error sync_error(std::string key, core::Args args = {}) {
 core::Error git_failure() {
     return sync_error("sync.git_failed", {{"detail", git_error_last()->message}});
 }
+
+core::Error read_failure(const fs::path& file, const std::error_code& ec);
 
 // libgit2'nin her çağrısı int döner (< 0: hata, ayrıntı git_error_last()'ta); C API'sini okunur tutar.
 #define TRY_GIT(expr)                                                                                        \
@@ -180,11 +191,31 @@ void fill_from_git_config(const fs::path& file, Author& author) {
     }
 }
 
-std::expected<int, core::Error> count_changes(git_repository* repo, git_tree* from, git_tree* to) {
+// Kullanıcıya söylenen sayı not değişikliğidir: `.trash/` altı sayılmaz. Yeniden ad algılama seçilmedi: çöpe
+// atma silme + ekleme olarak görünür ve boş ya da benzer notlarda benzerlik eşiği sayıyı oynatırdı; bu
+// kuralla çöpe atma ve geri alma her zaman 1, kalıcı silme 0'dır. Ağaç farkı ayrıca tutulur: sayılmayan
+// değişiklik de commit'lenir.
+struct TreeChanges {
+    std::size_t deltas = 0;
+    int notes = 0;
+};
+
+constexpr std::string_view kTrashPrefix = ".trash/";
+
+std::expected<TreeChanges, core::Error> count_changes(git_repository* repo, git_tree* from, git_tree* to) {
     git_diff* raw = nullptr;
     TRY_GIT(git_diff_tree_to_tree(&raw, repo, from, to, nullptr));
     const Diff diff(raw);
-    return static_cast<int>(git_diff_num_deltas(diff.get()));
+    TreeChanges changes;
+    changes.deltas = git_diff_num_deltas(diff.get());
+    for (std::size_t i = 0; i < changes.deltas; ++i) {
+        const git_diff_delta* delta = git_diff_get_delta(diff.get(), i);
+        const std::string_view path =
+            delta->status == GIT_DELTA_DELETED ? delta->old_file.path : delta->new_file.path;
+        if (!path.starts_with(kTrashPrefix))
+            ++changes.notes;
+    }
+    return changes;
 }
 
 // Dal ucunun ağacı; dal doğmamışsa (hiç commit yok) boş işaretçiler.
@@ -227,14 +258,53 @@ std::expected<Signature, core::Error> signature_now(const core::SyncConfig& sync
     return Signature(raw);
 }
 
-// Döngü 2: eklenen, değişen ve silinen her şey (.gitignore'a uyarak) sahnelenir; ağaç değiştiyse commit.
-std::expected<int, core::Error> commit_all(git_repository* repo, const std::string& branch,
-                                           const core::SyncConfig& sync) {
+// Bu cihazın ve diğerlerinin günlükleri; yalnız `<32 hex>.oplog` adı taşıyıcıdır. Dizin bağsa kullanılmaz:
+// core.symlinks kapalı olduğundan git'ten gelmez, elle kurulmuş olabilir ve dışarıdaki dosyaları günlük gibi
+// okuturdu.
+std::expected<std::vector<fs::path>, core::Error> log_files(const fs::path& notes_dir) {
+    const fs::path dir = notes_dir / kLogDir;
+    std::vector<fs::path> files;
+    const auto dir_stat = core::stat_file(dir);
+    if (!dir_stat)
+        return files;
+    if (dir_stat->symlink || !dir_stat->directory)
+        return std::unexpected(sync_error("sync.log_dir_not_regular", {{"path", utf8(dir)}}));
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        const std::string name = utf8(it->path().filename());
+        const bool is_log = name.size() == kLogNameBytes && name.ends_with(".oplog") &&
+                            std::all_of(name.begin(), name.begin() + kLogHexBytes, [](char c) {
+                                return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+                            });
+        if (is_log)
+            files.push_back(it->path());
+    }
+    if (ec)
+        return std::unexpected(read_failure(dir, ec));
+    std::ranges::sort(files);
+    return files;
+}
+
+// Döngü 2: yalnız taşıyıcılar sahnelenir (.gitignore, .gitattributes, graph/*.oplog). Depodaki diğer
+// dosyalara, eski notlar dahil, dokunulmaz (SPEC-sync). Ağaç değiştiyse commit; dönüş: commit atıldı mı.
+std::expected<bool, core::Error> commit_carriers(git_repository* repo, const fs::path& notes_dir,
+                                                 const std::string& branch, const core::SyncConfig& sync,
+                                                 int note_count) {
     git_index* index_raw = nullptr;
     TRY_GIT(git_repository_index(&index_raw, repo));
     const Index index(index_raw);
-    TRY_GIT(git_index_update_all(index.get(), nullptr, nullptr, nullptr));  // silinenler
-    TRY_GIT(git_index_add_all(index.get(), nullptr, GIT_INDEX_ADD_DEFAULT, nullptr, nullptr));
+    for (const char* name : {".gitignore", ".gitattributes"}) {
+        std::error_code ec;
+        if (fs::exists(notes_dir / name, ec))
+            TRY_GIT(git_index_add_bypath(index.get(), name));
+    }
+    const auto logs = log_files(notes_dir);
+    if (!logs)
+        return std::unexpected(logs.error());
+    for (const fs::path& log : *logs) {
+        const std::string relative = std::string(kLogDir) + "/" + utf8(log.filename());
+        TRY_GIT(git_index_add_bypath(index.get(), relative.c_str()));
+    }
     TRY_GIT(git_index_write(index.get()));
     git_oid tree_id;
     TRY_GIT(git_index_write_tree(&tree_id, index.get()));
@@ -246,21 +316,23 @@ std::expected<int, core::Error> commit_all(git_repository* repo, const std::stri
     if (!parent)
         return std::unexpected(parent.error());
     const auto changed = count_changes(repo, parent->second.get(), tree.get());
-    if (!changed || *changed == 0)
-        return changed;
+    if (!changed)
+        return std::unexpected(changed.error());
+    if (changed->deltas == 0)
+        return false;
 
     const auto signature = signature_now(sync);
     if (!signature)
         return std::unexpected(signature.error());
     const std::string message =
-        core::tr("sync.commit_message", {{"count", std::to_string(*changed)},
+        core::tr("sync.commit_message", {{"count", std::to_string(note_count)},
                                          {"host", host_name()},
                                          {"time", iso_utc(std::chrono::system_clock::now())}});
     const git_commit* parents[] = {parent->first.get()};
     git_oid commit_id;
     TRY_GIT(git_commit_create(&commit_id, repo, "HEAD", signature->get(), signature->get(), nullptr,
                               message.c_str(), tree.get(), parent->first ? 1 : 0, parents));
-    return changed;
+    return true;
 }
 
 // Bir ağ işleminin (ls, fetch, push) callback yükü. Kimliğin tek deneme kuralı işlem başınadır: her işlem
@@ -455,7 +527,10 @@ std::expected<int, core::Error> commit_merge(git_repository* repo, const git_com
     TRY_GIT(git_repository_state_cleanup(repo));
 
     copies.insert(copies.end(), resolved->begin(), resolved->end());
-    return count_changes(repo, ours_tree, tree.get());
+    const auto changed = count_changes(repo, ours_tree, tree.get());
+    if (!changed)
+        return std::unexpected(changed.error());
+    return changed->notes;
 }
 
 // Yarım kalmış merge'ü geri alır. Hiçbir içerik kaybolmaz: merge'e başlamadan önce tüm yerel değişiklikler
@@ -658,7 +733,7 @@ std::expected<int, core::Error> integrate(git_repository* repo, const std::strin
     const Tree target_tree(target_tree_raw);
     const auto changed = count_changes(repo, old_tip->second.get(), target_tree.get());
     if (!changed)
-        return changed;
+        return std::unexpected(changed.error());
 
     // SAFE: yerel değişikliğin üzerine yazmak yerine hata verir (ağaç az önce commit'lendi, olmamalı);
     // yok sayılan dosyalar da korunur. Önce checkout, sonra ref: checkout yarıda kalırsa dal eski commit'te
@@ -676,7 +751,7 @@ std::expected<int, core::Error> integrate(git_repository* repo, const std::strin
                                                            git_commit_id(old_tip->first.get()), kReflog)
                            : git_reference_create(&moved, repo, local.c_str(), target_id, 0, kReflog));
     git_reference_free(moved);
-    return changed;
+    return changed->notes;
 }
 
 // Döngü 5: yerel dal uzaktakinden öndeyse push. Dönüş: push yapıldı mı. Ret "sync.push_rejected".
@@ -732,6 +807,39 @@ bool has_visible_entries(const fs::path& dir) {
         if (!utf8(it->path().filename()).starts_with('.'))
             return true;
     return false;
+}
+
+std::string hex_device(const std::array<std::byte, 16>& device) {
+    std::string text;
+    for (const std::byte value : device)
+        text += std::format("{:02x}", std::to_integer<unsigned>(value));
+    return text;
+}
+
+// Motorun raporu kullanıcıya gidecek hatalara çevrilir; yol yerine cihaz: yol iç ayrıntıdır.
+void collect_issues(const graph::MergeReport& report, SyncResult& result) {
+    result.log_issues.clear();
+    result.heads.clear();
+    const auto add = [&](core::Error issue) {
+        if (result.log_issues.size() < kMaxReportedIssues)
+            result.log_issues.push_back(std::move(issue));
+    };
+    for (const graph::StalledLog& stalled : report.stalled)
+        add(sync_error("sync.log_stalled", {{"device", hex_device(stalled.device)},
+                                            {"seq", std::to_string(stalled.applied_seq)},
+                                            {"reason", stalled.reason}}));
+    for (const graph::BadFrameReport& bad : report.bad_frames)
+        add(sync_error(
+            "sync.log_bad_frame",
+            {{"device", hex_device(bad.device)}, {"seq", std::to_string(bad.seq)}, {"reason", bad.reason}}));
+    for (const graph::PartialTail& tail : report.partial_tails)
+        add(sync_error("sync.log_partial_tail", {{"device", hex_device(tail.device)},
+                                                 {"valid", std::to_string(tail.valid_bytes)},
+                                                 {"total", std::to_string(tail.file_bytes)}}));
+    if (report.omitted > 0)
+        add(sync_error("sync.log_omitted", {{"count", std::to_string(report.omitted)}}));
+    for (const graph::DeviceHead& head : report.heads)
+        result.heads.push_back({hex_device(head.device), head.log_seq, head.applied_seq});
 }
 
 // Bağlar düz dosya olarak (içinde hedef yolu) çıkarılır: notlar hiçbir bağın ardında yaşamaz (SPEC-core).
@@ -818,8 +926,19 @@ std::expected<void, core::Error> add_missing_lines(const fs::path& file,
     return core::write_file_atomically(file, text + missing);
 }
 
+// Yönetilen dosyanın içeriği; bağ ya da okunamayan girdide boş (ensure_* zaten reddetti).
+std::optional<std::string> read_if_present(const fs::path& file) {
+    auto text = read_regular_file(file);
+    return text ? *text : std::nullopt;
+}
+
 std::expected<void, core::Error> ensure_gitignore(const fs::path& notes_dir) {
-    return add_missing_lines(notes_dir / ".gitignore", {".noteapp/", ".*.tmp"});
+    return add_missing_lines(notes_dir / ".gitignore", {".noteapp/", ".*.tmp", "graph/*.aside-*"});
+}
+
+// Günlükler ikilidir ve tek yazarlıdır: git satır sonu dönüştürmez, metin birleştirmez (SPEC-graph "Dosya").
+std::expected<void, core::Error> ensure_gitattributes(const fs::path& notes_dir) {
+    return add_missing_lines(notes_dir / ".gitattributes", {"*.oplog -text -merge"});
 }
 
 // Klonun checkout'unu engellememesi için kenara alınan .gitignore geri gelir: checkout yazmadıysa bayt bayt,
@@ -942,6 +1061,21 @@ std::expected<std::vector<std::string>, core::Error> remote_refs(git_remote* rem
     return names;
 }
 
+// Uzak boş: yönetilen dosyalar ve bu cihazın günlüğü ilk commit olur ve gönderilir. Geçiş bekliyorsa günlük
+// verilmez: enable yine kurulur, senkron geçişe kadar reddeder.
+std::expected<void, core::Error> seed_empty_remote(const core::Config& config, git_repository* repo,
+                                                   git_remote* remote, const Credentials& credentials) {
+    const fs::path& notes_dir = config.notes_dir;
+    NOTEAPP_TRY(ensure_gitignore(notes_dir));
+    NOTEAPP_TRY(ensure_gitattributes(notes_dir));
+    core::NoteStore store = core::NoteStore::for_config(config);
+    if (!store.health())
+        NOTEAPP_TRY(core::export_note_log(store, notes_dir / kLogDir));
+    NOTEAPP_TRY(commit_carriers(repo, notes_dir, config.sync.branch, config.sync, 0));
+    NOTEAPP_TRY(push_if_ahead(repo, remote, config.sync.branch, credentials));
+    return {};
+}
+
 // Kurulum tablosunun son üç satırı: .git yok. Depo bu fonksiyonda oluşturulur (`created`); hata olursa
 // çağıran onu siler.
 std::expected<void, core::Error> initialize(const core::Config& config, const std::string& remote_url,
@@ -956,8 +1090,7 @@ std::expected<void, core::Error> initialize(const core::Config& config, const st
     TRY_GIT(git_repository_init_ext(&repo_raw, utf8(notes_dir).c_str(), &options));
     created = true;
     const Repository repo(repo_raw);
-    if (auto no_links = disable_symlinks(repo.get()); !no_links)
-        return std::unexpected(no_links.error());
+    NOTEAPP_TRY(disable_symlinks(repo.get()));
     git_remote* remote_raw = nullptr;
     TRY_GIT(git_remote_create(&remote_raw, repo.get(), kRemoteName, remote_url.c_str()));
     const Remote remote(remote_raw);
@@ -965,25 +1098,15 @@ std::expected<void, core::Error> initialize(const core::Config& config, const st
     const auto refs = remote_refs(remote.get(), credentials);
     if (!refs)
         return std::unexpected(refs.error());
-    if (std::ranges::none_of(*refs, [](const std::string& name) { return name.starts_with("refs/"); })) {
-        // Uzak boş: yerel her şey (yoksa yalnız .gitignore) ilk commit olur ve gönderilir.
-        if (auto written = ensure_gitignore(notes_dir); !written)
-            return std::unexpected(written.error());
-        if (auto committed = commit_all(repo.get(), branch, config.sync); !committed)
-            return std::unexpected(committed.error());
-        const auto pushed = push_if_ahead(repo.get(), remote.get(), branch, credentials);
-        if (!pushed)
-            return std::unexpected(pushed.error());
-        return {};
-    }
+    if (std::ranges::none_of(*refs, [](const std::string& name) { return name.starts_with("refs/"); }))
+        return seed_empty_remote(config, repo.get(), remote.get(), credentials);
     if (std::ranges::find(*refs, local_ref(branch)) == refs->end())
         return std::unexpected(sync_error("sync.remote_branch_missing", {{"branch", branch}}));
     if (!local_empty)
         return std::unexpected(sync_error("sync.both_non_empty", {{"path", utf8(notes_dir)}}));
     // Uzakta geçmiş varken fetch'ten önce commit atılmaz: atılsaydı iki ilgisiz geçmiş doğardı (T25 bulgusu).
     // Doğmamış dala hızlı ileri sarma = klon; notes_dir var ve gizli girdiler içeriyor olsa da çalışır.
-    if (auto fetched = fetch(remote.get(), branch, credentials); !fetched)
-        return std::unexpected(fetched.error());
+    NOTEAPP_TRY(fetch(remote.get(), branch, credentials));
     // Gizli girdiler klasörü "dolu" yapmaz ama izlenmeyen bir .gitignore SAFE checkout'u durdurur. Silinmez,
     // kenara alınır (`.*.tmp`: yok sayılır): süreç tam burada öldürülse de satırlar kaybolmaz. Diğer gizli
     // dosyalardaki çakışma checkout'u temizce durdurur; hiçbirinin üzerine yazılmaz.
@@ -1000,14 +1123,14 @@ std::expected<void, core::Error> initialize(const core::Config& config, const st
     std::vector<core::NotePath> copies;  // doğmamış dalda birleştirme yok, kopya da oluşmaz
     const auto pulled = integrate(repo.get(), branch, config.sync, copies);
     if (*leftover) {
-        if (auto restored = restore_gitignore(gitignore, **leftover); !restored)
-            return std::unexpected(restored.error());  // kenardaki kopya yerinde kalır
+        NOTEAPP_TRY(restore_gitignore(gitignore, **leftover));  // hatada kenardaki kopya yerinde kalır
         std::error_code ec;
         fs::remove(set_aside, ec);
     }
     if (!pulled)
         return std::unexpected(pulled.error());
-    return ensure_gitignore(notes_dir);
+    NOTEAPP_TRY(ensure_gitignore(notes_dir));
+    return ensure_gitattributes(notes_dir);
 }
 
 // Kilit altında kurulum: önce adres doğrulanır, sonra tabloya göre dallanılır. Ya tam kurulum ya hiç: yarım
@@ -1027,15 +1150,150 @@ std::expected<void, core::Error> enable_locked(const core::Config& config, std::
     if (!credentials)
         return std::unexpected(credentials.error());
     const bool local_empty = !has_visible_entries(notes_dir);
+    const bool had_old_notes = core::legacy_notes_pending(notes_dir, core::data_dir());
     const bool had_gitignore = fs::exists(notes_dir / ".gitignore", ec);
+    const bool had_gitattributes = fs::exists(notes_dir / ".gitattributes", ec);
+    const bool had_log_dir = fs::exists(notes_dir / kLogDir, ec);
     bool created = false;
     auto outcome = initialize(config, url, *credentials, local_empty, created);
+    // Klonla gelen düz dosyalar bu cihazın eski notu değildir.
+    if (outcome && !had_old_notes)
+        outcome = core::mark_notes_dir_current(notes_dir, core::data_dir());
     if (!outcome && created) {  // yalnız kendi oluşturduğumuz depo: başkasının .git'ine asla dokunulmaz
         remove_git_dir(notes_dir / ".git");
         if (!had_gitignore)
             fs::remove(notes_dir / ".gitignore", ec);
+        if (!had_gitattributes)
+            fs::remove(notes_dir / ".gitattributes", ec);
+        if (!had_log_dir)  // günlükler graph.db'den yeniden üretilir: burada kayıp yok
+            fs::remove_all(notes_dir / kLogDir, ec);
     }
     return outcome;
+}
+
+// Bir senkron döngüsünün ortak durumu. Adımlar SPEC-sync'teki sırayla çağrılır.
+struct LogCycle {
+    git_repository* repo;
+    git_remote* remote;
+    const Credentials& credentials;
+    const core::Config& config;
+    core::NoteStore& store;
+    fs::path log_dir;
+    std::uint64_t pushed_before;
+    SyncResult& result;
+    std::vector<core::Error> set_aside;
+    const SyncTestHooks& hooks;
+};
+
+// notes_dir deposu ve origin'i; değilse "sync.not_initialized".
+std::expected<std::pair<Repository, Remote>, core::Error> open_sync_repository(const fs::path& notes) {
+    const std::string notes_dir = utf8(notes);
+    const core::Error not_initialized{
+        core::Error::Code::NotFound, "sync.not_initialized", {{"path", notes_dir}}};
+    git_repository* repo_raw = nullptr;
+    if (const int rc = git_repository_open(&repo_raw, notes_dir.c_str()); rc == GIT_ENOTFOUND)
+        return std::unexpected(not_initialized);
+    else if (rc < 0)
+        return std::unexpected(git_failure());
+    Repository repo(repo_raw);
+    git_remote* remote_raw = nullptr;
+    if (git_repository_is_bare(repo.get()) || git_remote_lookup(&remote_raw, repo.get(), kRemoteName) < 0)
+        return std::unexpected(not_initialized);
+    return std::pair<Repository, Remote>{std::move(repo), Remote(remote_raw)};
+}
+
+// Sıra bağlayıcı (SPEC-graph): önce kendi günlüğü alınır. Geri yüklenmiş graph.db böyle yetişir; atlanırsa
+// yeni yazma aynı seq'i farklı içerikle üretip diğer cihazlarda seq_digest_mismatch doğururdu.
+std::expected<void, core::Error> ingest_own_log(LogCycle& cycle) {
+    const auto name = core::own_log_name(cycle.store);
+    if (!name)
+        return std::unexpected(name.error());
+    const std::vector<fs::path> own{cycle.log_dir / path_from_utf8(*name)};
+    std::error_code ec;
+    if (fs::exists(own.front(), ec))
+        NOTEAPP_TRY(core::ingest_note_logs(cycle.store, own));
+    return {};
+}
+
+// Doğmamış dal ve uzakta geçmiş: önce uzak alınır. Yoksa ilk commit ayrı bir kök olur, iki cihaz ilgisiz
+// geçmişe düşer (T25 bulgusu, enable'ın klon yolu da bu yüzden commit'ten önce fetch eder).
+std::expected<void, core::Error> pull_into_unborn_branch(LogCycle& cycle) {
+    const std::string& branch = cycle.config.sync.branch;
+    const fs::path& notes = cycle.config.notes_dir;
+    const auto tip = branch_tip(cycle.repo, local_ref(branch));
+    if (!tip)
+        return std::unexpected(tip.error());
+    if (tip->first)
+        return {};
+    NOTEAPP_TRY(fetch(cycle.remote, branch, cycle.credentials));
+    // Yönetilen dosyalar checkout'u durdurmasın: ensure_* az önce yazdı, uzaktan gelen sürüme eklenir.
+    const std::optional<std::string> ignore = read_if_present(notes / ".gitignore");
+    const std::optional<std::string> attributes = read_if_present(notes / ".gitattributes");
+    std::error_code removed;
+    fs::remove(notes / ".gitignore", removed);
+    fs::remove(notes / ".gitattributes", removed);
+    std::vector<core::NotePath> none;
+    const auto pulled = integrate(cycle.repo, branch, cycle.config.sync, none, cycle.hooks);
+    if (ignore)
+        NOTEAPP_TRY(restore_gitignore(notes / ".gitignore", *ignore));
+    if (attributes)
+        NOTEAPP_TRY(restore_gitignore(notes / ".gitattributes", *attributes));
+    if (!pulled)
+        return std::unexpected(pulled.error());
+    return {};
+}
+
+// Günlüğü dizine yazar ve taşıyıcıları commit'ler.
+std::expected<void, core::Error> publish_log(LogCycle& cycle) {
+    NOTEAPP_TRY(log_files(cycle.config.notes_dir));  // uzak commit graph'ı dosyaya çevirdiyse net hata
+    std::error_code ec;
+    fs::create_directories(cycle.log_dir, ec);
+    if (ec)
+        return std::unexpected(read_failure(cycle.log_dir, ec));
+    auto exported = core::export_note_log(cycle.store, cycle.log_dir);
+    if (!exported)
+        return std::unexpected(exported.error());
+    if (exported->set_aside)
+        cycle.set_aside.push_back(
+            sync_error("sync.log_set_aside",
+                       {{"path", utf8(exported->set_aside->filename())}, {"reason", exported->reason}}));
+    const auto unsent = core::count_local_changes(cycle.store, cycle.pushed_before);
+    if (!unsent)
+        return std::unexpected(unsent.error());
+    cycle.result.committed = *unsent;
+    // publish sonrası başka süreç yazabilir: yalnız günlüğe girmiş olan gönderilmiş sayılır.
+    cycle.result.exported_seq = exported->last_seq;
+    NOTEAPP_TRY(commit_carriers(cycle.repo, cycle.config.notes_dir, cycle.config.sync.branch,
+                                cycle.config.sync, *unsent));
+    return {};
+}
+
+// Döngünün 3–5. adımları: fetch → birleştir → günlükleri al ve çöz → ver → push.
+std::expected<bool, core::Error> exchange_logs(LogCycle& cycle) {
+    const std::string& branch = cycle.config.sync.branch;
+    NOTEAPP_TRY(fetch(cycle.remote, branch, cycle.credentials));
+    const auto pulled =
+        integrate(cycle.repo, branch, cycle.config.sync, cycle.result.conflict_copies, cycle.hooks);
+    if (!pulled)
+        return std::unexpected(pulled.error());
+    const auto logs = log_files(cycle.config.notes_dir);
+    if (!logs)
+        return std::unexpected(logs.error());
+    auto ingested = core::ingest_note_logs(cycle.store, *logs, merge_text);
+    if (!ingested)
+        return std::unexpected(ingested.error());
+    cycle.result.pulled += ingested->changed_notes;
+    cycle.result.conflict_copies.insert(cycle.result.conflict_copies.end(), ingested->conflict_copies.begin(),
+                                        ingested->conflict_copies.end());
+    collect_issues(ingested->report, cycle.result);
+    cycle.result.log_issues.insert(cycle.result.log_issues.end(), ingested->unresolved.begin(),
+                                   ingested->unresolved.end());
+    for (const core::NotePath& copy : ingested->conflict_copies)
+        core::log_warn("sync: body conflict; the losing version is kept as " + copy.string());
+    NOTEAPP_TRY(publish_log(cycle));
+    if (cycle.hooks.before_push)
+        cycle.hooks.before_push();
+    return push_if_ahead(cycle.repo, cycle.remote, branch, cycle.credentials);
 }
 
 }  // namespace
@@ -1110,57 +1368,58 @@ void SyncService::record_failure(const core::Error& error) const {
 }
 
 std::expected<SyncResult, core::Error> SyncService::run_cycle(const SyncTestHooks& hooks) {
+    auto opened = open_sync_repository(config_.notes_dir);
+    if (!opened)
+        return std::unexpected(opened.error());
+    const Repository& repo = opened->first;
+    const Remote& remote = opened->second;
     const std::string notes_dir = utf8(config_.notes_dir);
-    const core::Error not_initialized{
-        core::Error::Code::NotFound, "sync.not_initialized", {{"path", notes_dir}}};
-    git_repository* repo_raw = nullptr;
-    if (const int rc = git_repository_open(&repo_raw, notes_dir.c_str()); rc == GIT_ENOTFOUND)
-        return std::unexpected(not_initialized);
-    else if (rc < 0)
-        return std::unexpected(git_failure());
-    const Repository repo(repo_raw);
-    git_remote* remote_raw = nullptr;
-    if (git_repository_is_bare(repo.get()) || git_remote_lookup(&remote_raw, repo.get(), kRemoteName) < 0)
-        return std::unexpected(not_initialized);
-    const Remote remote(remote_raw);
 
-    // Elle başlatılmış ya da yarıda kalmış merge/rebase/cherry-pick: index'teki çakışmaları commit_all
-    // işaretli dosyalarla "çözerdi". Kullanıcı bitirene (ya da iptal edene) kadar hiçbir şeye dokunulmaz.
+    // Elle başlatılmış ya da yarıda kalmış merge/rebase/cherry-pick: index'teki çakışmalar commit'e girerdi.
+    // Kullanıcı bitirene (ya da iptal edene) kadar hiçbir şeye dokunulmaz.
     if (git_repository_state(repo.get()) != GIT_REPOSITORY_STATE_NONE)
         return std::unexpected(sync_error("sync.repo_busy_state", {{"path", notes_dir}}));
     // index ve checkout bu ayarı ilk kullanımda okur: hiçbir şeye dokunmadan önce.
-    if (auto no_links = disable_symlinks(repo.get()); !no_links)
-        return std::unexpected(no_links.error());
-
-    const std::string& branch = config_.sync.branch;
-    if (auto on_branch = check_head(repo.get(), branch); !on_branch)
-        return std::unexpected(on_branch.error());
+    NOTEAPP_TRY(disable_symlinks(repo.get()));
+    NOTEAPP_TRY(check_head(repo.get(), config_.sync.branch));
     // Ağa çıkmadan, hiçbir şeye dokunmadan: SSH host anahtarı ön kontrolü, HTTPS token'ı.
     const char* url = git_remote_url(remote.get());
     const auto credentials = prepare_credentials(url != nullptr ? url : "");
     if (!credentials)
         return std::unexpected(credentials.error());
 
-    SyncResult result;
-    const auto committed = commit_all(repo.get(), branch, config_.sync);
-    if (!committed)
-        return std::unexpected(committed.error());
-    result.committed = *committed;
+    core::NoteStore store = core::NoteStore::for_config(config_);
+    if (const auto issue = store.health())  // geçiş bekliyor ya da depo açılamıyor: git'e hiç dokunulmaz
+        return std::unexpected(*issue);
+    // Burada geçirilecek yerel eski not yok: bundan sonra git'le gelen dosya bu cihazın eski notu sayılmaz.
+    NOTEAPP_TRY(core::mark_notes_dir_current(config_.notes_dir, core::data_dir()));
+    NOTEAPP_TRY(ensure_gitattributes(config_.notes_dir));
+    NOTEAPP_TRY(ensure_gitignore(config_.notes_dir));
 
-    const auto pushed = retry_rejected_push([&]() -> std::expected<bool, core::Error> {
-        if (auto fetched = fetch(remote.get(), branch, *credentials); !fetched)
-            return std::unexpected(fetched.error());
-        const auto pulled = integrate(repo.get(), branch, config_.sync, result.conflict_copies, hooks);
-        if (!pulled)
-            return std::unexpected(pulled.error());
-        result.pulled += *pulled;
-        if (hooks.before_push)
-            hooks.before_push();
-        return push_if_ahead(repo.get(), remote.get(), branch, *credentials);
-    });
+    const auto own_log = core::own_log_name(store);
+    if (!own_log)
+        return std::unexpected(own_log.error());
+    SyncResult result;
+    result.pushed_log = *own_log;
+    LogCycle cycle{repo.get(),
+                   remote.get(),
+                   *credentials,
+                   config_,
+                   store,
+                   config_.notes_dir / kLogDir,
+                   pushed_seq_of(*own_log),
+                   result,
+                   {},
+                   hooks};
+    NOTEAPP_TRY(ingest_own_log(cycle));
+    NOTEAPP_TRY(pull_into_unborn_branch(cycle));
+    NOTEAPP_TRY(publish_log(cycle));
+    const auto pushed = retry_rejected_push([&] { return exchange_logs(cycle); });
     if (!pushed)
         return std::unexpected(pushed.error());
     result.pushed = *pushed;
+    result.log_issues.insert(result.log_issues.end(), cycle.set_aside.begin(), cycle.set_aside.end());
+    result.pushed_seq = result.exported_seq;
     return result;
 }
 
@@ -1169,6 +1428,14 @@ void SyncService::record(const std::expected<SyncResult, core::Error>& outcome) 
     if (outcome) {
         status.last_success = std::chrono::system_clock::now();
         status.last_error.reset();
+        status.pushed_seq = status.pushed_log == outcome->pushed_log
+                                ? std::max(status.pushed_seq, outcome->pushed_seq)
+                                : outcome->pushed_seq;
+        status.pushed_log = outcome->pushed_log;
+        status.log_issues = outcome->log_issues;
+        status.heads = outcome->heads;
+        for (const core::Error& issue : status.log_issues)
+            core::log_warn("sync: " + core::format_error(issue));
         core::log_info(std::format("sync: ok (committed {}, pulled {}, pushed {})", outcome->committed,
                                    outcome->pulled, outcome->pushed));
     } else {
@@ -1186,11 +1453,32 @@ void SyncService::record(const std::expected<SyncResult, core::Error>& outcome) 
         table.insert("last_error",
                      toml::table{{"key", status.last_error->message_key}, {"args", std::move(args)}});
     }
+    table.insert("pushed_seq", static_cast<std::int64_t>(status.pushed_seq));
+    table.insert("pushed_log", status.pushed_log);
+    toml::array issues;
+    for (const core::Error& issue : status.log_issues) {
+        toml::table args;
+        for (const auto& [name, value] : issue.args)
+            args.insert(name, value);
+        issues.push_back(toml::table{{"key", issue.message_key}, {"args", std::move(args)}});
+    }
+    table.insert("log_issues", std::move(issues));
+    toml::array heads;
+    for (const DeviceLogHead& head : status.heads)
+        heads.push_back(toml::table{{"device", head.device},
+                                    {"log_seq", static_cast<std::int64_t>(head.log_seq)},
+                                    {"applied_seq", static_cast<std::int64_t>(head.applied_seq)}});
+    table.insert("heads", std::move(heads));
     std::ostringstream text;
     text << table << '\n';
     // state_dir() kilit alınırken oluşturuldu.
     if (auto written = core::write_file_atomically(status_file(), text.str()); !written)
         core::log_error("sync: " + core::format_error(written.error()));
+}
+
+std::uint64_t SyncService::pushed_seq_of(std::string_view own_log) const {
+    const SyncStatus current = status();
+    return current.pushed_log == own_log ? current.pushed_seq : 0;
 }
 
 SyncStatus SyncService::status() const {
@@ -1214,6 +1502,24 @@ SyncStatus SyncService::status() const {
                 last.args.emplace_back(std::string(name.str()), value.value_or(std::string()));
         status.last_error = std::move(last);
     }
+    status.pushed_seq = static_cast<std::uint64_t>(table["pushed_seq"].value_or(std::int64_t{0}));
+    status.pushed_log = table["pushed_log"].value_or(std::string());
+    if (const toml::array* issues = table["log_issues"].as_array())
+        for (const toml::node& node : *issues)
+            if (const toml::table* issue = node.as_table()) {
+                core::Error parsed{core::Error::Code::Io, (*issue)["key"].value_or(std::string()), {}};
+                if (const toml::table* args = (*issue)["args"].as_table())
+                    for (const auto& [name, value] : *args)
+                        parsed.args.emplace_back(std::string(name.str()), value.value_or(std::string()));
+                status.log_issues.push_back(std::move(parsed));
+            }
+    if (const toml::array* heads = table["heads"].as_array())
+        for (const toml::node& node : *heads)
+            if (const toml::table* head = node.as_table())
+                status.heads.push_back(
+                    {(*head)["device"].value_or(std::string()),
+                     static_cast<std::uint64_t>((*head)["log_seq"].value_or(std::int64_t{0})),
+                     static_cast<std::uint64_t>((*head)["applied_seq"].value_or(std::int64_t{0}))});
     return status;
 }
 

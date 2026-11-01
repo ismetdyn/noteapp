@@ -31,6 +31,10 @@ int run_find(const ParsedArgs& args, const core::Config& config);  // args.rest:
 // args.rest: [] | status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST] | --background
 int run_sync(const ParsedArgs& args, const core::Config& config);
 int run_export(const ParsedArgs& args, const core::Config& config);  // args.rest: --pdf SORGU|YOL [-o ÇIKTI]
+// args.rest: migrate | export --format jsonl [-o DOSYA] | import DOSYA
+int run_graph(const ParsedArgs& args, const core::Config& config);
+int run_export_all(const std::string& directory, const core::Config& config);
+int run_query(const ParsedArgs& args);  // args.rest: [--write] [--json] [--param K=D]... CYPHER
 // Alt komut dağıtıcısı; gerçeklenmemiş olanlar "henüz kullanılamıyor" (çıkış 2) verir.
 int run_reserved(const ParsedArgs& args, const core::Config& config);
 int run_invalid(const ParsedArgs& args);

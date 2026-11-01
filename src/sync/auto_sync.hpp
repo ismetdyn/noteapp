@@ -23,7 +23,7 @@ class AutoSync {
 public:
     // `running` true: bir senkron başladı (`status` önceki sonuç: ⟳ göstergesi); false: bitti (`status`
     // durum dosyasından yeni sonuç). İŞÇİ İŞ PARÇACIĞINDAN çağrılır: ön yüz kendi UI iş parçacığına
-    // aktarmalı (FTXUI: ScreenInteractive::Post; Qt: QMetaObject::invokeMethod(…, Qt::QueuedConnection)).
+    // aktarmalı (FTXUI: ScreenInteractive::Post; ImGui: GuiState::post + SDL_PushEvent).
     // Callback içinden notify_changed/request_now çağrılabilir; stop() ve yıkıcı çağrılamaz (kilitlenir).
     using StatusCallback = std::function<void(const SyncStatus& status, bool running)>;
 

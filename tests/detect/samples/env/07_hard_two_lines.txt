@@ -1,0 +1,2 @@
+# only one key
+SECRET_KEY=abc123

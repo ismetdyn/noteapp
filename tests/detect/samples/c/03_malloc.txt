@@ -1,0 +1,7 @@
+#include <stdlib.h>
+#include <string.h>
+
+char *dup(const char *s) {
+    char *p = malloc(strlen(s) + 1);
+    return p ? strcpy(p, s) : NULL;
+}

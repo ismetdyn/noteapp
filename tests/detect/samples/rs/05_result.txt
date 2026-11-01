@@ -1,0 +1,4 @@
+fn read(path: &str) -> Result<String, std::io::Error> {
+    let text = std::fs::read_to_string(path)?;
+    Ok(text)
+}

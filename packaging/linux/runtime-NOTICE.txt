@@ -1,0 +1,29 @@
+AppImage runtime notice
+
+The ELF stub at the start of this AppImage is the AppImage type2-runtime, release
+20251108 (https://github.com/AppImage/type2-runtime). The noteapp programs do not
+link any of the libraries below; only the stub does. It mounts or extracts the
+payload and then starts AppRun.
+
+Statically linked into the stub, per src/runtime/Makefile and the licence text in
+src/runtime/runtime.c of that release (run the AppImage with --appimage-help):
+
+  libfuse 3.15.0, library licensed under LGPL-2.1 (libfuse-LICENSE, libfuse-LGPL2.txt)
+    https://github.com/libfuse/libfuse/releases/download/fuse-3.15.0/fuse-3.15.0.tar.xz
+    sha256 70589cfd5e1cff7ccd6ac91c86c01be340b227285c5e200baa284e401eea2ca0
+    Modified by upstream with libfuse-mount.c.diff before linking.
+  squashfuse 0.5.2 (squashfuse-LICENSE)
+    https://github.com/vasi/squashfuse/archive/0.5.2.tar.gz
+    sha256 db0238c5981dabbd80ee09ae15387f390091668ca060a7bc38047912491443d3
+  musl, libzstd, zlib, mimalloc (musl-COPYRIGHT, zstd-LICENSE, zlib-LICENSE,
+    mimalloc-LICENSE). Upstream installs these from Alpine 3.21 packages without
+    pinning a version. The licence texts are from upstream tags: zstd 1.5.6 and
+    zlib 1.3.1 as named by strings in the stub, musl 1.2.5 and mimalloc 2.1.7 as
+    listed in the Alpine 3.21 package index.
+
+Replacing the runtime (LGPL-2.1 section 6): build your own stub from the sources
+above, with your own libfuse if you wish, using scripts/chroot/chroot_build.sh in
+the type2-runtime repository. Then wrap the unchanged payload with it:
+
+  ./noteapp-*-x86_64.AppImage --appimage-extract
+  ARCH=x86_64 appimagetool --runtime-file <your-runtime> squashfs-root noteapp.AppImage

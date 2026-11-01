@@ -2,6 +2,7 @@
 
 #include "core/config.hpp"
 #include "core/paths.hpp"
+#include "core/text.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -51,6 +52,29 @@ std::string timestamp() {
                        local.tm_mday, local.tm_hour, local.tm_min, local.tm_sec);
 }
 
+// Mesajlarda dosya adı gibi dış veri geçer; `cat log.txt` terminale kaçış dizisi göndermesin. Satır sonu
+// boşluk olur: kayıt tek satır kalır. C0, DEL, C1 ve geçersiz UTF-8 `\xNN` yazılır, bilgi kaybolmaz.
+std::string log_safe(std::string_view message) {
+    const bool valid = is_valid_utf8(message);
+    std::string line;
+    line.reserve(message.size());
+    for (std::size_t i = 0; i < message.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(message[i]);
+        const bool c1 = byte == 0xC2 && i + 1 < message.size() &&
+                        (static_cast<unsigned char>(message[i + 1]) & 0xE0) == 0x80;
+        if (message[i] == '\n' || message[i] == '\r') {
+            line += ' ';
+        } else if (c1) {
+            line += std::format("\\x{:02x}", static_cast<unsigned char>(message[++i]));
+        } else if ((byte < 0x20 && message[i] != '\t') || byte == 0x7F || (!valid && byte >= 0x80)) {
+            line += std::format("\\x{:02x}", byte);
+        } else {
+            line += message[i];
+        }
+    }
+    return line;
+}
+
 // Çağıran g_mutex'i tutar. Başarısızlıklar bilerek yutulur: log, uygulamayı düşürmemeli.
 void append_line(std::string_view level, std::string_view message) {
     try {
@@ -75,10 +99,7 @@ void append_line(std::string_view level, std::string_view message) {
         std::ofstream out(file, std::ios::binary | std::ios::app);
         if (!out)
             return;
-        // Satır sonu mesajın içinde olsa bile kayıt tek satır kalır.
-        std::string line(message);
-        std::replace_if(line.begin(), line.end(), [](char c) { return c == '\n' || c == '\r'; }, ' ');
-        out << timestamp() << ' ' << level << ' ' << current_pid() << ' ' << line << '\n';
+        out << timestamp() << ' ' << level << ' ' << current_pid() << ' ' << log_safe(message) << '\n';
     } catch (...) {
         // bilerek boş: bkz. yukarıdaki yorum
     }

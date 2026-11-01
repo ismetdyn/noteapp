@@ -15,6 +15,11 @@ process_not_found = "Program not found: {program}"
 process_spawn_failed = "Could not start '{program}': {reason}"
 process_unsafe_argument = "Argument rejected because it contains characters that are unsafe for cmd.exe: {argument}"
 process_empty_command = "The command is empty"
+query_invalid = "Invalid search value '{value}' for {key}: {reason}"
+migration_required = "Run 'note graph migrate': notes in {path} use the old file layout, nothing can be saved until then"
+graph_too_new = "This database was written by a newer version and cannot be opened: {path}"
+graph_corrupt = "The note database is damaged or is not a noteapp database: {path}"
+edit_kept = "Your edit was NOT saved to the note. It is kept in {file} ({detail})"
 
 [reason]
 empty = "path is empty"
@@ -50,6 +55,17 @@ must_be_table = "must be a table"
 must_not_be_empty = "must not be empty"
 must_be_language = "must be one of auto, tr, en"
 remote_has_credentials = "must not contain a user name or token; store the token with 'note sync login'"
+must_be_sort_field = "must be name, size, updated or created, with an optional leading '-'"
+must_be_size_bound = "must look like >1mb or <10kb (units: b, kb, mb, gb)"
+must_be_age_or_date = "must look like 7d, >2026-10-01 or <2026-10-01"
+must_be_sync_state = "must be synced, modified, new, conflict_copy or sync_off"
+must_be_folder = "must be a valid folder inside the notes folder"
+too_large = "larger than the 60 MiB limit"
+unreadable = "it cannot be read"
+verify_failed = "the saved bytes differ"
+exists = "a file is already there"
+invalid_folder = "its folder name is invalid or too deep"
+too_many_collisions = "too many notes share this name"
 
 [config]
 unknown_key = "Unknown setting '{key}' ignored"
@@ -60,11 +76,49 @@ defaults_unusable = "Built-in defaults are unusable"
 remote_credentials_stripped = "The user name or token in '{key}' was ignored; remove it from the config file and use 'note sync login' for the token"
 
 [tui]
-query_placeholder = "query"
 mode_name = "[name]"
 mode_content = "[content]"
 sync_off = "sync off"
-key_hints = "Enter open  Tab content  ^O new  ^R move  ^D del  ^S sync  F1 help  F2 config  Esc quit"
+status_lines = "{count} lines"
+frame_list = "LIST"
+frame_review = "REVIEW"
+frame_edit = "EDIT"
+key_hints_list = "T trash  Space details  o sort  v column  f search  ? help  Enter edit  → preview  / filter  n new  a add  d to trash  u undo  F2 rename  PgDn page  c copy  q quit  D delete  E external  r move  s sync  Alt+→ details  I all  < > width  z zoom  Tab content  , config"
+key_hints_search = "Enter keep  Esc close  ↑↓ select  Tab content  F1 help  ^O new  ^R move  ^D trash  ^S sync  F9 config"
+key_hints_preview = "← list  e edit  ↑↓ scroll  / find  n/N next  c copy  q quit  g/G top/end  J/K 5 lines  ^U/^D half page  F2 rename  z zoom  < > width  E external  F1 help  , config"
+key_hints_editor = "Ctrl+S save  Ctrl+Q quit  Ctrl+F find  Ctrl+Z undo  F1 help  Ctrl+Y redo  ^X cut  ^C copy  ^V paste  F9 config"
+key_hints_editor_readonly = "Ctrl+Q quit  ↑↓ scroll  Ctrl+F find  ^C copy  F1 help"
+find_label = "Find:"
+note_find_hints = "Enter keep  ↑↓ next  Esc clear"
+editor_find_hints = "Enter/F3 next  ^P prev  Esc close"
+new_note_header = "New note"
+new_note_label = "Save as:"
+new_note_hints = "Enter save  Esc back  folder/name.ext"
+editor_not_found = "No match"
+editor_saved = "Saved"
+editor_no_changes = "No changes to save"
+editor_save_failed = "Save failed, your text is still here: {detail}"
+editor_saved_copy = "Saved as copy: {path}"
+editor_saved_new = "Saved as a new note: {path}"
+editor_deleted_on_disk = "Deleted on disk: ^S saves it as a new note"
+editor_changed_on_disk = "Changed on disk: ^S asks what to do"
+editor_readonly_binary = "Read-only: binary file"
+editor_readonly_utf8 = "Read-only: not valid UTF-8"
+editor_readonly_nul = "Read-only: contains NUL bytes"
+editor_readonly_large = "Read-only: larger than {limit} MiB, showing the start"
+editor_untitled = "new note"
+editor_leave_title = "Unsaved changes"
+editor_leave_question = "Save changes to '{path}'?"
+editor_choice_save = "Save"
+editor_conflict_title = "Changed on disk"
+editor_conflict_question = "'{path}' changed on disk while you were editing."
+editor_choice_copy = "Save mine as a copy"
+editor_choice_load = "Load the disk version (drop mine)"
+editor_choice_overwrite = "Write mine over the disk version"
+editor_exit_saved = "Unsaved text was saved: {path}"
+editor_exit_kept = "Could not save '{path}' ({detail}). Your text is in: {temp}"
+editor_exit_lost = "Could not save '{path}' and could not keep a copy: {detail}"
+new_row_hints = "type a name  Enter create and edit  Esc cancel"
 too_small = "Window too small (minimum 60x15)"
 binary_preview = "(binary file - no preview)"
 not_yet = "Not available yet"
@@ -88,23 +142,109 @@ deleted = "Deleted: {path}"
 help_title = "Keys"
 help_hints = "↑/↓ PgUp/PgDn scroll  Esc/F1/q close"
 help_body = """
-type          filter notes as you type
-↑ ↓  ^P ^N    move through the list
-PgUp PgDn     scroll the preview
+List
+/             search: filter notes as you type
+↑ ↓  k j      move, the right pane follows
+g G           first / last note
+→ l           preview
+Enter e       edit in the right pane
+E             open in external editor ($EDITOR)
+F2            change path and name (below)
+n ^O          new note: full-screen editor
+a             new note: name atop the list
+c             copy the whole note
+f             search names and content, args too
+d ^D          to trash, no question  u undo
+D             delete for good (asks first)
+T             trash (see below)
+Space i I     row details (see below)
+PgUp PgDn     move by a page in the list
+o  v          sort, right column (see below)
+r             move / rename / change type
+s             sync now
 Tab           switch name / content search
-Enter         open note (no match: new note)
-^O            new empty note
-^R            move / rename / change type
-^D            delete (asks first)
-^S            sync now
-F2            settings
-F1            this help
-Esc           clear query, or quit when empty
-^C            quit
+< >           pane width  z zoom pane
+?             this help
+q             quit
+Esc           clear filter
+Search (input below)
+type          filter the list
+↑ ↓  ^P ^N    move the selection
+Enter         keep selection (no match: new note)
+Tab           switch name / content search
+Esc           close, filter stays
+List and search
+^P ^N         move the selection
+PgUp PgDn     move by a page
+^O new  ^R move  ^D to trash  ^S sync
+Trash (T, or click trash: N on the top line)
+u             restore the selected note
+D             delete for good (asks first)
+E             empty it all (asks first)
+↑ ↓  k j      move, the right pane is read-only
+PgUp PgDn     scroll the right pane
+Esc q T       back to the list
+Row details
+▸ ▾           closed / open; click the marker
+Space i       open / close the selected row
+I             open / close all rows
+Alt+→ Alt+←   open / close
+              size, dates, sync, origin
+Sort and column
+o             n name  u updated  c created
+              s size  r reverse  Esc cancel
+v             cycle the right column
+Filter arguments (/ and f)
+sort:-size    largest first (- reverses)
+type:md       by type
+in:work/      in a folder
+size:>1mb     by size
+updated:7d    changed in the last 7 days
+sync:modified by sync state
+Preview (read-only)
+↑ ↓           scroll; speeds up when held
+k j  J K      1 line, 5 lines
+^U ^D         half a page
+PgUp PgDn     scroll by page
+F2            change path and name
+g G           top / bottom
+c             copy the whole note
+e Enter       edit from the top visible line
+E             external editor ($EDITOR)
+/             find in note (I = ı = i)
+n N           next / previous match
+← h Esc       back to the list (Esc clears find)
+q             quit
+< >           pane width  z zoom pane
+Editor (right pane): all keys edit
+^S save  ^Q close (asks if unsaved)
+Esc closes find, clears the selection
+^Z undo  ^Y redo
+^Space completion popup  Tab/→ accept hint
+Spell check: md, txt; needs hunspell on PATH
+^F find: Enter/F3 next  ^P prev  Esc close
+^X cut  ^C copy  ^V paste
+No selection: the line is cut/copied
+Shift+arrows select  Home End
+^Home ^End  PgUp PgDn  F1 F9
+^C ^X ^V use the system clipboard:
+wl-copy, xclip/xsel, pbcopy, Win32;
+copy falls back to OSC 52 (75 KB).
+Terminal paste arrives as typing.
+Mouse
+Drag the divider  Wheel scrolls under pointer
+Click a row or a pane
+Click ▸ ▾: row details
+Click trash: N on the top line: the trash
+Drag in REVIEW selects and copies
+Shift+drag selects terminal text
+Everywhere
+F1 help  F9 settings (List, preview: ,)
+^C quit (copy in the editor)
 """
 settings_title = "Settings"
 settings_language = "Language"
-settings_notes_dir = "Notes folder"
+settings_notes_dir = "Sync and migration folder"
 settings_editor = "Editor"
 settings_default_type = "Default type"
 settings_default_folder = "Default folder"
@@ -126,8 +266,56 @@ token_none = "none"
 settings_token_hints = "Enter save token  ^D delete token  ↑/↓ move  Esc cancel"
 settings_confirm_replace = "Replace the origin '{current}' with '{remote}'?"
 replace_yes = "Replace"
-sync_disabled_hint = "Sync is off: turn it on with F2"
+sync_disabled_hint = "Sync is off: turn it on with F9"
 sync_exiting = "Finishing the last sync..."
+completion_title = "Complete"
+completion_hints = "↑↓ move  Enter insert  Esc close"
+mode_global = "[all]"
+mode_trash = "[trash]"
+global_label = "All>"
+key_hints_global = "Enter open  Esc close  ↑↓ select  F1 help"
+key_hints_trash = "u restore  D delete forever  E empty  Esc/q back  ↑↓ select  ? help  PgUp PgDn scroll  Alt+→ details  z zoom"
+trash_title = "TRASH"
+totals = "Total {total} notes"
+totals_matches = " · {count} matches"
+totals_page = " · page {page}/{pages}"
+rename_label = "New path:"
+rename_hints = "Enter save  Esc cancel"
+trash_indicator = "trash: {count}"
+confirm_empty_trash = "Permanently delete the {count} notes in the trash? This cannot be undone."
+empty_trash_title = "Empty the trash"
+trash_emptied = "Trash emptied"
+sort_menu = "Sort: n name  u updated  c created  s size  r reverse  Esc cancel"
+sort_name = "name"
+sort_updated = "updated"
+sort_created = "created"
+sort_size = "size"
+query_error = "{column}: {detail}"
+meta_unknown = "unknown"
+meta_size = "size: {value}"
+meta_updated = "updated: {value}"
+meta_created = "created: {value}"
+meta_sync = "sync: {value}"
+meta_origin = "origin: {value}"
+sync_state_synced = "synced"
+sync_state_modified = "modified"
+sync_state_new = "new"
+sync_state_conflict = "conflict copy"
+trashed = "Trashed: {path}  (u restores)"
+restored = "Restored: {path}"
+nothing_to_restore = "Nothing to restore in this session"
+confirm_purge = "Permanently delete '{path}' from the trash?"
+clipboard_copied = "Copied {size} to the clipboard"
+clipboard_copied_terminal = "Sent {size} to the terminal clipboard (OSC 52)"
+clipboard_too_large = "{size} is too large for the terminal clipboard ({limit} max); kept inside notes only"
+clipboard_binary = "Not copied: the text contains NUL bytes"
+copy_refused_binary = "Not copied: binary note"
+copy_refused_utf8 = "Not copied: the note is not valid UTF-8"
+paste_no_tool = "No clipboard tool found: paste with Ctrl+Shift+V"
+paste_internal = "No clipboard tool: pasted the notes clipboard; Ctrl+Shift+V pastes the system one"
+paste_unavailable = "System clipboard is empty or unavailable"
+paste_binary = "Not pasted: the clipboard holds binary data"
+paste_too_large = "Not pasted: the clipboard is larger than {limit}"
 
 [gui]
 tab_notes = "Notes"
@@ -142,10 +330,6 @@ a11y_search = "Search notes"
 a11y_folders = "Folders"
 a11y_notes = "Note list"
 a11y_editor = "Note content"
-usage_export_pdf = "usage: notes-gui --export-pdf <input> <output>"
-export_input_unreadable = "cannot read input: {path}: {detail}"
-export_output_unopenable = "cannot open output: {path}: {detail}"
-export_output_unwritable = "cannot write output: {path}: {detail}"
 a11y_type = "Note type"
 a11y_error = "Validation error"
 untitled = "Untitled"
@@ -179,13 +363,30 @@ close_discard = "Discard"
 new_folder = "New folder"
 rename_folder = "Rename"
 delete_folder = "Delete folder"
-delete_note = "Delete note"
+delete_note = "Delete forever"
+trash_note = "Move to trash"
+trash_title = "Trash"
+trash_restore = "Restore"
+trash_purge = "Delete forever"
+trash_empty = "Empty"
+trash_back = "Back"
+trash_empty_hint = "The trash is empty."
+trash_count_label = "{count} notes in the trash"
+trashed = "Moved to trash: {path}"
+restored = "Restored: {path}"
+undo_trash = "Undo"
+confirm_purge = "Permanently delete '{path}' from the trash? This cannot be undone."
+confirm_empty_trash = "Permanently delete the {count} notes in the trash? This cannot be undone."
+toolbar_trash = "Trash ({count})"
+toolbar_trash_tip = "Open or close the trash: restore, delete forever, empty"
 move_note = "Move to folder"
 delete = "Delete"
 folder_name = "Folder name"
 new_folder_title = "New folder"
 rename_folder_title = "Rename folder"
 op_failed = "Operation failed: {detail}"
+confirm_overwrite = "'{path}' already exists. Replace it?"
+overwrite = "Replace"
 export_dialog_title = "Export as PDF"
 exported = "Exported: {path}"
 confirm_delete_title = "Confirm deletion"
@@ -196,9 +397,9 @@ mode_name = "Name"
 mode_content = "Content"
 a11y_mode = "Search mode: name or content"
 browse = "Browse..."
-browse_title = "Choose notes folder"
+browse_title = "Choose the sync and migration folder"
 setting_language = "Language"
-setting_notes_dir = "Notes folder"
+setting_notes_dir = "Sync and migration folder"
 setting_editor = "Editor command"
 setting_default_type = "Default type"
 setting_default_folder = "Default folder"
@@ -218,6 +419,20 @@ token_label = "Access token"
 token_save = "Save token"
 token_clear = "Delete token"
 token_stored = "stored in the keychain"
+token_none = "none"
+token_state = "Status: {state}"
+token_https_only = "Tokens are used only with https remotes."
+settings_group_general = "General"
+settings_group_sync = "Sync"
+settings_unsaved = "Unsaved changes"
+language_auto = "System language"
+language_tr = "Türkçe"
+language_en = "English"
+setting_hint_editor = "Empty uses $VISUAL, then $EDITOR."
+setting_hint_sync_remote = "Example: https://github.com/you/notes.git or git@github.com:you/notes.git"
+setting_hint_sync_idle_seconds = "Syncs this many seconds after the last change."
+close_settings_title = "Unsaved settings"
+close_settings_text = "The settings have unsaved changes."
 test_connection = "Test connection"
 test_ok = "✓ Connected and synced"
 test_failed = "⚠ {detail}"
@@ -226,7 +441,19 @@ sync_ok = "✓ {time}"
 sync_error = "⚠ {detail}"
 replace_origin_title = "Replace sync remote?"
 replace_origin = "Replace"
-pdf_image_placeholder = "[image]"
+toolbar_new_note = "New note"
+toolbar_new_note_tip = "New note (Ctrl+N)"
+toolbar_new_folder_tip = "New folder inside the selected folder"
+toolbar_delete_tip = "Move the selected note to the trash (Del); Shift+Del deletes forever"
+toolbar_move = "Move"
+toolbar_move_tip = "Move to folder (Ctrl+M)"
+toolbar_export = "Export PDF"
+toolbar_export_tip = "Export as PDF (Ctrl+E)"
+empty_list_hint = "No notes to show. Press Ctrl+N or the New note button to create one."
+
+[pdf]
+image_placeholder = "[image]"
+render_failed = "Could not create the PDF (libharu error {detail})"
 
 [cli]
 saved = "Saved: {path} ({type}, {how})"
@@ -252,8 +479,7 @@ binary_note = "Binary note cannot be shown: {path}"
 ls_usage = "Usage: note ls [QUERY] [-f FOLDER]"
 show_usage = "Usage: note show QUERY"
 edit_usage = "Usage: note edit QUERY"
-export_usage = "Usage: note export --pdf QUERY|PATH [-o OUTPUT]"
-gui_not_installed = "notes-gui not found; install the graphical interface to export PDFs"
+export_usage = "Usage: note export --pdf QUERY|PATH [-o OUTPUT] | note export --all DIR"
 exported = "Exported: {path}"
 find_usage = "Usage: note find TERM... [--limit N]"
 find_no_match = "No note contains '{query}'"
@@ -271,6 +497,10 @@ help_rm = "note rm PATH [-y]   Delete a note (exact path only); asks for confirm
 help_mv = "note mv SOURCE TARGET   Move or rename a note; a changed extension changes the type; folders are created"
 help_export = "note export --pdf PATH [-o OUTPUT]   Export a note as PDF"
 help_sync = "note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]   Sync now, or manage synchronization; login reads the access token from stdin without echo and saves it in the system keychain"
+help_query = "note query [--write] [--json] [--param KEY=VALUE]... CYPHER   Run a Cypher query on the graph database (read-only unless --write); prints a table or JSON"
+query_usage = "Usage: note query [--write] [--json] [--param KEY=VALUE]... CYPHER"
+query_no_database = "No graph database at {path}; 'note query --write' creates it"
+query_bad_param = "--param needs KEY=VALUE with a plain name, got '{param}'"
 help_config = "note config path | list | get KEY | set KEY VALUE   Manage the configuration (types takes a comma-separated list)"
 help = """
 Usage:
@@ -288,6 +518,7 @@ Usage:
   note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]
                                                               Sync now, or manage synchronization
   note config path | list | get KEY | set KEY VALUE           Manage the configuration
+  note query [--write] [--json] [--param KEY=VALUE]... CYPHER Run a Cypher query on the graph database
   note --help | help COMMAND | --version                      Show help or the version
 
 Use 'note -- ls' to add a note whose text is a command name.
@@ -317,6 +548,22 @@ sync_login_no_host = "No host given and no remote set: use 'note sync login HOST
 sync_token_prompt = "Access token for {host} (input is hidden): "
 sync_login_done = "The token for {host} was saved in the system keychain"
 sync_logout_done = "The token for {host} was removed"
+sync_status_head = "Device {device}: log {log}, applied {applied}"
+graph_usage = "Usage: note graph migrate [--skip-failed] | note graph export --format jsonl [-o FILE] | note graph import [--overwrite] FILE"
+graph_bad_line = "Line {line} of the import is not valid ({reason}); changes from earlier batches stay, nothing else was applied"
+graph_imported = "Imported {nodes} nodes and {edges} edges"
+graph_import_refused = "Refused: {id} already exists with different content; --overwrite replaces it"
+migrate_summary = "Migrated {imported} notes ({unchanged} already there), {folders} folders. Backup: {backup}"
+migrate_skipped = "Skipped, the file stays where it is: {path} ({reason})"
+migrate_failed = "NOT migrated: {path} ({reason})"
+migrate_incomplete = "Migration is not complete: writes stay refused and old files were not touched. Fix the files above and run 'note graph migrate' again"
+migrate_remove_repo = "Old files were NOT deleted and sync will leave them alone. Check your notes (note export --all DIR), then remove them from every device's history with: git -C {path} rm -r -- <files>, git -C {path} commit -m 'remove old notes', note sync"
+migrate_remove_plain = "Old files were NOT deleted. Check your notes (note export --all DIR); after that you can delete the old files in {path} yourself"
+export_all_done = "Exported {count} notes to {path}"
+export_all_refused = "Not exported: {path} ({reason})"
+help_graph = "note graph migrate | export --format jsonl [-o FILE] | import FILE   Import old plain-file notes; dump or load the whole graph as JSON lines"
+migrate_backup_hint = "Backup kept at {path} (private). When you no longer need it, delete it yourself: rm -r {path}"
+export_all_unreachable = "Not exported, no safe path: {name} (id {id}, {reason}). Its bytes are in: note graph export --format jsonl"
 
 [sync]
 commit_message = "Sync from {host} at {time} (changed files: {count})"
@@ -341,3 +588,32 @@ keychain_unavailable = "The system keychain is not available ({detail}); the tok
 timeout = "The sync did not finish within {seconds} seconds and was stopped; it will be retried on the next sync"
 remote_invalid_paths = "The remote contains a file name this system cannot store: '{path}' (a reserved name, or two names that differ only in case). Rename it on the device where it was created, then sync again; your local notes were not changed"
 gitignore_not_regular = "'{path}' is a link or not a regular file; for safety it is neither read nor changed. Replace it with a regular file, then try again"
+log_stalled = "Notes from device {device} stopped at change {seq} ({reason}); other notes keep syncing"
+log_bad_frame = "A damaged change from device {device} was not applied (change {seq}, {reason})"
+log_partial_tail = "The log of device {device} ends with an incomplete change ({valid} of {total} bytes); it completes on a later sync"
+log_omitted = "{count} more log problems were not listed"
+log_set_aside = "This device's log did not match its database; it was kept as {path} and written again ({reason})"
+log_dir_not_regular = "'{path}' is a link or not a folder (a remote commit may have replaced it with a file). Your notes are safe in the database; move it away or fix it in the repository, then sync again"
+conflict_unresolved = "The conflict on '{path}' could not be resolved ({detail}); both versions stay in the database and sync goes on"
+
+[graph]
+cypher_syntax = "Query syntax error at line {line}, column {col}: {what}"
+cypher_unsupported = "Not supported at line {line}, column {col}: {what}"
+cypher_read_only = "This query writes (line {line}, column {col}); run it with --write"
+cypher_missing_param = "Missing parameter ${name} at line {line}, column {col}; pass it with --param"
+cypher_arithmetic = "Arithmetic error at line {line}, column {col}: {reason}"
+cypher_bad_count = "SKIP and LIMIT need a non-negative whole number (line {line}, column {col})"
+cypher_bad_target = "This value is not a node or relationship (line {line}, column {col})"
+cypher_not_storable = "This value cannot be stored as a property (line {line}, column {col})"
+cypher_merge_conflict = "MERGE found a changed entity with the same identity (line {line}, column {col}); it was not overwritten"
+cypher_merge_null = "MERGE property {key} is null (line {line}, column {col})"
+cypher_aggregate_type = "This aggregate needs numbers (line {line}, column {col})"
+limit_exceeded = "Query limit exceeded: {limit}"
+invalid_argument = "Invalid graph operation: {reason}"
+not_found = "Not found in the graph: {what}"
+corrupt = "The graph database is damaged or is not a graph database: {reason}"
+schema_too_new = "The graph database was created by a newer version of noteapp"
+storage_error = "Graph database error"
+txn_poisoned = "The transaction failed and was rolled back"
+wal_unavailable = "The graph database could not enable its write-ahead log"
+bad_frame = "Invalid operation log frame: {reason}"

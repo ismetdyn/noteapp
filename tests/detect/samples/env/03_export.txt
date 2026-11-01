@@ -1,0 +1,3 @@
+export PATH_PREFIX=/opt/app
+export LOG_LEVEL=debug
+export FEATURE_X=true

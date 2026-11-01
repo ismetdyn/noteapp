@@ -1,0 +1,5 @@
+# build rules
+prefix = /usr/local
+
+install: app
+	install -m 755 app $(prefix)/bin

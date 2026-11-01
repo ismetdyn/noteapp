@@ -30,7 +30,7 @@ TEST_CASE("editor flow: content written by the editor becomes a note with a dete
     const auto result = box.run({"-e"});
     CHECK(result.exit_code == 0);
     CHECK(result.out.find("(java, önerilen)") != std::string::npos);
-    CHECK(slurp(box.notes() / "public-class-a.java") == code);
+    CHECK(box.body("public-class-a.java") == code);
 }
 
 // Betik `note < NUL` çağırırsa editör açılıp süreç asılı kalmamalı: stdin TTY değil, boş girdi reddedilir.
@@ -52,7 +52,7 @@ TEST_CASE("editor flow: chosen type and folder rules match quick add") {
     const auto result = box.run({"-e", "-t", "txt", "-f", "work", "-n", "plan"});
     CHECK(result.exit_code == 0);
     CHECK(result.out == "Kaydedildi: work/plan.txt (txt, seçilen)\n");
-    CHECK(slurp(box.notes() / "work" / "plan.txt") == "merhaba");
+    CHECK(box.body("work/plan.txt") == "merhaba");
 }
 
 TEST_CASE("editor flow: a blank result cancels with exit 1 and creates nothing") {
@@ -78,7 +78,7 @@ TEST_CASE("editor flow: -e text arguments prefill the file and become the note i
 
     const auto result = box.run({"-e", "Başlık"});
     CHECK(result.exit_code == 0);
-    CHECK(slurp(box.notes() / "baslik.md") == "Başlık");
+    CHECK(box.body("baslik.md") == "Başlık");
     // Geçici dosya: OS temp dizininde noteapp-*.md; başarıdan sonra silinmiş olmalı.
     const std::string args = slurp(out.path() / "args.txt");
     CHECK(args.find("noteapp-") != std::string::npos);
@@ -94,7 +94,7 @@ TEST_CASE("editor flow: Turkish content round-trips") {
     const ScopedEnv content("FAKE_EDITOR_CONTENT", text);
 
     CHECK(box.run({"-e", "-n", "gunluk"}).exit_code == 0);
-    CHECK(slurp(box.notes() / "gunluk.md") == text);
+    CHECK(box.body("gunluk.md") == text);
 }
 
 TEST_CASE("editor flow: a failing editor exits 3 and keeps the temp file with its path in the error") {

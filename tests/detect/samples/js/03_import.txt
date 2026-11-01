@@ -1,0 +1,7 @@
+import React from 'react';
+import { useState } from 'react';
+
+export function App() {
+  const [n, setN] = useState(0);
+  return n;
+}

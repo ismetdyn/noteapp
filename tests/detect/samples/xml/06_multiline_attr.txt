@@ -1,0 +1,5 @@
+<rule
+   name="a"
+   value="b">
+  <when>x</when>
+</rule>

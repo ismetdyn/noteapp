@@ -20,7 +20,9 @@ TEST_CASE("config list prints key = value lines with dotted sync keys and joined
     CHECK(result.exit_code == 0);
     CHECK(result.out.find("language = tr\n") != std::string::npos);
     CHECK(result.out.find("default_type = md\n") != std::string::npos);
-    CHECK(result.out.find("types = md, txt, csv, cpp, java, py, json, sh\n") != std::string::npos);
+    CHECK(result.out.find("types = md, txt, csv, cpp, java, py, json, sh, env, properties, yaml, toml, ini, "
+                          "xml, html, css, js, ts, sql, c, go, rs, dockerfile, makefile\n") !=
+          std::string::npos);
     CHECK(result.out.find("sync.enabled = false\n") != std::string::npos);
     CHECK(result.out.find("sync.idle_seconds = 30\n") != std::string::npos);
     CHECK(result.out.find("tuning") == std::string::npos);
@@ -45,7 +47,7 @@ TEST_CASE("config set keeps the other keys (notes_dir) intact") {
 
     const auto saved = box.run({"hello"});
     CHECK(saved.exit_code == 0);
-    CHECK(fs::exists(box.notes() / "hello.txt"));
+    CHECK(box.exists("hello.txt"));
 }
 
 TEST_CASE("config set and get round-trip scalars, bools, ints and lists") {
@@ -156,7 +158,7 @@ TEST_CASE("an unknown config key is warned on stderr while stdout, exit code and
 
     CHECK(result.exit_code == 0);
     CHECK(result.err.find("bogus_key") != std::string::npos);
-    CHECK(fs::exists(box.notes() / "hello.md"));
+    CHECK(box.exists("hello.md"));
     const auto value = box.run({"config", "get", "language"});
     CHECK(value.exit_code == 0);
     CHECK(value.out == "tr\n");  // stdout yalnız değer: uyarı stderr'de

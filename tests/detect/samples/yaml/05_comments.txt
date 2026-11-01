@@ -1,0 +1,5 @@
+# deployment
+replicas: 3
+strategy:
+  type: RollingUpdate
+max_surge: 1

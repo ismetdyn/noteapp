@@ -1,10 +1,11 @@
 # resources/ altındaki dosyaları C++ bayt dizilerine çevirip hedefe gömer.
-#   noteapp_embed_resources(<hedef> <resources/ altındaki göreli dosyalar...>)
-# Üretilen kaynak, core/resources.hpp'deki embedded_resource() işlevini tanımlar. Dosya değişince
+#   noteapp_embed_resources(<hedef> <resources/ altındaki göreli dosyalar...>)  -> core::embedded_resource()
+#   noteapp_embed_fonts(<hedef> <resources/ altındaki göreli dosyalar...>)      -> pdf::embedded_font()
+# Fontlar ayrı işlevdedir: `notes` (TUI) noteapp_core'a bağlanır ama 2,8 MB fonta ihtiyacı yoktur. Dosya değişince
 # add_custom_command DEPENDS sayesinde yeniden üretilir. Aynı dosya üretimi `cmake -P` ile de yürütür.
 
 if(CMAKE_SCRIPT_MODE_FILE)
-    # Betik modu: -DOUT=<çıktı.cpp> -DRES_DIR=<dizin> -DFILES=<a|b|c>
+    # Betik modu: -DOUT=<çıktı.cpp> -DRES_DIR=<dizin> -DFILES=<a|b|c> -DHEADER=<başlık> -DNS=<ad alanı> -DFUNC=<işlev>
     string(REPLACE "|" ";" _files "${FILES}")
     set(_arrays "")
     set(_table "")
@@ -20,11 +21,11 @@ if(CMAKE_SCRIPT_MODE_FILE)
         math(EXPR _i "${_i} + 1")
     endforeach()
     file(WRITE "${OUT}" "// Otomatik üretildi (cmake/EmbedResources.cmake); elle düzenlenmez.
-#include \"core/resources.hpp\"
+#include \"${HEADER}\"
 
 #include <cstddef>
 
-namespace noteapp::core {
+namespace ${NS} {
 
 namespace {
 
@@ -40,7 +41,7 @@ ${_table}};
 
 }  // namespace
 
-std::optional<std::string_view> embedded_resource(std::string_view relative_path) {
+std::optional<std::string_view> ${FUNC}(std::string_view relative_path) {
     for (const Entry& e : kEntries) {
         if (e.name == relative_path)
             return std::string_view(reinterpret_cast<const char*>(e.data), e.size);
@@ -48,16 +49,16 @@ std::optional<std::string_view> embedded_resource(std::string_view relative_path
     return std::nullopt;
 }
 
-}  // namespace noteapp::core
+}  // namespace ${NS}
 ")
     return()
 endif()
 
 set(NOTEAPP_EMBED_SCRIPT "${CMAKE_CURRENT_LIST_FILE}")
 
-function(noteapp_embed_resources target)
+function(noteapp_embed_files target header namespace func)
     set(_res_dir "${PROJECT_SOURCE_DIR}/resources")
-    set(_out "${CMAKE_CURRENT_BINARY_DIR}/embedded_resources.cpp")
+    set(_out "${CMAKE_CURRENT_BINARY_DIR}/${func}.cpp")
     set(_deps "")
     foreach(_f IN LISTS ARGN)
         list(APPEND _deps "${_res_dir}/${_f}")
@@ -65,10 +66,18 @@ function(noteapp_embed_resources target)
     list(JOIN ARGN "|" _files)
     add_custom_command(
         OUTPUT "${_out}"
-        COMMAND ${CMAKE_COMMAND} -DOUT=${_out} -DRES_DIR=${_res_dir} "-DFILES=${_files}"
-                -P "${NOTEAPP_EMBED_SCRIPT}"
+        COMMAND ${CMAKE_COMMAND} -DOUT=${_out} -DRES_DIR=${_res_dir} "-DFILES=${_files}" -DHEADER=${header}
+                -DNS=${namespace} -DFUNC=${func} -P "${NOTEAPP_EMBED_SCRIPT}"
         DEPENDS ${_deps} "${NOTEAPP_EMBED_SCRIPT}"
         COMMENT "Kaynaklar gömülüyor: ${_files}"
         VERBATIM)
     target_sources(${target} PRIVATE "${_out}")
+endfunction()
+
+function(noteapp_embed_resources target)
+    noteapp_embed_files(${target} core/resources.hpp noteapp::core embedded_resource ${ARGN})
+endfunction()
+
+function(noteapp_embed_fonts target)
+    noteapp_embed_files(${target} pdf/fonts.hpp noteapp::pdf embedded_font ${ARGN})
 endfunction()

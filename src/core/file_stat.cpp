@@ -13,6 +13,7 @@
 #include <windows.h>
 #else
 #include <cerrno>
+#include <fcntl.h>
 #include <sys/stat.h>
 #endif
 
@@ -165,6 +166,37 @@ std::vector<ScannedFile> scan_files(const fs::path& root) {
     }
 #endif
     return out;
+}
+
+std::optional<fs::file_time_type> file_birth_time(const fs::path& path) {
+#ifdef _WIN32
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data) == 0)
+        return std::nullopt;
+    return from_filetime(data.ftCreationTime);
+#else
+    const auto from_parts = [](std::int64_t seconds, std::int64_t nanos) {
+        const std::chrono::sys_time<std::chrono::nanoseconds> sys{std::chrono::seconds(seconds) +
+                                                                  std::chrono::nanoseconds(nanos)};
+        return std::chrono::time_point_cast<fs::file_time_type::duration>(
+            std::chrono::file_clock::from_sys(sys));
+    };
+#if defined(__linux__)
+    struct statx info{};
+    if (statx(AT_FDCWD, path.c_str(), AT_SYMLINK_NOFOLLOW, STATX_BTIME, &info) != 0 ||
+        (info.stx_mask & STATX_BTIME) == 0)
+        return std::nullopt;
+    return from_parts(info.stx_btime.tv_sec, info.stx_btime.tv_nsec);
+#elif defined(__APPLE__)
+    struct stat info{};
+    if (lstat(path.c_str(), &info) != 0)
+        return std::nullopt;
+    return from_parts(info.st_birthtimespec.tv_sec, info.st_birthtimespec.tv_nsec);
+#else
+    static_cast<void>(from_parts);
+    return std::nullopt;
+#endif
+#endif
 }
 
 }  // namespace noteapp::core

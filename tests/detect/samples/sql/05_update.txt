@@ -1,0 +1,4 @@
+UPDATE notes
+SET title = 'x'
+WHERE id = 3;
+DELETE FROM notes WHERE id = 4;

@@ -1,0 +1,60 @@
+#!/bin/sh
+# Tek dosya, üç komut. Ortamı bilerek sade tutar: LD_LIBRARY_PATH yok, çünkü editör, ssh ve zenity gibi çocuklar da
+# paketli kütüphaneleri yüklerdi; bağımlılıklar ikililerin RUNPATH'inden çözülür.
+here=$(dirname -- "$(readlink -f -- "$0")")
+
+invoked=${ARGV0:-$0}
+case ${invoked##*/} in
+    note | notes | notes-gui)
+        target=${invoked##*/}
+        ;;
+    *)
+        case ${1:-} in
+            note | notes)
+                target=$1
+                shift
+                ;;
+            gui)
+                target=notes-gui
+                shift
+                ;;
+            *)
+                target=notes-gui
+                ;;
+        esac
+        ;;
+esac
+
+# Ubuntu'da derlenen OpenSSL yalnız /usr/lib/ssl'e bakar; diğer dağıtımlarda HTTPS senkronu sertifika doğrulayamazdı.
+# Host'ta CA yoksa bir şey ayarlanmaz: bağlantı başarısız olur, doğrulama kapanmaz.
+if [ -n "${SSL_CERT_FILE:-}" ]; then
+    # Yalnız SSL_CERT_FILE verildiyse OpenSSL varsayılan dizine (Debian/Ubuntu'da dolu /usr/lib/ssl/certs) yine bakar ve
+    # kullanıcının daralttığı güveni genişletirdi. Pakette olmayan dizin: başka CA kaynağı kalmaz. Paket yalnız FUSE'da salt
+    # okunurdur; --appimage-extract ile açılan dizine sahibi yazabilir, dizin orada yaratılırsa güvenilir sayılır.
+    export SSL_CERT_DIR="${SSL_CERT_DIR:-$here/.no-default-ca-dir}"
+elif [ -z "${SSL_CERT_DIR:-}" ]; then
+    for ca_bundle in \
+        /etc/ssl/certs/ca-certificates.crt \
+        /etc/pki/tls/certs/ca-bundle.crt \
+        /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+        /etc/ssl/ca-bundle.pem \
+        /var/lib/ca-certificates/ca-bundle.pem \
+        /etc/ssl/cert.pem; do
+        if [ -s "$ca_bundle" ]; then
+            export SSL_CERT_FILE="$ca_bundle"
+            break
+        fi
+    done
+fi
+
+# libsecret SECRET_BACKEND=file ile token'ı ~/.local/share/keyrings altına yazar; sözleşme: yalnız host'un Secret Service'i.
+unset SECRET_BACKEND
+# libsecret 0.21.4 secret-backend.c:156: SNAP_NAME ya da /.flatpak-info varsa ve Secret portalı cevap verirse SECRET_BACKEND'e
+# hiç bakmadan file backend'i seçer.
+unset SNAP_NAME
+if [ -e /.flatpak-info ]; then
+    echo "noteapp: refusing to run inside Flatpak: libsecret would store the sync token in a file, not in the Secret Service" >&2
+    exit 1
+fi
+
+exec "$here/usr/bin/$target" "$@"

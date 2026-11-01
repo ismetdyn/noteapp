@@ -18,7 +18,8 @@ struct Error {
         Io,
         ConfigInvalid,
         EditorNotFound,
-        EditorFailed
+        EditorFailed,
+        MigrationRequired
     };
 
     Code code;
@@ -27,3 +28,10 @@ struct Error {
 };
 
 }  // namespace noteapp::core
+
+// expected döndüren çağrının hatasını aynen yayar: çok adımlı yazma ve senkron akışı okunur kalsın.
+#define NOTEAPP_TRY(expr)                                                                                    \
+    do {                                                                                                     \
+        if (auto noteapp_try_result = (expr); !noteapp_try_result)                                           \
+            return std::unexpected(noteapp_try_result.error());                                              \
+    } while (false)

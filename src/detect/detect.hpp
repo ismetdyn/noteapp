@@ -15,7 +15,7 @@ struct Candidate {
 struct Suggestion {
     std::string type;
     double confidence;              // [0, 1]; seçilen tipin puanı
-    std::vector<Candidate> ranked;  // 8 tipin tamamı, puana göre azalan
+    std::vector<Candidate> ranked;  // tüm tipler, puana göre azalan
     bool detected;                  // false: içerik algılamaya yetmedi, default_type döndü
 };
 

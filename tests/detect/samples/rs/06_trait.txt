@@ -1,0 +1,9 @@
+pub trait Shape {
+    fn area(&self) -> f64;
+}
+
+impl Shape for Square {
+    fn area(&self) -> f64 {
+        self.s * self.s
+    }
+}

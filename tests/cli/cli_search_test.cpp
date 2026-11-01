@@ -7,19 +7,12 @@
 
 using namespace noteapp::test;
 
-namespace {
-
-void put(const fs::path& file, const std::string& bytes) {
-    fs::create_directories(file.parent_path());
-    std::ofstream(file, std::ios::binary) << bytes;
-}
-
-}  // namespace
+namespace {}  // namespace
 
 TEST_CASE("find lists path:line: snippet for every hit (SPEC-cli acceptance 6)") {
     const Sandbox box;
-    put(box.notes() / "plan.md", "proje başlangıcı\nbaşka satır\nbütçe onaylandı\n");
-    put(box.notes() / "sadece-proje.md", "proje var, gerisi yok\n");
+    box.put("plan.md", "proje başlangıcı\nbaşka satır\nbütçe onaylandı\n");
+    box.put("sadece-proje.md", "proje var, gerisi yok\n");
 
     const auto result = box.run({"find", "proje bütçe"});
     CHECK(result.exit_code == 0);
@@ -28,8 +21,8 @@ TEST_CASE("find lists path:line: snippet for every hit (SPEC-cli acceptance 6)")
 
 TEST_CASE("find joins several arguments into one query") {
     const Sandbox box;
-    put(box.notes() / "plan.md", "proje başlangıcı\nbütçe onaylandı\n");
-    put(box.notes() / "other.md", "proje\n");
+    box.put("plan.md", "proje başlangıcı\nbütçe onaylandı\n");
+    box.put("other.md", "proje\n");
 
     const auto result = box.run({"find", "proje", "bütçe"});
     CHECK(result.exit_code == 0);
@@ -39,7 +32,7 @@ TEST_CASE("find joins several arguments into one query") {
 
 TEST_CASE("find folds Turkish letters") {
     const Sandbox box;
-    put(box.notes() / "k.md", "Öğrenci listesi\n");
+    box.put("k.md", "Öğrenci listesi\n");
 
     const auto result = box.run({"find", "ogrenci"});
     CHECK(result.exit_code == 0);
@@ -48,7 +41,7 @@ TEST_CASE("find folds Turkish letters") {
 
 TEST_CASE("find prints no ANSI escape codes when stdout is not a terminal") {
     const Sandbox box;
-    put(box.notes() / "k.md", "merhaba dünya\n");
+    box.put("k.md", "merhaba dünya\n");
 
     const auto result = box.run({"find", "dünya"});
     CHECK(result.exit_code == 0);
@@ -57,7 +50,7 @@ TEST_CASE("find prints no ANSI escape codes when stdout is not a terminal") {
 
 TEST_CASE("find with no match exits 1 and prints nothing to stdout") {
     const Sandbox box;
-    put(box.notes() / "k.md", "merhaba\n");
+    box.put("k.md", "merhaba\n");
 
     const auto result = box.run({"find", "yokboyle"});
     CHECK(result.exit_code == 1);
@@ -67,8 +60,8 @@ TEST_CASE("find with no match exits 1 and prints nothing to stdout") {
 
 TEST_CASE("find --limit caps the number of notes; usage errors exit 2") {
     const Sandbox box;
-    put(box.notes() / "a.md", "kelime\n");
-    put(box.notes() / "b.md", "kelime\n");
+    box.put("a.md", "kelime\n");
+    box.put("b.md", "kelime\n");
 
     const auto limited = box.run({"find", "kelime", "--limit", "1"});
     CHECK(limited.exit_code == 0);

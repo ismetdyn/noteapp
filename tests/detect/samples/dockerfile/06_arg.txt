@@ -1,0 +1,4 @@
+ARG VERSION=1
+FROM base:${VERSION}
+VOLUME /data
+ADD a.tar /b

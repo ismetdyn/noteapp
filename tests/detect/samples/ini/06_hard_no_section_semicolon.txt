@@ -1,0 +1,3 @@
+; only keys
+name = plain value
+other = another value

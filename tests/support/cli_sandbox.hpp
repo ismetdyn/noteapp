@@ -1,8 +1,10 @@
 #pragma once
 
 // cli testlerinin ortak kum havuzu (NOTEAPP_NOTE_EXE ile derlenmeli).
+#include "support/note_seed.hpp"
 #include "support/run_process.hpp"
 
+#include <chrono>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -27,14 +29,15 @@ public:
     RunResult run_null_stdin(const std::vector<std::string>& args) const {
         return run_process(NOTEAPP_NOTE_EXE, args, "", true);
     }
-    bool has_any_note() const {
-        if (!fs::exists(notes()))
-            return false;
-        for (const auto& entry : fs::recursive_directory_iterator(notes()))
-            if (entry.is_regular_file())
-                return true;
-        return false;
+    fs::path data() const { return home_.path() / "data"; }
+    bool has_any_note() const { return !core::NoteStore(data()).list().empty(); }
+    // Notlar graph.db'dedir: testin baytları depodan girer, depodan okunur. age_seconds büyük = eski.
+    void put(std::string_view path, std::string_view bytes, int age_seconds = 0) const {
+        upsert_note(data(), path, bytes,
+                    std::chrono::system_clock::now() - std::chrono::seconds(age_seconds));
     }
+    std::string body(std::string_view path) const { return note_body(data(), path); }
+    bool exists(std::string_view path) const { return note_exists(data(), path); }
 
 private:
     // TOML'da ters bölü kaçış sayılır; ileri bölü Windows'ta da geçerli bir yol ayracıdır.

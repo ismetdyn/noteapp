@@ -1,5 +1,6 @@
 #include "core/text.hpp"
 
+#include <algorithm>
 #include <array>
 #include <ctime>
 
@@ -30,6 +31,83 @@ std::string timestamp_name(std::chrono::system_clock::time_point now) {
     std::array<char, 32> buffer{};
     const std::size_t length = std::strftime(buffer.data(), buffer.size(), kStampFormat.data(), &local);
     return std::string(kStampPrefix) + std::string(buffer.data(), length);
+}
+
+constexpr std::string_view kBlank = " \t\r";
+constexpr std::string_view kExportPrefix = "export ";
+
+std::string_view trimmed(std::string_view text) {
+    const std::size_t first = text.find_first_not_of(kBlank);
+    if (first == std::string_view::npos)
+        return {};
+    return text.substr(first, text.find_last_not_of(kBlank) - first + 1);
+}
+
+struct Assignment {
+    std::string_view key;
+    char separator;
+    std::string_view value;
+};
+
+// `[export ]anahtar<ayraç>değer`: anahtar ilk `=` ya da `:` öncesidir. Ayraç yoksa ya da anahtar boşsa
+// nullopt.
+std::optional<Assignment> split_assignment(std::string_view line) {
+    line = trimmed(line);
+    if (line.starts_with(kExportPrefix))
+        line = trimmed(line.substr(kExportPrefix.size()));
+    const std::size_t at = line.find_first_of("=:");
+    if (at == std::string_view::npos || trimmed(line.substr(0, at)).empty())
+        return std::nullopt;
+    return Assignment{trimmed(line.substr(0, at)), line[at], trimmed(line.substr(at + 1))};
+}
+
+// Tırnak ve Türkçe bağımsız: düzyazı başlığı (`Toplantı: bütçe`, `int x`) anahtar sayılmasın diye yalnız
+// ASCII.
+bool is_ascii_identifier(std::string_view text) {
+    const auto is_letter = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+    };
+    if (text.empty() || !is_letter(text.front()))
+        return false;
+    return std::ranges::all_of(
+        text, [&](char c) { return is_letter(c) || (c >= '0' && c <= '9') || c == '.' || c == '-'; });
+}
+
+// `:` düzyazıda da geçer: yalnız tek sözcüklük ya da tırnaklı değer anahtar sayılır. `::` kod, `://`
+// adrestir; adresteki kimlik bilgisi (`@`) yine ada girmesin.
+bool is_value_assignment(const Assignment& assignment) {
+    const std::string_view value = assignment.value;
+    if (!is_ascii_identifier(assignment.key) || value.empty())
+        return false;
+    if (assignment.separator == '=')
+        return value.front() != '=';
+    if (value.starts_with("//"))
+        return value.find('@') != std::string_view::npos;
+    if (value.front() == ':')
+        return false;
+    return value.front() == '"' || value.front() == '\'' ||
+           value.find_first_of(kBlank) == std::string_view::npos;
+}
+
+// Sezgi: kısa belirteç ve rakamsız uzun sözcük kaçar; uzun camelCase kimlik öneriden düşer. Yalnız öneri
+// içindir, sır tarayıcısı değildir.
+bool is_token_like(std::string_view word) {
+    constexpr std::array<std::string_view, 11> kPrefixes = {
+        "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "sk-", "AKIA", "xoxb-", "xoxp-", "glpat-"};
+    constexpr std::size_t kMinPrefixedBytes = 16;
+    constexpr std::size_t kMinBareBytes = 32;
+    if (word.size() >= kMinPrefixedBytes &&
+        std::ranges::any_of(kPrefixes, [&](std::string_view prefix) { return word.starts_with(prefix); }))
+        return true;
+    const auto is_digit = [](char c) { return c >= '0' && c <= '9'; };
+    const auto is_letter = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
+    return word.size() >= kMinBareBytes && std::ranges::any_of(word, is_digit) &&
+           std::ranges::any_of(word, is_letter);
+}
+
+bool is_comment_or_structure(std::string_view line) {
+    constexpr std::string_view kLineMarkers = "#;![-";
+    return line.empty() || kLineMarkers.find(line.front()) != std::string_view::npos;
 }
 
 }  // namespace
@@ -151,8 +229,9 @@ std::string transliterate_turkish(std::string_view utf8) {
     return encode_utf8(*decoded);
 }
 
-std::string slugify(std::string_view first_line, std::chrono::system_clock::time_point now,
-                    std::size_t max_length) {
+namespace {
+
+std::string slug_of(std::string_view first_line, std::size_t max_length) {
     while (!first_line.empty() && is_leading_marker(first_line.front()))
         first_line.remove_prefix(1);
 
@@ -179,7 +258,38 @@ std::string slugify(std::string_view first_line, std::chrono::system_clock::time
         while (!slug.empty() && slug.back() == '-')
             slug.pop_back();
     }
+    return slug;
+}
+
+}  // namespace
+
+std::string slugify(std::string_view first_line, std::chrono::system_clock::time_point now,
+                    std::size_t max_length) {
+    std::string slug = slug_of(first_line, max_length);
     return slug.empty() ? timestamp_name(now) : slug;
+}
+
+TypedName split_typed_name(std::string_view name) {
+    const std::size_t dot = name.rfind('.');
+    if (dot == std::string_view::npos || dot == 0 || dot + 1 == name.size() ||
+        name.find_first_of(kBlank, dot) != std::string_view::npos)
+        return {name, {}};
+    return {name.substr(0, dot), name.substr(dot + 1)};
+}
+
+std::string slugify_stem(std::string_view stem, std::chrono::system_clock::time_point now,
+                         std::size_t max_length) {
+    std::string joined;
+    while (true) {
+        const std::size_t dot = stem.find('.');
+        const std::string part = slug_of(stem.substr(0, dot), max_length);
+        if (!part.empty())
+            joined += (joined.empty() ? "" : ".") + part;
+        if (dot == std::string_view::npos)
+            break;
+        stem.remove_prefix(dot + 1);
+    }
+    return joined.empty() ? timestamp_name(now) : joined;
 }
 
 std::string normalize_line_endings(std::string_view text) {
@@ -205,6 +315,55 @@ std::string first_non_empty_line(std::string_view content) {
         start = end + 1;
     }
     return {};
+}
+
+bool type_has_secret_values(std::string_view type) {
+    return type == "env" || type == "properties" || type == "ini" || type == "toml" || type == "yaml";
+}
+
+std::string_view secret_line_key(std::string_view line) {
+    line = trimmed(line);
+    if (is_comment_or_structure(line))
+        return {};
+    const auto assignment = split_assignment(line);
+    // Boşluk içeren "anahtar" düzyazı ya da çıplak değerdir.
+    return assignment && assignment->key.find_first_of(kBlank) == std::string_view::npos ? assignment->key
+                                                                                         : std::string_view{};
+}
+
+std::string_view assignment_line_key(std::string_view line) {
+    const auto assignment = split_assignment(line);
+    return assignment && is_value_assignment(*assignment) ? assignment->key : std::string_view{};
+}
+
+bool has_token_like_word(std::string_view text) {
+    constexpr std::string_view kTokenAlphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=_-";
+    std::size_t at = text.find_first_of(kTokenAlphabet);
+    while (at != std::string_view::npos) {
+        const std::size_t end = text.find_first_not_of(kTokenAlphabet, at);
+        if (is_token_like(text.substr(at, end == std::string_view::npos ? end : end - at)))
+            return true;
+        at = end == std::string_view::npos ? end : text.find_first_of(kTokenAlphabet, end);
+    }
+    return false;
+}
+
+std::string note_name_source(std::string_view content, std::string_view type) {
+    if (type_has_secret_values(type)) {
+        while (!content.empty()) {
+            const std::size_t end = content.find('\n');
+            if (const std::string_view key = secret_line_key(content.substr(0, end)); !key.empty())
+                return std::string(key);
+            content.remove_prefix(end == std::string_view::npos ? content.size() : end + 1);
+        }
+        return {};
+    }
+    std::string line = first_non_empty_line(content);
+    const std::optional<Assignment> assignment = split_assignment(line);
+    if (assignment && is_value_assignment(*assignment))
+        return std::string(assignment->key);
+    return line;
 }
 
 }  // namespace noteapp::core

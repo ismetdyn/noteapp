@@ -1,16 +1,9 @@
 #pragma once
 
-#include <QDialog>
-#include <QString>
-#include <memory>
-#include <optional>
+#include <cstddef>
 #include <string>
+#include <utility>
 #include <vector>
-
-class QComboBox;
-class QLabel;
-class QLineEdit;
-class QMessageBox;
 
 namespace noteapp::gui {
 
@@ -27,38 +20,39 @@ struct SaveDialogRequest {
     SaveDetails initial;
     std::vector<std::string> folders;
     std::vector<std::string> types;
-    QString hint;              // "öneri: java %82"; taşıma kipinde boş
+    std::string hint;          // "öneri: java %82"; taşıma kipinde boş
     bool folder_only = false;  // Ctrl+M: ad ve tip kilitli, yalnız klasör seçilir
+};
+
+// Ad / klasör / tip formu: çizim view'dadır, kurallar burada. Doğrulama hatası formu kapatmaz.
+struct SaveForm {
+    explicit SaveForm(const SaveDialogRequest& request) : fields(request.initial) {}
+
+    SaveDetails fields;
+    std::string error;
+
+    // Boşlukları kırpar, elle yazılan ".txt"nin noktasını atar; adda yazılan uzantı tipin yerine geçer.
+    SaveDetails details() const;
+    bool try_accept();  // geçersizse error dolar ve false döner
 };
 
 enum class ConflictChoice { Reload, Overwrite, SaveCopy, Cancel };
 enum class CloseChoice { Save, Discard, Cancel };
 
-// Ad / klasör / tip diyaloğu. Doğrulama hatası diyaloğu kapatmaz, satır içinde gösterilir.
-// Q_OBJECT gerekmez: yalnız sanal accept() ezilir, düğmeler QDialog::accept'e bağlanır.
-class SaveDialog : public QDialog {
-public:
-    SaveDialog(const SaveDialogRequest& request, QWidget* parent);
-
-    SaveDetails details() const;
-    void accept() override;
-
-private:
-    QLineEdit* name_ = nullptr;
-    QComboBox* folder_ = nullptr;
-    QComboBox* type_ = nullptr;
-    QLabel* error_ = nullptr;
+// Düğmeli soru: varsayılan (Enter) ve Esc düğmesi veri olarak tutulur, böylece çizimsiz test edilir.
+template <typename Choice> struct ChoiceBox {
+    std::string title;
+    std::string message;
+    std::vector<std::pair<std::string, Choice>> buttons;
+    std::size_t default_button = 0;
+    std::size_t escape_button = 0;
 };
 
-// Üretim varsayılanları: gerçek diyaloğu gösterir. nullopt = kullanıcı vazgeçti.
-std::optional<SaveDetails> run_save_dialog(const SaveDialogRequest& request, QWidget* parent);
-// Varsayılan düğme "benimkini kopya olarak kaydet", Esc = vazgeç (test edilebilsin diye ayrı üretilir).
-std::unique_ptr<QMessageBox> make_conflict_box(QWidget* parent, const std::string& path);
-ConflictChoice ask_conflict(QWidget* parent, const std::string& path);
-CloseChoice ask_close_unsaved(QWidget* parent);
+// Varsayılan düğme "benimkini kopya olarak kaydet" (veri kaybettirmeyen seçenek), Esc = vazgeç.
+ChoiceBox<ConflictChoice> make_conflict_box(const std::string& path);
+ChoiceBox<CloseChoice> make_close_box();
+ChoiceBox<CloseChoice> make_close_settings_box();
 // Silme onayı: varsayılan ve Esc düğmesi "Vazgeç" (geri alınamaz işlem; Enter'a basmak silmesin).
-std::unique_ptr<QMessageBox> make_delete_box(QWidget* parent, const QString& message);
-bool ask_confirm_delete(QWidget* parent, const QString& message);
-std::optional<std::string> ask_folder_name(QWidget* parent, const QString& title, const QString& initial);
+ChoiceBox<bool> make_delete_box(const std::string& message);
 
 }  // namespace noteapp::gui

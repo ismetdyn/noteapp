@@ -235,3 +235,35 @@ açmak `enable`'ı çağırır (repo varsa no-op).
 ## Kapsam dışı
 Rebase, seçmeli (dosya bazlı) senkron, GitHub dışı sağlayıcılara özel destek (genel git remote zaten çalışır),
 LFS, şifreli repo, Git Credential Manager entegrasyonu.
+
+## Değişiklik 2026-11-02 (G5)
+Bu bölüm "Senkron döngüsü" adım 2 ve 4'ü, kabul 3-4'ü ve aşağıdaki "Değişiklik 2026-11-01"in dosya ayrıntılarını geçersiz kılar. Birleştirilen şey dosya değil işlemdir ([SPEC-graph.md](SPEC-graph.md)). Kilit, kimlik doğrulama, `enable`, geri alma, `core.symlinks=false` ve uzak yol denetimi aynen geçerlidir.
+- **Döngü:** kilit → geçiş kapısı (`sync.migration_required`, git'e dokunulmaz) → `.gitattributes` ve `.gitignore` → **kendi günlüğünü al** → ver → commit → fetch → birleştir → tüm günlükleri al ve çöz → ver → commit → push → durum. Ret: fetch'ten bir kez daha. Doğmamış dalda commit'ten önce fetch: yoksa ilgisiz kök olurdu.
+- **Commit** yalnız `.gitignore`, `.gitattributes` (`*.oplog -text -merge`), `graph/<32 hex>.oplog`. Depodaki diğer dosyalara, eski notlar dahil, dokunulmaz. `graph/*.aside-*` yok sayılır.
+- **Gövde çakışması:** `ingest_note_logs` her ingest'te tüm notlara bakar, yalnız `MergeReport.conflicts`'e değil: rapor sınıra takılsa da süreç iki adım arasında ölse de kaybeden sürüm kaybolmaz. Kaybeden head `derive_id("conflict", not, kaybeden dot)` kimlikli kopya nota çıkar, gövde kazananda birleşir. Ad UTC damgalıdır (`<ad> (conflict YYYY-MM-DD HHMM).<uzantı>`), iki cihaz aynı düğüme varır. Yerel yazma da önce bunu yapar.
+- **Satır birleştirme:** Eşzamanlı gövdeler `git_merge_file` (libgit2 1.9) ile üç yönlü birleştirilir. Taban ortak nedensel atadır: her gövde yazması gördüğü head'leri `body_parents`'ta tutar, geçmiş `ReadTxn::properties_at` ile `ops`'tan okunur (motor nottan habersizdir). Girdi sırası (cihaz, seq) sabittir: iki cihaz aynı anda çözerse aynı baytı yazar, aynı değerli head çakışma değildir. CRLF ve BOM aynen kalır. Örtüşme, taban yok (4096 yazma ya da 256 MiB bütçe), ikili ya da geçersiz UTF-8: kopya kuralı. Yerel kayıt, önceki senkronun çözemediği head görürse birleştirmez, kopyaya çıkarır (libgit2'siz yol, nadir).
+- **Silme:** Gövdeyi görmemiş silme etkisizdir, düzenleme kazanır. Görülmeyen head aynı baytlarsa düzenleme sayılmaz.
+- **Görünürlük:** `sync-status.toml`: `pushed_seq`, `log_issues` (`stalled`, `bad_frame`, `partial_tail`, `omitted`, `set_aside`), `heads`. TUI göstergesi, GUI etiketi, `note sync` ve `note sync status` bunları gösterir.
+- **`note_status`:** Git status geçişi kalktı. Ölçüt: not başına bu cihazın yazma numarası ve `pushed_seq`. Çakışma kopyası adı → `conflict_copy`; bu cihazda oluşup gönderilmemiş → `new`; gönderilmemiş yazma → `modified`; aksi → `synced`; sync kapalı ya da `.git` yok → `sync_off`. 5.050 notta 0,45 ms.
+- **Sınır:** Günlük sıkıştırma yok. Her kayıt `ops`'a ve git'e gövdeyle girer; silinen içerik eski günlük satırlarında ve git geçmişinde kalır (SPEC-graph).
+- **`graph` dosya olursa:** Uzak commit `graph` klasörünü dosyaya çevirdiyse `sync.log_dir_not_regular`: notlar veritabanında güvende, kullanıcı düzeltir.
+- **Terminal:** Uzak sunucunun ret metni ve durum dosyası `format_error`'dan sonra temizlenir (C0, C1, geçersiz UTF-8).
+- **`committed` / `pulled`:** Gönderilmemiş yazması olan not sayısı / uzaktan gelip canlı ya da çöp listesinde değişen not sayısı. Çöpe atma 1, kalıcı silme 0.
+- **`enable`:** `graph.db`'deki notlar `notes_dir`'de durmadığından, boş `notes_dir`'li cihaz notları varken de klonlar: notlar birleşir. `sync.both_non_empty` yalnız görünür dosya varsa geçerli. Geçiş bekliyorsa kurulur ama düz dosya commit'lenmez, senkron geçişe kadar reddeder.
+- Test eşlemesi: [tasks/g5-test-map.md](tasks/g5-test-map.md).
+
+## Değişiklik 2026-11-01
+- **ADDED** Çöp kutusu cihazlar arası (T55a): `.trash/` sıradan bir yol olarak commit'lenir. Yönetilen `.gitignore` (`.noteapp/`, `.*.tmp`) ve
+  `sync.remote_invalid_paths` denetimi onu dışlamaz; kod değişikliği gerekmedi, gerçek `enable` + iki klonla sınandı (`tests/sync/trash_sync_test.cpp`):
+  A'daki atma B'nin çöpünde bayt bayt görünür ve canlı listesinden düşer; B'deki geri yükleme, A'daki `purge` ve `empty_trash` karşıya yayılır.
+  - Atma = silme + `.trash`'e ekleme (yeniden adlandırma tespiti kapalı). A atarken B düzenlerse silme/değiştirme çakışmasıdır, karar 7 geçerli:
+    **düzenleme yerinde kalır**, hangi taraf önce senkronlarsa; A'nın eski sürümü de çöpte durur.
+  - İki taraf aynı notun farklı sürümünü atarsa `.trash/<yol>` ekleme/eklemedir: yerel sürüm yerinde, uzak sürüm
+    `.trash/<ad> (conflict …).<uzantı>`. Bu kopya `SyncResult.conflict_copies`'te yoktur (gizli yol `NotePath` değil), `list_trash`'te vardır. Aynı sürüm çakışma değildir.
+- **ADDED** Not başına durum (T55a), `sync/note_status.hpp`: `fill_sync_status(config, span<NoteMeta>)`, `is_conflict_copy_name(path)`.
+  - Çağrı başına **tek** libgit2 status listesi; taban (`baseline`) `refs/remotes/origin/<dal>` ağacıdır, böylece commit'lenmiş ama gönderilmemiş
+    değişiklik de ikinci bir karşılaştırma olmadan görünür. Ağa çıkmaz, kilit almaz, index'i yazmaz; tazelik son fetch kadardır.
+    UI iş parçacığından çağrılmaz (5.050 notta 18 ms, ilk çağrı 24 ms; Release, konteyner, `tests/perf/query_perf_test.cpp`, sınır 500 ms).
+  - Kural sırası: sync kapalı ya da `notes_dir` depo değil → `sync_off`; ad çakışma kopyası (`<ad> (conflict YYYY-MM-DD HHMM)[ N][.uzantı]`) → `conflict_copy`,
+    gönderilmiş olsa da, kullanıcı çözene dek; uzak dal hiç alınmamış → `new`; `.gitignore`'a takılan → `sync_off`; uzakta yok → `new`; uzaktakinden farklı → `modified`; aynı → `synced`.
+  - Sınır: fetch edilip henüz birleştirilmemiş uzak değişiklik de `modified` görünür (not uzakla aynı değil). Kopya adını elle veren not da `conflict_copy` sayılır.

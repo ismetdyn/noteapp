@@ -1,0 +1,11 @@
+#[derive(Debug, Clone)]
+pub struct Note {
+    id: u32,
+    name: String,
+}
+
+impl Note {
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+}

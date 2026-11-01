@@ -99,3 +99,78 @@ TEST_CASE("normalize_line_endings turns CRLF into LF and keeps a lone CR") {
     const std::string big(1 << 20, 'x');  // doğrusal: büyük girdide de bir geçiş
     CHECK(normalize_line_endings(big + "\r\n") == big + "\n");
 }
+
+TEST_CASE("note_name_source: an assignment on the first line names the note by its key, whatever the type") {
+    for (const std::string_view type : {"md", "txt", "sh"}) {
+        CAPTURE(type);
+        CHECK(note_name_source("KEY=value", type) == "KEY");
+        CHECK(note_name_source("AWS_SECRET=sk-live-123\n", type) == "AWS_SECRET");
+        CHECK(note_name_source("export TOKEN=x", type) == "TOKEN");
+        CHECK(note_name_source("API_KEY: abc", type) == "API_KEY");
+        CHECK(note_name_source("API_KEY: \"a b c\"", type) == "API_KEY");
+        CHECK(note_name_source("TOKEN = abc def", type) == "TOKEN");
+        CHECK(note_name_source("server.port=8080\r\n", type) == "server.port");
+    }
+}
+
+TEST_CASE("note_name_source: ordinary prose and code keep the whole line") {
+    for (const std::string_view line :
+         {"Toplantı: bütçe", "Not: süt al ve ekmek", "# Toplantı Notları: Q4!", "int x = 5;", "merhaba dünya",
+          "public class Greeter {", "12:30 toplantı", "std::cout << x", "a == b", "https://example.org/yol",
+          "KEY=", "KEY:", "=deger", "iki sözcük=deger"}) {
+        CAPTURE(line);
+        CHECK(note_name_source(line, "md") == line);
+    }
+    CHECK(slugify(note_name_source("# Toplantı Notları: Q4!", "md"), kNow) == "toplanti-notlari-q4");
+    // Kullanıcı adı ve parola taşıyan URL düzyazı sayılmaz: parola ada girmesin.
+    CHECK(note_name_source("https://kullanici:parola@example.org", "md") == "https");
+}
+
+TEST_CASE("note_name_source: secret-bearing types skip comments and use the first key") {
+    for (const std::string_view type : {"env", "properties", "ini", "toml", "yaml"}) {
+        CAPTURE(type);
+        CHECK(note_name_source("# yorum\n\n; yorum\n! yorum\nAPI_TOKEN=gizli\nB=1\n", type) == "API_TOKEN");
+        CHECK(note_name_source("[bolum]\nkullanici = ali\n", type) == "kullanici");
+        CHECK(note_name_source("---\n- liste\nanahtar: deger\n", type) == "anahtar");
+        CHECK(note_name_source("export TOKEN=x\n", type) == "TOKEN");
+    }
+}
+
+TEST_CASE("note_name_source: a secret-bearing type with no key gets a timestamp name") {
+    for (const std::string_view content : {"", "# yalniz yorum\n", "bir sir degeri\n", "- liste\n"}) {
+        CAPTURE(content);
+        CHECK(note_name_source(content, "env").empty());
+        CHECK(slugify(note_name_source(content, "env"), kNow) == kStamp);
+    }
+}
+
+TEST_CASE("split_typed_name: the last dot of a name with no blanks after it") {
+    const struct {
+        std::string_view name, stem, extension;
+    } cases[] = {
+        {"deneme.cpp", "deneme", "cpp"},
+        {"a.tar.gz", "a.tar", "gz"},
+        {"notlar.v2", "notlar", "v2"},
+        {"ad", "ad", ""},
+        {".gizli", ".gizli", ""},
+        {"ad.", "ad.", ""},
+        {"v1.2 son", "v1.2 son", ""},
+        {"Rapor.PDF", "Rapor", "PDF"},
+        {"", "", ""},
+    };
+    for (const auto& item : cases) {
+        CAPTURE(item.name);
+        const TypedName typed = split_typed_name(item.name);
+        CHECK(typed.stem == item.stem);
+        CHECK(typed.extension == item.extension);
+    }
+}
+
+TEST_CASE("slugify_stem keeps dots between the slugged parts") {
+    const auto now = std::chrono::system_clock::now();
+    CHECK(slugify_stem("a.tar", now) == "a.tar");
+    CHECK(slugify_stem("Sürüm 1.2 Son", now) == "surum-1.2-son");
+    CHECK(slugify_stem("Toplantı Notu", now) == slugify("Toplantı Notu", now));
+    CHECK(slugify_stem("a..b", now) == "a.b");
+    CHECK(slugify_stem("...", now) == slugify("", now));
+}

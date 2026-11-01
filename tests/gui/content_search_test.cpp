@@ -1,59 +1,55 @@
-#include "core/i18n.hpp"
-#include "gui/main_window.hpp"
+#include "gui/gui_state.hpp"
 #include "window_fixture.hpp"
 
-#include <QLineEdit>
-#include <QListView>
-#include <QPlainTextEdit>
-#include <QPushButton>
-#include <QTextEdit>
-#include <QTreeView>
-#include <algorithm>
+#include <SDL3/SDL.h>
+#include <chrono>
 #include <doctest/doctest.h>
-#include <utility>
+#include <imgui.h>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
+using gui_test::make_view;
 using gui_test::press;
+using gui_test::settle;
+using gui_test::type_text;
 using gui_test::WindowFixture;
-using noteapp::gui::MainWindow;
+using noteapp::gui::GuiState;
+using noteapp::gui::TextSelection;
 
 namespace {
 
-// Emoji (2 UTF-16 birimi, 4 UTF-8 baytı) ve Türkçe harfler: bayt, UTF-16 ve kod noktası konumları ayrışır.
+// Emoji (4 UTF-8 baytı) ve Türkçe harfler: bayt ve kod noktası konumları ayrışır.
 constexpr const char kAlpha[] = "😀 İstanbul güzel. istanbul'a git\nbir satır daha\nISTANBUL";
 
-struct Ui {
-    QLineEdit* search;
-    QListView* list;
-    QPlainTextEdit* editor;
-    QPushButton* mode;
-    explicit Ui(MainWindow& w)
-        : search(w.findChild<QLineEdit*>("searchBox")), list(w.findChild<QListView*>("noteList")),
-          editor(w.findChild<QPlainTextEdit*>("noteEditor")), mode(w.findChild<QPushButton*>("modeButton")) {
-        REQUIRE(search);
-        REQUIRE(list);
-        REQUIRE(editor);
-        REQUIRE(mode);
-    }
-    std::vector<std::string> rows() const {
-        std::vector<std::string> out;
-        for (int row = 0; row < list->model()->rowCount(); ++row)
-            out.push_back(list->model()->index(row, 0).data().toString().toStdString());
-        return out;
-    }
-    // (başlangıç, uzunluk) çiftleri, konuma göre sıralı.
-    std::vector<std::pair<int, int>> highlights() const {
-        std::vector<std::pair<int, int>> out;
-        for (const auto& selection : editor->extraSelections())
-            out.emplace_back(selection.cursor.selectionStart(),
-                             selection.cursor.selectionEnd() - selection.cursor.selectionStart());
-        std::ranges::sort(out);
-        return out;
-    }
-};
+std::vector<std::string> rows(const GuiState& state) {
+    std::vector<std::string> out;
+    for (int row = 0; row < state.model().row_count(); ++row)
+        out.push_back(state.model().display(row));
+    return out;
+}
+
+// Plan davranış 3: tek seçim gelir; seçilen metin eşleşmenin kendisidir.
+std::string selected_text(const GuiState& state) {
+    const auto selection = state.editor_selection();
+    return selection ? state.buffer().substr(selection->start, selection->end - selection->start)
+                     : std::string{};
+}
+
+void click(gui_test::View& view, float x, float y) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(x, y);
+    view.draw_frame();
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    view.draw_frame();
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    view.draw_frame();
+    view.draw_frame();
+}
 
 struct ContentFixture : WindowFixture {
-    void seed() {
+    void seed() const {
         add_note("alpha.md", kAlpha, 10);
         add_note("beta.md", "istanbul tek", 20);
         add_note("gamma.md", "hiçbir şey", 30);
@@ -64,164 +60,227 @@ struct ContentFixture : WindowFixture {
 
 TEST_CASE_FIXTURE(ContentFixture, "content mode lists matches with their line counts, best first") {
     seed();
-    auto window = make_window();
-    Ui ui(*window);
-    ui.search->setText("istanbul");  // ad modu: yola göre fuzzy, içerik değil
-    CHECK(ui.rows().empty());
+    auto state = make_state();
+    state->set_query("istanbul");  // ad modu: yola göre fuzzy, içerik değil
+    CHECK(rows(*state).empty());
 
-    window->toggle_search_mode();
-    CHECK(ui.rows() == std::vector<std::string>{"alpha.md  (2)", "beta.md  (1)"});  // alpha: 2 satır
-    CHECK(ui.list->currentIndex().isValid());                                       // ilk sonuç seçili
+    state->toggle_search_mode();
+    CHECK(rows(*state) == std::vector<std::string>{"alpha.md  (2)", "beta.md  (1)"});  // alpha: 2 satır
+    CHECK(state->current_path().has_value());                                          // ilk sonuç seçili
 }
 
 TEST_CASE_FIXTURE(ContentFixture, "toggle button, API and Tab from the search box switch the mode") {
     seed();
-    auto window = make_window();
-    Ui ui(*window);
-    const QString name_label = ui.mode->text();
-    CHECK_FALSE(ui.mode->isChecked());
+    auto state = make_state();
+    auto view = make_view(*state);
+    CHECK_FALSE(state->content_mode());
 
-    ui.search->setText("istanbul");
-    ui.mode->click();
-    CHECK(ui.mode->isChecked());
-    CHECK(ui.mode->text() != name_label);
-    CHECK(ui.rows().size() == 2);
+    state->set_query("istanbul");
+    settle(*view);
+    const auto [mode_x, mode_y] = view->button_center("mode");
+    click(*view, mode_x, mode_y);
+    CHECK(state->content_mode());
+    CHECK(rows(*state).size() == 2);
 
-    press(ui.search, Qt::Key_Tab);  // Tab geri çevirir
-    CHECK_FALSE(ui.mode->isChecked());
-    CHECK(ui.mode->text() == name_label);
-    CHECK(ui.rows().empty());  // ad modunda "istanbul" hiçbir yola uymaz
-    ui.search->setText("alp");
-    CHECK(ui.rows() == std::vector<std::string>{"alpha.md"});
+    state->focus_search();
+    settle(*view);
+    press(*view, ImGuiKey_Tab);  // Tab geri çevirir, odak kutuda kalır
+    CHECK_FALSE(state->content_mode());
+    CHECK(view->search_active());
+    CHECK(rows(*state).empty());  // ad modunda "istanbul" hiçbir yola uymaz
+    state->set_query("alp");
+    CHECK(rows(*state) == std::vector<std::string>{"alpha.md"});
 
-    press(ui.search, Qt::Key_Tab);
-    CHECK(ui.mode->isChecked());
-    CHECK(ui.rows().empty());  // içerikte "alp" yok
+    state->focus_search();
+    settle(*view);
+    press(*view, ImGuiKey_Tab);
+    CHECK(state->content_mode());
+    CHECK(rows(*state).empty());  // içerikte "alp" yok
+
+    state->toggle_search_mode();  // API
+    CHECK_FALSE(state->content_mode());
 }
 
 TEST_CASE_FIXTURE(ContentFixture, "empty query in content mode lists every note without counts") {
     seed();
-    auto window = make_window();
-    Ui ui(*window);
-    window->toggle_search_mode();
-    CHECK(ui.rows() == std::vector<std::string>{"alpha.md", "beta.md", "gamma.md"});
+    auto state = make_state();
+    state->toggle_search_mode();
+    CHECK(rows(*state) == std::vector<std::string>{"alpha.md", "beta.md", "gamma.md"});
 }
 
-TEST_CASE_FIXTURE(ContentFixture,
-                  "selecting a result highlights every occurrence at correct UTF-16 positions") {
+// Plan davranış 3: editör diğer eşleşmeleri boyamaz; ilk eşleşmeye gidilir ve seçilir.
+TEST_CASE_FIXTURE(ContentFixture, "selecting a result selects the first occurrence at correct byte offsets") {
     seed();
-    auto window = make_window();
-    Ui ui(*window);
-    window->toggle_search_mode();
-    ui.search->setText("istanbul");
-    REQUIRE(ui.rows().front() == "alpha.md  (2)");
-    REQUIRE(ui.editor->toPlainText() == QString::fromUtf8(kAlpha));
+    auto state = make_state();
+    state->toggle_search_mode();
+    state->set_query("istanbul");
+    REQUIRE(rows(*state).front() == "alpha.md  (2)");
+    REQUIRE(state->buffer() == kAlpha);
 
-    // Beklenen konumlar bayt aritmetiğiyle değil Qt'nin kendi aramasıyla (UTF-16) bulunur.
-    const QString text = ui.editor->toPlainText();
-    const int first = text.indexOf(QStringLiteral("İstanbul"));
-    const int second = text.indexOf(QStringLiteral("istanbul"));
-    const int third = text.indexOf(QStringLiteral("ISTANBUL"));
-    REQUIRE(first == 3);  // emoji 2 birim + boşluk
-    REQUIRE(second > first);
-    REQUIRE(third > second);
-    const std::vector<std::pair<int, int>> expected{{first, 8}, {second, 8}, {third, 8}};
-    CHECK(ui.highlights() == expected);
-    CHECK(ui.editor->textCursor().position() == first);  // ilk eşleşmeye kaydırıldı
-    CHECK_FALSE(ui.editor->document()->isModified());    // vurgu belgeyi kirletmez
+    const std::string_view text = kAlpha;
+    const auto first = text.find("İstanbul");
+    REQUIRE(first == 5);  // emoji 4 bayt + boşluk
+    REQUIRE(state->editor_selection().has_value());
+    CHECK(state->editor_selection()->start == first);
+    CHECK(selected_text(*state) == "İstanbul");
+    CHECK_FALSE(state->dirty());  // seçim belgeyi kirletmez
 }
 
-TEST_CASE_FIXTURE(ContentFixture, "folding matches Turkish letters and phrases highlight as one range") {
+TEST_CASE_FIXTURE(ContentFixture, "Enter from the search box lands on the first match in the editor") {
+    seed();
+    auto state = make_state();
+    auto view = make_view(*state);
+    state->toggle_search_mode();
+    state->focus_search();
+    settle(*view);
+    type_text(*view, "istanbul");
+    settle(*view);
+    press(*view, ImGuiKey_Enter);
+    settle(*view);
+    REQUIRE(view->editor_active());
+    CHECK_FALSE(state->editor_selection().has_value());  // uygulandı
+
+    type_text(*view,
+              "X");  // seçili eşleşme yazılanla değişir: seçimin gerçekten ilk eşleşmede olduğunun kanıtı
+    CHECK(state->buffer() == std::string("😀 X güzel. istanbul'a git\nbir satır daha\nISTANBUL"));
+}
+
+TEST_CASE_FIXTURE(ContentFixture, "folding matches Turkish letters and phrases select as one range") {
     add_note("tr.md", "Öğrenci ogrenci ÖĞRENCİ\nışık ISIK güzel. istanbul", 0);
-    auto window = make_window();
-    Ui ui(*window);
-    window->toggle_search_mode();
+    auto state = make_state();
+    state->toggle_search_mode();
 
-    ui.search->setText("ogrenci");
-    const std::vector<std::pair<int, int>> students{{0, 7}, {8, 7}, {16, 7}};
-    CHECK(ui.highlights() == students);
+    state->set_query("ogrenci");
+    CHECK(selected_text(*state) == "Öğrenci");
 
-    ui.search->setText("\"güzel. istanbul\"");
-    const QString text = ui.editor->toPlainText();
-    const std::vector<std::pair<int, int>> phrase{
-        {static_cast<int>(text.indexOf(QStringLiteral("güzel"))), 15}};
-    CHECK(ui.highlights() == phrase);
+    state->set_query("\"güzel. istanbul\"");
+    CHECK(selected_text(*state) == "güzel. istanbul");
 }
 
-TEST_CASE_FIXTURE(ContentFixture, "highlights clear on edit, query change and mode change") {
+TEST_CASE_FIXTURE(ContentFixture, "selection clears on edit, query change and mode change") {
     seed();
-    auto window = make_window();
-    Ui ui(*window);
-    window->toggle_search_mode();
-    ui.search->setText("istanbul");
-    REQUIRE(ui.highlights().size() == 3);
+    auto state = make_state();
+    state->toggle_search_mode();
+    state->set_query("istanbul");
+    REQUIRE(state->editor_selection().has_value());
 
-    ui.editor->insertPlainText("x");  // kullanıcı düzenlemesi
-    CHECK(ui.highlights().empty());
+    state->edit_text(state->buffer() + "x");  // kullanıcı düzenlemesi: ofsetler eskidi
+    CHECK_FALSE(state->editor_selection().has_value());
 
-    ui.search->setText("istanbul tek");  // sorgu değişti: beta seçilir, yeni vurgu
-    CHECK(ui.list->currentIndex().data().toString().startsWith("beta.md"));
-    CHECK(ui.highlights().size() == 2);
+    state->set_query("istanbul tek");  // sorgu değişti: beta seçilir, yeni seçim
+    CHECK(state->current_path()->string() == "beta.md");
+    CHECK(selected_text(*state) == "istanbul");
 
-    ui.search->setText("zzz");  // sonuç yok
-    CHECK(ui.highlights().empty());
+    state->set_query("zzz");  // sonuç yok
+    CHECK_FALSE(state->editor_selection().has_value());
 
-    ui.search->setText("istanbul");
-    REQUIRE_FALSE(ui.highlights().empty());
-    window->toggle_search_mode();  // ad moduna dönüş
-    CHECK(ui.highlights().empty());
+    state->set_query("istanbul");
+    REQUIRE(state->editor_selection().has_value());
+    state->toggle_search_mode();  // ad moduna dönüş
+    CHECK_FALSE(state->editor_selection().has_value());
 }
 
-TEST_CASE_FIXTURE(ContentFixture, "highlight stays stable across rescans and uses a palette colour") {
+TEST_CASE_FIXTURE(ContentFixture, "selection is not reissued across rescans") {
     seed();
-    auto window = make_window();
-    Ui ui(*window);
-    window->toggle_search_mode();
-    ui.search->setText("istanbul");
-    REQUIRE(ui.highlights().size() == 3);
+    auto state = make_state();
+    state->toggle_search_mode();
+    state->set_query("istanbul");
+    REQUIRE(state->editor_selection().has_value());
 
-    // Kullanıcı kaydırdı/imleç taşıdı; yedek tarama onu ilk eşleşmeye geri atmamalı.
-    QTextCursor cursor = ui.editor->textCursor();
-    cursor.movePosition(QTextCursor::End);
-    ui.editor->setTextCursor(cursor);
-    const int where = ui.editor->textCursor().position();
-    window->rescan();
-    CHECK(ui.editor->textCursor().position() == where);
-    CHECK(ui.highlights().size() == 3);
-
-    const auto selections = ui.editor->extraSelections();
-    CHECK(selections.front().format.background().color().alpha() > 0);
-    CHECK(selections.front().format.background().color().rgb() ==
-          ui.editor->palette().highlight().color().rgb());
+    // Kullanıcı imleci taşıdı (seçim uygulandı); yedek tarama onu ilk eşleşmeye geri atmamalı.
+    state->take_editor_selection();
+    state->rescan();
+    CHECK_FALSE(state->editor_selection().has_value());
 }
 
 TEST_CASE_FIXTURE(ContentFixture, "content index follows external changes after a rescan") {
     seed();
-    auto window = make_window();
-    Ui ui(*window);
-    window->toggle_search_mode();
-    ui.search->setText("istanbul");
-    REQUIRE(ui.rows().size() == 2);
+    auto state = make_state();
+    state->toggle_search_mode();
+    state->set_query("istanbul");
+    REQUIRE(rows(*state).size() == 2);
 
     add_note("new.md", "yeni istanbul istanbul", 0);  // dışarıdan eklendi
-    window->rescan();
-    CHECK(ui.rows() == std::vector<std::string>{"alpha.md  (2)", "new.md  (1)", "beta.md  (1)"});
+    state->rescan();
+    CHECK(rows(*state) == std::vector<std::string>{"alpha.md  (2)", "new.md  (1)", "beta.md  (1)"});
 
     add_note("beta.md", "artık yok", 0);  // dışarıdan içerik değişti
-    window->rescan();
-    CHECK(ui.rows() == std::vector<std::string>{"alpha.md  (2)", "new.md  (1)"});
+    state->rescan();
+    CHECK(rows(*state) == std::vector<std::string>{"alpha.md  (2)", "new.md  (1)"});
 }
 
 TEST_CASE_FIXTURE(ContentFixture, "content results respect the selected folder") {
     add_note("work/a.md", "istanbul a", 0);
     add_note("b.md", "istanbul b", 10);
-    auto window = make_window();
-    Ui ui(*window);
-    window->toggle_search_mode();
-    ui.search->setText("istanbul");
-    REQUIRE(ui.rows().size() == 2);
-    auto* tree = window->findChild<QTreeView*>("folderTree");
-    REQUIRE(tree);
-    tree->setCurrentIndex(tree->model()->index(0, 0, tree->model()->index(0, 0)));  // work
-    CHECK(ui.rows() == std::vector<std::string>{"work/a.md  (1)"});
+    auto state = make_state();
+    state->toggle_search_mode();
+    state->set_query("istanbul");
+    REQUIRE(rows(*state).size() == 2);
+    state->set_folder("work");
+    CHECK(rows(*state) == std::vector<std::string>{"work/a.md  (1)"});
+}
+
+TEST_CASE_FIXTURE(ContentFixture, "clicking a folder in the tree limits the content results") {
+    add_note("work/a.md", "istanbul a", 0);
+    add_note("b.md", "istanbul b", 10);
+    auto state = make_state();
+    auto view = gui_test::make_view(*state);
+    state->toggle_search_mode();
+    state->set_query("istanbul");
+    REQUIRE(rows(*state).size() == 2);
+    view->draw_frame();
+    gui_test::click_button(*view, "folder:work");
+    CHECK(rows(*state) == std::vector<std::string>{"work/a.md  (1)"});
+}
+
+// ---- Dosya izleme: zamanlı tarama + odağa dönüş (plan T40) ----
+
+TEST_CASE_FIXTURE(ContentFixture, "the rescan timer picks up external changes only after rescan_seconds") {
+    config.tuning.rescan_seconds = 30;
+    add_note("alpha.md", "a", 10);
+    auto state = make_state();
+    REQUIRE(state->model().row_count() == 1);
+
+    add_note("new.md", "n", 0);  // dışarıdan
+    CHECK_FALSE(state->tick(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+    CHECK(state->model().row_count() == 1);
+
+    CHECK(state->tick(std::chrono::steady_clock::now() + std::chrono::seconds(31)));
+    CHECK(state->model().row_count() == 2);
+}
+
+TEST_CASE_FIXTURE(ContentFixture, "window focus triggers a rescan, even when it arrives during a dialog") {
+    config.tuning.rescan_seconds = 3600;  // zamanlayıcı karışmasın
+    add_note("alpha.md", "a", 10);
+    auto state = make_state();
+    auto view = make_view(*state);
+
+    add_note("new.md", "n", 0);
+    view->draw_frame();
+    CHECK(state->model().row_count() == 1);  // odak olayı yokken dışarıdaki değişiklik henüz görülmez
+
+    SDL_Event focus{};
+    focus.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
+    REQUIRE(SDL_PushEvent(&focus));
+    view->draw_frame();
+    CHECK(state->model().row_count() == 2);
+
+    // Diyalog sırasında gelen odak düşmez: diyalog kapanınca çalışır.
+    add_note("late.md", "l", 0);
+    int frame = 0;
+    view->on_modal_frame = [&] {
+        ++frame;
+        if (frame == 1)
+            REQUIRE(SDL_PushEvent(&focus));
+        if (frame == 5)
+            ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
+        if (frame == 6)
+            ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false);
+    };
+    view->install_deciders();
+    state->new_note();
+    state->edit_text("draft\n");
+    press(*view, ImGuiMod_Ctrl | ImGuiKey_S);
+    view->draw_frame();
+    CHECK(state->model().total() == 3);
 }

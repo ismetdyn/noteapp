@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=NoteApp
+Name[tr]=Not Uygulaması
+GenericName=Note-taking
+GenericName[tr]=Not Alma
+Comment=Fast, plain-file notes with optional GitHub sync
+Comment[tr]=Hızlı, düz dosyalı notlar; isteğe bağlı GitHub senkronu
+Exec=notes-gui
+Icon=noteapp
+Terminal=false
+Categories=Office;Utility;
+Keywords=note;notes;markdown;not;notlar;

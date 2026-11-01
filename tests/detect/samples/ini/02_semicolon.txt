@@ -1,0 +1,4 @@
+; legacy config
+[main]
+name = my app
+path = C:\apps\my

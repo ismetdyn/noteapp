@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -30,6 +31,14 @@ struct ContentResult {
 // İçerik sorgusunun katlanmış terimleri: boşlukla ayrılır, "..." arası tek ifade. Arama ve arayüz vurgusu
 // aynı kuralı kullansın diye tek kaynak burasıdır.
 std::vector<std::u32string> parse_terms(std::string_view query);
+// Aynı terimler katlanmadan (fuzzy ad araması kendisi katlar).
+std::vector<std::string> split_terms(std::string_view query);
+
+// Eşleşen not ve satır sayısı; kesit üretmez. path, sonraki refresh'e kadar geçerlidir.
+struct ContentCount {
+    const core::NotePath* path;
+    std::size_t hit_count;
+};
 
 // Bellek içi tam metin önbelleği; G/Ç yalnız refresh'te. Tek iş parçacığından kullanılır (SPEC-search
 // "Eşzamanlılık").
@@ -41,12 +50,18 @@ public:
     // düşürür.
     void refresh();
     std::vector<ContentResult> search(std::string_view query, std::size_t limit) const;
+    // Tüm eşleşen notlar, sırasız: çağıran kendi sıralamasını yapar, kesiti yalnız gösterecekleri için ister.
+    std::vector<ContentCount> count_matches(std::string_view query) const;
+    // Notun en iyi satırı: en çok farklı terim, sonra en çok geçiş, sonra en erken satır. Eşleşme yoksa
+    // nullopt.
+    std::optional<Hit> best_hit(const core::NotePath& path, std::string_view query) const;
     // Test kancası: şimdiye kadar (yeniden) okunan dosya sayısı.
     std::size_t read_count() const { return read_count_; }
 
 private:
     struct Entry {
         std::filesystem::file_time_type mtime;
+        core::Revision revision;
         std::uintmax_t size;
         std::string text;                         // özgün metin (kesitler buradan kesilir)
         std::u32string folded;                    // katlanmış kod noktaları; refresh'te bir kez hesaplanır

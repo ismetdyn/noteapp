@@ -1,0 +1,3 @@
+Formül şöyle: a = b + c demek.
+Yani toplam = fiyat kere adet olur, bunu unutma.
+Başka bir şey yok gibi.

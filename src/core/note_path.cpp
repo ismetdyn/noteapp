@@ -42,6 +42,8 @@ bool is_reserved_device(std::string_view component) {
         if (stem == device)
             return true;
     }
+    if (stem == "CONIN$" || stem == "CONOUT$")  // Win32 konsol aygıtları: CreateFile yolu aygıta açar
+        return true;
     if (!stem.starts_with("COM") && !stem.starts_with("LPT"))
         return false;
     const std::string_view digit = std::string_view(stem).substr(3);

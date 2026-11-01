@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/config.hpp"
 #include "core/error.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
@@ -12,6 +13,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace noteapp::tui {
@@ -119,5 +121,53 @@ std::expected<core::NotePath, core::Error> save_new_note(core::NoteStore& store,
                                                          const std::filesystem::path& temp_file,
                                                          const SaveRequest& request,
                                                          std::string_view content);
+
+// `a` ile listenin başında açılan ad satırı. Açıkken tüm tuşlar buraya gelir; yazılan harfler kısayol olarak
+// çalışmaz. FTXUI'ye bağlı değildir.
+class NewRowState {
+public:
+    enum class Outcome { Editing, Cancelled, Submit };
+
+    Outcome handle(Key key, std::string_view text = {});
+
+    const std::string& text() const { return text_; }
+    const std::string& error() const { return error_; }
+    // Geçersiz ya da dolu ad: satır açık kalır, yazılan metin kaybolmaz.
+    void set_error(std::string error) { error_ = std::move(error); }
+
+private:
+    std::string text_;
+    std::string error_;
+};
+
+// `F2` ile açılan yol girdisi: `klasör/ad.uzantı` ön dolu, imleç adın sonunda (uzantıdan önce). Diyalogsuz
+// hızlı yeniden adlandırma; FTXUI'ye bağlı değildir.
+class RenameState {
+public:
+    enum class Outcome { Editing, Cancelled, Submit };
+
+    explicit RenameState(core::NotePath from);
+
+    Outcome handle(Key key, std::string_view text = {});
+
+    const core::NotePath& from() const { return from_; }
+    const std::string& text() const { return text_; }
+    std::size_t cursor() const { return cursor_; }  // bayt ofseti, kod noktası başında
+    const std::string& error() const { return error_; }
+    void set_error(std::string error) { error_ = std::move(error); }
+
+private:
+    core::NotePath from_;
+    std::string text_;
+    std::size_t cursor_ = 0;
+    std::string error_;
+};
+
+// `a`: ad satırındaki metinden boş not; uzantı yazılmadıysa default_type, klasör yazılmadıysa default_folder.
+// Yazılan ad doluysa -2 eklenmez, hata döner: satır açık kalır.
+std::expected<core::CreatedNote, core::Error> create_named_note(core::NoteStore& store, std::string_view name,
+                                                                std::string_view default_folder,
+                                                                std::string_view default_type,
+                                                                std::size_t slug_max_length);
 
 }  // namespace noteapp::tui

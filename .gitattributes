@@ -1,5 +1,7 @@
 # Depoda ve çalışma kopyasında LF: Fedora konteyneri aynı kopyayı bağlar, CRLF betikleri bozar.
 * text=auto eol=lf
 *.bat text eol=crlf
+# Her cihaz yalnız kendi günlüğüne yazar; ikili birleştirme veriyi bozardı (tasks/graph-design.md "Op log").
+*.oplog -text -merge
 *.png binary
 *.pdf binary

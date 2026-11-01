@@ -1,0 +1,3 @@
+name=world
+target=$name
+cp "$target" /tmp

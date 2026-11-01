@@ -1,0 +1,10 @@
+# Kurulum
+
+Şu değişkenleri ayarla:
+
+```
+DB_HOST=localhost
+DB_PORT=5432
+```
+
+Sonra başlat.

@@ -1,0 +1,3 @@
+base.url=https://example.org:8443/a?b=c
+retry.count=3
+cache.ttl.seconds=60

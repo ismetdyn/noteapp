@@ -1,0 +1,10 @@
+package a
+
+func read() error {
+	v, err := load()
+	if err != nil {
+		return err
+	}
+	_ = v
+	return nil
+}

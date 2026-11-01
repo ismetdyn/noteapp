@@ -16,15 +16,19 @@ class ConfirmState {
 public:
     enum class Outcome { Pending, Confirmed, Cancelled };
 
-    explicit ConfirmState(std::string message) : message_(std::move(message)) {}
+    // `title` boşsa pencere not silme başlığını taşır.
+    explicit ConfirmState(std::string message, std::string title = {})
+        : message_(std::move(message)), title_(std::move(title)) {}
 
     Outcome handle(Key key, std::string_view text = {});
 
     const std::string& message() const { return message_; }
+    const std::string& title() const { return title_; }
     bool yes_selected() const { return yes_selected_; }
 
 private:
     std::string message_;
+    std::string title_;
     bool yes_selected_ = false;
 };
 

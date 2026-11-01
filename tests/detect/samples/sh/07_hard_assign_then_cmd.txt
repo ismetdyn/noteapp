@@ -1,0 +1,3 @@
+NAME=world
+GREETING=hello
+echo "$GREETING $NAME"

@@ -6,7 +6,7 @@
 
 ## 1. Amaç
 
-Terminalde yaşayan biri için hızlı, düz dosyalı, sahibine ait bir not sistemi:
+Terminalde yaşayan biri için hızlı, sunucusuz, sahibine ait bir not sistemi:
 
 - `note "metin"` ile saniyesinde not ekle; ya da `note` deyip sevdiğin editörde (edit/micro/nano/vim…) yaz.
 - `notes` ile TUI aç: solda fzf hissiyle notlar arası gezin, sağda içeriği gör.
@@ -16,8 +16,9 @@ Terminalde yaşayan biri için hızlı, düz dosyalı, sahibine ait bir not sist
 **Kullanıcı:** tek kişi (geliştirici), iki cihaz: Windows 11 (iş) ve Fedora Linux (ev).
 
 **Tasarım ilkeleri (araştırmadan: nb, Joplin, Trilium, QOwnNotes, zk, nvALT):**
-- Notlar **düz dosya**; kimlik = notes_dir'e göre göreli yol, tip = dosya uzantısı. Ayrı veritabanı yok,
-  metadata dosya dışında tutulmaz (QOwnNotes'un etiket-DB tuzağı).
+- Notlar **gömülü graph veritabanında** (`graph.db`, [SPEC-graph.md](SPEC-graph.md), 2026-11-01). Kimlik kalıcı düğüm
+  kimliğidir; yol, ad ve klasör kenarlarından türetilir; tip = uzantı. Baytlar aynen durur. Düz dosya yalnız dışa aktarma
+  biçimidir: `note export --all` notları uygulamadan bağımsız geri verir.
 - Arama kutusu aynı zamanda oluşturma kutusudur (nvALT): yazdıkça filtrele, eşleşme yoksa Enter yeni not.
 - Kaydetmede veri kaybı yok: atomik yazma, dışarıdan değişiklik tespiti, senkron çakışmasında iki kopya.
 - Ayarlar az ve tek dosyada; CLI/TUI/GUI aynı dosyayı paylaşır; sırlar asla bu dosyada değil.
@@ -26,19 +27,20 @@ Terminalde yaşayan biri için hızlı, düz dosyalı, sahibine ait bir not sist
 
 | Modül id | Sorumluluk | Bağımlı olduğu | Spec |
 |---|---|---|---|
-| `core` | Not deposu (not=dosya, klasör=dizin, tip=uzantı), yol güvenliği, atomik yazma, config, i18n (tr/en), editör başlatma, platform dizinleri | — | [SPEC-core.md](SPEC-core.md) |
+| `core` | Not deposu (not ve klasör graph düğümü, tip=uzantı), yol güvenliği, atomik yazma, config, i18n (tr/en), editör başlatma, platform dizinleri | — | [SPEC-core.md](SPEC-core.md) |
 | `detect` | İçerikten tip önerisi (puanlı sezgisel) | — | [SPEC-detect.md](SPEC-detect.md) |
 | `search` | fzf tarzı ad/yol eşleştirme + tam metin içerik arama | core | [SPEC-search.md](SPEC-search.md) |
-| `sync` | libgit2 ile GitHub senkronu; aç/kapa; HTTPS+token ve SSH; çakışmada iki kopya | core | [SPEC-sync.md](SPEC-sync.md) |
-| `cli` | `note` komutu: hızlı ekleme, ls/find/show/edit/rm/mv/export/sync/config | core, detect, search, sync | [SPEC-cli.md](SPEC-cli.md) |
+| `sync` | Oplog senkronu, libgit2 yalnız taşıyıcı; aç/kapa; HTTPS+token ve SSH; çakışmada iki kopya | core | [SPEC-sync.md](SPEC-sync.md) |
+| `pdf` | `noteapp_pdf` kütüphanesi: not metnini A4 PDF'e dizer (libharu + md4c, gömülü DejaVu). Ayrı spec dosyası yok; davranış [SPEC-cli.md](SPEC-cli.md) ve [SPEC-gui.md](SPEC-gui.md) "PDF dışa aktarma" bölümlerinde | core | — |
+| `cli` | `note` komutu: hızlı ekleme, ls/find/show/edit/rm/mv/export/sync/config | core, detect, search, sync, pdf | [SPEC-cli.md](SPEC-cli.md) |
 | `tui` | `notes`: fzf tarzı liste + önizleme, kaydet diyaloğu, ayar ekranı | core, detect, search, sync | [SPEC-tui.md](SPEC-tui.md) |
-| `gui` | `notes-gui`: klasör ağacı + liste + editör, Ayarlar sekmesi, PDF dışa aktarma | core, detect, search, sync | [SPEC-gui.md](SPEC-gui.md) |
+| `gui` | `notes-gui`: klasör ağacı + liste + editör, Ayarlar sekmesi, PDF dışa aktarma (SDL3 + Dear ImGui) | core, detect, search, sync, pdf | [SPEC-gui.md](SPEC-gui.md) |
 
-**Yapım sırası:** `core` ∥ `detect` → `search` ∥ `sync` → `cli` → `tui` → `gui`
+**Yapım sırası:** `core` ∥ `detect` → `search` ∥ `sync` ∥ `pdf` → `cli` → `tui` → `gui`
 (`cli`/`tui`/`gui` birbirinden bağımsız; sıra değer teslimine göre.)
 
-Bağımlılık yönü tek yönlü; döngü yok. `cli` → `gui` arasında **link bağımlılığı yoktur**; `note export --pdf`
-çalışma zamanında `notes-gui --export-pdf` sürecini çağırır (bkz. SPEC-cli, SPEC-gui).
+Bağımlılık yönü tek yönlü; döngü yok. `note export --pdf` `notes-gui`'yi **çağırmaz**: `note` ve `notes-gui`
+`pdf` modülüne doğrudan link olur. PDF bu yüzden GUI'siz derlemede (`-DNOTEAPP_BUILD_GUI=OFF`) çalışır.
 
 ## 3. Teknoloji
 
@@ -46,45 +48,62 @@ Bağımlılık yönü tek yönlü; döngü yok. `cli` → `gui` arasında **link
 |---|---|---|---|---|
 | Dil | C++23 (`std::expected`, `std::filesystem`) | — | — | — |
 | Derleme | CMake + Ninja, `CMakePresets.json` | CMake ≥ 3.28 | — | sistem / CLion |
-| Derleyici | Windows: Qt ile gelen MinGW-w64 GCC 13.1 (`C:\Qt\Tools\mingw1310_64`), Fedora: GCC ≥ 14, macOS: Apple Clang | — | — | sistem |
+| Derleyici | Windows: Linux'ta çapraz derleme, Fedora `mingw64-gcc-c++` 16.2.1 (`docker/windows-cross.Containerfile`); yerelde PATH'teki MinGW-w64 `g++` (doğrulanmadı). Fedora: GCC ≥ 14, macOS: Apple Clang | — | GPL + runtime exception (GCC) | konteyner imajı / sistem |
 | TUI | FTXUI | v7.0.3 | MIT | FetchContent |
-| GUI + PDF | Qt 6 Widgets (+ QtGui `QPdfWriter`) — Windows'ta 6.12.0 `mingw_64` kiti | ≥ 6.8 (LTS) | LGPLv3 (dinamik link) | sistem (Qt Online Installer) |
+| GUI arayüzü | Dear ImGui (`imgui_impl_sdlrenderer3`) | v1.93.0 | MIT | FetchContent |
+| GUI pencere/girdi/çizim | SDL3 (statik; SDL_Renderer, yazılımsal çizime düşebilir) | release-3.4.18 | zlib | FetchContent |
+| PDF | libharu + md4c (Markdown ayrıştırma) + kendi yerleşim kodumuz (`src/pdf`) | libharu v2.4.6, md4c v0.6.0 | zlib, MIT | FetchContent |
+| Font (GUI + PDF) | DejaVu Sans / Sans Mono, ikiliye gömülü (`resources/fonts`) | sürüm depoda kayıtlı değil | Bitstream Vera (serbest) | depoda |
 | Config / i18n | toml++ (`TOML_EXCEPTIONS=0`) | v3.4.0 | MIT | FetchContent |
 | Git senkron | libgit2 (`USE_SSH=exec`, HTTPS: WinHTTP / OpenSSL / SecureTransport) | v1.9.7 | GPLv2 + linking exception | FetchContent |
 | Sır saklama | Windows: Credential Manager API (`CRED_PERSIST_LOCAL_MACHINE`); Linux/macOS: hrantzsch/keychain (libsecret / Keychain) | v1.3.1 | MIT | sistem / FetchContent |
 | Test | doctest | v2.5.3 | MIT | FetchContent |
 | Fuzzy algoritma | fzy algoritması (jhawthorn/fzy) — C++'ta yeniden yazım | ref. v1.1 | MIT | — |
 
-- Windows'ta **tüm proje** Qt'nin kendi MinGW 13.1'iyle derlenir (Qt ikilileriyle birebir ABI/çalışma zamanı
-  uyumu). CLion'un GCC 15'i kullanılmaz: Qt'nin yanındaki eski `libstdc++-6.dll` ile çalışma zamanı çakışması riski.
-  GCC 13 sınırı: `std::expected`/`std::format` var, `std::print` yok → kullanılmaz.
-- MSVC bu makinede kurulu değil (VS 2026'da C++ iş yükü yok); gerekirse ileride preset eklenir.
-- Makineye özel yollar preset'lere yazılmaz: Qt yolu `NOTEAPP_QT_DIR` ortam değişkeninden, araçlar PATH'ten
-  (`scripts/dev-env.sh`; CLion'da toolchain = Qt MinGW, CMake profili ortamında `NOTEAPP_QT_DIR`).
-- Fedora sistem paketleri: `gcc-c++ cmake ninja-build qt6-qtbase-devel libsecret-devel openssl-devel pkgconf-pkg-config`.
+- Windows'ta **tüm proje** MinGW-w64 GCC ile derlenir (Linux'ta çapraz: preset `windows-cross-*`, toolchain
+  `cmake/toolchains/mingw-w64-x86_64.cmake`; yerelde: `windows-mingw-*`). İkililer statiktir ve `msvcrt.dll`'e bağlanır;
+  `scripts/build-windows.sh` yalnız Windows sistem DLL'lerine izin verir. `std::print` kodda kullanılmaz (eski GCC 13
+  sınırından kalan kural; kaldırılabileceği doğrulanmadı).
+- MSVC kullanılmaz; gerekirse ileride preset eklenir. macOS yalnız Mac'te derlenir; çapraz derleme yok.
+- Makineye özel yollar preset'lere yazılmaz: yerel derlemede araçlar PATH'ten gelir.
+- Fedora sistem paketleri (`docker/fedora.Containerfile`): `gcc-c++ cmake ninja-build git libsecret-devel openssl-devel
+  pkgconf-pkg-config poppler-utils` (poppler-utils = PDF testlerinin `pdftotext`'i) ve SDL3 için `libX11-devel libXext-devel
+  libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel libXtst-devel dbus-devel ibus-devel
+  libxkbcommon-devel mesa-libGL-devel mesa-libEGL-devel mesa-libGLES-devel wayland-devel wayland-protocols-devel libdecor-devel`.
+  GUI'siz derleme (`-DNOTEAPP_BUILD_GUI=OFF`) için SDL3 paketleri gerekmeyeceği beklenir; ayrı doğrulanmadı.
 - Listede olmayan her yeni bağımlılık **önce sorulur** (§9).
 
 ## 4. Komutlar
 
 ```bash
-# Windows (Git Bash) — MinGW, Ninja, CMake, clang-format ve NOTEAPP_QT_DIR ayarlanır
-source scripts/dev-env.sh            # yollar QT_ROOT/QT_VERSION/QT_MINGW ile ezilebilir
+# Windows ikilileri Linux'ta (podman ya da docker) — çıktı out/windows-x86_64/{note,notes,notes-gui}.exe
+bash scripts/build-windows.sh
+bash scripts/build-windows.sh --test   # önce Wine'da test; şu an sıfırdan farklı çıkar (core "hidden note stays hidden" =
+                                       # Wine sınırı; sync "a push the remote keeps rejecting" aralıklı, neden çözülmedi)
+```
+
+```bash
+# Windows'ta yerel derleme — doğrulanmadı; PATH'te MinGW-w64 g++, Ninja; test için pdftotext.exe
 cmake --preset windows-mingw-debug
 cmake --build --preset windows-mingw-debug
 ctest --preset windows-mingw-debug --output-on-failure
 ctest --preset windows-mingw-debug -R "core"          # tek modül testleri
 cmake --build --preset windows-mingw-release
-cmake --install build/windows-mingw-release --prefix "$LOCALAPPDATA/Programs/noteapp"   # + windeployqt
 ```
 
 ```bash
-# Fedora doğrulaması bu makinede (Docker, kontrol noktalarında)
-scripts/check-fedora.sh            # fedora:latest konteynerinde derle + ctest (GUI testleri offscreen)
+# Linux AppImage (podman ya da docker) — çıktı out/noteapp-<sürüm>-x86_64.AppImage
+bash scripts/build-appimage.sh
 ```
 
 ```bash
-# Fedora
-sudo dnf install gcc-c++ cmake ninja-build qt6-qtbase-devel libsecret-devel openssl-devel pkgconf-pkg-config
+# Fedora doğrulaması konteynerde (docker, çalışmıyorsa rootless podman)
+scripts/check-fedora.sh            # fedora:latest imajında derle + ctest (GUI testleri SDL_VIDEO_DRIVER=dummy)
+```
+
+```bash
+# Fedora (paket listesi: §3)
+sudo dnf install gcc-c++ cmake ninja-build git libsecret-devel openssl-devel pkgconf-pkg-config   # + SDL3 başlıkları, §3
 cmake --preset linux-gcc-debug
 cmake --build --preset linux-gcc-debug
 ctest --preset linux-gcc-debug --output-on-failure
@@ -102,10 +121,16 @@ dizini `NOTEAPP_HOME` ortam değişkeniyle geçici bir dizine yönlendirilebilir
 ## 5. Proje yapısı
 
 ```
-CMakeLists.txt            → kök; alt dizinleri ekler, seçenekler: NOTEAPP_BUILD_GUI (ON), NOTEAPP_BUILD_TESTS (ON)
-CMakePresets.json         → windows-mingw-{debug,release}, linux-gcc-{debug,release}, macos-clang-{debug,release}
-scripts/check-fedora.sh   → Docker'da Fedora derleme + test (kontrol noktası doğrulaması)
+CMakeLists.txt            → kök; alt dizinleri ekler, seçenekler: NOTEAPP_BUILD_GUI (ON; kapalıyken SDL3/ImGui indirilmez), NOTEAPP_BUILD_TESTS (ON)
+CMakePresets.json         → windows-mingw-{debug,release}, windows-cross-{debug,release}, linux-gcc-{debug,release}, macos-clang-{debug,release}
+cmake/toolchains/mingw-w64-x86_64.cmake → Linux'ta Windows çapraz derleme toolchain'i (Wine ile test)
+scripts/check-fedora.sh   → docker (yoksa podman) ile Fedora derleme + test (kontrol noktası doğrulaması)
+scripts/build-windows.sh  → konteynerde Windows .exe üretir (--test: Wine'da test)
+scripts/build-appimage.sh → konteynerde Linux AppImage üretir
+scripts/container-engine.sh → çalışan motoru (docker, yoksa podman) seçer; build-windows.sh kullanır
 docker/fedora.Containerfile → Fedora derleme imajı (bağımlılıklar önbellekli)
+docker/windows-cross.Containerfile → Windows çapraz derleme + Wine imajı
+resources/fonts/          → gömülü DejaVu fontları + lisans (GUI ve PDF)
 cmake/Dependencies.cmake  → tüm FetchContent pin'leri tek yerde
 cmake/EmbedResources.cmake→ resources/* dosyalarını derleme anında ikiliye gömer
 resources/i18n/en.toml    → İngilizce mesaj kataloğu (kaynak dil)
@@ -115,9 +140,10 @@ src/core/                 → noteapp_core (statik kütüphane)
 src/detect/               → noteapp_detect
 src/search/               → noteapp_search
 src/sync/                 → noteapp_sync
+src/pdf/                  → noteapp_pdf (libharu + md4c; GUI'siz derlemede de var)
 src/cli/                  → `note` çalıştırılabilir
 src/tui/                  → `notes` çalıştırılabilir
-src/gui/                  → `notes-gui` çalıştırılabilir (Qt)
+src/gui/                  → `notes-gui` çalıştırılabilir (SDL3 + Dear ImGui)
 tests/<modül>/            → doctest testleri, modül başına bir test çalıştırılabilir
 tests/detect/samples/     → tip algılama örnek korpusu (<tip>/*.txt)
 SPEC.md, SPEC-*.md        → bu spec'ler
@@ -175,7 +201,7 @@ private:
   - *Small (~%80):* saf mantık — yol doğrulama, slug, UTF-8 katlama, fuzzy puanlama, tip algılama, config ayrıştırma.
   - *Medium (~%15):* geçici dizinde gerçek dosya sistemi (NoteStore), **yerel bare git reposu** ile senkron
     (ağ yok; `file://` remote), `note` ikilisini alt süreç olarak çalıştıran CLI testleri, FTXUI ekranını
-    metne render eden TUI testleri, `QT_QPA_PLATFORM=offscreen` ile GUI model/diyalog testleri.
+    metne render eden TUI testleri, `SDL_VIDEO_DRIVER=dummy` + yazılımsal çizimle başsız GUI model/diyalog testleri (Xvfb gerekmez), `pdftotext` ile PDF geri okuma.
   - *Large (~%5, elle):* gerçek GitHub reposuyla Windows ↔ Fedora senkronu, gerçek editörlerle akış,
     GUI elle kontrol listesi (her modül spec'indeki "Elle doğrulama" bölümü).
 - **Kritik yollar** (veri kaybı/güvenlik): yol kaçışı, atomik yazma, dışarıdan değişiklik, senkron çakışması,
@@ -186,7 +212,8 @@ private:
 
 ## 8. Ortak veri sözleşmeleri
 
-- **Not deposu:** `notes_dir` (varsayılan `~/notes`, Windows'ta `%USERPROFILE%\notes`). Alt dizinler = klasörler.
+- **Not deposu:** `<veri dizini>/graph.db`. Veri dizini: `NOTEAPP_HOME/data`, `$XDG_DATA_HOME/noteapp` (`~/.local/share/noteapp`), macOS `~/Library/Application Support/noteapp`, Windows `%LOCALAPPDATA%\noteapp`. Durum ya da önbellek değildir: senkronsuz cihazda silinmesi notların kaybıdır.
+- **`notes_dir`** (varsayılan `~/notes`, Windows'ta `%USERPROFILE%\notes`): senkron deposu (`graph/<cihaz>.oplog`) ve geçiş kaynağı. Değiştirmek not listesini değiştirmez.
   Nokta ile başlayan dosya/dizinler (`.git`, `.noteapp`, geçici dosyalar) not sayılmaz.
 - **Config:** `config.toml` — Windows `%APPDATA%\noteapp\`, Linux `$XDG_CONFIG_HOME/noteapp/` (`~/.config`),
   macOS `~/Library/Application Support/noteapp/`. `NOTEAPP_HOME` hepsini ezer. Şema: SPEC-core §Config.
@@ -216,14 +243,15 @@ private:
 
 ## 10. Başarı kriterleri (bütün sistem)
 
-1. Temiz klonda §4 komutlarıyla Windows 11 (MSVC) ve Fedora (GCC) üzerinde derlenir, tüm testler geçer.
+1. Temiz klonda §4 komutlarıyla Windows 11 (`scripts/build-windows.sh` çapraz derleme; gerçek Windows'ta doğrulanmadı, `--test` Wine'da şu an geçmiyor, bkz. §4) ve Fedora (GCC; `scripts/check-fedora.sh` ile doğrulandı) üzerinde derlenir, tüm testler geçer.
 2. `note "merhaba"` notu ≤ 200 ms içinde diske yazar (senkron arka planda, bu süreye dahil değil).
-   (ölçüm: 7 koşu medyanı 40–50 ms, kabuksuz süreç açılışı dahil; yeni derlenmiş ikilinin ilk koşusu virüs
-   taraması yüzünden ~850 ms olabilir — Release, bu makinede, `ctest -R perf`)
+   (ölçüm 2026-10-31: medyan 6.6 ms, ilk koşu 10.6 ms — Release, Fedora konteyneri, `ctest -R perf`. Önceki Windows
+   ölçümü 40–50 ms idi; Windows'ta yeniden ölçülmedi)
 3. `notes` 5.000 notla ≤ 500 ms'de açılır; her tuş vuruşunda filtre ≤ 50 ms; sıcak içerik araması ≤ 100 ms.
-   (ölçüm: açılış vekili taze süreçte medyan 60–75 ms, süreç içi config+list+ilk çizim 15–23 ms; tuş başına
-   filtre+çizim 8 ms, GUI model 6–7 ms; sıcak arama 28–41 ms — Release, bu makinede; gerçek soğuk disk
-   önbelleği testte üretilemez)
+   (ölçüm 2026-10-31, Release, Fedora konteyneri, SDL dummy sürücü: açılış vekili medyan 30.2 ms, süreç içi 23.6 ms;
+   TUI tuş başına 2.1 ms; GUI tuş başına (model + görünen satır) 2.6 ms; sıcak arama 19.2 ms, soğuk tazeleme
+   348.8 ms ölçüt dışı; GUI 1 MB notta tuş medyanı 16.7 ms, en kötü 19.3 ms. Gerçek soğuk disk önbelleği testte
+   üretilemez; Windows'ta yeniden ölçülmedi)
 4. Tip önerisi örnek korpusta ilk-tahmin doğruluğu ≥ %90; TUI ve GUI kaydet diyaloğunda tip değiştirilebilir.
 5. Senkron varsayılan kapalı; açılınca HTTPS+token **veya** SSH ile Windows ↔ Fedora arasında private repo
    üzerinden notlar eşitlenir; aynı notun iki cihazda değişmesi çakışma kopyası üretir, hiçbir içerik kaybolmaz.
@@ -240,7 +268,8 @@ yönetimi, çoklu kullanıcı, paketleme (rpm/msi/winget), macOS'ta elle doğrul
 ## 12. Açık sorular
 
 1. ~~Qt'nin Windows kurulumu~~ — **Karar (2026-10-28):** Qt Online Installer ile Qt 6.12.0 `mingw_64` kuruldu;
-   Windows derleyicisi Qt'nin MinGW 13.1'i (MSVC kurulu değil). Fedora doğrulaması Docker konteynerinde.
+   Windows derleyicisi Qt'nin MinGW 13.1'i. **Geçersiz (2026-10-31):** Qt kaldırıldı, Windows derleyicisi
+   MinGW-w64 GCC; ayrıntı aşağıdaki `## Değişiklik 2026-10-31`. Fedora doğrulaması konteynerde.
 2. **SSH:** libgit2 `USE_SSH=exec` (sistemdeki OpenSSH'yi çağırır; anahtar/agent/`~/.ssh/config` otomatik)
    seçildi. Windows 11'de erken bir spike ile doğrulanacak; olmazsa `libssh2` bağımlılığı (önce sorulur).
    **Spike (2026-10-28):** exec arka ucu Windows'ta PATH'teki `ssh`'ı başlatıyor (doğrulandı); github.com host
@@ -248,3 +277,24 @@ yönetimi, çoklu kullanıcı, paketleme (rpm/msi/winget), macOS'ta elle doğrul
    onay bekleyip asılı kalır). Kontrol noktası 4: `ssh -T` onayı sonrası anahtar/agent ile `ls-remote` + asılı kalma önlemi.
 3. ~~İlk senkron~~ — **Karar (spec onayıyla, 2026-10-28):** ikisi de doluysa v1 reddeder + yönlendirir.
 4. ~~Kurulum~~ — **Karar (spec onayıyla, 2026-10-28):** v1'de paketleme yok; `cmake --install` + PATH elle.
+
+## Değişiklik 2026-10-31
+
+Qt 6 kaldırıldı; GUI SDL3 + Dear ImGui'ye taşındı. Karar kaydı: `tasks/plan-imgui.md`. Ayrıntılar SPEC-gui, SPEC-cli.
+
+- **MODIFIED** §3: GUI/PDF bileşenleri Qt'den SDL3, Dear ImGui, libharu, md4c ve gömülü DejaVu'ya geçti (pin ve lisanslar tabloda).
+  Neden: toolkit kararı kullanıcının (`tasks/plan-imgui.md`).
+- **MODIFIED** Windows toolchain: Qt'nin MinGW 13.1'i yerine MinGW-w64 GCC; `NOTEAPP_QT_DIR` ve `windeployqt` kalktı.
+  Windows ikilileri Linux'ta konteynerde çapraz derlenir (`scripts/build-windows.sh`, Fedora `mingw64-gcc-c++` 16.2.1, statik,
+  yalnız Windows sistem DLL'leri). Windows akışı gerçek Windows'ta doğrulanmadı.
+- **ADDED** §2 `pdf` modülü (`noteapp_pdf`): `cli` ve `gui` doğrudan link olur. Neden: `note export --pdf` GUI'siz derlemede
+  ve ekransız sunucuda çalışsın.
+- **REMOVED** `cli` -> `notes-gui` çalışma zamanı çağrısı (`notes-gui --export-pdf`).
+- **MODIFIED** §4/§7: `scripts/check-fedora.sh` docker, yoksa podman kullanır; GUI testleri `SDL_VIDEO_DRIVER=dummy` ile başsız.
+- **MODIFIED** §10/1–3: ölçümler Fedora konteynerinde yenilendi (Windows'ta yeniden ölçülmedi).
+- **MODIFIED** §12/1: Qt Windows kurulum kararı geçersiz (satır tarihsel not olarak duruyor, numara korundu).
+- **MODIFIED** Windows toolchain (bu sürüm): MSYS2 MinGW-w64 kullanımı bırakıldı; çapraz derleme birincil, yerel derleme PATH'teki
+  herhangi bir MinGW-w64 `g++` ile (doğrulanmadı). `--test` Wine'da şu an sıfırdan farklı çıkar (bkz. §4).
+- **ADDED** `scripts/build-appimage.sh` (Linux AppImage), `scripts/build-windows.sh`, `scripts/container-engine.sh`,
+  `docker/windows-cross.Containerfile`, `cmake/toolchains/mingw-w64-x86_64.cmake`, preset'ler `windows-cross-{debug,release}`.
+- **REMOVED** MSYS2 bağımlılığı ve `scripts/dev-env.sh` (`MSYS2_PREFIX`); MinGW DLL kopyalama riski statik bağlamayla kalktı.

@@ -1,0 +1,6 @@
+from typing import List
+
+def f(items: List[int]) -> int:
+    return len(items)
+
+print(f([1]))

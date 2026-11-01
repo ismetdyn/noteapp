@@ -51,6 +51,7 @@ TEST_CASE("embedded_resource returns defaults.toml and rejects unknown keys") {
 }
 
 TEST_CASE("parse_config with empty input yields the embedded defaults") {
+    const ScopedEnv no_home("NOTEAPP_HOME", std::nullopt);  // ayarlıyken notes_dir onun altına gider
     const LoadedConfig loaded = parse_config("");
     CHECK(loaded.warnings.empty());
     const Config& c = loaded.config;
@@ -59,7 +60,10 @@ TEST_CASE("parse_config with empty input yields the embedded defaults") {
     CHECK(c.editor.empty());
     CHECK(c.default_type == "md");
     CHECK(c.default_folder.empty());
-    CHECK(c.types == std::vector<std::string>{"md", "txt", "csv", "cpp", "java", "py", "json", "sh"});
+    CHECK(c.types == std::vector<std::string>{"md",   "txt", "csv",  "cpp",        "java",       "py",
+                                              "json", "sh",  "env",  "properties", "yaml",       "toml",
+                                              "ini",  "xml", "html", "css",        "js",         "ts",
+                                              "sql",  "c",   "go",   "rs",         "dockerfile", "makefile"});
     CHECK_FALSE(c.sync.enabled);
     CHECK(c.sync.branch == "main");
     CHECK(c.sync.idle_seconds == 30);
@@ -68,7 +72,7 @@ TEST_CASE("parse_config with empty input yields the embedded defaults") {
     CHECK(c.tuning.max_scan_bytes == 65536);
     CHECK(c.tuning.max_note_bytes == 10485760);
     CHECK(c.tuning.rescan_seconds == 5);
-    CHECK(c.tuning.autosave_ms == 1000);
+    CHECK(c.tuning.autosave_ms == 3000);
     CHECK(c.tuning.exit_timeout_seconds == 10);
     CHECK(c.tuning.log_max_bytes == 1048576);
     CHECK(c.tuning.sync_stale_lock_minutes == 10);
@@ -189,12 +193,22 @@ TEST_CASE("parse_config expands ~ and environment variables in notes_dir") {
     CHECK(parse_config(R"(notes_dir = "$NOTEAPP_TEST_DIR/n")").config.notes_dir == tmp.path() / "n");
 }
 
-TEST_CASE("NOTEAPP_HOME overrides config and state dirs, including non-ASCII paths") {
+TEST_CASE("NOTEAPP_HOME overrides config, state and data dirs, including non-ASCII paths") {
     const TempDir tmp(kTurkishUncreated);
     const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
     CHECK(config_dir() == tmp.path() / "config");
     CHECK(state_dir() == tmp.path() / "state");
+    CHECK(data_dir() == tmp.path() / "data");
     CHECK(config_file() == tmp.path() / "config" / "config.toml");
+}
+
+TEST_CASE("NOTEAPP_HOME moves the default notes_dir under it; an explicit value stays") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+    CHECK(parse_config("").config.notes_dir == tmp.path() / "notes");
+    CHECK(load_config().config.notes_dir == tmp.path() / "notes");
+    CHECK(parse_config(R"(notes_dir = "/data/notlar")").config.notes_dir == fs::path("/data/notlar"));
+    CHECK(parse_config(R"(notes_dir = "~/n")").config.notes_dir == home_dir() / "n");
 }
 
 TEST_CASE("platform default dirs follow SPEC section 8") {
@@ -204,20 +218,26 @@ TEST_CASE("platform default dirs follow SPEC section 8") {
     const ScopedEnv local("LOCALAPPDATA", u8"C:\\Users\\İşıl\\AppData\\Local");
     CHECK(config_dir() == fs::path(u8"C:\\Users\\İşıl\\AppData\\Roaming") / "noteapp");
     CHECK(state_dir() == fs::path(u8"C:\\Users\\İşıl\\AppData\\Local") / "noteapp");
+    CHECK(data_dir() == fs::path(u8"C:\\Users\\İşıl\\AppData\\Local") / "noteapp");
 #elif defined(__APPLE__)
     CHECK(config_dir() == home_dir() / "Library" / "Application Support" / "noteapp");
     CHECK(state_dir() == config_dir());
+    CHECK(data_dir() == config_dir());
 #else
     {
         const ScopedEnv xdg_config("XDG_CONFIG_HOME", u8"/x/config");
         const ScopedEnv xdg_state("XDG_STATE_HOME", u8"/x/state");
         CHECK(config_dir() == fs::path("/x/config/noteapp"));
         CHECK(state_dir() == fs::path("/x/state/noteapp"));
+        const ScopedEnv xdg_data("XDG_DATA_HOME", u8"/x/data");
+        CHECK(data_dir() == fs::path("/x/data/noteapp"));
     }
     const ScopedEnv no_config("XDG_CONFIG_HOME", std::nullopt);
     const ScopedEnv no_state("XDG_STATE_HOME", std::nullopt);
     CHECK(config_dir() == home_dir() / ".config" / "noteapp");
     CHECK(state_dir() == home_dir() / ".local" / "state" / "noteapp");
+    const ScopedEnv no_data("XDG_DATA_HOME", std::nullopt);
+    CHECK(data_dir() == home_dir() / ".local" / "share" / "noteapp");
 #endif
 }
 
@@ -447,7 +467,8 @@ TEST_CASE("config_entries lists the user-facing keys with dotted sync keys and j
     const std::map<std::string, std::string> by_key(entries.begin(), entries.end());
 
     CHECK(by_key.at("language") == "auto");
-    CHECK(by_key.at("types") == "md, txt, csv, cpp, java, py, json, sh");
+    CHECK(by_key.at("types") == "md, txt, csv, cpp, java, py, json, sh, env, properties, yaml, toml, ini, "
+                                "xml, html, css, js, ts, sql, c, go, rs, dockerfile, makefile");
     CHECK(by_key.at("sync.enabled") == "false");
     CHECK(by_key.at("sync.idle_seconds") == "30");
     CHECK(by_key.count("tuning.autosave_ms") == 0);

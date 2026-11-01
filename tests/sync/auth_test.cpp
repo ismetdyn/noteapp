@@ -368,11 +368,11 @@ TEST_CASE("acceptance 7: the token never reaches files, git objects, the log, th
 
     // Yerel remote'ta libgit2 callback'i çağırmaz; kurulum + senkron yine de token ortamdayken koşar.
     const fs::path a = fx.root() / u8"A notları";
-    write_file(a / u8"ilk not.md", "içerik\n");
+    put_note("ilk not.md", "içerik\n");
     SyncService sync_a(SyncFixture::config_for(a));
     const auto enabled_a = sync_a.enable(utf8(fx.remote()));
     REQUIRE_MESSAGE(enabled_a.has_value(), describe(enabled_a));
-    write_file(a / "iki.md", "2\n");
+    put_note("iki.md", "2\n");
     const auto synced_a = sync_a.sync_now();
     REQUIRE_MESSAGE(synced_a.has_value(), describe(synced_a));
     const fs::path b = fx.root() / u8"B notları";
@@ -397,7 +397,7 @@ TEST_CASE("acceptance 7: the token never reaches files, git objects, the log, th
     errors.push_back(*credentials->error);
     // Token'ı URL'ye gömen kullanıcıya bile geri yansıtılmaz; senkron durum dosyası ve log da hatayı alır.
     const fs::path c = fx.root() / u8"C notları";
-    write_file(c / "not.md", "c\n");
+    put_note("not.md", "c\n");
     SyncService sync_c(SyncFixture::config_for(c));
     const auto leaky = sync_c.enable("https://x-access-token:" + marker + "@github.com/kisi/notlar.git");
     REQUIRE_FALSE(leaky.has_value());

@@ -166,3 +166,13 @@ TEST_CASE("every rejection carries the offending path") {
     }
     CHECK(has_path);
 }
+
+TEST_CASE("the console device names CONIN$ and CONOUT$ are reserved too, in any case and with an extension") {
+    for (const char* name : {"CONIN$", "conout$", "CONIN$.txt", "ConOut$.md", "alt/CONIN$"}) {
+        CAPTURE(name);
+        const auto parsed = NotePath::parse(name);
+        REQUIRE_FALSE(parsed.has_value());
+        CHECK(parsed.error().code == Error::Code::InvalidPath);
+    }
+    CHECK(NotePath::parse("CONIN.md").has_value());
+}

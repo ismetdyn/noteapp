@@ -1,64 +1,32 @@
 #include "core/config.hpp"
+#include "core/dll_search.hpp"
+#include "core/error.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
-#include "gui/main_window.hpp"
-#include "gui/pdf_export.hpp"
+#include "gui/gui_state.hpp"
+#include "gui/view.hpp"
 
-#include <QApplication>
-#include <QStringList>
+#include <SDL3/SDL_main.h>
 #include <cstdio>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
-namespace {
-
-// WIN32 alt sistemi ikilisinin stderr'i, çağıran yönlendirmediyse (pipe/dosya) geçersizdir; o zaman üst
-// sürecin konsoluna bağlanılır. Yönlendirilmiş durumda dokunulmaz: boru zaten çalışıyor.
-void attach_parent_stderr() {
-#ifdef _WIN32
-    const HANDLE handle = GetStdHandle(STD_ERROR_HANDLE);
-    if ((handle == nullptr || handle == INVALID_HANDLE_VALUE) && AttachConsole(ATTACH_PARENT_PROCESS))
-        std::freopen("CONOUT$", "w", stderr);
-#endif
-}
-
-// notes-gui --export-pdf <girdi> <çıktı>: pencere açmadan dışa aktarır; çıkış kodu 0/1, hata stderr'e.
-int run_pdf_export(const QStringList& args) {
-    attach_parent_stderr();
-    if (args.size() != 4) {
-        std::fprintf(stderr, "%s\n", noteapp::core::tr("gui.usage_export_pdf").c_str());
-        return 1;
-    }
-    const auto result = noteapp::gui::export_pdf(args.at(2), args.at(3));
-    if (!result) {
-        std::fprintf(stderr, "%s\n", noteapp::core::format_error(result.error()).c_str());
-        return 1;
-    }
-    return 0;
-}
-
-}  // namespace
-
-int main(int argc, char* argv[]) {
-    // Dil ve log eşiği config'ten gelir; yükleme uyarıları log'a düşer, pencere açılınca durum çubuğunda
-    // görünür.
+int main(int /*argc*/, char* /*argv*/[]) {
+    noteapp::core::restrict_dll_search_to_system32();
+    // Dil ve log eşiği config'ten gelir; yükleme uyarıları log'a düşer, pencere açılınca durum çubuğunda görünür.
     const noteapp::core::LoadedConfig loaded = noteapp::core::load_config();
     noteapp::core::init_i18n(loaded.config.language);
     noteapp::core::init_log(loaded.config.tuning.log_max_bytes);
     for (const auto& warning : loaded.warnings)
         noteapp::core::log_warn(noteapp::core::format_error(warning));
 
-    QApplication app(argc, argv);
-    // argv değil arguments(): Windows'ta argv ANSI kod sayfasındadır, Türkçe karakterli yollar bozulur.
-    const QStringList args = QApplication::arguments();
-    if (args.size() > 1 && args.at(1) == QLatin1StringView("--export-pdf")) {
-        return run_pdf_export(args);
-    }
+    noteapp::gui::GuiState state(loaded.config);
+    state.show_config_warnings(loaded.warnings);
 
-    noteapp::gui::MainWindow window(loaded.config);
-    window.show_config_warnings(loaded.warnings);
-    window.show();
-    return QApplication::exec();
+    auto view = noteapp::gui::View::create(state);
+    if (!view) {
+        std::fprintf(stderr, "%s\n", view.error().c_str());
+        return 1;
+    }
+    (*view)->install_deciders();
+    (*view)->run();
+    return 0;
 }

@@ -382,3 +382,57 @@
   - [ ] 8. PDF: geçerli dosya ve Türkçe metin çıkarımı doğrulandı (`pdftotext`, T04); **görsel olarak göz kontrolü bekliyor.**
   - [x] 9. GUI ve TUI ayarları aynı `config.toml`'u yazar; `load_config` ile testli.
 - [ ] Kullanıcı evde Fedora'da elle son kontrol yaptı
+
+---
+
+## Faz 7 — Qt'yi kaldır, SDL3 + Dear ImGui'ye geç
+
+> Plan: [plan-imgui.md](plan-imgui.md) · Dal: `feat/imgui` · Test eşlemesi: [gui-test-map.md](gui-test-map.md)
+
+- [x] T37: Bağımlılıklar + iskelet. Kanıt: `bash scripts/check-fedora.sh` → exit 0, ctest 8/8 (`e4c50d1`).
+- [x] T38: Qt'siz PDF + `note export --pdf`. Kanıt: `bash scripts/check-fedora.sh` → exit 0, ctest 8/8 (`6808c5f`).
+- [x] T39: `GuiState`, pencere, liste, editör, kaydetme. Kanıt: temiz birimde `ctest` → exit 0, 8/8 (`f5b1986`).
+- [x] T40: Klasörler, içerik araması, tarama. Kanıt: `ctest` → 8/8, `gui_tests` 105 vaka 0 hata (`d8ae8f7`).
+- [x] T41: Ayarlar, senkron, PDF diyaloğu. Kanıt: `ctest` → exit 0, 8/8, `gui_tests` 134 vaka 0 hata (`c46abd6`).
+- [x] T42: Qt kaldırma + dağıtım (kod). Kanıt: temiz klonda `bash scripts/check-fedora.sh` → exit 0, 8/8 (`5af28e8`).
+- [x] T43: Belgeler (`SPEC*.md`, `README.md`). Kanıt: `grep -nE "\bQt|qt6|windeployqt|QT_QPA|offscreen" SPEC*.md README.md` yalnız Değişiklik kayıtlarını ve tarihsel notu bulur.
+- [x] T44: Bağımsız review ve test denetimi bulguları. Kanıt: temiz klonda `bash scripts/check-fedora.sh` → exit 0, ctest 8/8 (`c04a202`).
+- [x] T45: Linux AppImage. Kanıt: temiz klonda `bash scripts/build-appimage.sh` → exit 0; `bash packaging/linux/smoke-test.sh` fedora:44, ubuntu:24.04, debian:13 → exit 0 (TLS ve `SSL_CERT_FILE=/dev/null` dahil).
+- [x] T46: Windows çapraz derleme, MSYS2 yok. Kanıt: temiz klonda `bash scripts/build-windows.sh` → exit 0, yalnız sistem DLL'leri (`708b225`). Wine'da 2 test düşüyor: core `hidden note stays hidden` (Wine sınırı), sync `a push the remote keeps rejecting` (kesin neden yok, 9 koşuda 6 kez; gerçek Windows'ta doğrulanacak).
+- [x] T47: Paket belgeleri, betik birleştirme, son derleme. Kanıt: temiz klonda `build-appimage.sh`, `smoke-test.sh` (fedora:44), `build-windows.sh` → exit 0 (`59e38c7`).
+- [x] T48: Paket güvenlik review bulguları. Kanıt: temiz klonda `check-fedora` 8/8, `build-appimage`, üç dağıtımda smoke, `build-windows` → exit 0; Wine'da DLL yerleştirme kapısı marker yazmaz (`cedefb4`). `DependentLoadFlags` Wine'da doğrulanamadı.
+- [x] T49: Son review bulguları. Kanıt: temiz klonda `build-appimage`, smoke (fedora:44), `build-windows` → exit 0 (`675c671`).
+- [x] T50: GUI araç çubuğu ve üst üste binme. Kanıt: `ctest` → exit 0, 8/8; yerleşim testi eski kodda 99 assertion düşer (`bf7da6a`). Gerçek ekran doğrulanmadı.
+- [x] T51: TUI liste odaklı klavye. Kanıt: `ctest` → exit 0, 8/8; Release `perf` → exit 0; `notes` tmux e2e 27/27 (`1a4274c`).
+- [x] T52: TUI sağ panel önizleme + gömülü editör, `n` ad girişi, alt satır arama, fare ve `<` `>` `z`. Kanıt: `ctest` exit 0 8/8; `tests/tui/e2e_editor.sh` exit 0 42/42 (`cd4f996`).
+- [x] T53: GUI review düzeltmeleri (panel boyutu, negatif genişlik, çakışma testi). Kanıt: `ctest` → exit 0, 8/8 (`f81382a`).
+- [x] T54: GUI Ayarlar ekranı yeniden düzeni. Kanıt: `ctest` → exit 0, 8/8 (`aaac62b`).
+- [x] T57: TUI editör review düzeltmeleri. Kanıt: `ctest` exit 0 8/8, Release `perf` exit 0, `tests/tui/e2e_editor.sh` exit 0 43/43 (`a38737b`).
+- [x] T58: TUI `n` tam pencere taslak, `Ctrl+Q`, `q`, moda göre çerçeve, satır numaraları, format önerisi, sözdizimi renklendirme. Kanıt: `ctest` exit 0 8/8, Release `perf` exit 0, e2e 85/0 (`87be896`).
+- [x] T60: Satır içi öneri, `Ctrl+Space` listesi, `hunspell` yazım denetimi. Kanıt: `ctest` exit 0 8/8, Release `perf` exit 0, e2e 106/0 (`b8164e6`).
+- [x] T61: Sistem panosu, `c`, REVIEW fare seçimi. Kanıt: `ctest` exit 0 8/8, Release `perf` exit 0, e2e 106/0 (`b8164e6`).
+- [x] T55a: Çekirdek: senkronlu `.trash/`, not meta bilgisi, senkron durumu, arama argümanları, birleşik fzf. Kanıt: `ctest` exit 0 8/8, Release `perf` exit 0 (`4a67aed`). Windows derlemesi doğrulanmadı.
+- [x] T55b: `f`, `d`/`u`/`D`, `T`, açılır meta, `v`, `o`, arama argümanları. Kanıt: `ctest` exit 0 8/8, Release `perf` exit 0, e2e 106/0 (`b8164e6`).
+- [x] G1: Graph çekirdeği. Kanıt: `ctest` exit 0 9/9, ASan/UBSan `graph` exit 0, `build-windows.sh` exit 0, 2-hop 41,8 ms (`71d615f`).
+- [x] G2: Birleşim ve oplog. Kanıt: `graph` 104/104, ASan/UBSan exit 0 (`b321704`). Güvenlik düzeltmeleri G2b'de.
+- [x] G3: Cypher ve `note query`. Kanıt: `ctest` 9/9, Release `perf` exit 0, üretim sorgusu 20,5 ms (`46dcbb8`).
+- [x] G2b: Oplog güvenlik bulguları. Kanıt: `graph` 119/119, ASan/UBSan exit 0, `build-windows.sh --test -R '^graph$'` exit 0 (`1062e8f`).
+- [x] G3b: Fuzz. Kanıt: `query` 2,5M ve `decode_frame` 15,1M girdi, ASan/UBSan, 0 artifact; Cypher review bulguları kapalı (`debe7cf`). - [x] G4–G6: Notlar graph'ta, oplog senkronu, geçiş. Kanıt: `ctest` exit 0 10/10; e2e 179/0; smoke üç dağıtım exit 0; fuzz 0 artifact (`64f5ced`, `5d0ee36`).
+- [ ] G7: Son doğrulama.
+- [x] T55c: T55a review bulguları. Kanıt: `ctest` exit 0 8/8, Release `perf` exit 0, e2e 106/0 (`b8164e6`).
+- [x] T62: GUI ad önerisinde gizli değer ve kararsız GUI testleri. Kanıt: `ctest -j8` exit 0 9/9; 48 tam koşuda 0 düşüş (`bb8f293`).
+- [x] T64: Çöp kutusu ve tuşların görünürlüğü, GUI çöp görünümü, `NOTEAPP_HOME` yalıtımı. Kanıt: `ctest` exit 0 9/9, e2e 139/0 (`3e5f2b5`).
+- [x] T64b: `F2`, `Space`, sağ bilgi, sıra no, sayfa, gezinme hızı. Kanıt: `ctest` exit 0 9/9, e2e 139/0 (`3e5f2b5`).
+- [x] T65: Başarısız geri almada öğe korunur. Kanıt: `ctest` 10/10 (`8b8ff7e`).
+- [x] T63: Önizleme, öneri tablosu, `hunspell` çıkışı. Kanıt: `ctest` 10/10 (`83e7ed8`).
+- [x] T66: `a` liste içi ad, dosya sonuna dokunmama. Kanıt: e2e 179/0 (`7d0a657`).
+- [ ] T67: `main`'den sonra C++ kalite turu: internetten C++ ve grafik programlama skill ve araç araştırması (Anthropic, GitHub); bellek sızıntısı taraması (LSan, Valgrind, heaptrack); performans profili; sahiplik denetimi: ham `new`/`delete` ve sahip ham işaretçi yerine RAII, `unique_ptr`/`shared_ptr`; clang-tidy `modernize`, `cppcoreguidelines`, `performance` denetimleri.
+- [ ] T68: TUI metin girişleri: ortak giriş bileşeni, gri öneri, `Tab` listesi (klasör, ad, tip, arama argümanı), renkli arama satırı, `Ctrl+P`/`Ctrl+N` arama geçmişi, `/` modu `Ctrl+T`. Bağımlılık yok. Depends: T67.
+- [ ] T73: Simgeler: Symbols Nerd Font'u GUI'ye göm (ImGui); TUI için `note font install` ile kullanıcı font dizinine kurma; `icons = auto | nerd | off`.
+- [ ] T69: REVIEW Markdown görünümü (md4c, yeni bağımlılık yok), `R` ham metin; CSV tablo, JSON düzenli görünüm. Depends: `main`'e alma.
+- [ ] T70: TUI klasör gezinmesi (`←`/`h` üst, `→`/`l` içeri), klasör içi numara, `a` ile `klasör/`, `F2` ile klasör adı, simgeler. Depends: T69, T73 ile birlikte.
+- [ ] T71: Çoklu seçim `x`, `y`/`p`, `g` atlamaları. Depends: T70.
+- [ ] T59: LSP istemcisi, varsayılan kapalı. Depends: graph.
+- [~] T56: LadybugDB denemesi iptal: kullanıcı dış bağımlılık yerine kendi küçük graph depomuzu istedi (2026-11-01).
+- [ ] Elle (kullanıcı): Fedora KDE'de gerçek pencere, Türkçe giriş, koyu tema, PDF göz kontrolü.
+- [ ] Elle (kullanıcı): Windows 11'de çapraz derlenmiş `.exe`, Türkçe IME, koyu tema, pano.

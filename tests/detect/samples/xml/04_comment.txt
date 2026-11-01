@@ -1,0 +1,5 @@
+<!-- config -->
+<config>
+  <item key="a">1</item>
+  <item key="b">2</item>
+</config>

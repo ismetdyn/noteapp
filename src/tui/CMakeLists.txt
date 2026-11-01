@@ -1,6 +1,21 @@
 # Görünüm kütüphanede: ekranı metne render eden testler (SPEC-tui kabul 1) terminal açmadan aynı kodu çağırır.
 add_library(noteapp_tui
     view.cpp
+    display_text.cpp
+    child_process.cpp
+    clipboard.cpp
+    completion.cpp
+    spellcheck.cpp
+    list_actions.cpp
+    sync_status_worker.cpp
+    editor_buffer.cpp
+    editor_session.cpp
+    editor_view.cpp
+    syntax.cpp
+    termination.cpp
+    note_find.cpp
+    pane_layout.cpp
+    mouse.cpp
     modals.cpp
     settings.cpp
     sync_indicator.cpp

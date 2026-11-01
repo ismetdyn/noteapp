@@ -1,0 +1,6 @@
+static int counter = 0;
+
+void bump(void) {
+    counter++;
+    printf("%d\n", counter);
+}

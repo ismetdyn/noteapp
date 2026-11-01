@@ -1,0 +1,6 @@
+# production settings
+API_URL=https://example.org/v1
+
+# timeouts
+TIMEOUT_MS=3000
+RETRY=3
