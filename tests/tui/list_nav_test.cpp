@@ -191,6 +191,7 @@ TEST_CASE("a note without an extension puts the cursor at the end") {
 TEST_CASE("the rename input is drawn on the bottom line with the cursor inside the text") {
     tui::TuiState s;
     s.set_notes({info("work/plan.md")});
+    REQUIRE(s.select_note(core::NotePath::parse("work/plan.md").value()));
     const tui::RenameState r(s.selected_row()->path);
     const auto screen = draw(s, 100, 24, &r);
     CHECK(row_of(screen, 23).find("work/plan▏.md") != std::string::npos);
@@ -223,6 +224,7 @@ TEST_CASE("a rename onto an existing note shows the error, overwrites nothing an
     f.actions.begin_rename(f.rename);
     f.key(Key::Backspace);
     f.type("b");
+    REQUIRE(f.rename.has_value());
     REQUIRE(f.rename->text() == "b.md");
     f.key(Key::Enter);
     REQUIRE(f.rename);
@@ -260,7 +262,7 @@ TEST_CASE("leaving the trash after a restore selects the first row of the list")
     StoreFixture f;
     f.put("b.md", "b");
     f.put("c.md", "c");
-    f.put("is/a.md", "a");
+    f.put("a.md", "a");
     f.load();
     f.state.set_list_prefs({{search::SortField::Name, false}, tui::ListColumn::None});
     const std::string first = f.state.selected_row()->path.string();
@@ -268,6 +270,7 @@ TEST_CASE("leaving the trash after a restore selects the first row of the list")
     const auto press = [&](std::string_view letter) {
         f.actions.run(f.state.handle(Key::Char, letter), confirm);
     };
+    press("g");
     press("g");
     press("d");
     press("T");
@@ -391,10 +394,10 @@ TEST_CASE("rows are numbered, right-aligned to the width of the total, after the
     tui::TuiState s;
     s.set_notes(many(120));
     const auto screen = draw(s);
-    CHECK(row_of(screen, 2).find(">  1 ▸ n1000.md") != std::string::npos);
-    CHECK(row_of(screen, 3).find("   2 ▸ n1001.md") != std::string::npos);
+    CHECK(row_of(screen, 2).find("   1   n1000.md") != std::string::npos);
+    CHECK(row_of(screen, 3).find("   2   n1001.md") != std::string::npos);
     s.handle(Key::Char, "G");
-    CHECK(shows(draw(s), ">120 ▸ n1119.md"));
+    CHECK(shows(draw(s), " 120   n1119.md"));
 }
 
 TEST_CASE("the line above the hints shows totals, matches and the page in both languages") {
@@ -403,7 +406,7 @@ TEST_CASE("the line above the hints shows totals, matches and the page in both l
     s.set_notes(many(248));
     s.set_window(100, 24);  // 19 satırlık panel: 14 sayfa
     auto screen = draw(s);
-    CHECK(row_of(screen, 22) == "Toplam 248 not · sayfa 1/14");
+    CHECK(row_of(screen, 22) == "Klasör: 248 öğe · Toplam 248 not · sayfa 1/14");
     s.handle(Key::Char, "/");
     s.handle(Key::Char, "1");
     s.handle(Key::Char, "2");
@@ -428,6 +431,7 @@ TEST_CASE("the page number follows the selection") {
     s.handle(Key::Char, "G");
     CHECK(row_of(draw(s), 22).ends_with("page 6/6"));
     s.handle(Key::Char, "g");
+    s.handle(Key::Char, "g");
     CHECK(row_of(draw(s), 22).ends_with("page 1/6"));
 }
 
@@ -446,6 +450,7 @@ TEST_CASE("PgDn and PgUp page the list in List focus and leave the preview alone
     for (int i = 0; i < 10; ++i)
         s.handle(Key::PageDown);
     CHECK(s.selected() == 99);
+    s.handle(Key::Char, "g");
     s.handle(Key::Char, "g");
     s.handle(Key::PageUp);
     CHECK(s.selected() == 0);

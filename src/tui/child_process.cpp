@@ -1,6 +1,7 @@
 #include "tui/child_process.hpp"
 
 #include "core/process.hpp"
+#include "core/unique_handle.hpp"
 
 #include <array>
 #include <utility>
@@ -91,18 +92,25 @@ std::vector<char*> c_strings(const std::vector<std::string>& strings) {
     return out;
 }
 
+struct Pipe {
+    core::UniqueFd read_end;
+    core::UniqueFd write_end;
+};
+
 // CLOEXEC şart: başka bir iş parçacığının başlattığı çocuk bu borunun yazma ucunu devralırsa araç EOF görmez
 // ve zaman aşımına düşer.
-bool open_pipe(std::array<int, 2>& ends) {
+std::optional<Pipe> open_pipe() {
+    std::array<int, 2> ends{-1, -1};
 #ifdef __linux__
-    return pipe2(ends.data(), O_CLOEXEC) == 0;
+    if (pipe2(ends.data(), O_CLOEXEC) != 0)
+        return std::nullopt;
 #else
     if (pipe(ends.data()) != 0)
-        return false;
+        return std::nullopt;
     fcntl(ends[0], F_SETFD, FD_CLOEXEC);
     fcntl(ends[1], F_SETFD, FD_CLOEXEC);
-    return true;
 #endif
+    return Pipe{core::UniqueFd(ends[0]), core::UniqueFd(ends[1])};
 }
 
 void close_if_open(int& fd) {
@@ -159,20 +167,24 @@ std::optional<ChildProcess> ChildProcess::start(const std::vector<std::string>& 
     const auto program = core::find_program(argv.front());
     if (!program)
         return std::nullopt;
-    std::array<int, 2> input{-1, -1};
-    std::array<int, 2> output{-1, -1};
-    if (!open_pipe(input))
+    std::optional<Pipe> input = open_pipe();
+    if (!input)
         return std::nullopt;
-    if (capture_stdout && !open_pipe(output)) {
-        close(input[0]);
-        close(input[1]);
-        return std::nullopt;
+    std::optional<Pipe> output;
+    if (capture_stdout) {
+        output = open_pipe();
+        if (!output)
+            return std::nullopt;
     }
+    // Ayrılan bellek init/destroy çiftinin dışında: bad_alloc eylem ve öznitelik nesnesini sızdırmasın.
+    const std::vector<std::string> env = child_environment(extra_env);
+    std::vector<char*> args = c_strings(argv);
+    std::vector<char*> envp = c_strings(env);
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_adddup2(&actions, input[0], STDIN_FILENO);
-    if (capture_stdout)
-        posix_spawn_file_actions_adddup2(&actions, output[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, input->read_end.get(), STDIN_FILENO);
+    if (output)
+        posix_spawn_file_actions_adddup2(&actions, output->write_end.get(), STDOUT_FILENO);
     else
         posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
     posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
@@ -180,26 +192,16 @@ std::optional<ChildProcess> ChildProcess::start(const std::vector<std::string>& 
     posix_spawnattr_init(&attributes);
     posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP);  // torunlar birlikte öldürülebilsin
     posix_spawnattr_setpgroup(&attributes, 0);
-    const std::vector<std::string> env = child_environment(extra_env);
-    std::vector<char*> args = c_strings(argv);
-    std::vector<char*> envp = c_strings(env);
     pid_t pid = -1;
     const int spawned = posix_spawn(&pid, program->c_str(), &actions, &attributes, args.data(), envp.data());
     posix_spawnattr_destroy(&attributes);
     posix_spawn_file_actions_destroy(&actions);
-    close(input[0]);
-    if (capture_stdout)
-        close(output[1]);
-    if (spawned != 0) {
-        close(input[1]);
-        if (capture_stdout)
-            close(output[0]);
+    if (spawned != 0)
         return std::nullopt;
-    }
     ChildProcess child;
     child.pid_ = pid;
-    child.stdin_fd_ = input[1];
-    child.stdout_fd_ = capture_stdout ? output[0] : -1;
+    child.stdin_fd_ = input->write_end.release();
+    child.stdout_fd_ = output ? output->read_end.release() : -1;
     return child;
 }
 

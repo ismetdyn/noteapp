@@ -83,10 +83,10 @@ struct SortKey {
 };
 
 struct AggregateSpec {
-    AggregateFn fn;
-    bool distinct;
-    const Expr* arg;  // count(*)'da yok
-    int slot;
+    AggregateFn fn{};
+    bool distinct{};
+    const Expr* arg{};  // count(*)'da yok
+    int slot{};
     Position pos;
 };
 
@@ -115,7 +115,7 @@ OperatorPtr make_optional_apply(OperatorPtr child, OperatorPtr inner, OnceOp* in
 // yazmayla çakışmaz, LIMIT yazmayı kısmaz.
 struct WriteProperty {
     std::string key;
-    const Expr* value;
+    const Expr* value{};
 };
 
 struct WriteNode {
@@ -140,7 +140,7 @@ struct WriteStep {
 };
 
 struct SetOperation {
-    const Expr* target;
+    const Expr* target{};
     Position pos;
     std::string key;                  // boşsa etiket işlemi
     const Expr* value = nullptr;      // özellik; yoksa kaldırma

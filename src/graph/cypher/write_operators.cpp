@@ -112,7 +112,8 @@ Result<void> merge_node(const WriteNode& step, Row& row, ExecContext& context) {
         return std::unexpected(std::move(props).error());
     std::vector<std::string> labels = step.labels;
     std::ranges::sort(labels);
-    labels.erase(std::ranges::unique(labels).begin(), labels.end());
+    const auto duplicates = std::ranges::unique(labels);
+    labels.erase(duplicates.begin(), duplicates.end());
 
     std::string canonical;
     for (const std::string& label : labels)
@@ -419,9 +420,11 @@ private:
         // Cümle sonunda birlikte silinir: DELETE a, r yazım sırasına bağlı olmasın, aynı hedef iki kez
         // gelebilir.
         std::ranges::sort(edges);
-        edges.erase(std::ranges::unique(edges).begin(), edges.end());
+        const auto duplicate_edges = std::ranges::unique(edges);
+        edges.erase(duplicate_edges.begin(), duplicate_edges.end());
         std::ranges::sort(nodes);
-        nodes.erase(std::ranges::unique(nodes).begin(), nodes.end());
+        const auto duplicate_nodes = std::ranges::unique(nodes);
+        nodes.erase(duplicate_nodes.begin(), duplicate_nodes.end());
         CYPHER_TRY(delete_edges(edges, context));
         return delete_nodes(nodes, context);
     }

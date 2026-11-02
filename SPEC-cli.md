@@ -118,6 +118,8 @@ Argüman ayrıştırma elle yazılır (ek kütüphane yok). Windows'ta UTF-8 arg
 **Elle:** Windows Terminal ve Fedora'da `edit`/`micro`/`nano`/`vim` ile editör akışı; Türkçe karakterli argümanlar.
 
 ## Kapsam dışı
+- `note font install`: gerekmiyor; GUI kendi ikon fontunu taşır, terminalde font kullanıcınındır (SPEC-tui "Dosya ikonları").
+
 Kabuk tamamlama (bash/zsh/PowerShell), etkileşimli seçici (fzf benzeri seçim TUI'nin işi), `mkdir/rmdir` komutları
 (klasör `-f`/`mv` ile örtük oluşur; klasör silme TUI/GUI'de).
 

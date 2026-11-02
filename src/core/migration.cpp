@@ -8,12 +8,15 @@
 #include "core/text.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <format>
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
+#include <string_view>
 #include <system_error>
 
 namespace noteapp::core {
@@ -24,6 +27,7 @@ namespace {
 
 constexpr const char* kMarkerFile =
     "migrated-notes-dirs";  // geçişi biten notes_dir'ler, satır başına bir yol
+constexpr const char* kSkippedFile = "migration-skipped";
 constexpr const char* kTrashDir = ".trash";
 constexpr const char* kKeepFile = ".keep";
 constexpr const char* kOplogDir = "graph";
@@ -112,29 +116,45 @@ std::chrono::system_clock::time_point created_time(const fs::path& file, fs::fil
 }
 
 // Eski ağacın bağ izlemeyen listesi. Gizli girdiler (.git, .noteapp) atlanır; .trash ayrı kökten gezilir.
+// Okunamayan girdi sessizce düşmez: kullanıcı eski dosyaları silerse tek kopyası gider.
 struct LegacyTree {
     struct File {
         fs::path absolute;
         std::string relative;
-        FileStat stat;
+        FileStat stat{};
     };
     std::vector<File> files;
     std::vector<std::string> folders;
     std::vector<SkippedFile> links;
+    std::vector<SkippedFile> unreadable;
 };
+
+constexpr const char* kTreeRoot = ".";  // okunamayan kökün rapordaki adı
+
+// Kök hiç yoksa geçirilecek bir şey de yoktur. Alt dizinde "yok" da raporlanır: yol uzunluğu aşımı (MinGW
+// _wopendir, MAX_PATH) "bulunamadı" diye döner.
+bool path_is_missing(const fs::path& path) {
+    std::error_code ec;
+    return fs::symlink_status(path, ec).type() == fs::file_type::not_found;
+}
 
 void walk_legacy(const fs::path& root, const fs::path& dir, const std::string& prefix, LegacyTree& tree) {
     std::error_code ec;
     std::vector<fs::path> entries;
     for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
         entries.push_back(it->path());
+    if (ec)  // içi bilinmiyor (izin, yol uzunluğu); okunabilen kısmı yine gezilir
+        tree.unreadable.push_back({prefix.empty() ? std::string(kTreeRoot) : prefix, "unreadable_folder"});
     std::ranges::sort(entries);
     for (const fs::path& entry : entries) {
         const fs::path name = entry.filename();
         const auto stat = stat_file(entry);
         const std::string relative = prefix.empty() ? path_utf8(name) : prefix + "/" + path_utf8(name);
-        if (!stat)
+        if (!stat) {
+            if (!is_hidden_name(name))
+                tree.unreadable.push_back({relative, "unreadable"});
             continue;
+        }
         if (stat->symlink) {  // bağ izlenmez: hedefi kök dışına kaçabilir
             if (!is_hidden_name(name))
                 tree.links.push_back({relative, "link"});
@@ -151,24 +171,29 @@ void walk_legacy(const fs::path& root, const fs::path& dir, const std::string& p
     }
 }
 
+bool tree_has_content(const fs::path& root, const fs::path& dir);
+
+bool entry_has_content(const fs::path& root, const fs::path& dir, const fs::path& entry) {
+    const fs::path name = entry.filename();
+    const bool hidden = is_hidden_name(name);
+    const bool root_trash = name == kTrashDir && dir == root;
+    const auto stat = stat_file(entry);
+    if (!stat)  // türü bilinmiyor: not olabilir (.git gibi gizli adlar sayılmaz)
+        return !hidden || root_trash;
+    if (stat->symlink)
+        return false;
+    if (hidden)
+        return (root_trash && stat->directory && tree_has_content(root, entry)) || name == kKeepFile;
+    return stat->directory ? tree_has_content(root, entry)
+                           : (stat->regular && !is_carrier(entry.lexically_relative(root)));
+}
+
 bool tree_has_content(const fs::path& root, const fs::path& dir) {
     std::error_code ec;
-    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-        const fs::path name = it->path().filename();
-        const auto stat = stat_file(it->path());
-        if (!stat || stat->symlink)
-            continue;
-        if (is_hidden_name(name)) {
-            if ((name == kTrashDir && stat->directory && dir == root && tree_has_content(root, it->path())) ||
-                name == kKeepFile)
-                return true;
-            continue;
-        }
-        if (stat->directory ? tree_has_content(root, it->path())
-                            : (stat->regular && !is_carrier(it->path().lexically_relative(root))))
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+        if (entry_has_content(root, dir, it->path()))
             return true;
-    }
-    return false;
+    return static_cast<bool>(ec);  // okunamayan dizinin içi bilinmez: boş sayılmaz
 }
 
 // Yedek: yalnız kopya (.git ve oplog hariç). Mevcut graph.db de yanına: içe aktarma onu değiştirir. Notlar
@@ -216,6 +241,15 @@ std::expected<fs::path, Error> take_backup(const fs::path& notes_dir, const fs::
     return backup;
 }
 
+// Rapordaki yol kullanıcının bulacağı yerdir: çöp ağacı kendi kökünden gezilir, .trash öneki burada gelir.
+std::string trash_report_path(const std::string& relative) {
+    return relative == kTreeRoot ? std::string(kTrashDir) : std::string(kTrashDir) + "/" + relative;
+}
+
+std::string report_path(const LegacyTree::File& file, bool trashed) {
+    return trashed ? trash_report_path(file.relative) : file.relative;
+}
+
 // Bir ağacın dosyalarını partiler halinde içe aktarır; dosya başına sorun rapora girer, parti sürer.
 std::expected<void, Error> import_tree(NoteStore& store, const std::vector<LegacyTree::File>& files,
                                        bool trashed, MigrationReport& report) {
@@ -238,24 +272,25 @@ std::expected<void, Error> import_tree(NoteStore& store, const std::vector<Legac
     for (const LegacyTree::File& file : files) {
         auto parsed = NotePath::parse(file.relative);
         if (!parsed) {
-            report.skipped.push_back({file.relative, "invalid_name"});
+            report.skipped.push_back({report_path(file, trashed), "invalid_name"});
             continue;
         }
         if (!is_valid_utf8(file.relative)) {  // ad metin olarak saklanır; bayt koruması gövde içindir
-            report.failed.push_back({file.relative, "invalid_name"});
+            report.failed.push_back({report_path(file, trashed), "invalid_name"});
             continue;
         }
         if (!folder_path_within_limits(split_note_path(file.relative).folder)) {
-            report.failed.push_back({file.relative, "invalid_folder"});  // görünmez düğüm yazılmaz
+            report.failed.push_back(
+                {report_path(file, trashed), "invalid_folder"});  // görünmez düğüm yazılmaz
             continue;
         }
         if (file.stat.size > kMaxNoteBytes) {  // tek çerçeveye sığmaz: geçişi durdurmaz, dosya yerinde kalır
-            report.skipped.push_back({file.relative, "too_large"});
+            report.skipped.push_back({report_path(file, trashed), "too_large"});
             continue;
         }
         auto bytes = slurp_file(file.absolute);
         if (!bytes) {
-            report.failed.push_back({file.relative, "unreadable"});
+            report.failed.push_back({report_path(file, trashed), "unreadable"});
             continue;
         }
         if (batch_bytes + bytes->size() > kBatchBytes || batch.size() >= kBatchNotes)
@@ -306,9 +341,9 @@ std::expected<void, Error> verify_tree(const NoteStore& store, const std::vector
         if (!verified)
             return std::unexpected(verified.error());
         if (!*verified)
-            report.failed.push_back({file.relative, "verify_failed"});
+            report.failed.push_back({report_path(file, trashed), "verify_failed"});
         else if (auto reason = lost_reason(note, lost))
-            report.failed.push_back({file.relative, std::move(*reason)});
+            report.failed.push_back({report_path(file, trashed), std::move(*reason)});
     }
     return {};
 }
@@ -325,6 +360,77 @@ bool legacy_notes_pending(const fs::path& notes_dir, const fs::path& data_direct
 }
 
 namespace {
+
+// Dosya adı sekme ve satır sonu içerebilir: satır "neden<TAB>yol", özel baytlar %XX.
+std::string escape_field(std::string_view field) {
+    std::string out;
+    for (const char c : field) {
+        if (c == '%' || c == '\t' || c == '\n' || c == '\r')
+            out += std::format("%{:02X}", static_cast<unsigned char>(c));
+        else
+            out += c;
+    }
+    return out;
+}
+
+std::optional<std::string> unescape_field(std::string_view field) {
+    constexpr std::size_t kEscapeCells = 3;
+    constexpr int kHexBase = 16;
+    std::string out;
+    for (std::size_t at = 0; at < field.size(); ++at) {
+        if (field[at] != '%') {
+            out += field[at];
+            continue;
+        }
+        if (at + kEscapeCells > field.size())
+            return std::nullopt;
+        unsigned value = 0;
+        const char* const first = field.data() + at + 1;
+        const char* const last = first + kEscapeCells - 1;
+        const auto parsed = std::from_chars(first, last, value, kHexBase);
+        if (parsed.ec != std::errc{} || parsed.ptr != last)
+            return std::nullopt;
+        out += static_cast<char>(value);
+        at += kEscapeCells - 1;
+    }
+    return out;
+}
+
+std::string skipped_prefix(const fs::path& notes_dir) {
+    return path_utf8(canonical_notes_dir(notes_dir)) + "/";
+}
+
+std::expected<void, Error> remove_skipped_list(const fs::path& data_directory) {
+    const fs::path list = data_directory / kSkippedFile;
+    std::error_code ec;
+    fs::remove(list, ec);
+    if (ec)
+        return std::unexpected(io_error(path_utf8(list), ec.message()));
+    return {};
+}
+
+// Başka notes_dir'in kayıtları kalır: aynı veri dizinine ikinci kaynak geçirmek öncekinin uyarısını
+// silmemeli.
+std::expected<void, Error> save_skipped_files(const fs::path& notes_dir, const fs::path& data_directory,
+                                              const MigrationReport& report) {
+    auto previous = read_skipped_files(data_directory);
+    if (!previous)
+        return std::unexpected(previous.error());
+    const std::string root = skipped_prefix(notes_dir);
+    std::string text;
+    const auto add = [&text](const std::string& reason, const std::string& path) {
+        text += escape_field(reason) + "\t" + escape_field(path) + "\n";
+    };
+    for (const SkippedFile& file : *previous)
+        if (!file.path.starts_with(root))
+            add(file.reason, file.path);
+    for (const std::vector<SkippedFile>* files : {&report.skipped, &report.failed})
+        for (const SkippedFile& file : *files)
+            add(file.reason, root + file.path);
+    if (!text.empty())
+        return write_file_atomically(data_directory / kSkippedFile, text, true);
+    return remove_skipped_list(data_directory);
+}
 
 std::expected<void, Error> import_everything(NoteStore& store, const LegacyTree& live,
                                              const LegacyTree& trash, MigrationReport& report) {
@@ -346,6 +452,53 @@ std::expected<void, Error> import_everything(NoteStore& store, const LegacyTree&
 
 }  // namespace
 
+std::expected<std::vector<SkippedFile>, Error> read_skipped_files(const fs::path& data_directory) {
+    const fs::path list = data_directory / kSkippedFile;
+    std::error_code ec;
+    if (!fs::exists(list, ec) && !ec)
+        return std::vector<SkippedFile>{};
+    auto text = slurp_file(list);
+    if (!text)
+        return std::unexpected(text.error());
+    std::vector<SkippedFile> files;
+    std::string_view rest = *text;
+    while (!rest.empty()) {
+        const std::size_t end = rest.find('\n');
+        if (end == std::string_view::npos)
+            return std::unexpected(io_error(path_utf8(list), "truncated line"));
+        const std::string_view line = rest.substr(0, end);
+        rest.remove_prefix(end + 1);
+        const std::size_t tab = line.find('\t');
+        auto reason = tab == std::string_view::npos ? std::nullopt : unescape_field(line.substr(0, tab));
+        auto path = tab == std::string_view::npos ? std::nullopt : unescape_field(line.substr(tab + 1));
+        if (!reason || !path)
+            return std::unexpected(io_error(path_utf8(list), "malformed line"));
+        files.push_back({std::move(*path), std::move(*reason)});
+    }
+    return files;
+}
+
+bool skipped_file_is_under(const SkippedFile& file, const fs::path& notes_dir) {
+    return file.path.starts_with(skipped_prefix(notes_dir));
+}
+
+std::expected<void, Error> clear_skipped_files(const fs::path& data_directory) {
+    return remove_skipped_list(data_directory);
+}
+
+namespace {
+
+LegacyTree walk_legacy_trash(const fs::path& trash_root) {
+    LegacyTree trash;
+    if (const auto stat = stat_file(trash_root); stat && stat->directory && !stat->symlink)
+        walk_legacy(trash_root, trash_root, "", trash);
+    else if (!stat && !path_is_missing(trash_root))
+        trash.unreadable.push_back({kTreeRoot, "unreadable_folder"});
+    return trash;
+}
+
+}  // namespace
+
 std::expected<MigrationReport, Error>
 migrate_legacy_notes(const fs::path& notes_dir, const fs::path& data_directory, MigrationOptions options) {
     MigrationReport report;
@@ -353,13 +506,15 @@ migrate_legacy_notes(const fs::path& notes_dir, const fs::path& data_directory, 
         return std::unexpected(io_error(path_utf8(data_directory), made.message()));
 
     LegacyTree live;
-    walk_legacy(notes_dir, notes_dir, "", live);
-    LegacyTree trash;
-    const fs::path trash_root = notes_dir / kTrashDir;
-    if (const auto stat = stat_file(trash_root); stat && stat->directory && !stat->symlink)
-        walk_legacy(trash_root, trash_root, "", trash);
+    if (!path_is_missing(notes_dir))
+        walk_legacy(notes_dir, notes_dir, "", live);
+    const LegacyTree trash = walk_legacy_trash(notes_dir / kTrashDir);
     report.skipped = live.links;
-    report.skipped.insert(report.skipped.end(), trash.links.begin(), trash.links.end());
+    report.failed = live.unreadable;
+    for (const SkippedFile& link : trash.links)
+        report.skipped.push_back({trash_report_path(link.path), link.reason});
+    for (const SkippedFile& entry : trash.unreadable)
+        report.failed.push_back({trash_report_path(entry.path), entry.reason});
 
     auto backup = take_backup(notes_dir, data_directory, live.files, trash.files);
     if (!backup)
@@ -373,6 +528,7 @@ migrate_legacy_notes(const fs::path& notes_dir, const fs::path& data_directory, 
     const LostNotes lost = lost_notes_of(fresh);
     NOTEAPP_TRY(verify_tree(fresh, live.files, false, lost, report));
     NOTEAPP_TRY(verify_tree(fresh, trash.files, true, lost, report));
+    NOTEAPP_TRY(save_skipped_files(notes_dir, data_directory, report));
     if (!report.failed.empty() && !options.skip_failed)
         return report;  // kapı kapalı kalır; tekrar çağrı kalanı tamamlar
     NOTEAPP_TRY(mark_notes_dir_current(notes_dir, data_directory));

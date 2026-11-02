@@ -125,6 +125,6 @@ TEST_CASE("every indicator variant fits the 60x15 top bar; an error also fills t
     indicator.set_status({at_0905(), failure()}, false);
     const std::string screen = render_bar(indicator, indicator.error_text());
     CHECK(screen.find("⚠ ") != std::string::npos);
-    CHECK(screen.find("[name] 0/0") != std::string::npos);  // sayaç kesilmedi
+    CHECK(screen.find("[name] 0 notes") != std::string::npos);  // sayaç kesilmedi
     CHECK(screen.find(indicator.error_text().substr(0, 20)) != std::string::npos);
 }

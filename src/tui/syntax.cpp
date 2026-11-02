@@ -452,7 +452,7 @@ void CodeScanner::resume(SyntaxState entry) {
 
 void CodeScanner::step() {
     const char c = line_[pos_];
-    if (is_space(c)) {
+    if (is_space(c)) {  // NOLINT(bugprone-branch-clone) -- boşluk ve tanınmayan bayt aynı atlar; sıra anlamlı
         ++pos_;
     } else if (is_ascii_digit(c)) {
         scan_number();
@@ -1129,7 +1129,7 @@ constexpr LanguageRule kLanguageRules[] = {
 
 struct ExtensionRule {
     std::string_view extension;
-    SyntaxLanguage language;
+    SyntaxLanguage language{};
 };
 
 constexpr ExtensionRule kExtensions[] = {

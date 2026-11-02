@@ -6,7 +6,7 @@ FROM docker.io/library/ubuntu@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949
 # Paketler docker/fedora.Containerfile listesinin Ubuntu karşılığıdır (SDL3 X11/Wayland/D-Bus arka uçları dahil).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        g++-14 cmake ninja-build git curl ca-certificates pkg-config file \
+        g++-14 cmake ninja-build git patch curl ca-certificates pkg-config file \
         libsecret-1-dev libssl-dev \
         libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev \
         libdbus-1-dev libibus-1.0-dev libxkbcommon-dev libgl-dev libegl-dev libgles-dev \

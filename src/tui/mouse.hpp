@@ -15,7 +15,7 @@ struct MouseInput {
     MouseMotion motion = MouseMotion::Press;
 };
 
-enum class MouseResult { None, SelectionFinished, OpenTrash };
+enum class MouseResult { None, SelectionFinished, OpenTrash, SavePrefs };
 
 // Fare olayını modele uygular (FTXUI bilmez): bölücü sürükleme, işaretçinin altındaki paneli kaydırma, satır
 // seçme, panele odaklanma. Editörden çıkan her yol Esc ile aynı kapıdan geçer: kaydedilmemiş metin yine

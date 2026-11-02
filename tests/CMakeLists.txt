@@ -33,7 +33,6 @@ add_subdirectory(pdf)
 if(NOTEAPP_BUILD_GUI)
     add_subdirectory(gui)
 endif()
-# Perf paketi (T35) yalnız Release'te: Debug süreleri anlamsız ve günlük ctest hızlı kalmalı.
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    add_subdirectory(perf)
-endif()
+# Perf paketi (T35) yalnız Release'te koşar: Debug süreleri anlamsız ve günlük ctest hızlı kalmalı. Öbür yapılarda
+# yalnız derlenir (perf_compile_check), bayatlaması görülsün.
+add_subdirectory(perf)

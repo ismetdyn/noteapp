@@ -474,3 +474,34 @@ TEST_CASE("config_entries lists the user-facing keys with dotted sync keys and j
     CHECK(by_key.count("tuning.autosave_ms") == 0);
     CHECK(entries.front().first == "language");
 }
+
+TEST_CASE("icons defaults to nerd, reads the old auto as nerd, accepts off, warns otherwise") {
+    CHECK(parse_config("").config.icons == "nerd");
+    CHECK(parse_config("icons = \"auto\"").config.icons == "nerd");
+    CHECK(parse_config("icons = \"auto\"").warnings.empty());
+    CHECK(parse_config("icons = \"nerd\"").config.icons == "nerd");
+    CHECK(parse_config("icons = \"off\"").config.icons == "off");
+    const LoadedConfig bad = parse_config("icons = \"emoji\"");
+    CHECK(bad.config.icons == "nerd");
+    REQUIRE(bad.warnings.size() == 1);
+    CHECK(format_error(bad.warnings[0]).find("icons") != std::string::npos);
+
+    Config config = parse_config("").config;
+    CHECK_FALSE(set_config_value(config, "icons", "emoji").has_value());
+    CHECK(config.icons == "nerd");
+    REQUIRE(set_config_value(config, "icons", "off").has_value());
+    REQUIRE(set_config_value(config, "icons", "auto").has_value());  // eski ad kabul edilir
+    CHECK(config.icons == "nerd");
+    const auto entries = config_entries(config);
+    const std::map<std::string, std::string> by_key(entries.begin(), entries.end());
+    CHECK(by_key.at("icons") == "nerd");
+}
+
+TEST_CASE("save_config keeps the icons setting") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+    Config config = parse_config("").config;
+    config.icons = "off";
+    REQUIRE(save_config(config).has_value());
+    CHECK(load_config().config.icons == "off");
+}

@@ -36,7 +36,7 @@ core::NoteInfo note(const std::string& path, int age_hours = 0) {
 
 tui::TuiState sample_state() {
     tui::TuiState s;
-    s.set_notes({note("work/meeting.md", 0), note("personal/todo.md", 1), note("snippets/sort.java", 2)});
+    s.set_notes({note("work-meeting.md", 0), note("personal-todo.md", 1), note("snippets-sort.java", 2)});
     return s;
 }
 
@@ -101,10 +101,10 @@ bool contains(const ftxui::Screen& screen, const std::string& needle) {
 TEST_CASE("initial render shows list, preview, counts, sync status and key hints") {
     const auto state = sample_state();
     const auto screen = render_screen(state, text_preview({"# Toplantı notları", "- bütçe onayı"}));
-    CHECK(contains(screen, "work/meeting.md"));
-    CHECK(contains(screen, "personal/todo.md"));
-    CHECK(contains(screen, "snippets/sort.java"));
-    CHECK(contains(screen, "[name] 3/3"));
+    CHECK(contains(screen, "work-meeting.md"));
+    CHECK(contains(screen, "personal-todo.md"));
+    CHECK(contains(screen, "snippets-sort.java"));
+    CHECK(contains(screen, "[name] 3 notes"));
     CHECK(contains(screen, "sync off"));
     CHECK(contains(screen, "# Toplantı notları"));
     CHECK(contains(screen, "Enter edit"));
@@ -117,7 +117,7 @@ TEST_CASE("filtered list highlights exactly the matched characters") {
         state.handle(Key::Char, std::string(1, c));
     const auto screen = render_screen(state, text_preview({}));
     CHECK(contains(screen, "1/3"));
-    CHECK_FALSE(contains(screen, "work/meeting.md"));
+    CHECK_FALSE(contains(screen, "work-meeting.md"));
     CHECK(bold_at(screen, "todo.md", 0));
     CHECK(bold_at(screen, "todo.md", 1));
     CHECK(bold_at(screen, "todo.md", 2));
@@ -129,30 +129,30 @@ TEST_CASE("only the selected row is inverted and marked") {
     auto state = sample_state();
     state.handle(Key::Down);
     const auto screen = render_screen(state, text_preview({}));
-    const auto selected = find_text(screen, "personal/todo.md");
-    const auto other = find_text(screen, "work/meeting.md");
+    const auto selected = find_text(screen, "personal-todo.md");
+    const auto other = find_text(screen, "work-meeting.md");
     REQUIRE(selected);
     REQUIRE(other);
     CHECK(screen.PixelAt(selected->first, selected->second).inverted);
     CHECK_FALSE(screen.PixelAt(other->first, other->second).inverted);
-    CHECK(contains(screen, ">2 ▸ personal/todo.md"));
+    CHECK(contains(screen, " 2   personal-todo.md"));
 }
 
 TEST_CASE("a window below 60x15 shows only the centered too-small message") {
     const auto state = sample_state();
     const auto screen = render_screen(state, text_preview({}), 50, 10);
     CHECK(contains(screen, "Window too small"));
-    CHECK_FALSE(contains(screen, "work/meeting.md"));
+    CHECK_FALSE(contains(screen, "work-meeting.md"));
     const auto narrow = render_screen(state, text_preview({}), 59, 20);
     CHECK(contains(narrow, "Window too small"));
 }
 
 TEST_CASE("Turkish names render and match through the folded search") {
     tui::TuiState state;
-    state.set_notes({note("çalışma/öğrenci-notları.md", 0), note("kişisel/İstanbul.md", 1)});
+    state.set_notes({note("çalışma-öğrenci-notları.md", 0), note("kişisel-İstanbul.md", 1)});
     const std::vector<std::string> lines = {"çğıİöşü ÇĞIÖŞÜ"};
     auto screen = render_screen(state, text_preview(lines), 100);
-    CHECK(contains(screen, "çalışma/öğrenci-notları.md"));
+    CHECK(contains(screen, "çalışma-öğrenci-notları.md"));
     CHECK(contains(screen, "çğıİöşü ÇĞIÖŞÜ"));
 
     state.handle(Key::Char, "/");
@@ -169,7 +169,7 @@ TEST_CASE("Turkish catalog is used when the language is tr") {
     core::init_i18n("tr");
     const auto state = sample_state();
     const auto screen = render_screen(state, text_preview({}));
-    CHECK(contains(screen, "[ad] 3/3"));
+    CHECK(contains(screen, "[ad] 3 not"));
     CHECK(contains(screen, "Enter düzenle"));
     core::init_i18n("en");
 }
@@ -195,7 +195,7 @@ TEST_CASE("preview scrolls and the list follows a selection below the fold") {
     state.set_preview_line_count(lines.size());
     state.scroll_preview(static_cast<int>(tui::TuiState::kPreviewPageLines));
     const auto screen = render_screen(state, text_preview(lines));
-    CHECK(contains(screen, "▸ n125.md"));
+    CHECK(contains(screen, "  n125.md"));
     CHECK_FALSE(contains(screen, "n100.md"));
     CHECK(contains(screen, "line1010"));
     CHECK_FALSE(contains(screen, "line1009"));
@@ -321,7 +321,7 @@ TEST_CASE("List focus: heavy frame on the list, no cursor, inverted selection") 
     CHECK(list_corner(screen) == "┏");
     CHECK(preview_corner(screen, kWidth) == "┌");
     CHECK_FALSE(contains(screen, "▏"));
-    const auto selected = find_text(screen, "work/meeting.md");
+    const auto selected = find_text(screen, "work-meeting.md");
     REQUIRE(selected);
     CHECK(screen.PixelAt(selected->first, selected->second).inverted);
 }
@@ -354,8 +354,8 @@ TEST_CASE("Preview focus: heavy frame on the preview, selection marked but not i
     CHECK(list_corner(screen) == "┌");
     CHECK(preview_corner(screen, kWidth) == "┏");
     CHECK_FALSE(contains(screen, "▏"));
-    CHECK(contains(screen, ">1 ▸ work/meeting.md"));
-    const auto selected = find_text(screen, "work/meeting.md");
+    CHECK(contains(screen, " 1   work-meeting.md"));
+    const auto selected = find_text(screen, "work-meeting.md");
     REQUIRE(selected);
     CHECK_FALSE(screen.PixelAt(selected->first, selected->second).inverted);
 }
@@ -432,6 +432,7 @@ TEST_CASE("moving the selection updates the preview in the same frame without En
     CHECK_FALSE(contains(screen, "body of " + first.substr(0, 1)));
     state.handle(Key::Char, "j");
     CHECK(shows_selected(frame()));
+    state.handle(Key::Char, "g");
     state.handle(Key::Char, "g");
     screen = frame();
     CHECK(shows_selected(screen));
@@ -539,15 +540,17 @@ TEST_CASE("the top line shows a non-empty trash as text, at the far left") {
     core::init_i18n("en");
 }
 
-TEST_CASE("rows show whether their details are collapsed or expanded") {
+TEST_CASE("an open note row is an indented block, the row itself has no marker") {
     auto state = sample_state();
     const auto closed = render_screen(state, text_preview({}));
-    CHECK(contains(closed, ">1 ▸ work/meeting.md"));
-    CHECK(contains(closed, " 2 ▸ personal/todo.md"));
+    CHECK(contains(closed, " 1   work-meeting.md"));
+    CHECK(contains(closed, " 2   personal-todo.md"));
     state.handle(Key::AltRight);
     const auto open = render_screen(state, text_preview({}), kWidth, 24);
-    CHECK(contains(open, ">1 ▾ work/meeting.md"));
-    CHECK(contains(open, " 2 ▸ personal/todo.md"));
+    CHECK(contains(open, " 1   work-meeting.md"));
+    CHECK(contains(open, "    size: "));
+    CHECK_FALSE(contains(open, "▾"));
+    CHECK(contains(open, " 2   personal-todo.md"));
 }
 
 TEST_CASE("the search input keeps whole hints beside it at 60 columns in both languages") {
@@ -645,8 +648,9 @@ TEST_CASE("a: the name row is the first row of the list pane, not the bottom lin
     const auto screen = render_new_row(state, typed_row("deneme.cpp"), 100, 24);
     const std::string first = row_text(screen, 2);
     CHECK(first.find("deneme.cpp▏") != std::string::npos);
-    CHECK(first.starts_with("┃>"));
-    CHECK(row_text(screen, 3).find("work/meeting.md") != std::string::npos);
+    CHECK(first.starts_with("┃ "));
+    CHECK(first.find('>') == std::string::npos);
+    CHECK(row_text(screen, 3).find("work-meeting.md") != std::string::npos);
     const std::string bottom = row_text(screen, 23);
     CHECK(bottom.find("deneme") == std::string::npos);
     CHECK(bottom.find("Esc cancel") != std::string::npos);
@@ -702,7 +706,7 @@ TEST_CASE("a: an error shows inline under the row in the list pane and keeps the
     CHECK(row_text(screen, 2).find("x▏") != std::string::npos);
     CHECK(row_text(screen, 3).find("disk") != std::string::npos);
     CHECK(row_text(screen, 3).find("full") != std::string::npos);
-    CHECK(row_text(screen, 4).find("work/meeting.md") != std::string::npos);
+    CHECK(row_text(screen, 4).find("work-meeting.md") != std::string::npos);
     CHECK(row_text(screen, 23).find("disk") == std::string::npos);
 }
 
@@ -784,4 +788,82 @@ TEST_CASE("review syntax: PreviewCache picks the language from the extension") {
     CHECK(language_of("a.java") == tui::SyntaxLanguage::Java);
     CHECK(language_of("b.xyz") == tui::SyntaxLanguage::Plain);
     CHECK(language_of("big.java") == tui::SyntaxLanguage::Plain);
+}
+
+constexpr int kFirstRowY = 2;  // üst çubuk, panel kenarı
+
+TEST_CASE("list rows show no icon when icons are off") {
+    auto state = sample_state();
+    state.set_icon_style(core::IconStyle::Off);
+    CHECK(contains(render_screen(state, text_preview({})), " 1   work-meeting.md"));
+}
+
+TEST_CASE("list rows show the icon in one cell before the name, keeping the arrow column") {
+    auto state = sample_state();
+    const int marker = tui::row_marker_column(state);
+    state.set_icon_style(core::IconStyle::Nerd);
+    CHECK(tui::row_marker_column(state) == marker);
+    const auto screen = render_screen(state, text_preview({}));
+    const std::string md = core::icon_text(core::file_icon("a.md"), core::IconStyle::Nerd);
+    const std::string java = core::icon_text(core::file_icon("a.java"), core::IconStyle::Nerd);
+    CHECK(contains(screen, " 1   " + md + "  work-meeting.md"));
+    CHECK(contains(screen, " 3   " + java + "  snippets-sort.java"));
+    CHECK(screen.PixelAt(marker, kFirstRowY).character == " ");  // notta ok yok
+    CHECK(screen.PixelAt(marker + 2, kFirstRowY).character == md);
+    CHECK(screen.PixelAt(marker + 5, kFirstRowY).character == "w");
+}
+
+TEST_CASE("Nerd Font icons take one cell") {
+    for (const char* name : {"a.md", "a.json", "a.env", "a.unknown"}) {
+        CAPTURE(name);
+        CHECK(ftxui::string_width(core::icon_text(core::file_icon(name), core::IconStyle::Nerd)) == 1);
+    }
+    auto state = sample_state();
+    state.set_icon_style(core::IconStyle::Nerd);
+    const int marker = tui::row_marker_column(state);
+    const auto screen = render_screen(state, text_preview({}));
+    CHECK(screen.PixelAt(marker + 2, kFirstRowY).character ==
+          core::icon_text(core::file_icon("a.md"), core::IconStyle::Nerd));
+    CHECK(screen.PixelAt(marker + 3, kFirstRowY).character == " ");  // glifin taştığı hücre
+    CHECK(screen.PixelAt(marker + 4, kFirstRowY).character == " ");
+    CHECK(screen.PixelAt(marker + 5, kFirstRowY).character == "w");
+}
+
+TEST_CASE("every file type keeps one terminal cell") {
+    for (const char* name :
+         {"a.md",         "a.txt",    "a.csv",  "a.json", "a.yaml", "a.toml", "a.ini",    "a.env",
+          "a.properties", "a.xml",    "a.html", "a.css",  "a.js",   "a.ts",   "a.c",      "a.cpp",
+          "a.h",          "a.hpp",    "a.java", "a.py",   "a.sh",   "a.go",   "a.rs",     "a.sql",
+          "Dockerfile",   "Makefile", "a.pdf",  "a.png",  "a.svg",  "a.zip",  "a.unknown"}) {
+        CAPTURE(name);
+        const core::FileIcon icon = core::file_icon(name);
+        CHECK(ftxui::string_width(core::icon_text(icon, core::IconStyle::Nerd)) == 1);
+    }
+}
+
+TEST_CASE("the right column gives way two cells earlier when an icon takes room") {
+    tui::TuiState plain;
+    const std::string name(32, 'a');
+    plain.set_notes({note(name + ".md")});
+    const auto column_shown = [](const tui::TuiState& s, int width) {
+        return contains(render_screen(s, text_preview({}), width), "1 B");
+    };
+    int without = 0;
+    for (int width = 20; width < 200 && !without; ++width)
+        if (column_shown(plain, width))
+            without = width;
+    REQUIRE(without > 0);
+    plain.set_icon_style(core::IconStyle::Nerd);
+    CHECK_FALSE(column_shown(plain, without));
+}
+
+TEST_CASE("the trash indicator and title carry the trash icon") {
+    core::init_i18n("en");
+    auto state = sample_state();
+    state.set_trash_count(3);
+    state.set_icon_style(core::IconStyle::Nerd);
+    const std::string icon = core::icon_text(core::trash_icon(), core::IconStyle::Nerd);
+    CHECK(row_text(render_screen(state, text_preview({}), 60, 15), 0).starts_with(icon + "  trash: 3"));
+    state.set_icon_style(core::IconStyle::Off);
+    CHECK(row_text(render_screen(state, text_preview({}), 60, 15), 0).starts_with("trash: 3"));
 }

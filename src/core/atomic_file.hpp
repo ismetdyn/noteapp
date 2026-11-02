@@ -23,7 +23,9 @@ FileWriteResult write_new_file(const std::filesystem::path& file, std::string_vi
 // Var olan ya da olmayan dosyayı atomik değiştirir: aynı dizinde geçici dosya → diske zorla → rename.
 // Var olan hedefin izinleri korunur (POSIX: mod bitleri ve yetki varsa sahip; Windows: ReplaceFileW ile ACL
 // ve öznitelikler). Hata olursa geçici dosya silinir, hedef bozulmaz. İstisna fırlatmaz; Io hatası "path"
-// argümanı olarak verilen yolun kendisini taşır.
-std::expected<void, Error> write_file_atomically(const std::filesystem::path& target, std::string_view bytes);
+// argümanı olarak verilen yolun kendisini taşır. owner_only (kişisel durum dosyaları): POSIX'ta sonuç her
+// zaman 0600'dür, hedefin geniş modu korunmaz.
+std::expected<void, Error> write_file_atomically(const std::filesystem::path& target, std::string_view bytes,
+                                                 bool owner_only = false);
 
 }  // namespace noteapp::core

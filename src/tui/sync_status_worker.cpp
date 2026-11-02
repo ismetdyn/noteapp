@@ -25,7 +25,7 @@ void SyncStatusWorker::run(const std::stop_token& stop) {
     std::unique_lock lock(mutex_);
     while (true) {
         wake_.wait(lock, stop, [this] { return job_.has_value(); });
-        if (stop.stop_requested())
+        if (stop.stop_requested() || !job_)
             return;
         Job job = std::move(*job_);
         job_.reset();

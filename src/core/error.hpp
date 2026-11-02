@@ -19,10 +19,11 @@ struct Error {
         ConfigInvalid,
         EditorNotFound,
         EditorFailed,
-        MigrationRequired
+        MigrationRequired,
+        PartialCopy  // çok işlemli kopya yarıda kaldı: yazılanlar yerinde, yeni adla yinelenmez
     };
 
-    Code code;
+    Code code{};
     std::string message_key;
     std::vector<std::pair<std::string, std::string>> args;
 };

@@ -18,7 +18,7 @@ GitHub reposuyla senkron kalır (Windows ↔ Linux).
 
 ## Kaynaktan kurulum
 
-Gerekenler: C++23 derleyici, CMake ≥ 3.28, Ninja. FTXUI, libgit2, toml++, SDL3, Dear ImGui, libharu, md4c, doctest
+Gerekenler: C++23 derleyici, CMake ≥ 3.28, Ninja, `patch` (FTXUI yaması). FTXUI, libgit2, toml++, SDL3, Dear ImGui, libharu, md4c, doctest
 vb. derleme sırasında otomatik indirilir (`cmake/Dependencies.cmake`); ağ erişimi gerekir. Fontlar (DejaVu) depoda gömülüdür.
 
 CMake seçenekleri: `NOTEAPP_BUILD_GUI` (varsayılan ON; "notes-gui (SDL3 + Dear ImGui) derlensin") ve `NOTEAPP_BUILD_TESTS`
@@ -64,7 +64,7 @@ ctest --preset windows-mingw-release
 ### Fedora
 
 ```bash
-sudo dnf install gcc-c++ cmake ninja-build git libsecret-devel openssl-devel pkgconf-pkg-config \
+sudo dnf install gcc-c++ cmake ninja-build patch git libsecret-devel openssl-devel pkgconf-pkg-config \
     libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXScrnSaver-devel \
     libXtst-devel dbus-devel ibus-devel libxkbcommon-devel mesa-libGL-devel mesa-libEGL-devel mesa-libGLES-devel \
     wayland-devel wayland-protocols-devel libdecor-devel poppler-utils
@@ -104,6 +104,18 @@ bash scripts/build-appimage.sh
 install -m 755 out/noteapp-*-x86_64.AppImage ~/.local/bin/noteapp.AppImage
 for command in note notes notes-gui; do ln -sf noteapp.AppImage ~/.local/bin/"$command"; done
 ```
+
+**Günlük kullanım için yerel kurulum önerilir:** AppImage her açılışta FUSE bağlaması kurar, `notes` paketten açılınca
+çok daha hızlı başlar. Betik yalnız `~/.local/share/noteapp/<sürüm>` ve `~/.local/bin` altına yazar, tekrar çalıştırılabilir;
+`cmake --install` ağacını da kabul eder:
+
+```bash
+bash scripts/install-local.sh out/noteapp-*-x86_64.AppImage
+```
+
+Betik `~/.local/bin` içinde yalnız kendi kurduğu bağları (hedefi `~/.local/share/noteapp/` altında) değiştirir; başka bir dosya ya da bağ varsa dokunmaz, adını söyleyip durur. Yukarıdaki AppImage tarifinin bağları da yabancıdır: önce `rm ~/.local/bin/{note,notes,notes-gui}`. Paket önce geçici dizine açılır, sonra rename ile yerine geçer; hata önceki kurulumu bozmaz.
+
+Eski sürüm dizinleri kendiliğinden silinmez, gerekmiyorsa kaldır: `rm -r ~/.local/share/noteapp/<sürüm>`. Tümünü kaldırmak için `bash scripts/install-local.sh --uninstall`: yalnız betiğin bağlarını ve sürüm dizinlerini siler. **Notlar aynı dizindedir (`graph.db`) ve silinmez;** uygulama verisini silmek ayrı ve bilinçli bir iştir.
 
 FUSE yoksa paketi özel bir dizine açıp oradan çalıştır:
 
@@ -145,8 +157,9 @@ note show SORGU | note edit SORGU          # en iyi eşleşmeyi yazdır / editö
 note mv KAYNAK HEDEF                       # taşı/yeniden adlandır; uzantı değişimi = tip değişimi
 note rm YOL [-y]                           # yalnız tam yol; TTY yoksa -y şart
 note export --pdf YOL [-o ÇIKTI]           # PDF (A4; GUI ve ekran gerekmez)
-note export --all DİZİN                    # tüm notlar bayt bayt düz dosya, çöp .trash/ altında; üzerine yazmaz, bağdan geçmez; ulaşılamayan not varsa çıkış 1
+note export --all DİZİN [--ignore-skipped]  # tüm notlar bayt bayt düz dosya, çöp .trash/ altında; üzerine yazmaz, bağdan geçmez; ulaşılamayan not ya da geçişte dışarıda kalan dosya varsa çıkış 1
 note graph migrate [--skip-failed]         # eski düz dosya notları içe aktar (aşağıda)
+note graph status [--ignore-skipped | --clear-skipped]  # geçerli notes_dir'de dışarıda kalan dosyaları listeler, varsa çıkış 1; --clear-skipped listeyi unutur
 note graph export --format jsonl [-o DOSYA] | note graph import [--overwrite] DOSYA   # tüm graph'ı taşı
 note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]
 note config path | list | get ANAHTAR | set ANAHTAR DEĞER
@@ -160,23 +173,29 @@ bulunamadı) · `2` kullanım hatası · `3` G/Ç/iç hata · `4` senkron hatas�
 
 | Tuş | Eylem |
 |---|---|
-| `↑` `↓` `j` `k` | Listede gezin, sağ panel canlı izler |
-| `→` `l` | Önizleme (REVIEW, `cat` gibi): `↑↓` `PgUp/PgDn` `g` `G` kaydır, `/` notta bul, `n` `N` gez, `←` `Esc` liste, `q` çık |
+| `↑` `↓` `j` `k` | Listede gezin, sağ panel canlı izler. Liste klasör tabanlıdır: önce klasörler, sonra notlar, numara klasör başına; üstte yol (`notlar/work/sub`, parçaya tıkla). Seçim satır vurgusudur |
+| `Space` | Klasörü yerinde aç/kapat (`▸` `▾`, oka tıkla): alt öğeler girintili, her derinlikte, numara kendi klasöründe; açık olanlar `tui-state.toml`'da kalır. Notta ayrıntıyı açar |
+| `m` | Seçimi ya da satırı klasöre taşı: altta girdi, geçerli klasörle dolu, `Tab` klasörleri önerir; yazılan yeni iç içe klasör oluşur. Ezme yok: hedef doluysa hata girdide kalır |
+| `←` `h` | Üst klasör, seçim çıkılan klasörde kalır; kökte etkisiz; arama sonucunda notun klasörüne gider |
+| `→` `l` | Klasörde içeri girer (`Enter` ve çift tıklama da); notta önizleme (REVIEW, `cat` gibi): `↑↓` `PgUp/PgDn` `g` `G` kaydır, `/` notta bul, `n` `N` gez, `←` `Esc` liste, `q` çık. `md`, `csv`, `json` biçimli açılır, `R` ham metne geçer ve geri döner |
 | `Enter` `e` | Düzenle (EDIT): `Ctrl+S` kaydet, `Ctrl+Q` çık (kaydedilmemişi sorar), `Ctrl+F` bul, `Ctrl+Z/Y`, `Ctrl+X/C/V`; `Esc` yalnız aramayı kapatır ya da seçimi kaldırır, tek başına çıkmaz |
 | `E` | Harici editörde aç (`$EDITOR`) |
-| `/` | Alt satırda ara: `↑↓` seç, `Enter` seçimi tut (eşleşme yoksa taslak), `Tab` ad/içerik, `Esc` kapat |
+| `/` | Alt satırda ara: `↑↓` seç, `Enter` seçimi tut (eşleşme yoksa taslak), `Ctrl+T` ad/içerik, `Esc` kapat |
 | `f` | Ad ve içerikte ara: eşleşen satır yolun altında, `Enter` REVIEW'da eşleşmeye kayar. `/` ve `f` argüman alır: `sort:-size` `type:md` `in:work/` `size:>1mb` `updated:7d` `sync:modified`; bozuk değer metin sayılmaz, yeriyle hata gösterir |
 | `n` `Ctrl-O` | Yeni not: tüm terminali alan boş editör. Ad ilk `Ctrl+S`'te altta sorulur (`klasör/ad.uzantı`, önerisi ilk satır + algılanan tip), o ana dek dosya yok; `Ctrl+Q` iki panele döner |
-| `a` | Yeni not, önce ad: listenin başında satır açılır, `Enter` boş notu oluşturup EDIT'te açar (yazmaya ya da yapıştırmaya hazır), `Esc` vazgeçer; uzantı yoksa `default_type`; dolu ya da geçersiz ad satırda hata verir · `r` taşı/ad/tip · `s` senkron |
-| `d` `u` `D` | `d` çöpe atar (sormaz), `u` bu oturumda son atılanı geri alır, `D` kalıcı siler (sorar, varsayılan Vazgeç) |
-| `F2` | Yol ve ad: altta tek satır, imleç adın sonunda; `Enter` taşır (hedef varsa hata, ezme yok), `Esc` vazgeçer |
+| `a` | Yeni not ya da klasör, ad bulunulan klasöre göre: `ad/` klasör oluşturur ve Listede kalır, `sub/x.md` gereken klasörleri açar. Listenin başında satır açılır, `Enter` boş notu oluşturup EDIT'te açar (yazmaya ya da yapıştırmaya hazır), `Esc` vazgeçer; uzantı yoksa `default_type`; dolu ya da geçersiz ad satırda hata verir · `r` taşı/ad/tip · `s` senkron |
+| `d` `u` `D` | `d` çöpe atar (sormaz), `u` bu oturumda son atılanı geri alır, `D` kalıcı siler (sorar, varsayılan Vazgeç). Klasörde: `d` notları tek tek çöpe atıp klasörü kaldırır (notlu klasörde sorar, varsayılan Vazgeç), `u` hepsini geri getirir; `D` sayıları gösterip sorar, kalıcıdır |
+| `F2` | Yol ve ad: altta tek satır, bulunulan klasöre göre; `/` içeren yol taşır; klasörde (`r` de) klasörü yeniden adlandırır; imleç adın sonunda; `Enter` taşır (hedef varsa hata, ezme yok), `Esc` vazgeçer |
 | `T` | Çöp görünümü (ya da üstteki `çöp: N`e tıkla): `u` geri getir, `D` kalıcı sil, `E` tümünü boşalt (ikisi de sorar, varsayılan Vazgeç), `q` `Esc` geri; sağda not salt okunur |
 | `c` | Notun özgün baytlarını sistem panosuna kopyalar (liste ve REVIEW); ikili ya da UTF-8 olmayan notta nedenini söyler |
-| `Space` `i` / `I` | Seçili satırın / tüm satırların ayrıntısını aç-kapat; işarete (`▸` `▾`) tıklamak da olur |
-| `PgUp` `PgDn` `g` `G` | Listede sayfa sayfa, baş, son; REVIEW'da `↑↓` basılı tutunca hızlanır, `Ctrl+U` `Ctrl+D` yarım sayfa, `J` `K` 5 satır |
+| `i` / `I` | Seçili satırın (klasör de) / tüm satırların ayrıntısını aç-kapat |
+| `x` `X` `Ctrl+A` | Satırı seç ve aşağı in, seçimi temizle, görünenleri seç; seçim klasör değişince kalır, altta `seçili: 3` |
+| `y` `p` | Seçimi ya da satırı kopya için işaretle, geçerli klasöre yapıştır. Hiçbir şey ezilmez: dolu ad `-2` alır, raporlanır. `Esc` vazgeçer |
+| `gg` `gh` `gt` | Baş, kök klasör, çöp (`g` sıradaki tuşu bekler) |
+| `PgUp` `PgDn` `gg` `G` | Listede sayfa sayfa, baş, son; REVIEW'da `↑↓` basılı tutunca hızlanır, `Ctrl+U` `Ctrl+D` yarım sayfa, `J` `K` 5 satır |
 | `Alt+→` `Alt+←` | Satırı aç/kapat: boyut, güncelleme, oluşturma, senkron, kaynak (bilinmiyorsa "bilinmiyor"); birden çok satır açık kalabilir |
 | `v` `o` | Sağ sütun (boyut + tarih, boyut, güncelleme, oluşturma, senkron, kaynak, yok) · sıralama menüsü (`n` ad, `u` güncelleme, `c` oluşturma, `s` boyut, `r` ters); ikisi de `tui-state.toml`'da kalır |
-| `<` `>` `z` | Panel genişliği, yakınlaştırma · Fare: bölücü, tekerlek, tıklama; REVIEW'da sürükleme metni seçer ve bırakınca kopyalar (`Shift`+sürükle terminalin seçimi) |
+| `<` `>` `z` | Panel genişliği, yakınlaştırma · Fare: bölücü, tekerlek, tıklama; REVIEW'da sürükleme metni seçer ve bırakınca kopyalar (biçimli görünümde görüneni; `c` her zaman özgün baytları; `Shift`+sürükle terminalin seçimi) |
 | `,` `F9` / `F1` `?` | Ayarlar (`F9` her yerde, editörde kaydedilmemişi sorar) / yardım |
 | `Esc` | Listede süzgeci temizler, çıkmaz |
 | `q` | Liste ve önizlemeden çık (editörde ve girdilerde metindir) · `Ctrl-C` editör dışında acil çıkış (editörde kopyalar) |
@@ -185,9 +204,13 @@ EDIT'te `Ctrl+C` `Ctrl+X` `Ctrl+V` sistem panosunu kullanır: Wayland'de `wl-cop
 
 EDIT'te satır sonunda soluk öneri çıkar (önce bu nottan, sonra diğer notlardan): `Tab` ya da `→` alır, yazmaya devam etmek düşürür; öneri yokken `Tab` sekme ekler. `Ctrl+Space` fzf gibi süzülen tamamlama listesini açar. `.env`, `properties`, `ini`, `toml`, `yaml`, `sh`, `json` ve benzeri notlardan yalnız anahtarlar önerilir; öbür notlarda da `KEY=değer` satırı yalnız anahtarını verir, değerler başka nota sızmaz. `md` ve `txt`'de PATH'te `hunspell` varsa yanlış sözcüklerin altı çizilir (sözlük dilden: `tr_TR`, `en_US`; içerik makineden çıkmaz); yoksa sessizce kapalıdır.
 
+Girdiler zsh gibi çalışır (`f`, `/`, `a`, `F2`, ad istemi, editörde bul): metnin sonunda soluk öneri çıkar, `→` alır; `Tab` tek adayı yazar, çoksa süzülen liste açar (`↑↓`, `Enter`, `Esc`): klasörler, not adları, `.cpp` gibi tipler; `f` ve `/`'de `sort:` `type:` `in:` `size:` `updated:` `created:` `origin:` `sync:` anahtarları ve değerleri. Arama satırında geçerli argüman renkli, bozuk değer anında kırmızıdır. `Ctrl+P` `Ctrl+N` metni içeren önceki aramalarda gezer (`↑↓` sonuçları gezmeye devam eder); geçmiş `tui-state.toml`da yereldir, en çok 200 kayıt, senkrona girmez, sır benzeri değer ya da not adı taşıyan sorgu yazılmaz.
+
 Ad verirken yazdığın uzantı değiştirilmez, yerine başkası konmaz, üstüne eklenmez (`a`, `n`, `F2`, `r`, `note -n`, GUI): `deneme.cpp`, `deneme.xyz`, `a.tar.gz`, `notlar.v2` aynen kalır; uzantı yazmadıysan `a` `default_type`, `n` ve `note -n` içerikten algılananı kullanır. `a` ve `n` gövdeyi slug'lar (`Toplantı Notu.CPP` → `toplanti-notu.CPP`); `F2`, `r` ve `note -n` yazdığını aynen alır.
 
 En küçük pencere 60×15. Odaklı panelin çerçevesi kipe göre renklidir ve etiket taşır: `LIST` camgöbeği, `REVIEW` yeşil, `EDIT` eflatun, kaydedilmemişse `EDIT *`.
+
+REVIEW'da `.md` `glow` gibi biçimli görünür: başlık, kalın, eğik, kod (dil etiketiyle renkli), alıntı, liste, görev listesi, sarılan tablo, bağlantı metin + soluk URL, görsel `[görsel: alt]`, HTML yazıldığı gibi; ağa ya da dosyaya gidilmez. `.csv` hizalı tablo, `.json` girintili görünür; geçersiz ya da 256 KiB'ten büyükse ham metin ve soluk neden. `R` görünüm/ham arasında geçer (etikette yazar, oturum boyunca kalır), EDIT her zaman ham metindir. `/` gösterilen metinde arar, `e` üstte görünen bloğun kaynak satırında açar.
 
 EDIT'te satır numarası sütunu (geçerli satır vurgulu), gerçek terminal imleci, geçerli satır arka planı, dosya sonunun ötesinde `~` ve durum çubuğu (dosya, tip, UTF-8, LF/CRLF, BOM, satır:sütun, toplam satır) vardır; tıklama imleci oraya koyar. Sözdizimi vurgusu REVIEW ve EDIT'te, uzantıya göre (kaydedilmemiş taslakta canlı algılamayla); 2 MiB'den büyük dosya ve 64 KiB'den uzun satır düz metindir.
 
@@ -223,6 +246,10 @@ Oluşturulma zamanı dosyanın doğum zamanından alınır (yoksa son değişikl
 
 Senkronlu iki cihazda: A'da `note graph migrate`, `note sync`; B'de `note graph migrate`, `note sync`. Sıra önemli değildir: aynı baytlar tek not olur, farklıysa kopya kalır. `note export --all DİZİN` ile denetledikten sonra eski dosyaları tek cihazda kaldır: `git -C <notes_dir> rm -r -- <dosyalar>`, `git commit`, `note sync`. Senkronsuz kullanımda dosyaları kendin silersin.
 
+**Silmeden önce `note graph status` çalıştır.** Geçişin dışarıda bıraktığı dosyalar ve okunamayan klasörler (60 MiB üstü, geçersiz ad, bağ, izni olmayan ya da yolu çok uzun dizin, `--skip-failed` ile geçilenler) veritabanında ve dışa aktarımda **yoktur**; tek kopyaları eski dosyalardır, silersen kaybolur. Liste `<veri dizini>/migration-skipped` dosyasında kalır: `note graph status` ve `note export --all` adlarını yazar, 1 ile çıkar. Düzeltip `note graph migrate`i yinelemek listeyi günceller; `--ignore-skipped` kaybı kabul eder, çıkış 0 olur.
+
+`note graph status` yalnız geçerli `notes_dir`i denetler; aynı veri dizinine geçirilmiş başka dizinlerin kayıtlarını yalnız sayar, çıkış kodunu etkilemezler. `note export --all` ise veritabanının tümünü çıkardığı için bütün kayıtları yazmayı sürdürür. `note graph status --clear-skipped` bütün dizinlerin listesini yazıp unutur: yalnız kayıt silinir, eski dosyalara dokunulmaz, dosyalar hâlâ veritabanında değildir ve geçiş yinelenince o dizininkiler yeniden listelenir.
+
 ## Yapılandırma
 
 | | Windows | Linux |
@@ -245,6 +272,7 @@ kalır. Ayarlar `note config`, TUI'de `,` ya da `F9`, GUI'de Ayarlar sekmesinden
 | `default_type` | Tipi belirsiz tek satırlık notun uzantısı (`md`) |
 | `default_folder` | Hızlı notların klasörü (boş = kök) |
 | `types` | Tip seçim listesi (elle başka uzantı da yazılabilir) |
+| `icons` | Dosya ikonu: `nerd` (varsayılan) ya da `off`; eski `auto` `nerd` okunur. TUI'de terminal fontu Nerd Font olmalı; ikon boyutu terminal fontunu izler, Mono olmayan font (`MesloLGS Nerd Font`) glifin ardındaki boş hücreye taşıp daha büyük görünür; **Nerd Font yoksa glifler kutu görünür, `icons off` ayarlayın** (ikon sütunu kalkar). GUI kendi ikon fontunu taşır: `nerd` ikon çizer, `off` çizmez |
 | `sync.enabled` | Senkron açık/kapalı |
 | `sync.remote` | `https://…` (token) ya da `git@…` (SSH) |
 | `sync.branch` | Dal (`main`) |
@@ -291,6 +319,21 @@ Kapatmak: `note sync off` (repo ve geçmiş olduğu gibi kalır); token'ı silme
   gönderilir; başka bir sunucu için bu değişkeni de ayarlayın.
 - **Senkron kilitli (`sync.busy`):** başka bir senkron sürüyor; bekle ya da tekrar dene. Ayrıntı için log
   (`…/noteapp/log.txt`).
+
+## Kaldırma
+
+```bash
+bash scripts/install-local.sh --uninstall
+```
+
+Yalnız `~/.local/bin` bağlarını ve `~/.local/share/noteapp/<sürüm>` paket dizinlerini siler. **Notlar paketlerle aynı üst dizindedir:** `~/.local/share/noteapp/graph.db` (Windows: `%LOCALAPPDATA%\noteapp\graph.db`). **`rm -rf ~/.local/share/noteapp` notları da siler.**
+
+Önce yedek al:
+
+```bash
+note export --all DİZİN                     # düz dosya, baytlar aynen; çöp DİZİN/.trash/ altında
+note graph export --format jsonl -o yedek.jsonl  # bütün grafik, ulaşılamayan notlar dahil; note graph import ile döner
+```
 
 ## Geliştirme
 

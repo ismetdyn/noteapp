@@ -1,5 +1,5 @@
 // rand_s bildirimi bu tanım stdlib.h'tan önce geldiğinde görünür (MinGW stdlib.h).
-#define _CRT_RAND_S
+#define _CRT_RAND_S  // NOLINT(bugprone-reserved-identifier) -- rand_s için MSVCRT makrosu
 
 #include "graph/id.hpp"
 

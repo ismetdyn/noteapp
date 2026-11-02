@@ -18,7 +18,7 @@ namespace noteapp::search {
 enum class SortField { Name, Size, Updated, Created };
 
 struct SortSpec {
-    SortField field;
+    SortField field{};
     bool descending = false;
 };
 
@@ -27,7 +27,7 @@ struct Filter {
     enum class Kind { Type, Folder, Size, Updated, Created, Origin, Sync };
     enum class Compare { Less, Greater, Within };
 
-    Kind kind;
+    Kind kind{};
     Compare compare = Compare::Greater;               // Size, Updated, Created
     std::string text = {};                            // katlanmış: Type (noktasız), Folder ("work/"), Origin
     std::uintmax_t bytes = 0;                         // Size
@@ -45,8 +45,8 @@ struct ParsedQuery {
 // Gösterim için yeri belli hata: [begin, end) sorgunun bozuk değerinin bayt aralığıdır. format_error(error)
 // mesajı verir ("error.query_invalid": key, value, reason).
 struct QueryError {
-    std::size_t begin;
-    std::size_t end;
+    std::size_t begin{};
+    std::size_t end{};
     core::Error error;
 };
 

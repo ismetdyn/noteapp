@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# scripts/install-local.sh: geçici HOME'da sahte kurulum ağacı ve sahte AppImage ile; gerçek HOME'a dokunmaz.
+# Kullanım: install_local_test.sh <repo kökü>
+set -euo pipefail
+
+die() { echo "FAIL: $*" >&2; exit 1; }
+
+script="$1/scripts/install-local.sh"
+work="$(mktemp -d)"
+cleanup() { rm -rf "$work"; }
+trap cleanup EXIT
+export HOME="$work/home"
+mkdir -p "$HOME"
+
+fake_tree="$work/tree"
+mkdir -p "$fake_tree/bin"
+printf '#!/bin/sh\necho "note 9.8.7"\n' >"$fake_tree/bin/note"
+printf '#!/bin/sh\necho fake-notes\n' >"$fake_tree/bin/notes"
+chmod +x "$fake_tree/bin/note" "$fake_tree/bin/notes"
+
+bash "$script" "$fake_tree" >/dev/null
+[[ "$("$HOME/.local/bin/notes")" == fake-notes ]] || die "notes symlink does not run the installed tree"
+[[ "$(readlink "$HOME/.local/bin/note")" == "$HOME/.local/share/noteapp/9.8.7/bin/note" ]] || die "note symlink target"
+[[ ! -e "$HOME/.local/bin/notes-gui" ]] || die "no gui in the tree, no link expected"
+
+# İdempotent: ikinci kurulum aynı sonucu verir ve kurulum artığı bırakmaz.
+printf '#!/bin/sh\necho fake-notes-2\n' >"$fake_tree/bin/notes"
+bash "$script" "$fake_tree" >/dev/null
+[[ "$("$HOME/.local/bin/notes")" == fake-notes-2 ]] || die "reinstall did not replace the package"
+[[ "$(ls -A "$HOME/.local/share/noteapp")" == 9.8.7 ]] || die "staging left behind"
+
+# Yabancı dosya ezilmez, hata temiz çıkar.
+rm "$HOME/.local/bin/notes"
+echo mine >"$HOME/.local/bin/notes"
+if bash "$script" "$fake_tree" >/dev/null 2>&1; then
+    die "a regular file in ~/.local/bin must not be replaced"
+fi
+[[ "$(cat "$HOME/.local/bin/notes")" == mine ]] || die "regular file was changed"
+rm "$HOME/.local/bin/notes"
+
+# AppImage: komut symlink adından seçilir (AppRun).
+fake_appimage="$work/noteapp.AppImage"
+cat >"$fake_appimage" <<'EOF'
+#!/bin/sh
+[ "$1" = --appimage-extract ] || exit 2
+mkdir -p squashfs-root
+cat >squashfs-root/AppRun <<'INNER'
+#!/bin/sh
+case "${0##*/}:$1" in
+    AppRun:note) echo "note 1.2.3" ;;
+    notes:*) echo apprun-notes ;;
+    *) exit 3 ;;
+esac
+INNER
+chmod +x squashfs-root/AppRun
+EOF
+chmod +x "$fake_appimage"
+bash "$script" "$fake_appimage" >/dev/null
+[[ "$("$HOME/.local/bin/notes")" == apprun-notes ]] || die "AppImage notes link"
+[[ -L "$HOME/.local/bin/notes-gui" ]] || die "AppImage gui link"
+[[ "$(readlink "$HOME/.local/bin/notes-gui")" == "$HOME/.local/share/noteapp/1.2.3/AppRun" ]] || die "AppImage link target"
+
+# Geçersiz girdi: açık hata.
+if bash "$script" "$work/missing" >/dev/null 2>&1; then
+    die "a missing source must fail"
+fi
+
+# İsteğe bağlı ikinci argüman: gerçek AppImage (ctest vermez), iki kez kurulur, komutlar paketten çalışır.
+if [[ $# -ge 2 ]]; then
+    bash "$script" "$2" >/dev/null
+    bash "$script" "$2" >/dev/null
+    "$HOME/.local/bin/note" --version | grep -q '^note ' || die "installed note does not run"
+    readlink "$HOME/.local/bin/notes" | grep -q '/AppRun$' || die "notes link"
+fi
+# Sahiplik: yabancı bağa dokunulmaz, kurulum hiç başlamaz. Ayrı HOME: yukarıdaki durumdan bağımsız.
+export HOME="$work/home-owner"
+share="$HOME/.local/share/noteapp"
+bin="$HOME/.local/bin"
+mkdir -p "$bin" "$share"
+ln -s /usr/bin/true "$bin/notes"
+if refused="$(bash "$script" "$fake_tree" 2>&1)"; then
+    die "a foreign link must not be replaced"
+fi
+[[ "$refused" == *"$bin/notes"* ]] || die "the refusal must name the link: $refused"
+[[ "$(readlink "$bin/notes")" == /usr/bin/true ]] || die "foreign link was changed"
+[[ ! -e "$bin/note" && ! -e "$share/9.8.7" ]] || die "a refused install changed something"
+rm "$bin/notes"
+
+# Eski kurulum artığı temizlenir, çalışan bir kurulumunki (taze) kalır.
+mkdir "$share/.install.stale" "$share/.install.fresh"
+touch -d '2 hours ago' "$share/.install.stale"
+bash "$script" "$fake_tree" >/dev/null
+[[ ! -e "$share/.install.stale" ]] || die "stale staging left behind"
+[[ -d "$share/.install.fresh" ]] || die "a fresh staging directory may belong to a running install"
+rmdir "$share/.install.fresh"
+printf '#!/bin/sh\necho fake-notes-3\n' >"$fake_tree/bin/notes"
+
+# Başarısız yeniden kurulum önceki kurulumu korur: paket bozuk ya da yerine koyma düşüyor.
+broken_tree="$work/broken"
+mkdir -p "$broken_tree/bin"
+printf '#!/bin/sh\nexit 1\n' >"$broken_tree/bin/note"
+printf '#!/bin/sh\nexit 1\n' >"$broken_tree/bin/notes"
+chmod +x "$broken_tree/bin/note" "$broken_tree/bin/notes"
+if bash "$script" "$broken_tree" >/dev/null 2>&1; then
+    die "a package that cannot report its version must fail"
+fi
+[[ "$("$bin/notes")" == fake-notes-2 ]] || die "a broken package damaged the previous install"
+failing_mv="$work/failing-mv"
+mkdir -p "$failing_mv"
+printf '#!/bin/sh\nexit 1\n' >"$failing_mv/mv"
+chmod +x "$failing_mv/mv"
+if PATH="$failing_mv:$PATH" bash "$script" "$fake_tree" >/dev/null 2>&1; then
+    die "a failing rename must fail the install"
+fi
+[[ "$("$bin/notes")" == fake-notes-2 ]] || die "a failed rename lost the previous install"
+[[ "$(ls -A "$share")" == 9.8.7 ]] || die "a failed install left files behind"
+bash "$script" "$fake_tree" >/dev/null
+[[ "$("$bin/notes")" == fake-notes-3 ]] || die "reinstall over a previous version"
+[[ "$(ls -A "$share")" == 9.8.7 ]] || die "the replaced version stayed behind"
+
+# coreutils < 9.5 (--exchange yok): iki adımlı yol. İkinci adım düşerse önceki kurulum geri konur.
+real_mv="$(command -v mv)"
+old_mv="$work/old-mv"
+mkdir -p "$old_mv"
+printf '#!/bin/sh\ncase "$*" in --exchange*) exit 1 ;; esac\nexec "%s" "$@"\n' "$real_mv" >"$old_mv/mv"
+chmod +x "$old_mv/mv"
+printf '#!/bin/sh\necho fake-notes-4\n' >"$fake_tree/bin/notes"
+PATH="$old_mv:$PATH" bash "$script" "$fake_tree" >/dev/null
+[[ "$("$bin/notes")" == fake-notes-4 ]] || die "install without mv --exchange"
+[[ "$(ls -A "$share")" == 9.8.7 ]] || die "the two-step path left files behind"
+printf '#!/bin/sh\ncase "$*" in --exchange*|*/tree*) exit 1 ;; esac\nexec "%s" "$@"\n' "$real_mv" >"$old_mv/mv"
+printf '#!/bin/sh\necho fake-notes-5\n' >"$fake_tree/bin/notes"
+if PATH="$old_mv:$PATH" bash "$script" "$fake_tree" >/dev/null 2>&1; then
+    die "a failing second step must fail the install"
+fi
+[[ "$("$bin/notes")" == fake-notes-4 ]] || die "the second step's failure lost the previous install"
+[[ "$(ls -A "$share")" == 9.8.7 ]] || die "the second step's failure left files behind"
+
+# --uninstall: yalnız bizim bağlar ve sürüm dizinleri. Bu dizin notların da evidir (README "Yapılandırma").
+bash "$script" "$fake_appimage" >/dev/null
+rm "$bin/notes-gui"
+ln -s /usr/bin/true "$bin/notes-gui"
+echo notes >"$share/graph.db"
+mkdir -p "$share/migration-backup-1/notes/bin"
+echo mine >"$share/migration-backup-1/notes/bin/note"
+chmod +x "$share/migration-backup-1/notes/bin/note"
+bash "$script" --uninstall >/dev/null
+[[ ! -L "$bin/note" && ! -L "$bin/notes" ]] || die "our links stayed"
+[[ "$(readlink "$bin/notes-gui")" == /usr/bin/true ]] || die "uninstall touched a foreign link"
+[[ ! -e "$share/9.8.7" && ! -e "$share/1.2.3" ]] || die "version directories stayed"
+[[ "$(cat "$share/graph.db")" == notes ]] || die "uninstall touched the notes database"
+[[ "$(cat "$share/migration-backup-1/notes/bin/note")" == mine ]] || die "uninstall touched a backup"
+bash "$script" --uninstall >/dev/null || die "a second uninstall must succeed"
+
+# Boşalan dizin kalkar; hiç kurulmamışken hata yok, dizin de yaratılmaz.
+export HOME="$work/home-clean"
+mkdir -p "$HOME"
+bash "$script" --uninstall >/dev/null || die "uninstall with nothing installed must succeed"
+[[ ! -e "$HOME/.local/share/noteapp" ]] || die "uninstall created the directory"
+bash "$script" "$fake_tree" >/dev/null
+bash "$script" --uninstall >/dev/null
+[[ ! -e "$HOME/.local/share/noteapp" ]] || die "the emptied directory stayed"
+echo ok

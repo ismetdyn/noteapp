@@ -183,7 +183,7 @@ std::expected<DraftName, core::Error> parse_draft_name(std::string_view input,
 
 void EditorSession::begin_new_note(std::string default_folder) {
     name_folder_ = default_folder;
-    name_input_.clear();
+    name_line_.clear();
     DraftName name;
     name.folder = std::move(default_folder);
     name.ask_name = true;
@@ -191,9 +191,9 @@ void EditorSession::begin_new_note(std::string default_folder) {
     host_.on_opened();
 }
 
-void EditorSession::begin_draft(std::string first_text, std::string folder) {
+void EditorSession::begin_draft(std::string_view first_text, std::string folder) {
     start_draft(DraftName{std::move(folder), {}, {}, false});
-    buffer_->paste(first_text);
+    open_buffer().paste(first_text);
     refresh_type();
     host_.on_opened();
 }
@@ -223,7 +223,7 @@ void EditorSession::refresh_type() {
 void EditorSession::note_draft_edit(std::size_t size_before) {
     if (!draft_ || !draft_->type.empty())
         return;
-    const std::size_t size = buffer_->text().size();
+    const std::size_t size = open_buffer().text().size();
     draft_changes_ += std::max<std::size_t>(size > size_before ? size - size_before : size_before - size, 1);
     if (draft_changes_ >= std::max<std::size_t>(size >> kRedetectShift, 1))
         refresh_type();
@@ -241,33 +241,23 @@ std::vector<SyntaxSpan> EditorSession::syntax_spans(std::size_t line) const {
 }
 
 void EditorSession::handle_name(Key key, std::string_view text) {
-    switch (key) {
-    case Key::Char:
-        if (is_typable(text)) {
-            name_input_.append(text);
-            message_.clear();
-        }
-        break;
-    case Key::Backspace:
-        pop_code_point(name_input_);
+    const InputLine::Result result = name_line_.handle(key, text);
+    if (clears_input_error(key, result))
         message_.clear();
-        break;
-    case Key::Enter:
+    if (result != InputLine::Result::Ignored)
+        return;
+    if (key == Key::Enter) {
         submit_name();
-        break;
-    case Key::Escape:
+    } else if (key == Key::Escape) {
         mode_ = Mode::Editing;  // hiçbir şey yazılmaz; `Kaydet` ile gelindiyse çıkış da iptal
         cancel_pending_leave();
         show_info({});
-        break;
-    default:
-        break;
     }
 }
 
 void EditorSession::submit_name() {
-    auto name =
-        parse_draft_name(name_input_, name_folder_, std::chrono::system_clock::now(), host_.slug_max_length);
+    auto name = parse_draft_name(name_line_.text(), name_folder_, std::chrono::system_clock::now(),
+                                 host_.slug_max_length);
     if (!name) {
         message_ = core::format_error(name.error());
         message_is_error_ = true;
@@ -287,7 +277,7 @@ void EditorSession::submit_name() {
 
 EditorSession::SaveResult EditorSession::open_name_prompt() {
     const std::string type = note_type();
-    name_input_ = name_stem(type) + "." + type;
+    name_line_.set_text(name_stem(type) + "." + type);
     message_.clear();
     message_is_error_ = false;
     mode_ = Mode::NamePrompt;
@@ -295,7 +285,7 @@ EditorSession::SaveResult EditorSession::open_name_prompt() {
 }
 
 std::string EditorSession::name_stem(const std::string& type) const {
-    return core::slugify(core::note_name_source(buffer_->text(), type), std::chrono::system_clock::now(),
+    return core::slugify(core::note_name_source(open_buffer().text(), type), std::chrono::system_clock::now(),
                          host_.slug_max_length);
 }
 
@@ -321,8 +311,8 @@ void EditorSession::open(const core::NotePath& path, std::size_t start_line) {
     draft_.reset();
     buffer_.reset();
     apply_content(std::move(content->text), content->revision);
-    buffer_->move_to({start_line, 0});
-    buffer_->set_scroll_line(start_line);
+    open_buffer().move_to({start_line, 0});
+    open_buffer().set_scroll_line(start_line);
     mode_ = Mode::Editing;
     host_.on_opened();
 }
@@ -394,9 +384,11 @@ void EditorSession::click_at(int x, int y) {
     buffer_->move_to_cell(rows[row], std::max(x - gutter_width(), 0));
 }
 
-void EditorSession::handle(Key key, std::string_view text) {
+void EditorSession::handle(Key key, std::string_view text, const SharedInputSources& sources) {
     if (!buffer_)
         return;
+    if (sources)
+        name_line_.set_sources(sources);
     switch (mode_) {
     case Mode::Editing:
         handle_editing(key, text);
@@ -423,8 +415,8 @@ void EditorSession::handle_editing(Key key, std::string_view text) {
     show_info({});
     const std::string ghost = std::exchange(ghost_, {});  // her tuş öneriyi düşürür; yazım yenisini üretir
     if (!ghost.empty() && (key == Key::Tab || key == Key::Right)) {
-        const std::size_t size_before = buffer_->text().size();
-        buffer_->paste(ghost);
+        const std::size_t size_before = open_buffer().text().size();
+        open_buffer().paste(ghost);
         note_draft_edit(size_before);
         find_matches_.clear();
         return;
@@ -436,7 +428,7 @@ void EditorSession::handle_editing(Key key, std::string_view text) {
         request_leave(AfterLeave::List);
         return;
     case Key::Escape:
-        buffer_->clear_selection();  // kullanıcı kararı: Esc tek başına çıkmaz ve hiçbir şey atmaz
+        open_buffer().clear_selection();  // kullanıcı kararı: Esc tek başına çıkmaz ve hiçbir şey atmaz
         return;
     case Key::F9:
         request_leave(AfterLeave::Settings);
@@ -445,12 +437,14 @@ void EditorSession::handle_editing(Key key, std::string_view text) {
         save();
         return;
     case Key::CtrlC:
-        copy_to_clipboard(buffer_->copy());
+        copy_to_clipboard(open_buffer().copy());
         return;
     case Key::CtrlF:
         mode_ = Mode::Find;
-        find_origin_ = buffer_->cursor();
-        find_query_.clear();
+        find_origin_ = open_buffer().cursor();
+        find_line_.clear();
+        find_line_.set_sources(word_input_sources(completion_candidates(
+            open_buffer().text(), open_buffer().cursor(), shown_type_, current_word_table().get())));
         find_matches_.clear();
         return;
     case Key::F3:
@@ -465,7 +459,7 @@ void EditorSession::handle_editing(Key key, std::string_view text) {
         open_completion();
         return;
     }
-    const std::size_t size_before = buffer_->text().size();
+    const std::size_t size_before = open_buffer().text().size();
     apply_edit(key, text);
     note_draft_edit(size_before);
     find_matches_.clear();  // ofsetler eski metne ait; F3 yeniden hesaplar
@@ -477,7 +471,7 @@ bool EditorSession::apply_motion(Key key) {
     const auto* motion = std::ranges::find(kMotions, key, &Motion::key);
     if (motion == std::ranges::end(kMotions))
         return false;
-    motion->apply(*buffer_, columns_, rows_);
+    motion->apply(open_buffer(), columns_, rows_);
     return true;
 }
 
@@ -485,31 +479,31 @@ void EditorSession::apply_edit(Key key, std::string_view text) {
     switch (key) {
     case Key::Char:
         if (is_typable(text))
-            buffer_->type_text(text);
+            open_buffer().type_text(text);
         break;
     case Key::Backspace:
-        buffer_->backspace();
+        open_buffer().backspace();
         break;
     case Key::Delete:
-        buffer_->delete_forward();
+        open_buffer().delete_forward();
         break;
     case Key::Enter:
-        buffer_->newline();
+        open_buffer().newline();
         break;
     case Key::Tab:
-        buffer_->type_text("\t");
+        open_buffer().type_text("\t");
         break;
     case Key::CtrlX:
-        copy_to_clipboard(buffer_->cut());
+        copy_to_clipboard(open_buffer().cut());
         break;
     case Key::CtrlV:
         paste_from_clipboard();
         break;
     case Key::CtrlZ:
-        buffer_->undo();
+        open_buffer().undo();
         break;
     case Key::CtrlY:
-        buffer_->redo();
+        open_buffer().redo();
         break;
     default:
         break;
@@ -526,12 +520,12 @@ void EditorSession::copy_to_clipboard(std::string text) {
 
 void EditorSession::paste_from_clipboard() {
     if (!host_.system_paste) {
-        buffer_->paste(host_.clipboard);
+        open_buffer().paste(host_.clipboard);
         return;
     }
     PasteChoice choice = host_.system_paste(host_.clipboard);
     if (!choice.text.empty())
-        buffer_->paste(choice.text);
+        open_buffer().paste(choice.text);
     if (!choice.message.empty())
         show_info(std::move(choice.message));
 }
@@ -543,18 +537,18 @@ std::shared_ptr<const WordTable> EditorSession::current_word_table() const {
 // Yalnız satır sonunda: metnin ortasında soluk yazı ardındaki metni örterdi.
 void EditorSession::update_ghost() {
     ghost_.clear();
-    const std::string& text = buffer_->text();
-    const std::size_t cursor = buffer_->cursor();
+    const std::string& text = open_buffer().text();
+    const std::size_t cursor = open_buffer().cursor();
     const bool at_line_end = cursor == text.size() || text[cursor] == '\n' || text[cursor] == '\r';
-    if (read_only_ != ReadOnly::No || !at_line_end || buffer_->selection())
+    if (read_only_ != ReadOnly::No || !at_line_end || open_buffer().selection())
         return;
     const auto table = current_word_table();
     ghost_ = suggest_completion(text, cursor, shown_type_, table.get()).value_or(std::string{});
 }
 
 void EditorSession::open_completion() {
-    const std::string& text = buffer_->text();
-    const std::size_t cursor = buffer_->cursor();
+    const std::string& text = open_buffer().text();
+    const std::size_t cursor = open_buffer().cursor();
     const auto table = current_word_table();
     completion_candidates_ = completion_candidates(text, cursor, shown_type_, table.get());
     completion_query_ = std::string(word_prefix_at(text, cursor));
@@ -572,11 +566,11 @@ void EditorSession::refresh_completion() {
 void EditorSession::insert_completion() {
     if (completion_items_.empty())
         return;
-    const std::size_t cursor = buffer_->cursor();
-    const std::size_t typed = word_prefix_at(buffer_->text(), cursor).size();
-    const std::size_t size_before = buffer_->text().size();
-    buffer_->select_range({cursor - typed, cursor});
-    buffer_->paste(completion_items_[completion_selected_]);
+    const std::size_t cursor = open_buffer().cursor();
+    const std::size_t typed = word_prefix_at(open_buffer().text(), cursor).size();
+    const std::size_t size_before = open_buffer().text().size();
+    open_buffer().select_range({cursor - typed, cursor});
+    open_buffer().paste(completion_items_[completion_selected_]);
     note_draft_edit(size_before);
     find_matches_.clear();
 }
@@ -616,7 +610,7 @@ void EditorSession::handle_complete(Key key, std::string_view text) {
 
 // Eşleşmeleri yeniden hesaplar; geçerli eşleşme `from`dan sonraki ilkidir, yoksa başa sarar.
 void EditorSession::recompute_find(std::size_t from) {
-    find_matches_ = find_folded(buffer_->text(), find_query_);
+    find_matches_ = find_folded(open_buffer().text(), find_line_.text());
     const auto next =
         std::ranges::find_if(find_matches_, [from](const ByteRange& m) { return m.begin >= from; });
     find_index_ = next == find_matches_.end() ? 0 : static_cast<std::size_t>(next - find_matches_.begin());
@@ -624,27 +618,27 @@ void EditorSession::recompute_find(std::size_t from) {
 
 void EditorSession::select_current_match() {
     if (find_matches_.empty()) {
-        if (!find_query_.empty())
+        if (!find_line_.text().empty())
             show_info(core::tr("tui.editor_not_found"));
         return;
     }
     show_info({});
-    buffer_->select_range(find_matches_[find_index_]);
+    open_buffer().select_range(find_matches_[find_index_]);
 }
 
 void EditorSession::update_find() {
-    buffer_->select_range({find_origin_, find_origin_});
+    open_buffer().select_range({find_origin_, find_origin_});
     show_info({});
     recompute_find(find_origin_);
     select_current_match();
 }
 
 void EditorSession::step_find(int delta) {
-    if (find_query_.empty())
+    if (find_line_.text().empty())
         return;
     if (find_matches_.empty()) {
         // Düzenleme eşleşmeleri düşürdü: imleçten sonraki ilk eşleşmeye gidilir, atlanmaz.
-        recompute_find(buffer_->cursor());
+        recompute_find(open_buffer().cursor());
     } else {
         const std::size_t count = find_matches_.size();
         find_index_ = (find_index_ + count + (delta > 0 ? 1 : count - 1)) % count;
@@ -653,17 +647,12 @@ void EditorSession::step_find(int delta) {
 }
 
 void EditorSession::handle_find(Key key, std::string_view text) {
-    switch (key) {
-    case Key::Char:
-        if (is_typable(text)) {
-            find_query_.append(text);
-            update_find();
-        }
-        break;
-    case Key::Backspace:
-        pop_code_point(find_query_);
+    const InputLine::Result result = find_line_.handle(key, text);
+    if ((key == Key::Backspace || result == InputLine::Result::Edited) && !find_line_.popup())
         update_find();
-        break;
+    if (result != InputLine::Result::Ignored)
+        return;
+    switch (key) {
     case Key::Enter:
     case Key::Down:
     case Key::CtrlN:
@@ -691,7 +680,7 @@ void EditorSession::handle_find(Key key, std::string_view text) {
 
 void EditorSession::request_leave(AfterLeave after) {
     after_leave_ = after;
-    if (!buffer_->dirty()) {
+    if (!open_buffer().dirty()) {
         close();
         return;
     }
@@ -761,15 +750,15 @@ void EditorSession::close() {
 }
 
 std::string EditorSession::body() const {
-    return (bom_ ? std::string(kBom) : std::string{}) + buffer_->text();
+    return (bom_ ? std::string(kBom) : std::string{}) + open_buffer().text();
 }
 
 void EditorSession::adopt_saved(const core::Revision& revision) {
     revision_ = revision;
-    buffer_->mark_saved();
+    open_buffer().mark_saved();
     deleted_on_disk_ = false;
     changed_on_disk_ = false;
-    host_.on_saved(*path_);
+    host_.on_saved(note_path());
 }
 
 EditorSession::SaveResult EditorSession::save() {
@@ -777,7 +766,7 @@ EditorSession::SaveResult EditorSession::save() {
         return SaveResult::Failed;
     if (deleted_on_disk_)
         return save_as_new_note({}, "tui.editor_saved_new");
-    if (!buffer_->dirty()) {
+    if (!open_buffer().dirty()) {
         show_info(core::tr("tui.editor_no_changes"));
         return SaveResult::Saved;
     }
@@ -822,26 +811,29 @@ std::expected<core::NotePath, core::Error> EditorSession::create_and_adopt(core:
 }
 
 std::expected<core::NotePath, core::Error> EditorSession::create_note(std::string_view name_suffix) {
-    const std::filesystem::path& file = path_->value();
-    return create_and_adopt(core::NewNote{
-        initial_folder(&*path_, ""), to_utf8(file.stem()) + std::string(name_suffix), note_type(), body()});
+    const std::filesystem::path& file = note_path().value();
+    return create_and_adopt(core::NewNote{initial_folder(&note_path(), ""),
+                                          to_utf8(file.stem()) + std::string(name_suffix), note_type(),
+                                          body()});
 }
 
 std::expected<core::NotePath, core::Error> EditorSession::create_draft() {
     const std::string type = note_type();
-    std::string stem = draft_->stem;
-    if (draft_->timestamp_name)
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- çağıranların hepsi draft_'ı denetler
+    const DraftName& draft = *draft_;
+    std::string stem = draft.stem;
+    if (draft.timestamp_name)
         stem = core::slugify("", std::chrono::system_clock::now(), host_.slug_max_length);
-    else if (stem.empty() && draft_->ask_name)
+    else if (stem.empty() && draft.ask_name)
         stem = name_stem(type);  // ad sorulmadan çıkış: istemde önerilecek adın aynısı
-    return create_and_adopt(core::NewNote{draft_->folder, stem, type, body()});
+    return create_and_adopt(core::NewNote{draft.folder, stem, type, body()});
 }
 
 // Taslakta açık uzantı kazanır, yoksa içerikten detect; var olan notta dosyanın uzantısı.
 std::string EditorSession::note_type() const {
     if (draft_)
-        return draft_->type.empty() ? host_.suggest_type(buffer_->text()) : draft_->type;
-    std::string type = to_utf8(path_->value().extension());
+        return draft_->type.empty() ? host_.suggest_type(open_buffer().text()) : draft_->type;
+    std::string type = to_utf8(note_path().value().extension());
     if (!type.empty())
         type.erase(0, 1);
     return type;
@@ -869,7 +861,7 @@ EditorSession::SaveResult EditorSession::save_as_new_note(std::string_view name_
 }
 
 bool EditorSession::overwrite_disk() {
-    const auto fresh = host_.store.read(*path_);
+    const auto fresh = host_.store.read(note_path());
     if (!fresh) {
         show_error(fresh.error());
         return false;
@@ -888,7 +880,7 @@ bool EditorSession::overwrite_disk() {
 }
 
 bool EditorSession::load_disk() {
-    auto fresh = host_.store.read(*path_);
+    auto fresh = host_.store.read(note_path());
     if (!fresh) {
         show_error(fresh.error());
         return false;
@@ -961,7 +953,7 @@ void EditorSession::on_listing(std::span<const core::NoteInfo> notes) {
 std::expected<core::NotePath, core::Error> EditorSession::flush_write() {
     if (draft_)
         return create_draft();
-    const core::NotePath path = *path_;
+    core::NotePath path = note_path();
     const auto written = [&] {
         const std::scoped_lock lock(host_.store_mutex);
         return host_.store.write(path, body(), revision_);

@@ -35,9 +35,6 @@ ConsoleUtf8Scope::~ConsoleUtf8Scope() {
     if (output_cp_ != 0)
         SetConsoleOutputCP(output_cp_);
 }
-#else
-ConsoleUtf8Scope::ConsoleUtf8Scope() = default;
-ConsoleUtf8Scope::~ConsoleUtf8Scope() = default;
 #endif
 
 }  // namespace noteapp::core

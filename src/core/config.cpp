@@ -23,6 +23,7 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr std::array<std::string_view, 3> kLanguages = {"auto", "tr", "en"};
+constexpr std::array<std::string_view, 3> kIconModes = {"auto", "nerd", "off"};
 
 bool is_valid_type(std::string_view type) {
     return !type.empty() && type.find('.') == std::string_view::npos;
@@ -249,6 +250,12 @@ void apply(const toml::table& root, Config& config, std::vector<Error>& warnings
         config.default_folder = std::move(*v);
     if (auto v = top.string_array("types"))
         config.types = std::move(*v);
+    if (auto v = top.string("icons")) {
+        if (std::find(kIconModes.begin(), kIconModes.end(), *v) == kIconModes.end())
+            top.invalid("icons", "must_be_icons");
+        else
+            config.icons = *v == "auto" ? "nerd" : std::move(*v);  // `auto` eski addır, yedek sembol kalktı
+    }
     if (auto sync = top.subsection("sync"))
         apply_sync(*sync, config.sync);
     if (auto tuning = top.subsection("tuning"))
@@ -292,8 +299,8 @@ enum class ValueKind { String, Bool, Integer, StringList };
 
 struct Setting {
     std::string_view key;
-    ValueKind kind;
-    std::string (*get)(const Config&);
+    ValueKind kind{};
+    std::string (*get)(const Config&){};
 };
 
 std::string join(const std::vector<std::string>& items) {
@@ -303,14 +310,15 @@ std::string join(const std::vector<std::string>& items) {
     return out;
 }
 
-const std::array<Setting, 12>& settings() {
-    static const std::array<Setting, 12> table = {{
+const std::array<Setting, 13>& settings() {
+    static const std::array<Setting, 13> table = {{
         {"language", ValueKind::String, [](const Config& c) { return c.language; }},
         {"notes_dir", ValueKind::String, [](const Config& c) { return to_utf8(c.notes_dir); }},
         {"editor", ValueKind::String, [](const Config& c) { return c.editor; }},
         {"default_type", ValueKind::String, [](const Config& c) { return c.default_type; }},
         {"default_folder", ValueKind::String, [](const Config& c) { return c.default_folder; }},
         {"types", ValueKind::StringList, [](const Config& c) { return join(c.types); }},
+        {"icons", ValueKind::String, [](const Config& c) { return c.icons; }},
         {"sync.enabled", ValueKind::Bool,
          [](const Config& c) { return std::string(c.sync.enabled ? "true" : "false"); }},
         {"sync.remote", ValueKind::String, [](const Config& c) { return c.sync.remote; }},
@@ -329,7 +337,7 @@ const std::array<Setting, 12>& settings() {
 // eklenir.
 struct TuningKey {
     std::string_view key;
-    std::string (*text)(const Tuning&);
+    std::string (*text)(const Tuning&){};
 };
 
 std::string fraction_text(double value) {
@@ -490,7 +498,9 @@ std::expected<void, Error> save_config(const Config& config) {
     out << "types = [";
     for (std::size_t i = 0; i < config.types.size(); ++i)
         out << (i == 0 ? "" : ", ") << quote(config.types[i]);
-    out << "]\n\n[sync]\n";
+    out << "]\n";
+    out << "icons = " << quote(config.icons) << "\n";
+    out << "\n[sync]\n";
     out << "enabled = " << (config.sync.enabled ? "true" : "false") << "\n";
     out << "remote = " << quote(config.sync.remote) << "\n";
     out << "branch = " << quote(config.sync.branch) << "\n";

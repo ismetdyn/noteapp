@@ -73,6 +73,7 @@ TEST_CASE("the status bar offers undo after Delete and undo brings the note back
     click_button(*scene.view, kUndo);
     CHECK(scene.fixture.note_exists("b.md"));
     CHECK_FALSE(scene.fixture.note_exists(".trash/b.md"));
+    REQUIRE(scene.state->current_path().has_value());
     CHECK(scene.state->current_path()->string() == "b.md");
     settle(*scene.view);
     CHECK_FALSE(scene.has_item(kUndo));

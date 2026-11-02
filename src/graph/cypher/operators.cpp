@@ -72,6 +72,7 @@ public:
                     return more;
             }
             CYPHER_TRY(context.budget.tick());
+            // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- open() true ise cursor_ kurulu
             const Result<std::optional<NodeId>> id = cursor_->next();
             if (!id)
                 return std::unexpected(id.error());

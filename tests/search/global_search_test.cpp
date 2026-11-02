@@ -85,7 +85,9 @@ TEST_CASE("a content match carries the best line, its snippet and ranges") {
     CHECK(hit.best_line->line == 2);
     CHECK(hit.best_line->snippet == "ikinci bütçe satırı");
     REQUIRE(hit.best_line->ranges.size() == 1);
+    REQUIRE(hit.best_line.has_value());
     const auto [begin, end] = hit.best_line->ranges[0];
+    REQUIRE(hit.best_line.has_value());
     CHECK(hit.best_line->snippet.substr(begin, end - begin) == "bütçe");
 }
 

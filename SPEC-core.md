@@ -124,6 +124,7 @@ editor = ""              # boş: $VISUAL → $EDITOR → platform varsayılanı
 default_type = "md"
 default_folder = ""      # hızlı notların klasörü ("" = kök)
 types = ["md", "txt", "csv", "cpp", "java", "py", "json", "sh"]   # seçim listesi; elle başka uzantı da yazılabilir
+icons = "nerd"           # nerd | off; `auto` nerd okunur; davranış SPEC-tui "Dosya ikonları"
 
 [sync]
 enabled = false

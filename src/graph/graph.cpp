@@ -132,7 +132,7 @@ Result<void> require_same_edge_if_exists(Store& store, const EdgeId& id, const N
 struct NeighborCursor::Impl {
     Store* store;
     NodeId self;
-    Direction direction;
+    Direction direction{};
     std::optional<std::string> type;
     std::optional<Statement> statement;
     bool scanning_in = false;
@@ -286,6 +286,7 @@ Result<NodeCursor> ReadTxn::nodes_with_label(std::string_view label) {
     // Tarama cursor kapanana dek sürer; etiket metni çağıran tarafta ölebilir, kopyası step boyunca yaşamalı.
     auto impl = std::make_unique<NodeCursor::Impl>(std::move(*statement));
     impl->label = std::string(label);
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- Impl kurucusu statement'ı doldurur
     impl->statement->bind_text(1, impl->label);
     return NodeCursor(std::move(impl));
 }
@@ -635,8 +636,9 @@ Result<std::uint64_t> Graph::last_seq() {
     return store_->applied_seq(store_->device());
 }
 
-Result<QueryResult> Graph::query(std::string_view cypher, const Params& params, QueryMode mode,
-                                 QueryLimits limits) {
+Result<QueryResult>
+Graph::query(std::string_view cypher, const Params& params, QueryMode mode,
+             QueryLimits limits) {  // cppcheck-suppress passedByValue ; küçük, kopyası ucuz
     return detail::cypher::run_query(*this, *store_, cypher, params, mode, limits);
 }
 

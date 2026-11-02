@@ -1,0 +1,35 @@
+# Tek tek susturma: `// NOLINT(check) -- neden`. Bağımlılıklar (_deps) denetlenmez.
+# Kapalı kalanların nedeni (Checks içinde yorum yazılamaz):
+# - easily-swappable-parameters, use-nodiscard: yüzlerce imza uyarısı, hata bulmuyor; API'yi toptan yeniden yazdırır.
+# - implicit-widening: 16 yerin tamamı küçük derleme zamanı sabiti çarpımı, taşma yok (2026-11-02 denendi).
+# - avoid-c-arrays, raw-string-literal, return-braced-init-list, use-auto, use-designated-initializers,
+#   use-ranges, use-std-print, use-trailing-return-type: yalnız stil; toplu yeniden yazım değer katmıyor.
+# - use-integer-sign-comparison: derleyicinin -Wall -Wextra işaret uyarısıyla örtüşür.
+# - performance-enum-size: birkaç baytlık kazanç, tasarımı değiştirmez.
+Checks: >
+  -*,
+  bugprone-*,
+  concurrency-*,
+  cppcoreguidelines-owning-memory,
+  modernize-*,
+  performance-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -modernize-avoid-c-arrays,
+  -modernize-raw-string-literal,
+  -modernize-return-braced-init-list,
+  -modernize-use-auto,
+  -modernize-use-designated-initializers,
+  -modernize-use-integer-sign-comparison,
+  -modernize-use-nodiscard,
+  -modernize-use-ranges,
+  -modernize-use-std-print,
+  -modernize-use-trailing-return-type,
+  -performance-enum-size
+HeaderFilterRegex: '/(src|internal)/'
+ExcludeHeaderFilterRegex: '/_deps/'
+CheckOptions:
+  # `(void)` bilinçli yok saymadır.
+  bugprone-unused-return-value.AllowCastToVoid: true
+  # Bu çağrılar uzunluğu da alır; NUL sonlandırma gerekmez.
+  bugprone-suspicious-stringview-data-usage.AllowedCallees: '::std::from_chars;::ImFont::CalcTextSizeA'

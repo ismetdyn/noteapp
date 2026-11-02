@@ -43,7 +43,7 @@ public:
 
     struct Row {
         std::string key;  // config anahtarı ("sync.enabled")
-        Kind kind;
+        Kind kind{};
         std::string value;
         std::string original;
         std::string error;  // satır içi (kırmızı) hata; kaydetme denemesinde dolar

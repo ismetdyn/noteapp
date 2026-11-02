@@ -8,6 +8,7 @@
 #include <chrono>
 #include <compare>
 #include <cstddef>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <set>
@@ -201,7 +202,7 @@ private:
         std::vector<std::size_t> latest_deletes;
     };
     struct PutAt {
-        At at;
+        At at{};
         NodeId src;
         std::string type;
         NodeId dst;
@@ -283,6 +284,7 @@ private:
         for (const At write : writes)
             firsts.try_emplace(frames_[write.frame].dot.dev, write);
         std::vector<At> result;
+        result.reserve(firsts.size());
         for (const auto& [device, at] : firsts)
             result.push_back(at);
         return result;
@@ -293,6 +295,7 @@ private:
         for (const std::size_t del : deletes)
             lasts[frames_[del].dot.dev] = del;
         std::vector<std::size_t> result;
+        result.reserve(lasts.size());
         for (const auto& [device, frame] : lasts)
             result.push_back(frame);
         return result;
@@ -805,7 +808,7 @@ private:
             return {};
         if (const Result<void> opened = ensure_merger(); !opened)
             return opened;
-        merger_->request_rebuild();
+        open_merger().request_rebuild();
         return {};
     }
 
@@ -881,6 +884,13 @@ private:
         return {};
     }
 
+    // ensure_merger başarılıysa dolu, sonra hiç boşalmaz; in_batch_ de ondan sonra açılır. İhlal bug'dır.
+    Merger& open_merger() {
+        if (!merger_)
+            std::abort();
+        return *merger_;
+    }
+
     Result<void> open_batch() {
         if (in_batch_)
             return {};
@@ -896,7 +906,7 @@ private:
         frames_in_batch_ = 0;
         bytes_in_batch_ = 0;
         batch_started_ = std::chrono::steady_clock::now();
-        return merger_->catch_up();
+        return open_merger().catch_up();
     }
 
     // Kilit bırakılır. Bekleyen yeniden kurma bayrakla kalıcıdır: çökerse sonraki ingest tamamlar. Ara durum
@@ -904,7 +914,7 @@ private:
     Result<void> close_batch() {
         if (!in_batch_)
             return {};
-        if (merger_->rebuild_needed())
+        if (open_merger().rebuild_needed())
             if (const Result<void> flagged = store_.set_rebuild_pending(true); !flagged)
                 return flagged;
         in_batch_ = false;
@@ -917,7 +927,7 @@ private:
             return {};
         if (const Result<void> opened = open_batch(); !opened)
             return opened;
-        if (const Result<void> finished = merger_->finish(); !finished)
+        if (const Result<void> finished = open_merger().finish(); !finished)
             return finished;
         if (const Result<void> cleared = store_.set_rebuild_pending(false); !cleared)
             return cleared;
@@ -947,9 +957,9 @@ private:
     Result<void> apply_frame(const LogCursor& log, const Frame& frame, std::span<const std::byte> payload) {
         if (const Result<void> opened = open_batch(); !opened)
             return opened;
-        if (const Result<void> applied = merger_->apply_frame(log.device, frame, payload); !applied)
+        if (const Result<void> applied = open_merger().apply_frame(log.device, frame, payload); !applied)
             return applied;
-        if (merger_->last_frame_had_identity_conflict())
+        if (open_merger().last_frame_had_identity_conflict())
             report_bad(log.path, log.device, frame.seq, "edge_identity_conflict");
         remember_touched(frame);
         ++frames_in_batch_;
@@ -995,7 +1005,7 @@ private:
             merge_limit_hit_ = true;
             return false;
         }
-        return merger_->owner_count() + frame.ops.size() <= limits_.max_merge_owners;
+        return open_merger().owner_count() + frame.ops.size() <= limits_.max_merge_owners;
     }
 
     // Sırayla tekrar, matches_stored yüzünden ops'taki baytlarla sınırlıdır ve bütçeden düşmez: yoksa büyük

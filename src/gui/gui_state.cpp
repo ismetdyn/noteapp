@@ -121,6 +121,7 @@ GuiState::GuiState(core::Config config)
                                                const core::Config& after) { apply_settings(before, after); },
                              .synced = [this] { rescan(); },
                              .post = [this](std::function<void()> work) { post(std::move(work)); }}) {
+    // cppcheck-suppress useInitializationList ; tek seferlik kurulum; üye sırasına bağlanmasın
     sync_note_exe = sync::note_executable_beside_self();
     rescan();
     load_gui_state();
@@ -400,7 +401,9 @@ void GuiState::clear_editor() {
     set_editor({}, false);
 }
 
-void GuiState::show_note(core::NoteInfo info) {  // kopya: yükleme shown_'ı yeniden atar
+// Kopya şart: yükleme shown_'ı yeniden atar, info onu gösterebilir.
+// NOLINTNEXTLINE(performance-unnecessary-value-param) -- üstteki neden
+void GuiState::show_note(core::NoteInfo info) {  // cppcheck-suppress passedByValue ; üstteki neden
     // Aynı not, aynı mtime: editör içeriğine/kaydırmasına dokunma (rescan sonrası kararlılık). Kirli tampon
     // varken dışarıdaki değişiklik tamponu ezmez; kayıt anında çakışma diyaloğu çıkar.
     if (shown_ && shown_->path == info.path && (shown_->revision == info.revision || dirty_))
@@ -579,12 +582,12 @@ void GuiState::save_now() {
 
 std::expected<void, core::Error> GuiState::try_write() {
     autosave_at_.reset();
-    const auto written = store_.write(shown_->path, body(true), shown_->revision);
+    const auto written = store_.write(shown_note().path, body(true), shown_note().revision);
     if (!written)
         return std::unexpected(written.error());
     ++writes_;
     changed();
-    shown_->revision = *written;
+    shown_note().revision = *written;
     dirty_ = false;
     status_.clear();
     // ponytail: her otomatik kayıtta tam yeniden tarama (>= 1 sn boşta sonrası, 5.000 notta ~20 ms) kabul
@@ -612,9 +615,9 @@ bool GuiState::save_existing() {
 }
 
 bool GuiState::resolve_conflict() {
-    switch (deciders.conflict(shown_->path.string())) {
+    switch (deciders.conflict(shown_note().path.string())) {
     case ConflictChoice::Reload: {
-        const core::NoteInfo info = *shown_;  // load_text shown_'ı yeniden atar
+        const core::NoteInfo info = shown_note();  // load_text shown_'ı yeniden atar
         const auto loaded = load_text(info);
         if (!loaded) {
             report(loaded.error());
@@ -624,12 +627,12 @@ bool GuiState::resolve_conflict() {
     }
     case ConflictChoice::Overwrite: {
         // Diskteki güncel mtime alınır; kullanıcı bilerek ezdi.
-        const auto fresh = store_.read(shown_->path);
+        const auto fresh = store_.read(shown_note().path);
         if (!fresh) {
             report(fresh.error());
             return false;
         }
-        shown_->revision = fresh->revision;
+        shown_note().revision = fresh->revision;
         if (const auto written = try_write(); !written) {
             report(written.error());
             return false;
@@ -645,7 +648,7 @@ bool GuiState::resolve_conflict() {
 }
 
 bool GuiState::save_copy() {
-    const PathParts parts = split(shown_->path);
+    const PathParts parts = split(shown_note().path);
     const auto created =
         store_.create(core::NewNote{parts.folder, parts.stem + " (copy)", parts.type, body(false)});
     if (!created) {
@@ -705,6 +708,12 @@ bool GuiState::adopt_saved(const core::NotePath& path) {
     crlf_ = false;  // create() satır sonlarını LF'ye normalleştirir
     autosave_at_.reset();
     status_.clear();
+    // Liste tazelenirken seçim süzgeçteki başka nota kayıp editörü ezmesin: kaydedilen not gösterilir.
+    const struct Restore {
+        bool& flag;
+        bool value;
+        ~Restore() { flag = value; }
+    } restore{in_show_, std::exchange(in_show_, true)};
     rescan();
     ensure_visible(path);
     return true;
@@ -758,8 +767,8 @@ bool GuiState::request_close() {
     return true;
 }
 
-SaveDialogRequest GuiState::move_request() const {
-    const PathParts parts = split(shown_->path);
+SaveDialogRequest GuiState::move_request(const core::NotePath& note) const {
+    const PathParts parts = split(note);
     SaveDialogRequest request;
     request.mode = SaveDialogRequest::Mode::Move;
     // `a.tar.gz`: gövde de uzantı gibi görünür; adın tamamı gösterilir, form onu aynen geri verir.
@@ -775,42 +784,59 @@ void GuiState::save_as() {
         save_new();
         return;
     }
-    if (!shown_ || !flush())
+    if (!shown_)
         return;
-    if (const auto chosen = deciders.save_dialog(move_request()))
-        move_current(*chosen);
+    const core::NotePath note = shown_->path;
+    if (!flush_for(note))
+        return;
+    if (const auto chosen = deciders.save_dialog(move_request(note)))
+        move_saved(note, *chosen);
 }
 
 void GuiState::change_type(const std::string& type) {
     if (!shown_ || new_note_ || type.empty())
         return;
-    const PathParts parts = split(shown_->path);
+    const core::NotePath note = shown_->path;
+    const PathParts parts = split(note);
     if (type == parts.type)
         return;
-    if (flush())
-        move_current({parts.stem, parts.folder, type});
+    if (flush_for(note))
+        move_saved(note, {parts.stem, parts.folder, type});
+}
+
+// flush listeyi tazeler: not aramadan düşerse editör başka nota geçer ya da boşalır, seçim artık hedef
+// değildir. İşlem flush'tan önce alınan nota uygulanır; o not yoksa (dışarıdan silinmiş) iletiyle durur.
+bool GuiState::flush_for(const core::NotePath& note) {
+    if (!flush())
+        return false;
+    const auto content = store_.read(note);
+    if (!content)
+        fail(content.error());
+    return content.has_value();
 }
 
 // Tampon önceden kaydedilmiş olmalı (flush). Hedef varsa NoteStore::move AlreadyExists verir, hiçbir şey
 // değişmez.
-bool GuiState::move_current(const SaveDetails& target) {
+bool GuiState::move_saved(const core::NotePath& note, const SaveDetails& target) {
     const auto to = core::NotePath::parse((target.folder.empty() ? "" : target.folder + "/") + target.name +
                                           "." + target.type);
     if (!to) {
         report(to.error());
         return false;
     }
-    if (*to == shown_->path)
+    if (*to == note)
         return true;
-    const auto moved = store_.move(shown_->path, *to);
+    const auto moved = store_.move(note, *to);
     if (!moved) {
         report(moved.error());
         return false;
     }
     changed();
-    shown_->path = *moved;
-    if (const auto fresh = store_.read(*moved))  // taşıma mtime'ı korur; yine de güncel değeri al
-        shown_->revision = fresh->revision;
+    if (shown_ && shown_->path == note) {
+        shown_->path = *moved;
+        if (const auto fresh = store_.read(*moved))  // taşıma mtime'ı korur; yine de güncel değeri al
+            shown_->revision = fresh->revision;
+    }
     status_.clear();
     rescan();
     ensure_visible(*moved);
@@ -818,14 +844,17 @@ bool GuiState::move_current(const SaveDetails& target) {
 }
 
 void GuiState::move_note() {
-    if (new_note_ || !shown_ || !flush() || !shown_)
+    if (new_note_ || !shown_)
         return;
-    const PathParts parts = split(shown_->path);
-    SaveDialogRequest request = move_request();
+    const core::NotePath note = shown_->path;
+    if (!flush_for(note))
+        return;
+    const PathParts parts = split(note);
+    SaveDialogRequest request = move_request(note);
     request.folder_only = true;
     // Ad ve tip kilitli: karar ne dönerse dönsün yalnız klasör alınır.
     if (const auto chosen = deciders.save_dialog(request))
-        move_current({parts.stem, chosen->folder, parts.type});
+        move_saved(note, {parts.stem, chosen->folder, parts.type});
 }
 
 void GuiState::delete_note() {
@@ -879,6 +908,7 @@ void GuiState::trash_note() {
 void GuiState::undo_trash() {
     if (!can_undo_trash())
         return;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- can_undo_trash undo_item_'ı denetledi
     const auto restored = store_.restore(*undo_item_);
     if (!restored) {
         fail(restored.error());
@@ -1025,10 +1055,11 @@ void GuiState::rename_folder(const std::string& folder) {
     status_.clear();
     // flush sonrası bakılır: dışarıdan silinen not kaydet diyaloğuyla başka klasöre gitmiş olabilir.
     if (shown_in(folder)) {
-        if (const auto moved = core::NotePath::parse(target + shown_->path.string().substr(folder.size()))) {
-            shown_->path = *moved;
+        if (const auto moved =
+                core::NotePath::parse(target + shown_note().path.string().substr(folder.size()))) {
+            shown_note().path = *moved;
             if (const auto fresh = store_.read(*moved))
-                shown_->revision = fresh->revision;
+                shown_note().revision = fresh->revision;
         }
     }
     if (current_folder_ == folder || is_inside(current_folder_, folder))
@@ -1080,20 +1111,23 @@ void GuiState::export_pdf() {
         return;
     // Önce kaydet: PDF diskteki sürümden üretilir ve tampondaki düzenleme kaybolmaz. Kayıt başarısızsa ya da
     // vazgeçildiyse (tampon korunur) dışa aktarma da yapılmaz.
-    if (unsaved() && !flush())
+    std::optional<core::NotePath> note = shown_ ? std::optional(shown_->path) : std::nullopt;
+    if (note ? !flush_for(*note) : (unsaved() && !flush()))
         return;
-    if (!shown_)  // gösterilen not yok ya da boş taslak atıldı
+    if (!note && shown_)  // taslak: yolu ancak kayıttan sonra belli olur
+        note = shown_->path;
+    if (!note)  // gösterilen not yok ya da boş taslak atıldı
         return;
-    const auto output = deciders.export_path(split(shown_->path).stem + ".pdf");
+    const auto output = deciders.export_path(split(*note).stem + ".pdf");
     if (!output)
         return;
-    const auto content = store_.read(shown_->path);
+    const auto content = store_.read(*note);
     if (!content) {
         fail(content.error());
         return;
     }
     const auto exported =
-        pdf::export_pdf(content->text, pdf::format_for(shown_->path.value()), path_from_utf8(*output));
+        pdf::export_pdf(content->text, pdf::format_for(note->value()), path_from_utf8(*output));
     if (!exported) {
         fail(exported.error());
         return;
@@ -1160,6 +1194,7 @@ void GuiState::show_sync_status(const sync::SyncStatus& status, bool running) {
     if (!auto_sync_ && !running && !status.last_success && !status.last_error)
         sync_label_ = core::tr("gui.sync_off");
     else if (running)
+        // NOLINTNEXTLINE(bugprone-branch-clone) -- hata ve son başarı denetiminden önce gelmeli
         sync_label_ = core::tr("gui.sync_running");
     else if (status.last_error)
         sync_label_ = core::tr("gui.sync_error", {{"detail", core::format_error(*status.last_error)}});

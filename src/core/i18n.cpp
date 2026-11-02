@@ -107,7 +107,7 @@ std::string detect_language() {
     return (GetUserDefaultUILanguage() & 0x3FF) == LANG_TURKISH ? "tr" : "en";
 #else
     for (const char* name : {"LC_ALL", "LC_MESSAGES", "LANG"}) {
-        const char* value = std::getenv(name);
+        const char* value = std::getenv(name);  // NOLINT(concurrency-mt-unsafe) -- üründe setenv/putenv yok
         if (value != nullptr && *value != '\0')
             return std::string_view(value).starts_with("tr") ? "tr" : "en";
     }
@@ -118,7 +118,7 @@ std::string detect_language() {
 void init_i18n(std::string_view language_setting) {
     State& s = state();
     const std::string language = resolve_language(language_setting);
-    const std::lock_guard lock(s.mutex);
+    const std::scoped_lock lock(s.mutex);
     s.loaded = false;  // test katalogları (init_i18n_with_catalogs) varsa gömülülerle değiştirilir
     load_embedded_locked(s);
     s.language = language;
@@ -129,7 +129,7 @@ void init_i18n_with_catalogs(std::string_view language_setting, std::string_view
                              std::string_view tr_toml) {
     State& s = state();
     const std::string language = resolve_language(language_setting);
-    const std::lock_guard lock(s.mutex);
+    const std::scoped_lock lock(s.mutex);
     s.en = parse_catalog(en_toml, "en");
     s.tr = parse_catalog(tr_toml, "tr");
     s.loaded = true;
@@ -139,7 +139,7 @@ void init_i18n_with_catalogs(std::string_view language_setting, std::string_view
 
 std::string current_language() {
     State& s = state();
-    const std::lock_guard lock(s.mutex);
+    const std::scoped_lock lock(s.mutex);
     return s.language;
 }
 
@@ -148,7 +148,7 @@ std::string tr(std::string_view key, const Args& args) {
     std::string warning;
     std::string result;
     {
-        const std::lock_guard lock(s.mutex);
+        const std::scoped_lock lock(s.mutex);
         load_embedded_locked(s);
         const std::string k(key);
         const Catalog& selected = s.language == "tr" ? s.tr : s.en;

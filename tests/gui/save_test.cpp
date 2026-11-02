@@ -112,6 +112,7 @@ TEST_CASE_FIXTURE(SaveFixture, "each keystroke restarts the autosave deadline") 
     state->tick(*first - std::chrono::milliseconds(1));  // süre dolmadan yazılmaz
     CHECK(state->write_count() == 0);
     state->edit_text("abc");
+    REQUIRE(state->next_deadline().has_value());
     CHECK(*state->next_deadline() >= *first);
     state->save_now();
     CHECK_FALSE(state->next_deadline().has_value());  // kayıt bekleyen süreyi iptal eder

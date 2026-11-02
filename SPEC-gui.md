@@ -92,6 +92,12 @@ TUI ayar ekranıyla aynı alanlar (SPEC-core config). İki sütunlu form: etiket
 alan sağda ve pencereyle büyür. Gruplar: **Genel** (dil, not klasörü, varsayılan tip, varsayılan klasör, tipler, editör komutu) ve **Senkron** (aç, uzak adres,
 dal, boşta bekleme, yazar adı, yazar e-postası, token, bağlantı testi). Alan hatası alanın altında; editör, uzak adres ve bekleme alanında kısa ipucu.
 - **Dil:** seçenekler okunur metindir (Sistem dili, Türkçe, English); saklanan değer `auto`/`tr`/`en` kalır.
+- **Dosya ikonları:** satır ikonu metnin 1,3 katı çizilir, satır yüksekliği değişmez (`View::kRowIconScale`, yuva 1,6 em). Nerd Font, Kapalı; saklanan değer `nerd`/`off` (dosyadaki eski `auto` `nerd` okunur). Pencerenin kendi fontu olduğu için
+  `nerd` Nerd glifi çizer, `off` çizmez: not ve çöp listesi (sabit genişlikli yuva, adlar aynı sütunda), çöp başlığı, araç çubuğu
+  ("Sil" hariç: tabloda karşılığı yok). `resources/fonts/NoteappIcons.ttf` tablodaki 30 glifin alt kümesidir, UI fontuna tam
+  aralıklarla birleşir (`src/gui/icon_font.*`), yalnız `noteapp_gui`'ye gömülür; `note` ve `notes` taşımaz. Yeniden üretim:
+  `scripts/generate-icon-font.sh`. Lisans: `resources/fonts/LICENSE-NoteappIcons.txt`, paketlerde `licenses/noteapp-icons/`. Tablo:
+  SPEC-tui "Dosya ikonları".
 - **Token:** maskeli alan ve Kaydet/Sil aynı satırda, dar pencerede alta iner. Https remote'ta altında durum satırı (`kasada kayıtlı` / `yok`); başka remote'ta
   satır kilitlidir ve nedeni tek satır ipucuyla yazılır.
 - **Senkron kapalıyken** aç kutusu dışındaki senkron alanları kilitlenir, değerleri korunur; kutu işaretlenince hemen açılır (kayıt akışı değişmez). Token satırı ve

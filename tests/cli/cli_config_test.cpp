@@ -188,3 +188,15 @@ TEST_CASE("sync --background stays silent even with config warnings") {
     CHECK(result.out.empty());
     CHECK(result.err.empty());
 }
+
+TEST_CASE("config set icons validates the value and shows it in the list") {
+    const Sandbox box;
+    CHECK(box.run({"config", "get", "icons"}).out == "nerd\n");
+    CHECK(box.run({"config", "set", "icons", "off"}).exit_code == 0);
+    CHECK(box.run({"config", "set", "icons", "auto"}).exit_code == 0);  // eski ad nerd okunur
+    CHECK(box.run({"config", "get", "icons"}).out == "nerd\n");
+    CHECK(box.run({"config", "list"}).out.find("icons = nerd\n") != std::string::npos);
+    const auto bad = box.run({"config", "set", "icons", "emoji"});
+    CHECK(bad.exit_code == 2);
+    CHECK(box.run({"config", "get", "icons"}).out == "nerd\n");
+}

@@ -298,6 +298,7 @@ Result<std::vector<Dot>> read_deps(Reader& reader) {
 std::optional<Value> decode_fixed_value(ValueTag tag, std::span<const std::byte> payload) {
     if (payload.size() != sizeof(std::uint64_t))
         return std::nullopt;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- uzunluk yukarıda sekiz bayt denetlendi
     const std::uint64_t bits = *Reader(payload).read_le<std::uint64_t>();
     if (tag == ValueTag::Int)
         return Value{static_cast<std::int64_t>(bits)};
@@ -525,6 +526,7 @@ Result<std::vector<Dot>> parse_dots(std::span<const std::byte> encoded) {
     while (!reader.at_end()) {
         const auto dev = reader.read_id();
         const auto seq = reader.read_le<std::uint64_t>();
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- boyut kDotBytes'ın katı: okuma tamamlanır
         dots.push_back(Dot{*dev, *seq});  // uzunluk yukarıda denetlendi
     }
     return dots;

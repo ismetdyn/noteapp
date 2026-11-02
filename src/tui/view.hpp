@@ -2,6 +2,7 @@
 
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
+#include "tui/markdown_view.hpp"
 #include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
 #include "tui/settings.hpp"
@@ -29,6 +30,8 @@ inline constexpr int kMinWidth = 60;
 inline constexpr int kMinHeight = 15;
 // Kaydedilmemiş değişikliğin çerçeve etiketindeki ve alt çubuktaki işareti.
 inline constexpr std::string_view kDirtyMark = " *";
+// Alt satırda ipuçları ve notlar arasındaki boşluk.
+inline constexpr std::string_view kHintSeparator = "  ";
 
 // Seçili notun önizlemesi; dosya okuması render'dan ayrı tutulur (render saf kalır).
 struct Preview {
@@ -41,7 +44,14 @@ struct Preview {
     bool spell_checked = false;            // md/txt: yazım denetimi altı çizer
     std::string error;                     // Kind::Error: çevrilmiş hata metni
     SyntaxLanguage language = SyntaxLanguage::Plain;
-    mutable SyntaxStateCache syntax;  // yalnız görünen satıra dek tembel dolar; metin değişmez
+    mutable SyntaxStateCache syntax;      // yalnız görünen satıra dek tembel dolar; metin değişmez
+    ViewKind view_kind = ViewKind::None;  // md/csv/json: `R` ham ve biçimli görünüm arasında geçer
+    // Biçimli görünümde `lines`/`text` görüntülenen metindir (seçim onu kopyalar, arama onda çalışır);
+    // satırlar zaten panele sığar. `styled` ve `source_lines` `lines` ile paraleldir.
+    bool rendered = false;
+    std::vector<std::vector<StyledSpan>> styled;
+    std::vector<std::size_t> source_lines;
+    std::string note;  // biçimli görünüm istendi, olmadı: toplamlar satırında soluk neden
 };
 
 // Son okunan notu tutar: her yeniden çizimde diske gidilmez. Not değişince (yeniden tarama, editör dönüşü)
@@ -57,8 +67,15 @@ public:
     // okunur; sakin kullanıcının tek hareketi bekletilmez. Beklerken önceki içerik döner, `deferred()` true
     // olur ve çağıran yeniden çizim ister.
     static constexpr int kCoalesceMs = 60;
-    const Preview& throttled(const TuiState& state, const core::NoteStore& store,
+    // Sürükleyerek boyutlandırmada biçimli görünüm her genişlikte yeniden sarılmaz: art arda değişimlerde
+    // önceki yerleşim kalır, değişim bu süre durunca üretilir. Sakin kullanıcının tek değişimi beklemez.
+    static constexpr int kResizeSettleMs = 120;
+    // Dönen önizleme kullanıcının seçtiği görünümdür (`R`); biçimli görünüm not sürümü ve genişlik başına bir
+    // kez üretilir, görüntü satırı -> kaynak satırı eşlemesi modele buradan bildirilir.
+    const Preview& throttled(TuiState& state, const core::NoteStore& store,
                              std::chrono::steady_clock::time_point now);
+    // Şu an gösterilen: biçimli görünüm ya da ham metin. Seçim kopyası bunu okur.
+    const Preview& shown() const { return rendered_active_ ? rendered_ : preview_; }
     bool deferred() const { return deferred_; }
     void invalidate() { path_.reset(); }
     // Her yeniden okumada artar: not içi arama eşleşmeleri eski metne ait kalmasın.
@@ -67,6 +84,11 @@ public:
 private:
     using Reader = std::function<std::expected<core::NoteContent, core::Error>()>;
     const Preview& load(const Row* row, bool from_trash, const Reader& read);
+    const Preview& publish(TuiState& state, std::chrono::steady_clock::time_point now);
+    bool resize_settling(int width, std::chrono::steady_clock::time_point now);
+    // Görünümü gerekirse üretir; false: boyutlandırma sürüyor, önceki yerleşim kalır.
+    bool update_rendered(bool wanted, int width, std::chrono::steady_clock::time_point now);
+    void build_rendered(int width);
 
     std::optional<core::NotePath> path_;
     bool from_trash_ = false;
@@ -76,6 +98,17 @@ private:
     bool deferred_ = false;
     Preview preview_;
     std::size_t generation_ = 0;
+    // Biçimli görünüm: `revision_` (her okumada artar) ve genişlik aynıysa yeniden üretilmez.
+    Preview rendered_;
+    std::size_t revision_ = 0;
+    std::optional<std::size_t> rendered_revision_;
+    int rendered_width_ = 0;
+    bool rendered_ok_ = false;
+    bool rendered_active_ = false;
+    std::string rendered_note_;
+    std::optional<int> settling_width_;
+    std::chrono::steady_clock::time_point last_resize_{};
+    bool resize_waiting_ = false;
 };
 
 struct StatusLine {
@@ -93,8 +126,11 @@ ftxui::Element render(const TuiState& state, const Preview& preview, const Statu
                       const EditorSession* editor = nullptr, SpellChecker* spell = nullptr,
                       const RenameState* rename = nullptr);
 
-// Satırın `▸` `▾` işaretinin ekran sütunu: kenar, seçim, numara, boşluk.
-int row_marker_column(const TuiState& state);
+// Satırın ok hücresinin ekran sütunu (klasörde `▸` `▾`): kenar, seçim işareti, girinti, numara, boşluk.
+int row_marker_column(const TuiState& state, std::size_t row = 0);
+
+// Üst satırdaki klasör yolunun `x` sütunundaki parçasının klasörü; ayırıcıda ve dışında nullopt.
+std::optional<std::string> breadcrumb_folder_at(const TuiState& state, int x);
 
 // Üst satırın en solundaki çöp göstergesi ("çöp: 3"); çöp boşken ya da çöp görünümünde boş. Metin esastır:
 // simge karakterinin genişliği terminale göre değişir ve satırı kaydırırdı.
@@ -120,6 +156,6 @@ ftxui::Element input_bar(const std::string& label, const std::string& value, con
 std::string fit_hints(std::string_view hints, int width);
 
 // Değerin son `limit` kod noktası; kesilen başa "…" konur (imleç sonda, görünür kalsın).
-std::string tail_code_points(const std::string& value, std::size_t limit);
+std::string tail_cells(const std::string& value, std::size_t limit);
 
 }  // namespace noteapp::tui

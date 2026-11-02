@@ -1,10 +1,16 @@
 // NoteStore taşı/sil/klasör işlemleri (T14). Silme yolu 🔴: hiçbir testte "yanlış şey silindi" olmamalı.
+#include "core/i18n.hpp"
 #include "core/note_store.hpp"
+#include "core/note_store_impl.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 
 #include <algorithm>
 #include <doctest/doctest.h>
+#include <span>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace noteapp::core;
 using noteapp::test::seed_note;
@@ -222,4 +228,142 @@ TEST_CASE("remove_folder removes an empty folder without force and a full one wi
     const auto missing = store.remove_folder("yok", true);
     REQUIRE_FALSE(missing.has_value());
     CHECK(missing.error().code == Error::Code::NotFound);
+}
+
+TEST_CASE("copy_folder copies the subtree, empty folders and exact bytes, in one write step") {
+    const noteapp::test::TempDir dir;
+    NoteStore store(dir.path());
+    noteapp::test::upsert_note(dir.path(), "work/a.md", std::string_view("A\r\n\0B", 5));
+    noteapp::test::upsert_note(dir.path(), "work/sub/b.txt", "B");
+    REQUIRE(store.import_notes(std::vector{ImportedNote{NotePath::parse("work/Makefile").value(), "M"}}));
+    REQUIRE(store.create_folder("work/empty"));
+    REQUIRE(store.create_folder("dest"));
+    REQUIRE(store.copy_folder("work", "dest/kopya"));
+    CHECK(noteapp::test::note_body(dir.path(), "dest/kopya/a.md") == std::string("A\r\n\0B", 5));
+    CHECK(noteapp::test::note_body(dir.path(), "dest/kopya/sub/b.txt") == "B");
+    CHECK(noteapp::test::note_body(dir.path(), "dest/kopya/Makefile") == "M");
+    const auto folders = store.folders();
+    CHECK(std::ranges::find(folders, "dest/kopya/empty") != folders.end());
+    CHECK(noteapp::test::note_body(dir.path(), "work/a.md") == std::string("A\r\n\0B", 5));
+}
+
+TEST_CASE("copy_folder refuses a missing source, a taken target and copying into itself, writing nothing") {
+    const noteapp::test::TempDir dir;
+    NoteStore store(dir.path());
+    noteapp::test::upsert_note(dir.path(), "work/a.md", "A");
+    noteapp::test::upsert_note(dir.path(), "taken.md", "T");
+    const auto folders_before = store.folders();
+    using Code = Error::Code;
+    const auto code_of = [&](std::string_view from, std::string_view to) {
+        const auto result = store.copy_folder(from, to);
+        REQUIRE_FALSE(result.has_value());
+        return result.error().code;
+    };
+    CHECK(code_of("nope", "x") == Code::NotFound);
+    CHECK(code_of("work", "taken.md") == Code::AlreadyExists);
+    CHECK(code_of("work", "work") == Code::InvalidPath);
+    CHECK(code_of("work", "work/in/deep") == Code::InvalidPath);
+    CHECK(store.folders() == folders_before);
+    CHECK(store.list().size() == 2);
+}
+
+TEST_CASE("copy_folder splits a large copy across frames and copies every note once") {
+    const noteapp::test::TempDir dir;
+    NoteStore store(dir.path());
+    constexpr int kNotes = 40;
+    std::vector<ImportedNote> notes;
+    const std::string big(2U * 1024U * 1024U, 'x');  // 80 MiB toplam: tek çerçeveye sığmaz
+    for (int i = 0; i < kNotes; ++i)
+        notes.push_back(ImportedNote{NotePath::parse("work/n" + std::to_string(i) + ".md").value(),
+                                     big + std::to_string(i)});
+    for (const ImportedNote& note : notes)
+        REQUIRE(store.import_notes(std::span(&note, 1)));
+    REQUIRE(store.copy_folder("work", "copy"));
+    CHECK(store.list().size() == 2 * kNotes);
+    CHECK(noteapp::test::note_body(dir.path(), "copy/n39.md") == big + "39");
+}
+
+namespace {
+
+// Her biri kendi çerçevesine düşecek kadar büyük dört not: work/n0..n3.
+constexpr std::size_t kCopyNoteBytes = 20U * 1024U * 1024U;
+constexpr int kCopyNotes = 4;
+
+void seed_large_notes(NoteStore& store) {
+    for (int i = 0; i < kCopyNotes; ++i) {
+        const ImportedNote note{np("work/n" + std::to_string(i) + ".md"),
+                                std::string(kCopyNoteBytes, 'x') + std::to_string(i)};
+        REQUIRE(store.import_notes(std::span(&note, 1)));
+    }
+}
+
+std::vector<std::string> paths_under(const NoteStore& store, std::string_view prefix) {
+    std::vector<std::string> paths;
+    for (const NoteInfo& info : store.list())
+        if (info.path.string().starts_with(prefix))
+            paths.push_back(info.path.string());
+    std::ranges::sort(paths);
+    return paths;
+}
+
+std::vector<std::string> all_copies() {
+    return {"copy/n0.md", "copy/n1.md", "copy/n2.md", "copy/n3.md"};
+}
+
+}  // namespace
+
+TEST_CASE("copy_folder closes the frame before a note that would overflow it: 31 MiB then 40 MiB") {
+    const noteapp::test::TempDir dir;
+    NoteStore store(dir.path());
+    const std::string first(31U * 1024U * 1024U, 'a');
+    const std::string second(40U * 1024U * 1024U, 'b');
+    const std::vector<ImportedNote> notes{{np("work/a.md"), first}, {np("work/b.md"), second}};
+    for (const ImportedNote& note : notes)
+        REQUIRE(store.import_notes(std::span(&note, 1)));
+    const auto copied = store.copy_folder("work", "copy");
+    REQUIRE_MESSAGE(copied.has_value(), (copied ? std::string() : format_error(copied.error())));
+    CHECK(noteapp::test::note_body(dir.path(), "copy/a.md") == first);
+    CHECK(noteapp::test::note_body(dir.path(), "copy/b.md") == second);
+}
+
+TEST_CASE("copy_folder resumes by path when a writer changes the source between frames") {
+    const noteapp::test::TempDir dir;
+    NoteStore store(dir.path());
+    seed_large_notes(store);
+    bool fired = false;
+    std::function<void()> write;
+    store.impl().after_copy_batch = [&] {
+        if (!std::exchange(fired, true))
+            write();
+    };
+    SUBCASE("a copied source note is removed: the next one is not skipped") {
+        write = [&] { REQUIRE(store.remove(np("work/n0.md"))); };
+    }
+    SUBCASE("a note appears before the cursor: nothing is copied twice") {
+        write = [&] { put(store, "work/a.md", "A"); };
+    }
+    REQUIRE(store.copy_folder("work", "copy"));
+    CHECK(fired);
+    CHECK(paths_under(store, "copy/") == all_copies());
+}
+
+TEST_CASE("copy_folder failing after a committed frame reports a partial copy with its count") {
+    const noteapp::test::TempDir dir;
+    NoteStore store(dir.path());
+    seed_large_notes(store);
+    bool fired = false;
+    store.impl().after_copy_batch = [&] {
+        if (!std::exchange(fired, true))
+            put(store, "copy/n3.md", "someone else");
+    };
+    const auto copied = store.copy_folder("work", "copy");
+    REQUIRE_FALSE(copied.has_value());
+    CHECK(copied.error().code == Error::Code::PartialCopy);  // AlreadyExists olsa çağıran yeni adla yinelerdi
+    const auto& args = copied.error().args;
+    const auto count = std::ranges::find_if(args, [](const auto& arg) { return arg.first == "count"; });
+    REQUIRE(count != args.end());
+    CHECK(count->second == "3");
+    CHECK(paths_under(store, "copy/") == all_copies());  // yarım kopya yerinde; n3 başkasının
+    CHECK(noteapp::test::note_body(dir.path(), "copy/n3.md") == "someone else");
+    CHECK(paths_under(store, "work/").size() == kCopyNotes);
 }

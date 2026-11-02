@@ -106,7 +106,8 @@ std::vector<std::string> scan_links(std::string_view body) {
             links.emplace_back(target);
     }
     std::ranges::sort(links);
-    links.erase(std::ranges::unique(links).begin(), links.end());
+    const auto duplicates = std::ranges::unique(links);
+    links.erase(duplicates.begin(), duplicates.end());
     return links;
 }
 
@@ -805,10 +806,17 @@ std::expected<void, Error> WriteContext::import_one(const ImportedNote& note, Im
         return import_existing(note, id, outcome);
     const std::int64_t updated = to_ms(note.updated_at.value_or(std::chrono::system_clock::now()));
     const std::int64_t created = note.created_at ? to_ms(*note.created_at) : updated;
-    NOTEAPP_TRY(init_note(id, note.path, note.bytes, created, updated, kOriginUnknown));
-    NOTEAPP_TRY_GRAPH(txn.set_property(id, kMigratedSha, graph::Value{digest_of(note.bytes)}), path);
-    if (note.deleted_at)
+    if (note.deleted_at) {
+        // Çöpün yolu kTrashedFrom'dadır: düğüm kökte durur, canlı ağaçta boş klasör doğmaz; geri alma kurar.
+        auto leaf = NotePath::parse(path.substr(path.rfind('/') + 1));
+        if (!leaf)
+            return std::unexpected(leaf.error());
+        NOTEAPP_TRY(init_note(id, *leaf, note.bytes, created, updated, kOriginUnknown));
         NOTEAPP_TRY(mark_trashed(id, path, *note.deleted_at));
+    } else {
+        NOTEAPP_TRY(init_note(id, note.path, note.bytes, created, updated, kOriginUnknown));
+    }
+    NOTEAPP_TRY_GRAPH(txn.set_property(id, kMigratedSha, graph::Value{digest_of(note.bytes)}), path);
     ++outcome.imported;
     return {};
 }

@@ -47,7 +47,7 @@ public:
 
 private:
     struct Row {
-        std::size_t scope_index;
+        std::size_t scope_index{};
         std::vector<std::size_t> byte_positions;
         std::size_t hits = 0;  // içerik modunda eşleşen satır sayısı
     };

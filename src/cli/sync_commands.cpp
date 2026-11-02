@@ -156,8 +156,7 @@ std::string read_token(const std::string& host) {
 
 // HOST verilmezse config.sync.remote'un host'u (kasa hesabı = host, SPEC.md §8).
 std::optional<std::string> token_host(const core::Config& config, const std::vector<std::string>& operands) {
-    const std::string host =
-        operands.empty() ? sync::parse_remote(config.sync.remote).host : operands.front();
+    std::string host = operands.empty() ? sync::parse_remote(config.sync.remote).host : operands.front();
     if (host.empty()) {
         std::cerr << core::tr("cli.sync_login_no_host") << '\n';
         return std::nullopt;

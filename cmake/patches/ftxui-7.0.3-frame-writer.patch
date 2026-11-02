@@ -1,0 +1,103 @@
+FTXUI 7.0.3 writes the whole screen on every frame and reads input 128 bytes at
+a time, so one key costs ~3 KiB on the terminal and queued keys need many frames.
+App has no output hook, so noteapp (T75) adds the smallest one:
+- App::SetFrameWriter: noteapp's src/tui/frame_diff.cpp writes changed cells only.
+- FetchTerminalEvents: 4096-byte read, all queued input lands in one frame.
+Drop this patch when upstream offers an output hook; re-check at every FTXUI bump.
+
+--- a/src/ftxui/component/app.cpp
++++ b/src/ftxui/component/app.cpp
+@@ -118,6 +118,9 @@
+ 
+   bool frame_valid_ = false;
+ 
++  FrameWriter frame_writer_;
++  bool frame_writer_repaint_ = true;
++
+   bool force_handle_ctrl_c_ = true;
+   bool force_handle_ctrl_z_ = true;
+ 
+@@ -561,6 +564,7 @@
+ 
+ void App::Internal::Install() {
+   frame_valid_ = false;
++  frame_writer_repaint_ = true;
+ 
+   // Flush the buffer for stdout to ensure whatever the user has printed before
+   // is fully applied before we start modifying the terminal configuration. This
+@@ -1019,13 +1023,17 @@
+   }
+ 
+   // Hide cursor to prevent flickering during reset.
+-  TerminalSend("\033[?25l");
++  if (!frame_writer_) {
++    TerminalSend("\033[?25l");
++  }
+ 
+   const bool resized =
+       frame_count_ == 0 || (dimx != public_->dimx_) || (dimy != public_->dimy_);
+-  TerminalSend(ResetCursorPosition());
++  if (!frame_writer_) {
++    TerminalSend(ResetCursorPosition());
++  }
+ 
+-  if (frame_count_ != 0) {
++  if (frame_count_ != 0 && !frame_writer_) {
+     // Reset the cursor position to the lower left corner to start drawing the
+     // new frame.
+     public_->ResetPosition(output_buffer, resized);
+@@ -1065,6 +1073,18 @@
+                          selection_data_.end_x, selection_data_.end_y);
+   Render(*public_, document.get(), *selection_);
+ 
++  if (frame_writer_) {
++    frame_writer_(*public_, frame_writer_repaint_, output_buffer);
++    frame_writer_repaint_ = false;
++    if (!output_buffer.empty()) {
++      TerminalFlush();
++    }
++    public_->Clear();
++    frame_valid_ = true;
++    frame_count_++;
++    return;
++  }
++
+   // Set cursor position for user using tools to insert CJK characters.
+   {
+     const int dx = public_->dimx_ - 1 - public_->cursor_.x +
+@@ -1395,7 +1415,7 @@
+   last_char_time = std::chrono::steady_clock::now();
+ 
+   // Read chars from the terminal.
+-  std::array<char, 128> out{};
++  std::array<char, 4096> out{};
+   const ssize_t l = read(tty_fd_, out.data(), out.size());
+   if (l <= 0) {
+     return 0;
+@@ -1572,6 +1592,10 @@
+   };
+ }
+ 
++void App::SetFrameWriter(FrameWriter writer) {
++  internal_->frame_writer_ = std::move(writer);
++}
++
+ void App::ForceHandleCtrlC(bool force) {
+   internal_->force_handle_ctrl_c_ = force;
+ }
+--- a/include/ftxui/component/app.hpp
++++ b/include/ftxui/component/app.hpp
+@@ -167,6 +167,13 @@
+   /// @brief Return the terminal emulator version.
+   const std::string& TerminalEmulatorVersion() const;
+ 
++  /// @brief Replaces the full-frame write: called with each rendered frame.
++  /// Fullscreen on the alternate screen only: the writer owns cursor placement.
++  /// `repaint` is true on the first frame after the terminal was (re)installed.
++  using FrameWriter =
++      std::function<void(const Screen&, bool repaint, std::string& output)>;
++  void SetFrameWriter(FrameWriter writer);
++
+   /// @brief Return the terminal capabilities.
+   const std::vector<int>& TerminalCapabilities() const;
+ 

@@ -5,7 +5,7 @@
 FROM registry.fedoraproject.org/fedora@sha256:b414c09be79dd1f32529b55b096b6bb30435d82ee16fbdbbabf8985eb5f86db0
 
 RUN dnf install -y --setopt=install_weak_deps=False \
-        cmake ninja-build tar poppler-utils \
+        cmake ninja-build tar patch poppler-utils \
         mingw64-gcc-c++ mingw64-winpthreads-static \
         wine-core.x86_64 wine-common \
     && dnf clean all

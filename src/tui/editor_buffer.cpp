@@ -57,7 +57,7 @@ std::size_t edit_bytes(std::string_view removed, std::string_view inserted) {
 }
 
 std::string with_eol(std::string_view text, std::string_view eol) {
-    const std::string normalized = core::normalize_line_endings(text);
+    std::string normalized = core::normalize_line_endings(text);
     if (eol == kLf)
         return normalized;
     std::string out;

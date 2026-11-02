@@ -70,11 +70,17 @@ TEST_CASE("parse_query separates arguments from search text") {
 }
 
 TEST_CASE("parse_query reads every sort field and direction; the last sort wins") {
+    REQUIRE(parsed("sort:name").sort.has_value());
     CHECK(parsed("sort:name").sort->field == SortField::Name);
+    REQUIRE(parsed("sort:name").sort.has_value());
     CHECK_FALSE(parsed("sort:name").sort->descending);
+    REQUIRE(parsed("sort:updated").sort.has_value());
     CHECK(parsed("sort:updated").sort->field == SortField::Updated);
+    REQUIRE(parsed("sort:-created").sort.has_value());
     CHECK(parsed("sort:-created").sort->field == SortField::Created);
+    REQUIRE(parsed("sort:-created").sort.has_value());
     CHECK(parsed("sort:-created").sort->descending);
+    REQUIRE(parsed("sort:name sort:-size").sort.has_value());
     CHECK(parsed("sort:name sort:-size").sort->field == SortField::Size);
 }
 
@@ -103,7 +109,9 @@ TEST_CASE("parse_query allows quoted values and keeps quoted text for the conten
 }
 
 TEST_CASE("parse_query folds keys and values with the search fold rules") {
+    REQUIRE(parsed("SORT:-SİZE").sort.has_value());
     CHECK(parsed("SORT:-SİZE").sort->field == SortField::Size);
+    REQUIRE(parsed("sort:-sıze").sort.has_value());
     CHECK(parsed("sort:-sıze").sort->descending);
     CHECK(parsed("TYPE:MD").filters[0].text == "md");
     CHECK(parsed("İN:İŞ/").filters[0].text == "is/");

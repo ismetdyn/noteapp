@@ -71,6 +71,7 @@ TEST_CASE("libgit2 locks are left alone when no stale sync lock was taken over")
 TEST_CASE("a merge a killed sync left without conflicts in the index is closed and the sync goes on") {
     const SyncFixture fx;
     const fs::path a = synced_clone(fx);
+    REQUIRE(ref_id(a, "HEAD").has_value());
     write_file(a / ".git" / "MERGE_HEAD", *ref_id(a, "HEAD") + "\n");
     put_note("yeni.md", "yeni\n");
     leave_dead_sync_lock();
@@ -100,6 +101,7 @@ TEST_CASE("an interrupted merge with conflicts in the index is undone; the note 
         REQUIRE_GIT(git_index_conflict_add(index.get(), nullptr, &ours, &theirs));
         REQUIRE_GIT(git_index_write(index.get()));
     }
+    REQUIRE(ref_id(a, "HEAD").has_value());
     write_file(a / ".git" / "MERGE_HEAD", *ref_id(a, "HEAD") + "\n");
     leave_dead_sync_lock();
     const auto head = ref_id(a, "HEAD");

@@ -7,6 +7,7 @@
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
 
+#include <algorithm>
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <ftxui/dom/node.hpp>
@@ -189,11 +190,22 @@ TEST_CASE("help lists every key from the catalog at the minimum size") {
     CHECK(has(top, "Keys"));
     CHECK(has(top, "filter notes"));
     CHECK(has(top, "Esc/F1/q close"));
-    for (int i = 0; i < 20; ++i)
+    for (int i = 0; i < 40; ++i)
         h.handle(Key::PageDown);
     const auto bottom = render_modal(60, 15, nullptr, nullptr, &h);
     CHECK(has(bottom, "quit"));  // en alttaki satıra kaydırılınca ulaşılır
     CHECK(has(bottom, "Esc/F1/q close"));
+}
+
+TEST_CASE("help lists the Ctrl+L redraw in both languages") {
+    for (const char* language : {"en", "tr"}) {
+        core::init_i18n(language);
+        const auto lines = tui::help_lines();
+        CHECK_MESSAGE(
+            std::ranges::any_of(lines, [](const std::string& line) { return line.contains("Ctrl+L"); }),
+            language);
+    }
+    core::init_i18n("en");
 }
 
 TEST_CASE("help is available in Turkish") {

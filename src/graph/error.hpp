@@ -24,7 +24,7 @@ struct Error {
         Io
     };
 
-    Code code;
+    Code code{};
     std::string message_key;
     std::vector<std::pair<std::string, std::string>> args;
 };

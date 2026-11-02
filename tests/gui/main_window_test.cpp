@@ -302,6 +302,7 @@ TEST_CASE_FIXTURE(WindowFixture, "typing Turkish text in the editor edits the bu
     type_text(*view, "çğıİöşü");
     CHECK(state->buffer() == "çğıİöşüa");
     CHECK(state->dirty());
+    REQUIRE(state->next_deadline().has_value());
     state->tick(*state->next_deadline());
     CHECK(read_note("alpha.md") == "çğıİöşüa");
 }

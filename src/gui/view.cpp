@@ -2,6 +2,7 @@
 
 #include "core/i18n.hpp"
 #include "core/log.hpp"
+#include "gui/icon_font.hpp"
 #include "pdf/fonts.hpp"
 
 #include <SDL3/SDL.h>
@@ -42,13 +43,14 @@ constexpr float kMinFieldEms = 4.0F;
 constexpr float kScaleRounding = 100.0F;
 constexpr float kMinInlineFieldEms = 8.0F;    // daha darsa yanındaki düğmeler alt satıra iner
 constexpr float kMaxLabelColumnShare = 0.5F;  // etiket sütunu alanı yok etmesin; uzun etiket sarılır
-constexpr const char* kGeneralKeys[] = {"language",       "notes_dir", "default_type",
-                                        "default_folder", "types",     "editor"};
+constexpr const char* kGeneralKeys[] = {"language", "notes_dir", "default_type", "default_folder",
+                                        "types",    "icons",     "editor"};
 constexpr const char* kSyncKeys[] = {"sync.enabled",      "sync.remote",      "sync.branch",
                                      "sync.idle_seconds", "sync.author_name", "sync.author_email"};
 constexpr const char* kEllipsis = "…";
 constexpr ImVec4 kErrorColor(0.75F, 0.22F, 0.17F, 1.0F);  // açık ve koyu temada okunur kırmızı
 constexpr const char* kLanguages[] = {"auto", "tr", "en"};
+constexpr const char* kIconModes[] = {"nerd", "off"};
 const SDL_DialogFileFilter kPdfFilters[] = {{"PDF", "pdf"}};
 
 using WindowPtr = std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)>;
@@ -101,6 +103,21 @@ ImFont* load_font(const char* resource) {
     void* owned = IM_ALLOC(font->size());
     std::memcpy(owned, font->data(), font->size());
     return ImGui::GetIO().Fonts->AddFontFromMemoryTTF(owned, static_cast<int>(font->size()), kFontPixels);
+}
+
+// Aralıklar yalnız tablodaki kod noktalarıdır; alt küme fontu zaten yalnız onları taşır, atlas da yalnız
+// onları ister. `ranges` fontla yaşar (ImGui dizinin kopyasını tutmaz).
+bool merge_icon_font(const std::vector<ImWchar>& ranges) {
+    const auto font = embedded_icon_font("fonts/NoteappIcons.ttf");
+    if (!font)
+        return false;
+    void* owned = IM_ALLOC(font->size());
+    std::memcpy(owned, font->data(), font->size());
+    ImFontConfig config;
+    config.MergeMode = true;
+    config.GlyphRanges = ranges.data();
+    return ImGui::GetIO().Fonts->AddFontFromMemoryTTF(owned, static_cast<int>(font->size()), kFontPixels,
+                                                      &config) != nullptr;
 }
 
 std::size_t utf8_length(char lead) {
@@ -247,10 +264,10 @@ void draw_hint(const std::string& text) {
     ImGui::PopStyleColor();
 }
 
-// Dil kodu saklanır; kullanıcı okunur adını görür. Elle yazılmış bilinmeyen değer olduğu gibi gösterilir.
-std::string language_label(const std::string& code) {
-    return std::ranges::find(kLanguages, code) != std::end(kLanguages) ? core::tr("gui.language_" + code)
-                                                                       : code;
+// Kod saklanır; kullanıcı okunur adını görür. Elle yazılmış bilinmeyen değer olduğu gibi gösterilir.
+std::string choice_label(const std::string& key, std::span<const char* const> choices,
+                         const std::string& code) {
+    return std::ranges::find(choices, code) != choices.end() ? core::tr("gui." + key + "_" + code) : code;
 }
 
 // Sondaki etiket ya da düğme için yer bırakan form alanı genişliği.
@@ -302,11 +319,51 @@ void draw_row_text(ImVec2 position, std::string_view text, const std::vector<std
     draw_piece(done, text.size(), normal);
 }
 
-bool plain_selectable(const std::string& text, bool selected,
-                      const std::vector<std::size_t>& highlights = {}) {
-    const ImVec2 position = ImGui::GetCursorScreenPos();
-    const float width = ImGui::GetContentRegionAvail().x;
+// Sabit tonlar: tema değişse de hem açık hem koyu zeminde okunur.
+ImU32 icon_color(core::IconColor color) {
+    switch (color) {
+    case core::IconColor::Blue:
+        return IM_COL32(64, 132, 214, 255);
+    case core::IconColor::Cyan:
+        return IM_COL32(32, 152, 168, 255);
+    case core::IconColor::Green:
+        return IM_COL32(64, 160, 88, 255);
+    case core::IconColor::Yellow:
+        return IM_COL32(196, 150, 32, 255);
+    case core::IconColor::Red:
+        return IM_COL32(212, 84, 72, 255);
+    case core::IconColor::Magenta:
+        return IM_COL32(170, 96, 200, 255);
+    case core::IconColor::Default:
+        break;
+    }
+    return ImGui::GetColorU32(ImGuiCol_Text);
+}
+
+// İkonu çizip metne ayrılan genişliği döner. Yuva sabit: orantılı fontta sembol genişlikleri farklı, adlar
+// aynı sütunda başlasın.
+float draw_row_icon(ImVec2 position, core::IconStyle style, const std::string& text, bool selected) {
+    if (style == core::IconStyle::Off)
+        return 0.0F;
+    const core::FileIcon icon = core::file_icon(text);
+    const std::string glyph = core::icon_text(icon, style);
+    // Seçili satırın vurgu zemininde tür rengi kaybolur (mavi üstüne mavi): metin rengi kullanılır.
+    const ImU32 color = selected ? ImGui::GetColorU32(ImGuiCol_Text) : icon_color(icon.color);
+    const float font_size = ImGui::GetFontSize();
+    const float icon_size = font_size * View::kRowIconScale;
+    position.y -= (icon_size - font_size) / 2.0F;  // satır ortasında kalsın
+    ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(), icon_size, position, color, glyph.c_str());
+    return font_size * View::kRowIconSlotEms;
+}
+
+bool plain_selectable(const std::string& text, bool selected, const std::vector<std::size_t>& highlights = {},
+                      core::IconStyle icon_style = core::IconStyle::Off) {
+    ImVec2 position = ImGui::GetCursorScreenPos();
+    float width = ImGui::GetContentRegionAvail().x;
     const bool clicked = ImGui::Selectable("##row", selected);
+    const float icon_width = draw_row_icon(position, icon_style, text, selected);
+    position.x += icon_width;
+    width -= icon_width;
     if (text_width(text) <= width) {
         draw_row_text(position, text, highlights);
         return clicked;
@@ -387,6 +444,7 @@ struct View::Platform {
     std::optional<RendererBackend> renderer_backend;
     ImFont* ui_font = nullptr;
     ImFont* mono_font = nullptr;
+    std::vector<ImWchar> icon_ranges = icon_glyph_ranges();
 };
 
 std::expected<std::unique_ptr<View>, std::string> View::create(GuiState& state) {
@@ -410,8 +468,9 @@ std::expected<std::unique_ptr<View>, std::string> View::create(GuiState& state) 
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     platform->ui_font = load_font("fonts/DejaVuSans.ttf");
+    const bool has_icons = merge_icon_font(platform->icon_ranges);
     platform->mono_font = load_font("fonts/DejaVuSansMono.ttf");
-    if (platform->ui_font == nullptr || platform->mono_font == nullptr)
+    if (platform->ui_font == nullptr || !has_icons || platform->mono_font == nullptr)
         return std::unexpected("embedded UI font is missing");
     platform->sdl_backend.emplace(platform->window.get(), platform->renderer.get());
     if (!platform->sdl_backend->ok)
@@ -420,7 +479,7 @@ std::expected<std::unique_ptr<View>, std::string> View::create(GuiState& state) 
     if (!platform->renderer_backend->ok)
         return std::unexpected(sdl_error("ImGui_ImplSDLRenderer3_Init"));
 
-    std::unique_ptr<View> view(new View(state, std::move(platform)));
+    auto view = std::make_unique<View>(state, std::move(platform));
     view->apply_window_scale();  // temayı da uygular
     return view;
 }
@@ -639,7 +698,7 @@ void View::handle_shortcuts() {
         return;
     struct Shortcut {
         ImGuiKeyChord chord;
-        void (*action)(GuiState&);
+        void (*action)(GuiState&){};
     };
     static constexpr Shortcut kShortcuts[] = {
         {ImGuiMod_Ctrl | ImGuiKey_K, [](GuiState& s) { s.focus_search(); }},
@@ -810,17 +869,18 @@ int View::token_input_flags() {
     return ImGuiInputTextFlags_Password;
 }
 
-// Saklanan değer dil kodudur; ImGui kimliği de koddan gelir, çeviri kimliği değiştirmez.
-void View::draw_language_combo(std::string& value) {
-    const bool open = ImGui::BeginCombo("##value", language_label(value).c_str());
-    remember_item_center("setting:language");
+// Saklanan değer koddur; ImGui kimliği de koddan gelir, çeviri kimliği değiştirmez.
+void View::draw_choice_combo(const std::string& key, std::span<const char* const> choices,
+                             std::string& value) {
+    const bool open = ImGui::BeginCombo("##value", choice_label(key, choices, value).c_str());
+    remember_item_center("setting:" + key);
     if (!open)
         return;
-    for (const char* language : kLanguages) {
-        const std::string option = language_label(language) + "###" + language;
-        if (ImGui::Selectable(option.c_str(), value == language))
-            value = language;
-        remember_item_center(std::string("language:") + language);
+    for (const char* choice : choices) {
+        const std::string option = choice_label(key, choices, choice) + "###" + choice;
+        if (ImGui::Selectable(option.c_str(), value == choice))
+            value = choice;
+        remember_item_center(key + ":" + choice);
     }
     ImGui::EndCombo();
 }
@@ -829,7 +889,11 @@ void View::draw_setting_input(const std::string& key) {
     SettingsPage& page = state_.settings();
     std::string& value = page.field(key);
     if (key == "language") {
-        draw_language_combo(value);
+        draw_choice_combo(key, kLanguages, value);
+        return;
+    }
+    if (key == "icons") {
+        draw_choice_combo(key, kIconModes, value);
         return;
     }
     if (key == "default_type") {
@@ -883,7 +947,7 @@ void View::draw_setting_field(const std::string& key) {
             queue([this] { state_.settings().browse_notes_dir(); });
     }
     ImGui::EndDisabled();
-    if (key == "editor" || key == "sync.remote" || key == "sync.idle_seconds") {
+    if (key == "editor" || key == "icons" || key == "sync.remote" || key == "sync.idle_seconds") {
         draw_hint(setting_hint(key));
         remember_item_center("setting_hint:" + key);
     }
@@ -1119,24 +1183,34 @@ void View::draw_folder_tree() {
 
 void View::draw_toolbar() {
     struct ToolbarAction {
-        const char* name;
-        const char* label_key;
-        const char* tooltip_key;
-        bool enabled;
+        const char* name{};
+        const char* label_key{};
+        const char* tooltip_key{};
+        bool enabled{};
         std::function<void()> run;
+        std::string icon;  // boşsa etiket ikonsuz; tabloda "sil" karşılığı glif yok
+    };
+    const auto glyph = [this](const core::FileIcon& icon) {
+        return core::icon_text(icon, state_.icon_style());
     };
     const ToolbarAction actions[] = {
         {"toolbar_new_note", "gui.toolbar_new_note", "gui.toolbar_new_note_tip", true,
-         [this] { state_.new_note(); }},
+         [this] { state_.new_note(); }, glyph(core::file_icon(""))},
         {"toolbar_new_folder", "gui.new_folder", "gui.toolbar_new_folder_tip", true,
-         [this, folder = state_.current_folder()] { state_.new_folder(folder); }},
-        {"toolbar_delete", "gui.delete", "gui.toolbar_delete_tip", state_.can_delete(),
-         [this] { state_.delete_selected(false); }},
-        {"toolbar_trash", nullptr, "gui.toolbar_trash_tip", true, [this] { state_.toggle_trash(); }},
+         [this, folder = state_.current_folder()] { state_.new_folder(folder); },
+         glyph(core::folder_icon(false))},
+        {"toolbar_delete",
+         "gui.delete",
+         "gui.toolbar_delete_tip",
+         state_.can_delete(),
+         [this] { state_.delete_selected(false); },
+         {}},
+        {"toolbar_trash", nullptr, "gui.toolbar_trash_tip", true, [this] { state_.toggle_trash(); },
+         glyph(core::trash_icon())},
         {"toolbar_move", "gui.toolbar_move", "gui.toolbar_move_tip", state_.can_move(),
-         [this] { state_.move_note(); }},
+         [this] { state_.move_note(); }, glyph(core::folder_icon(true))},
         {"toolbar_export", "gui.toolbar_export", "gui.toolbar_export_tip", state_.can_export(),
-         [this] { state_.export_pdf(); }},
+         [this] { state_.export_pdf(); }, glyph(core::file_icon("a.pdf"))},
     };
     const float top = ImGui::GetCursorPosY();
     const float row_start_x = ImGui::GetCursorScreenPos().x;
@@ -1148,7 +1222,8 @@ void View::draw_toolbar() {
     const std::string trash_label =
         core::tr("gui.toolbar_trash", {{"count", std::to_string(state_.trash_count())}});
     for (const ToolbarAction& action : actions) {
-        const std::string label = action.label_key ? core::tr(action.label_key) : trash_label;
+        const std::string text = action.label_key ? core::tr(action.label_key) : trash_label;
+        const std::string label = action.icon.empty() ? text : action.icon + " " + text;
         if (!first)
             flow_after_previous(button_width(label), row_start_x, row_width);
         first = false;
@@ -1165,12 +1240,14 @@ void View::draw_toolbar() {
 
 // Kaydırılan listenin dışında: çok satırda da düğmeler görünür kalır.
 void View::draw_trash_header() {
-    ImGui::TextUnformatted(core::tr("gui.trash_title").c_str());
+    const std::string trash_icon = core::icon_text(core::trash_icon(), state_.icon_style());
+    ImGui::TextUnformatted(
+        ((trash_icon.empty() ? "" : trash_icon + " ") + core::tr("gui.trash_title")).c_str());
     remember_item_center("trash_title");
     struct TrashAction {
-        const char* name;
-        const char* label_key;
-        bool enabled;
+        const char* name{};
+        const char* label_key{};
+        bool enabled{};
         std::function<void()> run;
     };
     const TrashAction actions[] = {
@@ -1206,7 +1283,8 @@ void View::draw_trash_rows(bool focus_row) {
             ImGui::PushID(row);
             if (focus_row && row == current)
                 ImGui::SetKeyboardFocusHere();
-            if (plain_selectable(items[static_cast<std::size_t>(row)].path.string(), row == current))
+            if (plain_selectable(items[static_cast<std::size_t>(row)].path.string(), row == current, {},
+                                 state_.icon_style()))
                 queue([this, row] { state_.select_trash_row(row); });
             if (row == current && current != scrolled_row_) {
                 ImGui::SetScrollHereY();
@@ -1266,7 +1344,8 @@ void View::draw_note_rows(bool focus_row) {
             ImGui::PushID(row);
             if (focus_row && row == current)
                 ImGui::SetKeyboardFocusHere();
-            if (plain_selectable(model.display(row), row == current, model.highlights(row)))
+            if (plain_selectable(model.display(row), row == current, model.highlights(row),
+                                 state_.icon_style()))
                 queue([this, row] { state_.select_row(row); });
             draw_note_menu(row);
             if (row == current && current != scrolled_row_) {
@@ -1493,12 +1572,14 @@ std::optional<std::string> View::ask_path(const std::string& title, const std::s
         const bool browse_clicked = ImGui::Button(browse_label.c_str());
         remember_item_center("dialog_browse");
         if (browse_clicked) {
-            auto* userdata = new std::shared_ptr<NativeDialogResult>(native);  // sahibi native_dialog_done
+            auto userdata = std::make_unique<std::shared_ptr<NativeDialogResult>>(native);
             SDL_Window* window = platform_->window.get();
+            // release: sahiplik SDL üzerinden native_dialog_done'a geçer, geri çağrı her durumda çalışır.
             if (kind == PathKind::Folder)
-                SDL_ShowOpenFolderDialog(native_dialog_done, userdata, window, path.c_str(), false);
+                SDL_ShowOpenFolderDialog(native_dialog_done, userdata.release(), window, path.c_str(), false);
             else
-                SDL_ShowSaveFileDialog(native_dialog_done, userdata, window, kPdfFilters, 1, path.c_str());
+                SDL_ShowSaveFileDialog(native_dialog_done, userdata.release(), window, kPdfFilters, 1,
+                                       path.c_str());
         }
         submitted |= button("dialog_ok", core::tr("gui.ok"));
         ImGui::SameLine();

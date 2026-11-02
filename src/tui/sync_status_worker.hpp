@@ -32,7 +32,7 @@ public:
 
 private:
     struct Job {
-        core::Config config;
+        core::Config config{};
         std::vector<core::NoteMeta> notes;
     };
     void run(const std::stop_token& stop);

@@ -24,7 +24,7 @@ struct SaveDialogInit {
     std::string folder;                // ön dolu klasör (bkz. initial_folder)
     std::vector<std::string> folders;  // NoteStore::folders(): öneri havuzu
     std::vector<std::string> types;    // config.types: ←/→ döngüsü
-    detect::Suggestion suggestion;
+    detect::Suggestion suggestion{};
     std::size_t slug_max_length = core::kDefaultSlugMaxLength;
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
     // Taşıma kipi (Ctrl-R): ad/tip slug ve öneriden değil mevcut notun kendisinden gelir (move_dialog_init).
@@ -128,15 +128,19 @@ class NewRowState {
 public:
     enum class Outcome { Editing, Cancelled, Submit };
 
+    explicit NewRowState(SharedInputSources sources = {}) { line_.set_sources(std::move(sources)); }
+
     Outcome handle(Key key, std::string_view text = {});
 
-    const std::string& text() const { return text_; }
+    const std::string& text() const { return line_.text(); }
+    const InputLine& line() const { return line_; }
+    std::string ghost() const { return line_.ghost(); }
     const std::string& error() const { return error_; }
     // Geçersiz ya da dolu ad: satır açık kalır, yazılan metin kaybolmaz.
     void set_error(std::string error) { error_ = std::move(error); }
 
 private:
-    std::string text_;
+    InputLine line_;
     std::string error_;
 };
 
@@ -146,25 +150,42 @@ class RenameState {
 public:
     enum class Outcome { Editing, Cancelled, Submit };
 
-    explicit RenameState(core::NotePath from);
+    // `base`: girdi bu klasöre göredir, ön dolu metin ondan kısalır. Klasör adında nokta uzantı değildir.
+    explicit RenameState(core::NotePath from, SharedInputSources sources = {}, std::string base = {},
+                         bool is_folder = false);
+    // `m`: yalnız hedef klasör sorulur; `target()` klasördür, öğeler boş olamaz.
+    RenameState(std::vector<ListItem> items, std::string folder, SharedInputSources sources);
 
     Outcome handle(Key key, std::string_view text = {});
 
     const core::NotePath& from() const { return from_; }
-    const std::string& text() const { return text_; }
-    std::size_t cursor() const { return cursor_; }  // bayt ofseti, kod noktası başında
+    const std::string& text() const { return line_.text(); }
+    // Girdinin tam yolu: `base` + yazılan; klasörde sondaki `/` düşer.
+    std::string target() const;
+    bool is_folder() const { return is_folder_; }
+    bool is_move_to() const { return !items_.empty(); }
+    const std::vector<ListItem>& items() const { return items_; }
+    void set_items(std::vector<ListItem> items) { items_ = std::move(items); }
+    std::size_t cursor() const { return line_.cursor(); }  // bayt ofseti, kod noktası başında
+    const InputLine& line() const { return line_; }
+    std::string ghost() const { return line_.ghost(); }
     const std::string& error() const { return error_; }
     void set_error(std::string error) { error_ = std::move(error); }
 
 private:
     core::NotePath from_;
-    std::string text_;
-    std::size_t cursor_ = 0;
+    std::string base_;
+    bool is_folder_ = false;
+    std::vector<ListItem> items_;
+    InputLine line_;
     std::string error_;
 };
 
 // `a`: ad satırındaki metinden boş not; uzantı yazılmadıysa default_type, klasör yazılmadıysa default_folder.
 // Yazılan ad doluysa -2 eklenmez, hata döner: satır açık kalır.
+// `a` metni klasör mü: `/` ile biter, kök değildir.
+bool names_folder(std::string_view text);
+
 std::expected<core::CreatedNote, core::Error> create_named_note(core::NoteStore& store, std::string_view name,
                                                                 std::string_view default_folder,
                                                                 std::string_view default_type,

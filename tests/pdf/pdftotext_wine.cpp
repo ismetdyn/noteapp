@@ -1,10 +1,12 @@
 // Çapraz derlemede pdf_tests'in pdftotext'i: Fedora'da pdftotext.exe paketi yok, gerçek okuyucu host'unki.
-// Wine Unix programını beklenebilir süreç olarak başlatmaz: CreateProcess hemen döner, çıkış kodu kaybolur, stderr
-// bağlanmaz, boru da erken EOF verir. Bu yüzden sh betiği sonucu dosyalara yazar (pdftotext_wine.sh); burada beklenir ve
-// stdout, stderr, çıkış kodu olduğu gibi aktarılır.
+// Wine Unix programını beklenebilir süreç olarak başlatmaz: CreateProcess hemen döner, çıkış kodu kaybolur,
+// stderr bağlanmaz, boru da erken EOF verir. Bu yüzden sh betiği sonucu dosyalara yazar (pdftotext_wine.sh);
+// burada beklenir ve stdout, stderr, çıkış kodu olduğu gibi aktarılır.
+// shellapi.h windows.h türlerine ihtiyaç duyar; include sıralayıcısı onları yer değiştirmesin.
+// clang-format off
 #include <windows.h>
-
 #include <shellapi.h>
+// clang-format on
 
 #include <cstdio>
 #include <filesystem>
@@ -40,7 +42,8 @@ std::string read_and_delete(const std::wstring& path) {
 
 void write_all(DWORD std_handle, const std::string& content) {
     DWORD written = 0;
-    WriteFile(GetStdHandle(std_handle), content.data(), static_cast<DWORD>(content.size()), &written, nullptr);
+    WriteFile(GetStdHandle(std_handle), content.data(), static_cast<DWORD>(content.size()), &written,
+              nullptr);
 }
 
 }  // namespace
@@ -61,8 +64,8 @@ int main() {
     }
     const std::wstring base = temp_file;
 
-    std::wstring command = L"\"/bin/sh\" \"" NOTEAPP_PDFTOTEXT_WINE_SCRIPT L"\" \"" + widen_utf8(to_unix(base.c_str())) +
-                           L"\" \"" NOTEAPP_HOST_PDFTOTEXT L"\"";
+    std::wstring command = L"\"/bin/sh\" \"" NOTEAPP_PDFTOTEXT_WINE_SCRIPT L"\" \"" +
+                           widen_utf8(to_unix(base.c_str())) + L"\" \"" NOTEAPP_HOST_PDFTOTEXT L"\"";
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     for (int i = 1; i < argc; ++i) {
@@ -74,7 +77,8 @@ int main() {
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
-    if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process)) {
+    if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup,
+                        &process)) {
         std::fprintf(stderr, "pdftotext_wine: cannot start the script, error %lu\n", GetLastError());
         return 1;
     }

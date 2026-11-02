@@ -171,6 +171,7 @@ TEST_CASE("created_at and origin are real values; move keeps them and the body")
     CHECK(*metas[0].origin == "windows");
 #elif defined(__APPLE__)
     CHECK(*metas[0].origin == "macos");
+    REQUIRE(metas[0].origin.has_value());
 #else
     CHECK(*metas[0].origin == "linux");
 #endif

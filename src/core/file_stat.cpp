@@ -1,6 +1,7 @@
 #include "core/file_stat.hpp"
 
 #include "core/log.hpp"
+#include "core/unique_handle.hpp"
 
 #include <chrono>
 #include <cwchar>
@@ -68,9 +69,10 @@ std::string to_utf8(const wchar_t* wide) {
 // FIND_FIRST_EX_LARGE_FETCH: dizin girdileri toplu gelir; ad, öznitelik, boyut ve mtime girdiden okunur.
 void scan_dir(const fs::path& dir, const std::string& prefix, std::vector<ScannedFile>& out) {
     WIN32_FIND_DATAW data;
-    const HANDLE find = FindFirstFileExW((dir / L"*").c_str(), FindExInfoBasic, &data, FindExSearchNameMatch,
-                                         nullptr, FIND_FIRST_EX_LARGE_FETCH);
-    if (find == INVALID_HANDLE_VALUE)
+    const auto find = own_win_handle<UniqueFind>(FindFirstFileExW((dir / L"*").c_str(), FindExInfoBasic,
+                                                                  &data, FindExSearchNameMatch, nullptr,
+                                                                  FIND_FIRST_EX_LARGE_FETCH));
+    if (!find)
         return;  // kök yok ya da erişilemeyen dizin (skip_permission_denied gibi)
     do {
         if (data.cFileName[0] == L'.')
@@ -89,8 +91,7 @@ void scan_dir(const fs::path& dir, const std::string& prefix, std::vector<Scanne
             scan_dir(dir / data.cFileName, relative, out);
         else
             out.push_back(ScannedFile{std::move(relative), stat});
-    } while (FindNextFileW(find, &data));
-    FindClose(find);
+    } while (FindNextFileW(find.get(), &data));
 }
 
 #else
@@ -118,11 +119,10 @@ std::expected<FileStat, std::error_code> stat_file(const fs::path& path) {
     if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
         // Reparse etiketi yalnız dizin girdisinde var; nadir yol (bağ ya da bulut yer tutucusu).
         WIN32_FIND_DATAW entry;
-        const HANDLE find =
-            FindFirstFileExW(path.c_str(), FindExInfoBasic, &entry, FindExSearchNameMatch, nullptr, 0);
-        if (find == INVALID_HANDLE_VALUE)
+        const auto find = own_win_handle<UniqueFind>(
+            FindFirstFileExW(path.c_str(), FindExInfoBasic, &entry, FindExSearchNameMatch, nullptr, 0));
+        if (!find)
             return std::unexpected(last_error());
-        FindClose(find);
         link = is_link(entry);
     }
     return make_stat(data.dwFileAttributes, link, data.ftLastWriteTime, data.nFileSizeHigh,

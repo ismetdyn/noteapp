@@ -20,8 +20,8 @@ constexpr std::size_t kReservedLimitDivisor = 4;  // limit'in bu kadarda biri i√
 enum class Tier { StrongName, Content, WeakName };
 
 struct Row {
-    std::size_t index;
-    std::size_t path_size;
+    std::size_t index{};
+    std::size_t path_size{};
     Tier tier = Tier::WeakName;
     bool name_matched = false;
     double name_score = 0;

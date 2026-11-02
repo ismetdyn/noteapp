@@ -93,7 +93,7 @@ TEST_CASE("editor view: the focused pane is heavy, the list is light, the select
     const auto screen = f.frame();
     CHECK(screen.PixelAt(0, 1).character == "┌");
     CHECK(screen.PixelAt(kWidth * 2 / 5, 1).character == "┏");
-    CHECK(contains(screen, ">1 ▸ a.md"));
+    CHECK(contains(screen, " 1   a.md"));
     CHECK_FALSE(screen.PixelAt(2, kPaneY).inverted);
 }
 
@@ -243,7 +243,7 @@ TEST_CASE("editor view: the find bar shows the query; read-only shows the reason
     f.session.handle(Key::CtrlF);
     f.session.handle(Key::Char, "m");
     const auto screen = f.frame();
-    CHECK(contains(screen, core::tr("tui.find_label") + " m▏  1/1"));
+    CHECK(contains(screen, core::tr("tui.find_label") + " m▏etin  1/1"));
     CHECK(screen.PixelAt(pane_x(kWidth), kPaneY).inverted);  // geçerli eşleşme seçili
 
     Fixture binary(std::string("ikili\0x", 7));
@@ -329,7 +329,9 @@ TEST_CASE("new note view: closing returns to the normal two panes with the note 
     f.session.handle(Key::Enter);
     REQUIRE(f.session.path());
     f.state.set_notes(f.store.list());
+    REQUIRE(f.session.path().has_value());
     REQUIRE(f.state.select_note(*f.session.path()));
+    REQUIRE(f.session.path().has_value());
     const std::string saved = f.session.path()->string();
     f.session.handle(Key::CtrlQ);
     CHECK_FALSE(f.state.new_note_view());

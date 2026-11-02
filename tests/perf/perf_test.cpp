@@ -126,11 +126,12 @@ TEST_CASE("TUI startup proxy: fresh process with 5000 notes on disk within 500 m
 // SPEC.md §10/3 + SPEC-tui kabul 5: 5.000 notla tuş başına süzme ≤ 50 ms. Ölçüme yeniden çizim de girer
 // (kullanıcının gördüğü gecikme); koşu başına en kötü tuş alınır.
 TEST_CASE("TUI: per-keystroke filter with 5000 notes within 50 ms") {
+    core::init_i18n("en");  // sayaç metni katalogdan gelir
     std::vector<double> worst_per_run;
     for (int run = 0; run < kRuns; ++run) {
         tui::TuiState state;
         state.set_notes(generated_notes("note-"));
-        CHECK(render_text(state).find("5000/5000") != std::string::npos);
+        CHECK(render_text(state).find("5000 notes") != std::string::npos);
         state.handle(tui::Key::Char, "/");  // yazı yalnız Arama odağında süzer
         double worst = 0;
         for (const char c : std::string("note-42"))

@@ -78,7 +78,7 @@ retry_rejected_push(const std::function<std::expected<bool, core::Error>()>& exc
 // işi, T26); değilse "sync.not_initialized".
 class SyncService {
 public:
-    explicit SyncService(const core::Config& config);
+    explicit SyncService(core::Config config);
 
     // İlk kurulum (SPEC-sync "İlk kurulum" tablosu), senkron kilidi altında:
     //  - .git var, origin == remote → no-op; origin farklı/yok → "sync.remote_mismatch" {current, remote},

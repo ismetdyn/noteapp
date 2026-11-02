@@ -1,6 +1,7 @@
 #include "core/process.hpp"
 
 #include "core/log.hpp"
+#include "core/unique_handle.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -197,25 +198,24 @@ std::expected<Command, Error> prepare_command(const std::vector<std::string>& ar
     return command;
 }
 
-// Devredilebilir boş aygıt (NUL) tutamacı; çağıran kapatır.
-HANDLE open_null_device() {
+// Devredilebilir boş aygıt (NUL) tutamacı; hatada boş.
+UniqueHandle open_null_device() {
     SECURITY_ATTRIBUTES inheritable{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
-    return CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable,
-                       OPEN_EXISTING, 0, nullptr);
+    return own_win_handle<UniqueHandle>(CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+                                                    FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable,
+                                                    OPEN_EXISTING, 0, nullptr));
 }
 
 // Yalnız çocuğun ağacını toplayan, adsız iş nesnesi; son tutamaç kapanırsa (ör. uygulama çökerse)
-// üyeleri öldürür. Başarısızlıkta nullptr.
-HANDLE create_kill_on_close_job() {
-    HANDLE job = CreateJobObjectW(nullptr, nullptr);
-    if (job == nullptr)
+// üyeleri öldürür. Başarısızlıkta boş.
+UniqueHandle create_kill_on_close_job() {
+    UniqueHandle job(CreateJobObjectW(nullptr, nullptr));
+    if (!job)
         return nullptr;
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
-        CloseHandle(job);
+    if (!SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
         return nullptr;
-    }
     return job;
 }
 
@@ -224,6 +224,7 @@ HANDLE create_kill_on_close_job() {
 // posix_spawn'ın istediği NULL sonlu dizi; işaretçiler `strings`in ömrüne bağlıdır.
 std::vector<char*> c_strings(const std::vector<std::string>& strings) {
     std::vector<char*> out;
+    out.reserve(strings.size() + 1);
     for (const std::string& s : strings)
         out.push_back(const_cast<char*>(s.c_str()));
     out.push_back(nullptr);
@@ -291,6 +292,7 @@ std::optional<std::string> get_env_utf8(std::string_view name) {
         return std::nullopt;
     return to_utf8(fs::path(std::wstring(value)));
 #else
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) -- üründe setenv/putenv yok, salt okuma yarışmaz
     const char* value = std::getenv(std::string(name).c_str());
     if (value == nullptr || *value == '\0')
         return std::nullopt;
@@ -341,7 +343,7 @@ std::optional<fs::path> find_program(std::string_view name) {
     if (requested.has_parent_path())
         return executable(requested) ? std::optional<fs::path>(requested) : std::nullopt;
     for (const auto& dir : split_list(get_env_utf8("PATH").value_or(""), ':')) {
-        if (const fs::path candidate = path_from_utf8(dir) / requested; executable(candidate))
+        if (fs::path candidate = path_from_utf8(dir) / requested; executable(candidate))
             return candidate;
     }
     return std::nullopt;
@@ -385,10 +387,10 @@ std::expected<int, Error> run_and_wait(const std::vector<std::string>& argv,
     if (!env_overrides.empty())
         environment = build_environment_block(env_overrides);
 
-    HANDLE null_device = INVALID_HANDLE_VALUE;
+    UniqueHandle null_device;
     if (discard_output) {
         null_device = open_null_device();
-        if (null_device == INVALID_HANDLE_VALUE)
+        if (!null_device)
             return std::unexpected(spawn_failed(program_name, std::to_string(GetLastError())));
     }
     // Standart tutamaçlar açıkça devredilir: stdout bir boruya yönlendirilmişse de çocuk aynısını görür.
@@ -396,23 +398,22 @@ std::expected<int, Error> run_and_wait(const std::vector<std::string>& argv,
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESTDHANDLES;
     startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-    startup.hStdOutput = discard_output ? null_device : GetStdHandle(STD_OUTPUT_HANDLE);
-    startup.hStdError = discard_output ? null_device : GetStdHandle(STD_ERROR_HANDLE);
+    startup.hStdOutput = discard_output ? null_device.get() : GetStdHandle(STD_OUTPUT_HANDLE);
+    startup.hStdError = discard_output ? null_device.get() : GetStdHandle(STD_ERROR_HANDLE);
     PROCESS_INFORMATION info{};
     const BOOL started = CreateProcessW(
         application.c_str(), command_line.data(), nullptr, nullptr, TRUE, CREATE_UNICODE_ENVIRONMENT,
         env_overrides.empty() ? nullptr : environment.data(), nullptr, &startup, &info);
     const DWORD spawn_error = GetLastError();
-    if (null_device != INVALID_HANDLE_VALUE)
-        CloseHandle(null_device);
+    null_device.reset();
     if (!started)
         return std::unexpected(spawn_failed(program_name, std::to_string(spawn_error)));
+    const UniqueHandle process(info.hProcess);
+    const UniqueHandle thread(info.hThread);
 
-    WaitForSingleObject(info.hProcess, INFINITE);
+    WaitForSingleObject(process.get(), INFINITE);
     DWORD exit_code = 1;
-    GetExitCodeProcess(info.hProcess, &exit_code);
-    CloseHandle(info.hProcess);
-    CloseHandle(info.hThread);
+    GetExitCodeProcess(process.get(), &exit_code);
     return static_cast<int>(exit_code);
 #else
     posix_spawn_file_actions_t actions;
@@ -451,8 +452,8 @@ std::expected<ProcessHandle, Error> spawn_detached(const std::vector<std::string
     if (!env_overrides.empty())
         environment = build_environment_block(env_overrides);
 
-    HANDLE null_device = open_null_device();
-    if (null_device == INVALID_HANDLE_VALUE)
+    UniqueHandle null_device = open_null_device();
+    if (!null_device)
         return std::unexpected(spawn_failed(program_name, std::to_string(GetLastError())));
     // Yalnız NUL tutamacı devredilir (PROC_THREAD_ATTRIBUTE_HANDLE_LIST): bInheritHandles=TRUE tek başına
     // ebeveynin devredilebilir her tutamacını (ör. stdout'un yönlendirildiği dosya) uzun ömürlü çocuğa verir.
@@ -461,15 +462,16 @@ std::expected<ProcessHandle, Error> spawn_detached(const std::vector<std::string
     std::vector<char> list_buffer(list_size);
     auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(list_buffer.data());
     BOOL ok = InitializeProcThreadAttributeList(attributes, 1, 0, &list_size);
+    HANDLE inherited = null_device.get();  // liste CreateProcessW'e kadar bu adresi okur
     if (ok)
-        ok = UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &null_device,
+        ok = UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &inherited,
                                        sizeof(HANDLE), nullptr, nullptr);
     STARTUPINFOEXW startup{};
     startup.StartupInfo.cb = sizeof(startup);
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    startup.StartupInfo.hStdInput = null_device;
-    startup.StartupInfo.hStdOutput = null_device;
-    startup.StartupInfo.hStdError = null_device;
+    startup.StartupInfo.hStdInput = inherited;
+    startup.StartupInfo.hStdOutput = inherited;
+    startup.StartupInfo.hStdError = inherited;
     startup.lpAttributeList = attributes;
     PROCESS_INFORMATION info{};
     if (ok)
@@ -481,22 +483,21 @@ std::expected<ProcessHandle, Error> spawn_detached(const std::vector<std::string
     const DWORD spawn_error = GetLastError();
     if (list_size > 0)
         DeleteProcThreadAttributeList(attributes);
-    CloseHandle(null_device);
+    null_device.reset();
     if (!ok)
         return std::unexpected(spawn_failed(program_name, std::to_string(spawn_error)));
     // Çocuk askıda başlar: işe atanmadan tek komut çalışmasın ki torunlar da işe katılsın. Çağıran zaten
     // bir işin içindeyse (CI/IDE) iç içe iş Windows 8+'ta çalışır; olmazsa doğrudan çocuğa düşülür.
-    HANDLE job = create_kill_on_close_job();
-    if (job == nullptr || !AssignProcessToJobObject(job, info.hProcess)) {
+    UniqueHandle process(info.hProcess);
+    const UniqueHandle thread(info.hThread);
+    UniqueHandle job = create_kill_on_close_job();
+    if (!job || !AssignProcessToJobObject(job.get(), process.get())) {
         log_warn("process: job object unavailable (error " + std::to_string(GetLastError()) +
                  "); terminate will only kill the direct child");
-        if (job != nullptr)
-            CloseHandle(job);
-        job = nullptr;
+        job.reset();
     }
-    ResumeThread(info.hThread);
-    CloseHandle(info.hThread);
-    return ProcessHandle(info.dwProcessId, info.hProcess, job);
+    ResumeThread(thread.get());
+    return ProcessHandle(info.dwProcessId, process.release(), job.release());
 #else
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);

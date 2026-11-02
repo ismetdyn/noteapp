@@ -4,6 +4,7 @@
 #include "core/text.hpp"
 #include "search/fuzzy.hpp"
 #include "tui/editor_session.hpp"
+#include "tui/folder_tree.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -316,28 +317,6 @@ std::expected<core::NotePath, core::Error> save_new_note(core::NoteStore& store,
 
 namespace {
 
-bool is_utf8_continuation(char c) {
-    return (static_cast<unsigned char>(c) & 0xC0) == 0x80;
-}
-
-std::size_t next_code_point(std::string_view text, std::size_t at) {
-    if (at >= text.size())
-        return text.size();
-    ++at;
-    while (at < text.size() && is_utf8_continuation(text[at]))
-        ++at;
-    return at;
-}
-
-std::size_t previous_code_point(std::string_view text, std::size_t at) {
-    if (at == 0)
-        return 0;
-    --at;
-    while (at > 0 && is_utf8_continuation(text[at]))
-        --at;
-    return at;
-}
-
 // Son yol bileşenindeki son noktanın yeri; uzantı yoksa metnin sonu.
 std::size_t stem_end(std::string_view path) {
     const std::size_t slash = path.rfind('/');
@@ -349,69 +328,53 @@ std::size_t stem_end(std::string_view path) {
 
 }  // namespace
 
-RenameState::RenameState(core::NotePath from)
-    : from_(std::move(from)), text_(from_.string()), cursor_(stem_end(text_)) {}
+RenameState::RenameState(core::NotePath from, SharedInputSources sources, std::string base, bool is_folder)
+    : from_(std::move(from)), base_(std::move(base)), is_folder_(is_folder) {
+    std::string path = from_.string();
+    if (in_folder(path, base_) && !base_.empty())
+        path.erase(0, base_.size() + 1);
+    const std::size_t cursor = is_folder_ ? path.size() : stem_end(path);
+    line_.set_text(std::move(path), cursor);
+    line_.set_sources(std::move(sources));
+}
+
+RenameState::RenameState(std::vector<ListItem> items, std::string folder, SharedInputSources sources)
+    : from_(items.front().path), is_folder_(true), items_(std::move(items)), line_(InputKind::Folder) {
+    line_.set_text(std::move(folder));
+    line_.set_sources(std::move(sources));
+}
+
+std::string RenameState::target() const {
+    std::string_view typed = line_.text();
+    if (is_folder_ && typed.ends_with('/'))
+        typed.remove_suffix(1);
+    return join_folder(base_, typed);
+}
+
+bool names_folder(std::string_view text) {
+    return text.size() > 1 && text.ends_with('/');
+}
 
 RenameState::Outcome RenameState::handle(Key key, std::string_view text) {
-    switch (key) {
-    case Key::Enter:
+    const InputLine::Result result = line_.handle(key, text);
+    if (clears_input_error(key, result))
+        error_.clear();
+    if (result != InputLine::Result::Ignored)
+        return Outcome::Editing;
+    if (key == Key::Enter)
         return Outcome::Submit;
-    case Key::Escape:
-        return Outcome::Cancelled;
-    case Key::Left:
-        cursor_ = previous_code_point(text_, cursor_);
-        return Outcome::Editing;
-    case Key::Right:
-        cursor_ = next_code_point(text_, cursor_);
-        return Outcome::Editing;
-    case Key::Home:
-        cursor_ = 0;
-        return Outcome::Editing;
-    case Key::End:
-        cursor_ = text_.size();
-        return Outcome::Editing;
-    case Key::Backspace: {
-        const std::size_t start = previous_code_point(text_, cursor_);
-        text_.erase(start, cursor_ - start);
-        cursor_ = start;
-        error_.clear();
-        return Outcome::Editing;
-    }
-    case Key::Delete:
-        text_.erase(cursor_, next_code_point(text_, cursor_) - cursor_);
-        error_.clear();
-        return Outcome::Editing;
-    case Key::Char:
-        if (!text.empty() && static_cast<unsigned char>(text.front()) >= 0x20) {
-            text_.insert(cursor_, text);
-            cursor_ += text.size();
-            error_.clear();
-        }
-        return Outcome::Editing;
-    default:
-        return Outcome::Editing;
-    }
+    return key == Key::Escape ? Outcome::Cancelled : Outcome::Editing;
 }
 
 NewRowState::Outcome NewRowState::handle(Key key, std::string_view text) {
-    switch (key) {
-    case Key::Char:
-        if (is_printable(text)) {
-            text_.append(text);
-            error_.clear();
-        }
-        return Outcome::Editing;
-    case Key::Backspace:
-        pop_code_point(text_);
+    const InputLine::Result result = line_.handle(key, text);
+    if (clears_input_error(key, result))
         error_.clear();
+    if (result != InputLine::Result::Ignored)
         return Outcome::Editing;
-    case Key::Enter:
-        return is_blank(text_) ? Outcome::Cancelled : Outcome::Submit;
-    case Key::Escape:
-        return Outcome::Cancelled;
-    default:
-        return Outcome::Editing;
-    }
+    if (key == Key::Enter)
+        return is_blank(line_.text()) ? Outcome::Cancelled : Outcome::Submit;
+    return key == Key::Escape ? Outcome::Cancelled : Outcome::Editing;
 }
 
 std::expected<core::CreatedNote, core::Error> create_named_note(core::NoteStore& store, std::string_view name,

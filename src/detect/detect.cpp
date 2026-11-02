@@ -62,8 +62,8 @@ constexpr double kCsvBlockingScore = 3.0;
 
 struct Signal {
     std::string_view needle;
-    Type type;
-    double weight;
+    Type type{};
+    double weight{};
 };
 
 // Satırın herhangi bir yerinde geçen basit sinyaller. Konuma bağlı olanlar kPrefixes'ta ve score_line içinde.
@@ -517,7 +517,7 @@ LineScan score_lines(const std::vector<std::string_view>& lines) {
         }
     }
     // Tek başlık bile belgeyi md yapmaz ama kanıt sayılır; çoğu "# yorum" olan kodu ezmesin diye üst sınır 2.
-    r.scores[kMd] += std::min<std::size_t>(h1_count, 1) * 1.5;
+    r.scores[kMd] += static_cast<double>(std::min<std::size_t>(h1_count, 1)) * 1.5;
     resolve_families(r);
     return r;
 }
@@ -590,7 +590,7 @@ std::size_t count_delimiter(std::string_view line, char delim) {
     return n;
 }
 
-bool is_consistent_table(const std::vector<std::string_view>& lines) {
+std::optional<char> consistent_delimiter(const std::vector<std::string_view>& lines) {
     for (const char delim : {',', ';', '\t'}) {
         std::vector<std::size_t> counts;
         counts.reserve(lines.size());
@@ -613,11 +613,11 @@ bool is_consistent_table(const std::vector<std::string_view>& lines) {
         if (mode == 0 || best_run * 100 < lines.size() * kCsvConsistencyPercent)
             continue;
         const double avg_field =
-            static_cast<double>(chars) / (static_cast<double>(lines.size()) * (mode + 1));
+            static_cast<double>(chars) / (static_cast<double>(lines.size()) * static_cast<double>(mode + 1));
         if (avg_field <= kCsvMaxAvgFieldLength)
-            return true;
+            return delim;
     }
-    return false;
+    return std::nullopt;
 }
 
 // Sıralı aday listesi; `chosen` (varsa) başa alınır ki type == ranked[0].type kalsın.
@@ -701,7 +701,7 @@ Suggestion suggest(std::string_view content, const Options& options) {
     auto& raw = scan.scores;
 
     // 4. CSV: tutarlı ayırıcı ve kod/biçim sinyali yok.
-    if (strongest_signal(raw) < kCsvBlockingScore && is_consistent_table(lines))
+    if (strongest_signal(raw) < kCsvBlockingScore && consistent_delimiter(lines))
         return decided(kCsv, kCsvConfidence);
 
     // 5. Puanlama.
@@ -723,6 +723,10 @@ Suggestion suggest(std::string_view content, const Options& options) {
     // kullanılmaz.)
     const Type fallback = raw[kMd] > 0 ? kMd : kTxt;
     return finish(normalized, std::string(kTypeNames[fallback]), normalized[fallback], true);
+}
+
+std::optional<char> table_delimiter(const std::vector<std::string_view>& lines) {
+    return lines.empty() ? std::nullopt : consistent_delimiter(lines);
 }
 
 }  // namespace noteapp::detect

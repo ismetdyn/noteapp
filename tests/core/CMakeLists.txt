@@ -1,6 +1,7 @@
 noteapp_add_test(core
     config_test.cpp
     editor_test.cpp
+    file_icons_test.cpp
     i18n_test.cpp
     log_test.cpp
     note_path_test.cpp

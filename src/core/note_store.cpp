@@ -29,6 +29,9 @@ constexpr int kMaxNameAttempts = 10000;          // çakışma döngüsünün so
 // Tek işlemin işlem bütçesi: çerçeve sınırı 65.536. Not başına iş (1024 bağlantı, kenarlar) aşağıdaki payın
 // içinde kalsın.
 constexpr std::size_t kBatchOps = 30000;
+// Klasör kopyasında işlem başına gövde: kMaxFrameBytes'in yarısı. Sonraki not aşırıyorsa işlem kapanır, tek
+// büyük not kendi çerçevesine sığar.
+constexpr std::size_t kCopyBatchBytes = 32U * 1024U * 1024U;
 
 Error not_regular(std::string_view path) {
     return io_error(path, "not a regular file");
@@ -512,6 +515,126 @@ std::expected<void, Error> NoteStore::rename_folder(std::string_view from, std::
         .transform([](std::monostate) {});
 }
 
+namespace {
+
+// Kopyanın ilk adımı: denetimler ve klasörler. Hiçbir denetim düşmeden yazılmaz.
+std::expected<void, Error> begin_folder_copy(WriteContext& context, const std::string& source,
+                                             const std::string& target) {
+    const Snapshot& snapshot = context.snapshot;
+    if (!snapshot.folders.contains(source))
+        return std::unexpected(not_found(source));
+    if (target == source || in_subtree(target, source))
+        return std::unexpected(invalid_path("into_itself", target));
+    if (snapshot.path_taken(target))
+        return std::unexpected(already_exists(target));
+    NOTEAPP_TRY(check_renamed_subtree(snapshot, source, target));
+    if (auto made = context.ensure_folder(target); !made)
+        return std::unexpected(made.error());
+    for (const auto& [path, ids] : snapshot.folders)
+        if (in_subtree(path, source))
+            if (auto made = context.ensure_folder(target + path.substr(source.size())); !made)
+                return std::unexpected(made.error());
+    return {};
+}
+
+std::expected<void, Error> copy_note_body(WriteContext& context, const NoteRow& row,
+                                          const std::string& copy_path,
+                                          std::chrono::system_clock::time_point now,
+                                          std::size_t& bytes_in_batch) {
+    const std::string path = row.info.path.string();
+    // Görüntü taze: başka yazar hedefe not koyduysa ezme de -2'li ikiz de yok.
+    if (context.snapshot.path_taken(copy_path))
+        return std::unexpected(already_exists(copy_path));
+    auto body = context.txn.property(row.id, kBody);
+    if (!body)
+        return std::unexpected(from_graph(body.error(), path));
+    const graph::Bytes* bytes = std::get_if<graph::Bytes>(&*body);
+    const std::string_view content = bytes == nullptr ? std::string_view{} : bytes->data;
+    auto copy = NotePath::parse(copy_path);
+    if (!copy)
+        return std::unexpected(copy.error());
+    if (auto made = context.create_note(*copy, content, now, kOrigin); !made)
+        return std::unexpected(made.error());
+    bytes_in_batch += content.size();
+    return {};
+}
+
+struct CopyBatch {
+    std::string last_path;  // bu işlemde kopyalanan son kaynak yol; boşsa cursor ilerlemez
+    std::size_t notes = 0;
+    bool more = false;
+};
+
+// after'dan sonraki notları yol sırasıyla, bir çerçeveye sığdığı kadar kopyalar. Sıra konumla değil yolla
+// sürer: işlemler arasında başka yazar kaynağa not ekleyip silebilir. Cursor'dan önce eklenen not bu kopyaya
+// girmez.
+std::expected<CopyBatch, Error> copy_next_batch(WriteContext& context, const std::string& source,
+                                                const std::string& target, const std::string& after,
+                                                std::chrono::system_clock::time_point now) {
+    std::vector<const NoteRow*> rows;
+    for (const NoteRow& row : context.snapshot.live) {
+        const std::string path = row.info.path.string();
+        if (in_subtree(path, source) && path > after)
+            rows.push_back(&row);
+    }
+    std::ranges::sort(rows, {}, [](const NoteRow* row) { return row->info.path.string(); });
+    CopyBatch batch;
+    std::size_t bytes_in_batch = 0;
+    for (const NoteRow* row : rows) {
+        batch.more = context.txn.pending_ops() >= kBatchOps ||
+                     (bytes_in_batch > 0 && bytes_in_batch + row->info.size > kCopyBatchBytes);
+        if (batch.more)
+            return batch;
+        std::string path = row->info.path.string();
+        NOTEAPP_TRY(copy_note_body(context, *row, target + path.substr(source.size()), now, bytes_in_batch));
+        batch.last_path = std::move(path);
+        ++batch.notes;
+    }
+    return batch;
+}
+
+Error partial_copy(const std::string& target, std::size_t notes, const Error& cause) {
+    return Error{Error::Code::PartialCopy,
+                 "error.copy_folder_partial",
+                 {{"path", target}, {"count", std::to_string(notes)}, {"detail", format_error(cause)}}};
+}
+
+}  // namespace
+
+std::expected<void, Error> NoteStore::copy_folder(std::string_view from, std::string_view to) {
+    const auto from_path = NotePath::parse(from);
+    if (!from_path)
+        return std::unexpected(from_path.error());
+    const auto to_path = NotePath::parse(to);
+    if (!to_path)
+        return std::unexpected(to_path.error());
+    const std::string source = from_path->string();
+    const std::string target = to_path->string();
+    const auto now = std::chrono::system_clock::now();
+    std::string cursor;  // yazılmamış işlem ilerletmez: yalnız commit'ten sonra güncellenir
+    std::size_t copied = 0;
+    bool first = true;
+    bool more = true;
+    while (more) {
+        const auto step =
+            impl_->write<CopyBatch>([&](WriteContext& context) -> std::expected<CopyBatch, Error> {
+                if (first)
+                    NOTEAPP_TRY(begin_folder_copy(context, source, target));
+                return copy_next_batch(context, source, target, cursor, now);
+            });
+        if (!step)  // ilk işlem bütünüyle geri alınır; sonrası yerinde kalır
+            return std::unexpected(first ? step.error() : partial_copy(target, copied, step.error()));
+        first = false;
+        copied += step->notes;
+        if (step->notes > 0)
+            cursor = step->last_path;
+        more = step->more;
+        if (more && impl_->after_copy_batch)
+            impl_->after_copy_batch();
+    }
+    return {};
+}
+
 std::expected<void, Error> NoteStore::remove_folder(std::string_view folder, bool force) {
     const auto parsed = NotePath::parse(folder);
     if (!parsed)
@@ -583,7 +706,7 @@ std::expected<bool, Error> NoteStore::verify_imported(const ImportedNote& note) 
     const std::scoped_lock lock(impl_->mutex);
     if (auto opened = impl_->open_for_write(); !opened)
         return std::unexpected(opened.error());
-    auto txn = impl_->graph->read();
+    auto txn = impl_->opened_graph().read();
     if (!txn)
         return std::unexpected(from_graph(txn.error(), note.path.string()));
     return verify_import(*txn, note);

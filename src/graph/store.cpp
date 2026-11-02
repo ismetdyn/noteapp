@@ -32,7 +32,7 @@ public:
 };
 
 struct StatementEntry {
-    StatementId id;
+    StatementId id{};
     Sql sql;
 };
 
@@ -105,6 +105,7 @@ constexpr Sql kSchemaV1[] = {
     "CREATE TABLE nodes(id BLOB PRIMARY KEY, dots BLOB NOT NULL) WITHOUT ROWID",
     "CREATE TABLE labels(node BLOB, label TEXT, dots BLOB NOT NULL, PRIMARY KEY(node, label)) WITHOUT ROWID",
     "CREATE INDEX labels_scan ON labels(label, node)",
+    // NOLINTNEXTLINE(bugprone-suspicious-missing-comma) -- tek SQL deyimi iki satıra bölünmüştür
     "CREATE TABLE edges(id BLOB PRIMARY KEY, src BLOB NOT NULL, type TEXT NOT NULL, dst BLOB NOT NULL,"
     " dots BLOB NOT NULL) WITHOUT ROWID",
     "CREATE INDEX edges_out ON edges(src, type, dst)",
@@ -508,7 +509,7 @@ Result<bool> touch_owner(Store& store, const OwnerId& owner, const ApplyContext&
 
 struct SeenVersion {
     DeviceId dev;
-    std::int64_t seq;
+    std::int64_t seq{};
     std::optional<std::int64_t> large_id;
 };
 
@@ -754,6 +755,10 @@ Store::~Store() {
 
 namespace {
 
+struct CloseDatabase {
+    void operator()(sqlite3* db) const noexcept { sqlite3_close(db); }
+};
+
 // SQLite umask'la oluşturur, WAL ve SHM ana dosyanın modunu kopyalar: dosya SQLite açmadan önce 0600 olmalı.
 // Eski sürümün bıraktığı dosyalar da burada daralır. Windows: dosyalar kullanıcı profilinin ACL'sini miras
 // alır, ek işlem yok.
@@ -783,12 +788,14 @@ Result<void> make_database_private([[maybe_unused]] const std::filesystem::path&
 Result<std::unique_ptr<Store>> Store::open(const std::filesystem::path& path) {
     if (const Result<void> made = make_database_private(path); !made)
         return std::unexpected(made.error());
-    sqlite3* db = nullptr;
+    std::unique_ptr<sqlite3, CloseDatabase> db;
     const std::u8string name = path.u8string();
-    const int code = sqlite3_open_v2(reinterpret_cast<const char*>(name.c_str()), &db,
+    const int code = sqlite3_open_v2(reinterpret_cast<const char*>(name.c_str()), std::out_ptr(db),
                                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
-    // Başarısız açılış da kapatılması gereken tanıtıcı döndürür; Store sahiplenir.
-    std::unique_ptr<Store> store(new Store(db));
+    // Başarısız açılış da kapatılması gereken tanıtıcı döndürür; kurucu ayırma hatası verirse db kapatır,
+    // kurulunca sahiplik Store'a geçer.
+    std::unique_ptr<Store> store(new Store(db.get()));
+    (void)db.release();
     if (code != SQLITE_OK)
         return std::unexpected(storage_error(code, "open"));
 

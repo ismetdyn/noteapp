@@ -1,9 +1,13 @@
 add_library(noteapp_gui
     gui_state.cpp
+    icon_font.cpp
     note_list_model.cpp
     save_dialog.cpp
     settings_page.cpp
     view.cpp)
+# noteapp_embed_fonts pdf::embedded_font'u üretir ve noteapp_pdf'te zaten tanımlıdır; ikon fontu kendi işlevini alır ki
+# `note` (noteapp_pdf'e bağlı) bu veriyi taşımasın.
+noteapp_embed_files(noteapp_gui gui/icon_font.hpp noteapp::gui embedded_icon_font fonts/NoteappIcons.ttf)
 target_include_directories(noteapp_gui PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(noteapp_gui
     PUBLIC noteapp_core noteapp_search noteapp_sync imgui

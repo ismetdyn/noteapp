@@ -51,6 +51,7 @@ public:
     std::span<const std::byte> payload() const {
         return std::as_bytes(std::span(payload_.data(), payload_.size()));
     }
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- Damaged yalnız damaged() ile döner, o doldurur
     const Error& error() const { return *error_; }
     const DeviceId& device() const { return device_; }
     std::uint64_t offset() const { return offset_; }

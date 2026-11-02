@@ -56,26 +56,35 @@ bool leave_editor(TuiState& state, EditorSession& editor) {
     return state.focus() != Focus::Editor;
 }
 
-void click_list(const MouseInput& input, TuiState& state, EditorSession& editor) {
+MouseResult click_list(const MouseInput& input, TuiState& state, EditorSession& editor) {
     if (!leave_editor(state, editor))
-        return;
+        return MouseResult::None;
     const auto visible = static_cast<std::size_t>(state.window_height() - kFirstPaneRow - kBottomChromeRows);
     const auto line = static_cast<std::size_t>(input.y - kFirstPaneRow);
     // Seçim pencereyi kaydırabilir: satır, tıklamadan önceki pencereye göre çözülür.
     const std::size_t row = state.row_at(visible, line);
-    // İşaret ve ardındaki boşluk: tek hücrelik hedef fareyle zor.
-    const int marker = row_marker_column(state);
-    const bool on_marker =
-        (input.x == marker || input.x == marker + 1) && state.line_starts_row(visible, line);
+    // Ok ve ardındaki boşluk: tek hücrelik hedef fareyle zor. Notta ok yoktur, tıklama yalnız seçer.
+    const bool is_folder = row < state.rows().size() && state.rows()[row].is_folder;
+    const int arrow = is_folder ? row_marker_column(state, row) : 0;
+    const bool on_arrow =
+        is_folder && (input.x == arrow || input.x == arrow + 1) && state.line_starts_row(visible, line);
     state.click_row(row);
-    if (on_marker)
-        state.toggle_expanded(row);
+    if (on_arrow) {
+        state.toggle_tree(row);
+        return MouseResult::SavePrefs;
+    }
+    state.note_row_click(row);
+    return MouseResult::None;
 }
 
 MouseResult click_top_line(const MouseInput& input, TuiState& state, EditorSession& editor) {
-    if (state.new_note_view() || input.x >= ftxui::string_width(trash_indicator(state)))
+    if (state.new_note_view())
         return MouseResult::None;
-    return leave_editor(state, editor) ? MouseResult::OpenTrash : MouseResult::None;
+    if (input.x < ftxui::string_width(trash_indicator(state)))
+        return leave_editor(state, editor) ? MouseResult::OpenTrash : MouseResult::None;
+    if (const auto folder = breadcrumb_folder_at(state, input.x); folder && leave_editor(state, editor))
+        state.go_to_folder(*folder);
+    return MouseResult::None;
 }
 
 // Panel içi hücre -> metindeki konum; çizimle aynı sarma. Metin bittiyse son satırın sonu. Metin yoksa
@@ -172,16 +181,17 @@ MouseResult handle_left_press(const MouseInput& input, TuiState& state, EditorSe
     }
     if (!in_pane_rows(state, input.y))
         return MouseResult::None;
-    if (over_right(input.x, geometry))
-        click_right(input, state, editor, geometry);
-    else
-        click_list(input, state, editor);
+    if (!over_right(input.x, geometry))
+        return click_list(input, state, editor);
+    click_right(input, state, editor, geometry);
     return MouseResult::None;
 }
 
 }  // namespace
 
 MouseResult route_mouse(const MouseInput& input, TuiState& state, EditorSession& editor) {
+    if (!state.summary().empty())
+        return MouseResult::None;  // özet penceresi sıradaki tuşu bekler
     PaneLayout& layout = state.layout();
     if (layout.dragging()) {
         if (input.motion == MouseMotion::Move && input.button == MouseButton::Left) {

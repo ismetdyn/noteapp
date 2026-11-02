@@ -101,13 +101,15 @@ Hepsi kümenin saf fonksiyonudur, her cihazda aynı sonucu verir; aşım raporla
 `note graph migrate`: Düz dosyaları içe aktarır. Önce yedekler (`<veri dizini>/migration-backup-*`: notlar, çöp, varsa `graph.db`), idempotenttir, taze bağlantıyla bayt karşılaştırmasıyla doğrular. Eski dosyalara hiçbir koşulda dokunmaz, kendiliğinden silmez.
 
 - **Kimlik yoldan türer** (`derive_id("migrated-note", "live|trash/" + yol)`): iki cihazın aynı dosyası aynı düğümdür, aynı baytlar çakışma üretmez.
-- **Değerler:** `origin=unknown`, `updated_at` dosyanın mtime'ı. `created_at` dosyanın doğum zamanı (Linux `statx` btime, Windows oluşturma zamanı, macOS `st_birthtime`), yoksa ya da mtime'dan yeniyse (kopyalanmış dosya) mtime; asla geçiş anı. Git checkout doğumu sıfırladığından klon cihazında bu checkout anıdır; iki cihaz geçirirse eşzamanlı head'lerden biri okunur. `.trash/` altı `deleted_at`'lı gelir, `.keep` ve boş dizin `Folder` olur. Gizli girdi ve bağ alınmaz, bağ raporlanır.
+- **Değerler:** `origin=unknown`, `updated_at` dosyanın mtime'ı. `created_at` dosyanın doğum zamanı (Linux `statx` btime, Windows oluşturma zamanı, macOS `st_birthtime`), yoksa ya da mtime'dan yeniyse (kopyalanmış dosya) mtime; asla geçiş anı. Git checkout doğumu sıfırladığından klon cihazında bu checkout anıdır; iki cihaz geçirirse eşzamanlı head'lerden biri okunur. `.trash/` altı `deleted_at`'lı gelir, klasör düğümü üretmez (yol `trashed_from`'da, geri alma klasörü kurar), `.keep` ve boş dizin `Folder` olur. Gizli girdi ve bağ alınmaz, bağ raporlanır.
 - **Kapı:** Geçirilmemiş eski not varsa (`<veri dizini>/migrated-notes-dirs` satırı yoksa) her yazma ve senkron `MigrationRequired` ile reddedilir, her ön yüz nedenini söyler. Okuma çalışır.
 - **Geçiş yazması en düşük önceliklidir** (`WriteTxn::set_lowest_priority`, sabit HLC; motor nottan habersizdir): Kapı senkrondan önce geçişi zorladığından B, A'nın geçiş sonrası düzenlemesini görmeden içe aktarır. HLC'si geç olsa da bayat metin gerçek düzenlemeyi geçemez: gerçek yazma head'ler arasında kazanır, geçişin baytları ancak başka hiçbir yazma yoksa okunur.
 - **Kopya yalnız gerçekten farklı içerik için:** Kaybeden head bir geçiş yazmasıysa (`migrated_sha` aynı dot'ta) ve aynı baytları başka cihaz da geçirdiyse o ortak tabandır, kopya üretilmez, head birleşir. Farklıysa B'nin göndermediği düzenleme kopya not olur. Düğüm zaten görülmüşse (günlükler önce alındıysa) dosya ezmez, aynı kural geçerlidir.
 - **60 MiB üstü dosya** tek çerçeveye sığmaz: geçişi durdurmaz, adıyla raporlanır, yerinde kalır, kapı açılır, çıkış 0.
 - **Çıkış yolu:** Diğer hatalarda (okunamayan, ad UTF-8 değil) varsayılan durup raporlamaktır. `note graph migrate --skip-failed` geçemeyen dosyaları adıyla raporlar, yerinde bırakır, kapıyı açar; hiçbir şey silmez.
 - **Kapı yalnız yerel eski notta kapanır:** `enable` klonu ya da eski not görülmeden başlayan senkron `migrated-notes-dirs`'e işler: git'le sonradan gelen düz dosya kilitlemez, not sayılmaz.
+- **Dışarıda kalanlar kalıcıdır (2026-11-02):** `skipped` ve `failed` dosyaları tam yol ve nedenle `<veri dizini>/migration-skipped`e yazılır (`neden<TAB>yol`, özel bayt `%XX`); geçiş yinelenince o `notes_dir`in kayıtları yenilenir, başka dizininki kalır. `note graph status` geçerli `notes_dir`in, `note export --all` tüm listenin kayıtlarını yazar, 1 ile çıkar; `--ignore-skipped` yazar, 0 ile çıkar. Status başka dizinin kayıtlarını yalnız sayar. `note graph status --clear-skipped` tüm listeyi yazıp unutur, eski dosyalara dokunmaz. Bozuk liste 3 ile çıkar, "atlanan yok" sayılmaz.
+- **Okunamayan girdi sessiz kalmaz (2026-11-02):** Listelenemeyen dizin (izin, Windows'ta MAX_PATH) içi bilinmese de `unreadable_folder`, durumu okunamayan girdi `unreadable` ile `failed`'a girer; `.trash` altındakiler gerçek yoluyla. Böyle ağaç "boş" sayılmaz: kapı kapalı kalır. Yalnız kökün kendisinin yokluğu hata değildir.
 - **Yedek özeldir:** Dizin 0700, dosyalar 0600; yer ve silme komutu `note graph migrate` çıktısındadır.
 - **Sınır:** `NotePath`'ten geçmeyen ad eski listede de görünmüyordu, atlanır ve raporlanır.
 
@@ -120,7 +122,7 @@ Hepsi kümenin saf fonksiyonudur, her cihazda aynı sonucu verir; aşım raporla
 1. Cihazlarda eski sürümle son kez `note sync` (isteğe bağlı ama gürültüyü azaltır).
 2. A: yeni sürüm, `note graph migrate`, `note sync`. Eski dosyalar depoda kalır, senkron onlara dokunmaz.
 3. B: yeni sürüm, `note sync` reddedilir ve yönlendirir, `note graph migrate`, `note sync`. Sıra önemli değildir; aynı baytlar tek not olur.
-4. Her iki cihazda `note export --all DİZİN` ile denetle. Sonra tek cihazda: `git -C <notes_dir> rm -r -- <eski dosyalar>`, `git commit`, `note sync`.
+4. Her iki cihazda `note graph status` ve `note export --all DİZİN` ile denetle; dışarıda kalan dosya varsa ikisi de 1 ile çıkar, o dosyaları silme. Sonra tek cihazda: `git -C <notes_dir> rm -r -- <eski dosyalar>`, `git commit`, `note sync`.
 
 ## Kabul kriterleri
 

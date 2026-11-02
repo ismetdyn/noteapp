@@ -340,7 +340,7 @@ void prune_set_aside(const std::filesystem::path& path, const std::filesystem::p
 }
 
 Result<std::filesystem::path> set_aside(const std::filesystem::path& path) {
-    const std::filesystem::path aside = with_suffix(path, ".aside-");
+    std::filesystem::path aside = with_suffix(path, ".aside-");
     std::error_code code;
     std::filesystem::rename(path, aside, code);
     if (code)

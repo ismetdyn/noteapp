@@ -120,7 +120,8 @@ TEST_CASE("every Error key and reason produced by core exists in the catalogs") 
                             "reason.link",
                             "reason.contains_link",
                             "reason.invalid_type",
-                            "reason.invalid_name"})
+                            "reason.invalid_name",
+                            "reason.unreadable_folder"})
         CHECK_MESSAGE(en.count(key) == 1, key);
 }
 

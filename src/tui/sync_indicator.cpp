@@ -63,6 +63,7 @@ std::string SyncIndicator::text() const {
     case State::Running:
         return "⟳";
     case State::Ok:
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- Ok yalnız last_success_ doluyken atanır
         return "✓ " + clock_text(*last_success_);
     case State::Failed:
         return "⚠ " + shorten(error_text(), kShortReasonCodePoints);
@@ -71,6 +72,7 @@ std::string SyncIndicator::text() const {
 }
 
 std::string SyncIndicator::error_text() const {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- Failed yalnız last_error_ doluyken atanır
     return state_ == State::Failed ? core::format_error(*last_error_) : std::string{};
 }
 

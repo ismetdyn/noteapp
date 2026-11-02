@@ -84,16 +84,26 @@ bool has(const ftxui::Screen& screen, const std::string& needle) {
 TEST_CASE("rows follow the fixed human order with the right kinds") {
     const Home home;
     const SettingsState s(defaults());
-    const char* order[] = {"language",          "notes_dir",        "editor",
-                           "default_type",      "default_folder",   "types",
-                           "sync.enabled",      "sync.remote",      "sync.branch",
-                           "sync.idle_seconds", "sync.author_name", "sync.author_email"};
-    REQUIRE(s.rows().size() == 12);
-    for (std::size_t i = 0; i < 12; ++i)
+    const char* order[] = {"language",
+                           "notes_dir",
+                           "editor",
+                           "default_type",
+                           "default_folder",
+                           "types",
+                           "icons",
+                           "sync.enabled",
+                           "sync.remote",
+                           "sync.branch",
+                           "sync.idle_seconds",
+                           "sync.author_name",
+                           "sync.author_email"};
+    REQUIRE(s.rows().size() == 13);
+    for (std::size_t i = 0; i < 13; ++i)
         CHECK(s.rows()[i].key == order[i]);
     CHECK(s.rows()[0].kind == SettingsState::Kind::Choice);
     CHECK(s.rows()[3].kind == SettingsState::Kind::Choice);
-    CHECK(s.rows()[6].kind == SettingsState::Kind::Toggle);
+    CHECK(s.rows()[6].kind == SettingsState::Kind::Choice);
+    CHECK(s.rows()[7].kind == SettingsState::Kind::Toggle);
     CHECK(s.rows()[1].kind == SettingsState::Kind::Text);
     CHECK(s.rows()[5].kind == SettingsState::Kind::Text);
     CHECK_FALSE(s.changed());
@@ -370,4 +380,24 @@ TEST_CASE("config warnings become one translated status line, empty when there a
     const std::string both = tui::config_warnings_message({unknown, syntax});
     CHECK(both == core::format_error(unknown) + "; " + core::format_error(syntax));
     CHECK(both.find("bogus") != std::string::npos);
+}
+
+TEST_CASE("the icons row cycles through nerd and off and is saved") {
+    const Home home;
+    SettingsState s(defaults());
+    focus_row(s, "icons");
+    CHECK(s.rows()[s.focus()].value == "nerd");
+    s.handle(Key::Right);
+    CHECK(s.rows()[s.focus()].value == "off");
+    s.handle(Key::Right);
+    CHECK(s.rows()[s.focus()].value == "nerd");
+    s.handle(Key::Left);
+    const auto saved = s.commit(defaults());
+    REQUIRE(saved.has_value());
+    CHECK(saved->icons == "off");
+    core::init_i18n("en");
+    CHECK(settings_label(s.rows()[s.focus()]) == "File icons");
+    core::init_i18n("tr");
+    CHECK(settings_label(s.rows()[s.focus()]) == "Dosya ikonları");
+    core::init_i18n("en");
 }

@@ -29,7 +29,7 @@ struct MigrationOptions {
 struct SkippedFile {
     std::string path;
     // reason.<değer> kataloğu: invalid_name, invalid_folder, too_many_collisions, link, too_large,
-    // unreadable, verify_failed
+    // unreadable, unreadable_folder (içi bilinmeyen dizin: izin ya da yol uzunluğu), verify_failed
     std::string reason;
 };
 
@@ -52,6 +52,20 @@ struct MigrationReport {
 std::expected<MigrationReport, Error> migrate_legacy_notes(const std::filesystem::path& notes_dir,
                                                            const std::filesystem::path& data_directory,
                                                            MigrationOptions options = {});
+
+// Geçişin dışarıda bıraktığı dosyalar (skipped ve failed), path tam yolla. Son geçiş sonucudur: dosya
+// düzeltilip geçiş yinelenince listeden çıkar. Dosya yoksa boş; okunamayan ya da bozuk liste hatadır, "hiçbir
+// şey atlanmadı" sayılmaz: bu liste eski dosyaları silmeden önceki son uyarıdır.
+std::expected<std::vector<SkippedFile>, Error>
+read_skipped_files(const std::filesystem::path& data_directory);
+
+// Kayıt bu notes_dir'den mi. Liste veri dizinini paylaşan bütün kökleri tutar; alt dizindeki ayrı kök
+// kayıtta ayırt edilemez, üst kökün sayılır.
+bool skipped_file_is_under(const SkippedFile& file, const std::filesystem::path& notes_dir);
+
+// Listeyi (bütün kökler) unutur. Yalnız kaydı siler, eski dosyalara dokunmaz; geçiş yinelenince o kökün
+// dosyaları yeniden listelenir. Liste yoksa etkisizdir.
+std::expected<void, Error> clear_skipped_files(const std::filesystem::path& data_directory);
 
 struct ExportedFile {
     NotePath note;

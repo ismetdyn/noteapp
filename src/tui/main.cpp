@@ -2,6 +2,7 @@
 #include "core/console.hpp"
 #include "core/dll_search.hpp"
 #include "core/editor.hpp"
+#include "core/file_icons.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
 #include "core/note_store.hpp"
@@ -15,6 +16,7 @@
 #include "tui/display_text.hpp"
 #include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
+#include "tui/frame_diff.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/modals.hpp"
 #include "tui/mouse.hpp"
@@ -128,6 +130,8 @@ std::optional<Key> to_key(const ftxui::Event& event, std::string& text) {
         {&Event::F2, Key::F2},
         {&Event::F9, Key::F9},
         {&Event::CtrlU, Key::CtrlU},
+        {&Event::CtrlT, Key::CtrlT},
+        {&Event::CtrlA, Key::CtrlA},
         {&Event::CtrlC, Key::CtrlC},
         {&Event::Home, Key::Home},
         {&Event::End, Key::End},
@@ -188,8 +192,10 @@ noteapp::tui::MouseInput to_mouse(const ftxui::Mouse& mouse) {
     return {mouse.x, mouse.y, button, motion};
 }
 
-// Yeni notun klasörü: seçili notun klasörü, yoksa default_folder (kaydet diyaloğuyla aynı kural).
+// Yeni notun klasörü: girilen klasör; kökte ve düz listede seçili notun klasörü, yoksa default_folder.
 std::string new_note_folder(const noteapp::tui::TuiState& state, const noteapp::core::Config& config) {
+    if (!state.name_base_folder().empty())
+        return state.name_base_folder();
     const noteapp::tui::Row* row = state.selected_row();
     return noteapp::tui::initial_folder(row ? &row->path : nullptr, config.default_folder);
 }
@@ -229,7 +235,7 @@ void run_event_loop(ftxui::App& app, const ftxui::Component& component) {
 
 void print_exit_note(const std::string& note) {
     if (!note.empty())
-        std::cerr << note << std::endl;
+        std::cerr << note << '\n';
 }
 
 }  // namespace
@@ -259,6 +265,10 @@ int main() {
         const std::scoped_lock lock(list_mutex);
         return store->list();
     };
+    const auto list_folders = [&] {
+        const std::scoped_lock lock(list_mutex);
+        return store->folders();
+    };
     // Okunamayan çöp göstergeyi gizler; `T` hatayı söyler.
     const auto trash_count = [&]() -> std::size_t {
         const std::scoped_lock lock(list_mutex);
@@ -266,12 +276,14 @@ int main() {
         return items ? items->size() : 0;
     };
     tui::TuiState state;
+    state.set_icon_style(core::terminal_icon_style(config.icons));
     tui::PreviewCache preview;
     // Yükleme uyarıları (ör. bozuk config.toml -> varsayılanlar) açılışta alt çubukta görünür.
     tui::StatusLine status{core::tr("tui.sync_off"), tui::config_warnings_message(loaded.warnings)};
     tui::SyncIndicator sync_indicator;
     auto listing = list_notes();
     state.set_notes(listing);
+    state.set_folders(list_folders());
     state.set_trash_count(trash_count());
     // Geçiş bekleyen ya da açılamayan depoda liste boştur: kullanıcı bunu notların kaybı sanmasın.
     if (const auto issue = store->health())
@@ -295,6 +307,10 @@ int main() {
     tui::load_list_prefs(state);
 
     auto app = ftxui::App::Fullscreen();
+    tui::FrameDiff frame_diff;
+    app.SetFrameWriter([&frame_diff](const ftxui::Screen& screen, bool repaint, std::string& output) {
+        frame_diff.write(screen, repaint, output);
+    });
     // Durumlar işçide hesaplanır, tuş beklemez; sonuç UI iş parçacığına Post edilir. app'ten sonra
     // bildirildiği için ondan önce yıkılır.
     tui::SyncStatusWorker sync_status([&](tui::SyncStates states) {
@@ -348,10 +364,8 @@ int main() {
     };
     sync_preview();
 
-    // Açık kaydet diyaloğu ve ona ait geçici dosya/içerik; diyalog açıkken tüm tuşlar ona gider.
+    // Açık kaydet diyaloğu; diyalog açıkken tüm tuşlar ona gider.
     std::optional<tui::SaveDialogState> dialog;
-    std::filesystem::path draft_file;
-    std::string draft_content;
     // Ctrl-D onayı, F1 yardımı ve Ctrl-R'nin hedef notu (taşıma/silme sırasında seçim değişmesin diye
     // saklanır).
     std::optional<tui::ConfirmState> confirm;
@@ -374,6 +388,7 @@ int main() {
         if (content_index)
             content_index->refresh();
         state.set_notes(list_notes());
+        state.set_folders(list_folders());
         state.set_trash_count(trash_count());
         sync_status.request(config, state.metas());
     };
@@ -504,23 +519,11 @@ int main() {
         case tui::NewRowState::Outcome::Cancelled:
             new_row.reset();
             break;
-        case tui::NewRowState::Outcome::Submit: {
-            const auto created = [&] {
-                const std::scoped_lock lock(list_mutex);
-                return tui::create_named_note(*store, new_row->text(), new_note_folder(state, config),
-                                              config.default_type, config.tuning.slug_max_length);
-            }();
-            if (!created) {
-                new_row->set_error(core::format_error(created.error()));
-                break;
-            }
-            new_row.reset();
-            refresh_notes();
-            state.select_note(created->path);  // süzgeç notu gizliyorsa temizlenir
-            editor.open(created->path, 0);
-            notify_changed();
+        case tui::NewRowState::Outcome::Submit:
+            list_actions.submit_new_row(
+                new_row, {new_note_folder(state, config), config.default_type, config.tuning.slug_max_length},
+                [&](const core::NotePath& path) { editor.open(path, 0); });
             break;
-        }
         }
     };
 
@@ -536,6 +539,8 @@ int main() {
         config.default_type = next.default_type;
         config.default_folder = next.default_folder;
         config.types = next.types;
+        config.icons = next.icons;
+        state.set_icon_style(core::terminal_icon_style(config.icons));
         config.sync = next.sync;
         core::init_i18n(config.language);
         spell = make_spell_checker();
@@ -569,6 +574,10 @@ int main() {
     // Ctrl-C'yi de kendimiz işleriz: FTXUI'ye bırakılırsa döngüden sonra SIGINT'i yeniden yükseltir ve süreç
     // yıkıcılar (kod sayfası geri yüklemesi dahil) çalışmadan biter.
     const auto on_event = [&](ftxui::Event event) {
+        if (event == ftxui::Event::CtrlL) {
+            frame_diff.invalidate();
+            return true;
+        }
         // Fare olayı FTXUI'ye bırakılmaz: kendi seçim boyamasını başlatırdı. Modal açıkken yok sayılır.
         if (event.is_mouse()) {
             if (!any_open(help, confirm, dialog, settings, new_row, rename))
@@ -638,7 +647,7 @@ int main() {
             open_selected();
             break;
         case tui::Intent::NewRow:
-            new_row.emplace();
+            new_row.emplace(state.name_input_sources());
             break;
         case tui::Intent::NewNote:
             state.open_new_note_view();
@@ -654,6 +663,9 @@ int main() {
         case tui::Intent::RenameSelected:
             list_actions.begin_rename(rename);
             break;
+        case tui::Intent::MoveTo:
+            list_actions.begin_move_to(rename);
+            break;
         case tui::Intent::ShowHelp:
             help.emplace(tui::help_lines().size());
             break;
@@ -664,7 +676,7 @@ int main() {
             editor.open(state.selected_row()->path, state.editor_start_line());
             break;
         case tui::Intent::EditorKey:
-            editor.handle(*key, text);
+            editor.handle(*key, text, state.input_sources());
             break;
         case tui::Intent::SyncNow:
             if (auto_sync)
@@ -684,11 +696,12 @@ int main() {
     // Post edilir; FTXUI kapanış görevinden sonra kareyi geçersiz saymaz, çizimi ardından gelen özel olay
     // tetikler (yoksa değişiklik ilk tuşa dek görünmezdi). Değişmediyse hiçbir şey gönderilmez. jthread,
     // state/preview'dan sonra bildirildiği için onlardan önce yıkılır (durdur + birleş).
-    std::jthread rescan([&](const std::stop_token stop) {
+    std::jthread rescan([&](const std::stop_token& stop) {
         std::mutex mutex;
         std::condition_variable_any wake;
         const auto period = std::chrono::seconds(config.tuning.rescan_seconds);
         std::size_t seen_trash = trash_count();
+        std::vector<std::string> seen_folders = list_folders();
         while (true) {
             std::unique_lock lock(mutex);
             wake.wait_for(lock, stop, period, [] { return false; });  // durdurma isteğinde erken döner
@@ -696,18 +709,23 @@ int main() {
                 return;
             auto latest = list_notes();
             const std::size_t latest_trash = trash_count();  // senkron yalnız çöpü de değiştirebilir
-            if (tui::same_listing(listing, latest) && latest_trash == seen_trash)
+            auto latest_folders = list_folders();            // boş klasör not listesini değiştirmez
+            if (tui::same_listing(listing, latest) && latest_trash == seen_trash &&
+                latest_folders == seen_folders)
                 continue;
             listing = latest;  // yalnız bu iş parçacığı okur/yazar
             seen_trash = latest_trash;
+            seen_folders = latest_folders;
             app.Post([&state, &preview, &content_index, &sync_preview, &editor, &word_tables, &sync_status,
-                      &config, &list_actions, latest_trash, latest = std::move(latest)]() mutable {
+                      &config, &list_actions, latest_trash, latest = std::move(latest),
+                      latest_folders = std::move(latest_folders)]() mutable {
                 preview.invalidate();
                 word_tables.request();
                 if (content_index)
                     content_index->refresh();  // yalnız mtime/boyutu değişenler yeniden okunur
                 editor.on_listing(latest);     // senkron çekmesi de buradan geçer
                 state.set_notes(std::move(latest));
+                state.set_folders(std::move(latest_folders));
                 state.set_trash_count(latest_trash);
                 sync_status.request(config, state.metas());
                 list_actions.refresh_trash_view();
@@ -733,7 +751,7 @@ int main() {
     // Çıkış (Ctrl-C dahil, ikisi de app.Exit): bekleyen değişiklik için son bir senkron, en çok exit_timeout.
     // Terminal artık normal kipte; kullanıcı bekleyişin nedenini görsün.
     if (auto_sync) {
-        std::cerr << core::tr("tui.sync_exiting") << std::endl;
+        std::cerr << core::tr("tui.sync_exiting") << '\n';
         auto_sync->stop(std::chrono::seconds(config.tuning.exit_timeout_seconds));
     }
     return tui::termination_exit_code();

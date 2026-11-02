@@ -15,10 +15,11 @@ namespace noteapp::core {
 // kaçardı. Windows'ta FILETIME (100 ns), POSIX'te st_mtim (ns) okunur; değerler file_time_type'tır.
 struct FileStat {
     std::filesystem::file_time_type mtime;
-    std::uintmax_t size;
-    bool regular;
-    bool directory;
-    bool symlink;  // sembolik bağ / junction (Windows: ad vekili reparse point; OneDrive yer tutucusu değil)
+    std::uintmax_t size{};
+    bool regular{};
+    bool directory{};
+    bool
+        symlink{};  // sembolik bağ / junction (Windows: ad vekili reparse point; OneDrive yer tutucusu değil)
 };
 
 // Sembolik bağı izlemez (bağın kendi bilgisi döner).
@@ -30,7 +31,7 @@ std::optional<std::filesystem::file_time_type> file_birth_time(const std::filesy
 
 struct ScannedFile {
     std::string relative;  // köke göre, '/' ayırıcılı UTF-8
-    FileStat stat;
+    FileStat stat{};
 };
 
 // root altındaki normal dosyalar, özyinelemeli. '.' ile başlayan adlar ve bağlar atlanır, içlerine

@@ -870,3 +870,16 @@ TEST_CASE_FIXTURE(SettingsFixture, "a worker post wakes the idle event loop thro
     CHECK(ran_on_ui_thread);
     CHECK(view->frames() > frames);
 }
+
+TEST_CASE_FIXTURE(SettingsFixture, "the icons setting is saved from the page and applied to the list") {
+    auto state = make_state_wired();
+    CHECK(state->icon_style() == noteapp::core::IconStyle::Nerd);  // pencerenin kendi fontu var
+    state->settings().set_field("icons", "off");
+    state->settings().save();
+    CHECK(get("icons") == "off");
+    CHECK(state->icon_style() == noteapp::core::IconStyle::Off);
+    state->settings().set_field("icons", "nerd");
+    state->settings().save();
+    CHECK(get("icons") == "nerd");
+    CHECK(state->icon_style() == noteapp::core::IconStyle::Nerd);
+}

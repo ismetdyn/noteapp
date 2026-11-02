@@ -46,7 +46,7 @@ Error from_graph(const graph::Error& error, std::string_view path) {
     }
     std::string detail = error.message_key;
     for (const auto& [key, value] : error.args)
-        detail += " " + key + "=" + value;
+        detail.append(" ").append(key).append("=").append(value);
     return io_error(path, detail);
 }
 
@@ -227,9 +227,11 @@ void resolve_folder(FolderMap& folders, FolderNode& folder) {
     if (folder.name.empty() || folder.name.find('/') != std::string::npos || !NotePath::parse(folder.name) ||
         folder.depth > kMaxFolderDepth)
         return;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- üst doluysa path'i yukarıda denetlendi
     const std::size_t parent_bytes = parent == nullptr ? 0 : parent->path->size() + 1;
     if (parent_bytes + folder.name.size() > kMaxFolderPathBytes)
         return;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- üst doluysa path'i yukarıda denetlendi
     folder.path = parent == nullptr ? folder.name : *parent->path + "/" + folder.name;
 }
 
@@ -533,12 +535,12 @@ std::shared_ptr<const Snapshot> NoteStore::Impl::current() {
 }
 
 std::expected<std::shared_ptr<const Snapshot>, Error> NoteStore::Impl::refresh_in(graph::ReadTxn& txn) {
-    const auto version = graph->data_version();
+    const auto version = opened_graph().data_version();
     if (!version)
         return std::unexpected(from_graph(version.error(), path_utf8(database())));
     if (snapshot && *version == snapshot_version)
         return snapshot;
-    auto built = build_snapshot(txn, graph->device());
+    auto built = build_snapshot(txn, opened_graph().device());
     if (!built)
         return std::unexpected(from_graph(built.error(), path_utf8(database())));
     snapshot = std::make_shared<const Snapshot>(std::move(*built));
@@ -571,7 +573,7 @@ std::expected<void, Error> NoteStore::Impl::open_for_write() {
 
 std::expected<std::pair<std::string, Revision>, Error> NoteStore::Impl::read_body(const NodeId& id,
                                                                                   std::string_view path) {
-    auto txn = graph->read();
+    auto txn = opened_graph().read();
     if (!txn)
         return std::unexpected(from_graph(txn.error(), path));
     auto heads = txn->properties(id);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -11,6 +12,9 @@ namespace noteapp::tui {
 // Dışarıdan gelen metni (dosya adı, kesit, senkrondan gelen yol) terminale güvenli hale getirir: C0, DEL, C1,
 // bidi denetimleri ve geçersiz UTF-8 U+FFFD olur. Çizimden hemen önce çağrılır; model ham baytı tutar.
 std::string terminal_safe(std::string_view raw);
+
+// "1 item", "3 items": `<key>_one` birdir; Türkçede ikisi aynı metindir.
+std::string count_text(std::string_view key, std::size_t count);
 
 // "512 B", "1.5 KiB", "2.0 MiB".
 std::string human_size(std::uintmax_t bytes);

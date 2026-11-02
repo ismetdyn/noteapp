@@ -3,10 +3,7 @@
 #include "core/i18n.hpp"
 #include "core/text.hpp"
 
-#include <charconv>
-#include <cstdint>
 #include <md4c.h>
-#include <system_error>
 #include <utility>
 
 namespace noteapp::pdf {
@@ -14,37 +11,6 @@ namespace noteapp::pdf {
 namespace {
 
 constexpr char kReplacementCharacter[] = "\xEF\xBF\xBD";
-
-// ponytail: yalnız sayısal ve en yaygın adlı HTML varlıkları çözülür; diğerleri yazıldığı gibi kalır. Tam
-// tablo md4c-html'in entity.c'sinde; ihtiyaç doğarsa o eklenir.
-std::string decode_entity(std::string_view entity) {
-    if (entity == "&amp;")
-        return "&";
-    if (entity == "&lt;")
-        return "<";
-    if (entity == "&gt;")
-        return ">";
-    if (entity == "&quot;")
-        return "\"";
-    if (entity == "&apos;")
-        return "'";
-    if (entity == "&nbsp;")
-        return " ";
-    if (entity.size() > 3 && entity[1] == '#') {
-        const bool is_hex = entity[2] == 'x' || entity[2] == 'X';
-        const std::string_view digits = entity.substr(is_hex ? 3 : 2, entity.size() - (is_hex ? 4 : 3));
-        std::uint32_t value = 0;
-        const auto [end, ec] =
-            std::from_chars(digits.data(), digits.data() + digits.size(), value, is_hex ? 16 : 10);
-        // Sınırların dışı (vekil, 0, 10FFFF üstü) ve denetim karakteri metne girmesin.
-        const bool is_valid = ec == std::errc{} && end == digits.data() + digits.size() && value >= 0x20 &&
-                              value <= 0xFFFF && !(value >= 0xD800 && value <= 0xDFFF);
-        if (!is_valid)
-            return kReplacementCharacter;
-        return core::encode_utf8(std::u32string(1, static_cast<char32_t>(value)));
-    }
-    return std::string(entity);
-}
 
 class BlockBuilder {
 public:
@@ -191,7 +157,7 @@ public:
             append(" ");
             break;
         case MD_TEXT_ENTITY:
-            append(decode_entity(value));
+            append(core::decode_html_entity(value));
             break;
         default:  // NORMAL, CODE ve (NOHTML altında yalnız düz metin olan) HTML
             append(value);

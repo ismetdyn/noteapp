@@ -10,8 +10,10 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -216,7 +218,7 @@ struct NoteStore::Impl {
     template <class R, class F> std::expected<R, Error> write_locked(F&& body, bool keep_snapshot = false) {
         if (auto opened = open_for_write(); !opened)
             return std::unexpected(opened.error());
-        auto txn = graph->write();
+        auto txn = opened_graph().write();
         if (!txn)
             return std::unexpected(from_graph(txn.error(), path_utf8(database())));
         auto fresh = refresh_in(*txn);
@@ -239,9 +241,17 @@ struct NoteStore::Impl {
     bool gate_open = false;  // geçiş bir kez doğrulandıysa süreç boyunca yeniden taranmaz
     std::mutex mutex;
     std::optional<graph::Graph> graph;
+    // open_for_write ya da current başarılıysa dolu, sonra hiç boşalmaz. İhlal bug'dır: UB yerine durur.
+    graph::Graph& opened_graph() {
+        if (!graph)
+            std::abort();
+        return *graph;
+    }
     std::shared_ptr<const Snapshot> snapshot;
     std::uint64_t snapshot_version = 0;
     std::optional<Error> last_error;
+    // Test dikişi: copy_folder'ın iki işlemi arası, kilit tutulmazken. Eşzamanlı yazarı belirlenimli kılar.
+    std::function<void()> after_copy_batch;
 
 private:
     std::expected<std::shared_ptr<const Snapshot>, Error> refresh_in(graph::ReadTxn& txn);

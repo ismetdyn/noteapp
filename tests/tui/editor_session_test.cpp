@@ -178,6 +178,7 @@ TEST_CASE("session: every editing key reaches the buffer") {
     f.session.handle(Key::ShiftLeft);
     CHECK_FALSE(f.session.buffer()->selection().has_value());
     f.session.handle(Key::ShiftEnd);
+    REQUIRE(f.session.buffer()->selection().has_value());
     CHECK(f.session.buffer()->selection()->end == 2);
     f.session.handle(Key::Delete);
     CHECK(f.text() == "\ncd");
@@ -232,21 +233,28 @@ TEST_CASE("session: Ctrl+F finds with folding; Enter, F3, Up, Down and Ctrl+N/P 
     f.type("ağaç");
     CHECK(f.session.find_query() == "ağaç");
     CHECK(f.session.find_matches().size() == 2);
+    REQUIRE(f.session.buffer()->selection().has_value());
     CHECK(f.session.buffer()->selection()->begin == 0);
     CHECK(f.session.find_label() == "1/2");
     CHECK(f.text() == "Ağaç bir AĞAÇ");  // arama kutusundaki harf metne girmez
     f.session.handle(Key::Enter);
+    REQUIRE(f.session.buffer()->selection().has_value());
     CHECK(f.session.buffer()->selection()->begin == 11);
     CHECK(f.session.find_label() == "2/2");
     f.session.handle(Key::F3);
+    REQUIRE(f.session.buffer()->selection().has_value());
     CHECK(f.session.buffer()->selection()->begin == 0);
     f.session.handle(Key::CtrlP);
+    REQUIRE(f.session.buffer()->selection().has_value());
     CHECK(f.session.buffer()->selection()->begin == 11);
     f.session.handle(Key::CtrlN);
+    REQUIRE(f.session.buffer()->selection().has_value());
     CHECK(f.session.buffer()->selection()->begin == 0);
     f.session.handle(Key::Up);
+    REQUIRE(f.session.buffer()->selection().has_value());
     CHECK(f.session.buffer()->selection()->begin == 11);
     f.session.handle(Key::Down);
+    REQUIRE(f.session.buffer()->selection().has_value());
     CHECK(f.session.buffer()->selection()->begin == 0);
     f.session.handle(Key::Backspace);
     CHECK(f.session.find_query() == "ağa");
@@ -272,6 +280,7 @@ TEST_CASE("session: find starts from the cursor and wraps") {
     f.session.handle(Key::Down);
     f.session.handle(Key::CtrlF);
     f.type("bir");
+    REQUIRE(f.session.buffer()->selection().has_value());
     CHECK(f.session.buffer()->selection()->begin == 4);
     CHECK(f.session.find_label() == "2/3");
 }
@@ -295,7 +304,7 @@ TEST_CASE("session: editing clears matches and F3 recomputes them from the curso
     CHECK(f.session.find_matches().empty());
     f.session.handle(Key::F3);
     CHECK(f.session.find_matches().size() == 2);
-    CHECK(f.session.buffer()->selection().has_value());
+    REQUIRE(f.session.buffer()->selection().has_value());
     CHECK(f.text().substr(f.session.buffer()->selection()->begin, 4) == "kök");
 }
 
@@ -498,11 +507,13 @@ TEST_CASE("draft exit: a dirty draft is saved under the key, never the value") {
         named.session.begin_new_note("");
         named.type(content);
         CHECK_FALSE(named.session.flush_on_exit().empty());
+        REQUIRE(named.session.path().has_value());
         CHECK(named.session.path()->string().starts_with(std::string(stem) + "."));
 
         Fixture query;
         query.session.begin_draft(std::string(content), "");
         CHECK_FALSE(query.session.flush_on_exit().empty());
+        REQUIRE(query.session.path().has_value());
         CHECK(query.session.path()->string().starts_with(std::string(stem) + "."));
     }
 }
@@ -614,6 +625,7 @@ TEST_CASE("new note: a name collision uses the -2 suffix and never overwrites") 
     f.session.handle(Key::Enter);
     CHECK(f.bytes("ad.md") == "eski");
     CHECK(f.bytes("ad-2.md") == "yeni");
+    REQUIRE(f.session.path().has_value());
     CHECK(f.session.path()->string() == "ad-2.md");
 }
 
@@ -957,6 +969,7 @@ TEST_CASE("session: conflict: save as copy keeps both versions and edits the cop
     CHECK(f.bytes("work/a.md") == "dış");
     CHECK(f.bytes("work/a (copy).md") == "xeski\r\n");
     CHECK(f.saved == std::vector<std::string>{"work/a (copy).md"});
+    REQUIRE(f.session.path().has_value());
     CHECK(f.session.path()->string() == "work/a (copy).md");
     CHECK_FALSE(f.session.dirty());
     f.type("y");
@@ -1260,6 +1273,7 @@ TEST_CASE("session: saving a CRLF and BOM buffer as a new note writes the exact 
         path.prepare(f);
         path.save(f);
         CHECK(f.bytes(path.target) == kCrlfBomBody);
+        REQUIRE(f.session.path().has_value());
         CHECK(f.session.path()->string() == path.target);
         CHECK_FALSE(f.session.dirty());
         CHECK(f.saved == std::vector<std::string>{path.target});
@@ -1328,6 +1342,7 @@ TEST_CASE("session: a failed save as new note leaves no file and the retry makes
         std::ranges::sort(expected);
         CHECK(files_under(f.dir.path()) == expected);
         CHECK(f.bytes(path.target) == kCrlfBomBody);
+        REQUIRE(f.session.path().has_value());
         CHECK(f.session.path()->string() == path.target);
         CHECK_FALSE(f.session.dirty());
         CHECK(f.saved == std::vector<std::string>{path.target});

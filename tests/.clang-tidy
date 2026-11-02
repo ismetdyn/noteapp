@@ -1,0 +1,4 @@
+# Yalnız testler: araç doctest REQUIRE'ın başarısızlıkta testi kestiğini ve fikstür kurucusunu modellemez.
+# Optional erişimi her zaman önce REQUIRE ile korunur (CHECK başarısız olup sürer: UB olurdu).
+InheritParentConfig: true
+Checks: '-bugprone-unchecked-optional-access'

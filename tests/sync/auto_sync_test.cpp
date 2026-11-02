@@ -158,6 +158,7 @@ TEST_CASE("a sync that outlives tuning.sync_timeout_seconds is killed and report
     const auto elapsed = std::chrono::steady_clock::now() - start;
     CHECK(elapsed >= 1s);
     CHECK(elapsed < 5s);
+    REQUIRE(recorder.last().has_value());
     REQUIRE(recorder.last()->last_error.has_value());
     CHECK(recorder.last()->last_error->message_key == "sync.timeout");
     // Öldürülen süreç durumu yazamadı; AutoSync yazar (`note sync status` da görsün).
@@ -212,6 +213,7 @@ TEST_CASE("a missing note executable is reported in the status, not thrown") {
     AutoSync auto_sync(config_with(30, 30), fx.root() / "yok" / "note", recorder.callback());
     auto_sync.request_now();
     REQUIRE(recorder.wait_finished(1, 10s));
+    REQUIRE(recorder.last().has_value());
     REQUIRE(recorder.last()->last_error.has_value());
     CHECK(recorder.last()->last_error->message_key == "error.process_not_found");
 }
@@ -229,8 +231,10 @@ TEST_CASE("end to end: AutoSync runs the real `note sync --background` and the n
     auto_sync.request_now();
     REQUIRE(recorder.wait_finished(1, 60s));
     const auto status = recorder.last();
+    REQUIRE(status.has_value());
     CHECK_MESSAGE(!status->last_error.has_value(),
                   (status->last_error ? status->last_error->message_key : std::string()));
+    REQUIRE(status.has_value());
     CHECK(status->last_success.has_value());
     CHECK(commit_count(fx.remote()) == 1);
     auto_sync.stop(5s);

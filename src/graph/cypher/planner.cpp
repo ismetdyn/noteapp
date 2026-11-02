@@ -94,7 +94,7 @@ enum StartScore { kScanAll = 0, kLabel = 1, kLabelAndEquality = 2, kIdSeek = 3, 
 
 // WHERE'in AND'den bölünmüş parçası; değişkenleri bağlanınca en erken işlece iner.
 struct PendingFilter {
-    const Expr* expr;
+    const Expr* expr{};
     std::vector<int> dependencies;
     bool applied = false;
 };
@@ -155,7 +155,8 @@ private:
 
     const TypeSet* type_set_of(std::vector<std::string> types) {
         std::ranges::sort(types);
-        types.erase(std::ranges::unique(types).begin(), types.end());
+        const auto duplicates = std::ranges::unique(types);
+        types.erase(duplicates.begin(), duplicates.end());
         for (const TypeSet& known : plan_.type_sets)
             if (known.types == types)
                 return &known;
@@ -487,6 +488,7 @@ private:
             return;
         if (!clause.order.empty()) {
             std::vector<SortKey> keys;
+            keys.reserve(clause.order.size());
             for (const OrderItem& item : clause.order)
                 keys.push_back(SortKey{item.expr.get(), item.descending});
             plan_.root = make_sort(std::move(plan_.root), std::move(keys), clause.skip.get(),
@@ -508,6 +510,7 @@ private:
             resolve(*item.expr, scope_);
         plan_order_skip_limit(clause);
         const std::vector<int> slots = allocate_outputs(clause);
+        outputs.reserve(clause.items.size());
         for (std::size_t i = 0; i < clause.items.size(); ++i)
             outputs.push_back(ProjectItem{clause.items[i].expr.get(), slots[i]});
         plan_.root = make_project(std::move(plan_.root), std::move(outputs));
@@ -538,6 +541,7 @@ private:
             resolve(*item.expr, scope_);
         const std::vector<int> slots = allocate_outputs(clause);
         std::vector<ProjectItem> outputs;
+        outputs.reserve(clause.items.size());
         for (std::size_t i = 0; i < clause.items.size(); ++i)
             outputs.push_back(ProjectItem{clause.items[i].expr.get(), slots[i]});
         plan_.root = make_project(std::move(plan_.root), std::move(outputs));
@@ -882,6 +886,7 @@ private:
 
     void plan_pattern(std::vector<PathPattern>& paths, ExprPtr& where) {
         std::vector<PathPattern*> pointers;
+        pointers.reserve(paths.size());
         for (PathPattern& path : paths)
             pointers.push_back(&path);
         plan_pattern_paths(pointers, std::move(where));

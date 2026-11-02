@@ -27,7 +27,7 @@ core::NoteInfo note(const std::string& path, int age_hours = 0) {
 }
 
 std::vector<core::NoteInfo> sample() {
-    return {note("work/meeting.md", 0), note("personal/todo.md", 1), note("snippets/sort.java", 2)};
+    return {note("work-meeting.md", 0), note("personal-todo.md", 1), note("snippets-sort.java", 2)};
 }
 
 // Açılış odağı Liste: yazı ancak `/` ile Arama'ya geçince sorguya gider.
@@ -49,7 +49,7 @@ TEST_CASE("empty query lists all notes newest first with the first selected") {
     s.set_notes(sample());
     CHECK(s.rows().size() == 3);
     CHECK(s.total() == 3);
-    CHECK(selected_path(s) == "work/meeting.md");
+    CHECK(selected_path(s) == "work-meeting.md");
     CHECK(s.mode() == Mode::Name);
 }
 
@@ -58,7 +58,7 @@ TEST_CASE("typing filters the list and keeps match positions for highlighting") 
     s.set_notes(sample());
     type(s, "tod");
     REQUIRE(s.rows().size() == 1);
-    CHECK(selected_path(s) == "personal/todo.md");
+    CHECK(selected_path(s) == "personal-todo.md");
     CHECK(s.rows()[0].positions.size() == 3);
     CHECK(s.query() == "tod");
 }
@@ -94,11 +94,11 @@ TEST_CASE("navigation clamps at both ends and Ctrl-P/N mirror the arrows") {
 TEST_CASE("selection stays on the same note when the list refilters, else resets to 0") {
     tui::TuiState s;
     s.set_notes(sample());
-    s.handle(Key::Down);  // personal/todo.md
+    s.handle(Key::Down);  // personal-todo.md
     type(s, "o");         // üçü de 'o' içerir
-    CHECK(selected_path(s) == "personal/todo.md");
-    type(s, "rk");  // yalnız work/meeting.md kalır; seçili not düştü
-    CHECK(selected_path(s) == "work/meeting.md");
+    CHECK(selected_path(s) == "personal-todo.md");
+    type(s, "rk");  // yalnız work-meeting.md kalır; seçili not düştü
+    CHECK(selected_path(s) == "work-meeting.md");
     CHECK(s.selected() == 0);
 }
 
@@ -106,11 +106,11 @@ TEST_CASE("set_notes keeps the selection by path and clamps when the note vanish
     tui::TuiState s;
     s.set_notes(sample());
     s.handle(Key::Down);
-    s.handle(Key::Down);  // snippets/sort.java
+    s.handle(Key::Down);  // snippets-sort.java
     auto more = sample();
     more.insert(more.begin(), note("new.md", -5));  // en yeni: sıra kayar
     s.set_notes(more);
-    CHECK(selected_path(s) == "snippets/sort.java");
+    CHECK(selected_path(s) == "snippets-sort.java");
     s.set_notes({note("only.md")});
     CHECK(selected_path(s) == "only.md");
     s.set_notes({});
@@ -183,10 +183,10 @@ tui::ContentSearcher fake_searcher(std::vector<std::string>* seen_queries = null
         if (seen_queries)
             seen_queries->emplace_back(query);
         std::vector<search::ContentResult> results;
-        results.push_back({core::NotePath::parse("personal/todo.md").value(),
+        results.push_back({core::NotePath::parse("personal-todo.md").value(),
                            3,
                            {search::Hit{12, "buy milk", {{4, 8}}}, search::Hit{20, "milk again", {{0, 4}}}}});
-        results.push_back({core::NotePath::parse("snippets/sort.java").value(),
+        results.push_back({core::NotePath::parse("snippets-sort.java").value(),
                            1,
                            {search::Hit{1, "milk sort", {{0, 4}}}}});
         return results;
@@ -216,7 +216,7 @@ TEST_CASE("content mode rows come from the searcher with hit counts, only for a 
     CHECK(seen.empty());
     type(s, "milk");
     REQUIRE(s.rows().size() == 2);
-    CHECK(s.rows()[0].path.string() == "personal/todo.md");
+    CHECK(s.rows()[0].path.string() == "personal-todo.md");
     CHECK(s.rows()[0].hit_count == 3);
     CHECK(s.rows()[1].hit_count == 1);
     CHECK_FALSE(seen.empty());
@@ -244,7 +244,7 @@ TEST_CASE("switching back to name mode restores the fuzzy list and resets the sc
     s.set_content_searcher(fake_searcher());
     s.handle(Key::Tab);
     type(s, "tod");
-    s.handle(Key::Tab);
+    s.handle(Key::CtrlT);
     CHECK(s.mode() == Mode::Name);
     REQUIRE(s.rows().size() == 1);
     CHECK(s.rows()[0].hit_count == 0);
@@ -287,11 +287,11 @@ TEST_CASE("reveal clears the query and selects the given note") {
     tui::TuiState s;
     s.set_notes(sample());
     type(s, "todo");
-    const auto target = core::NotePath::parse("snippets/sort.java").value();
+    const auto target = core::NotePath::parse("snippets-sort.java").value();
     CHECK(s.reveal(target));
     CHECK(s.query().empty());
     CHECK(s.mode() == Mode::Name);
-    CHECK(selected_path(s) == "snippets/sort.java");
+    CHECK(selected_path(s) == "snippets-sort.java");
     CHECK_FALSE(s.reveal(core::NotePath::parse("yok.md").value()));
 }
 
@@ -338,9 +338,11 @@ TEST_CASE("List: k/j and arrows move the selection and clamp") {
     CHECK(s.query().empty());
 }
 
-TEST_CASE("List: g and G jump to the first and last note") {
+TEST_CASE("List: gg and G jump to the first and last note") {
     auto s = in_focus(Focus::List);
     CHECK(s.handle(Key::Char, "G") == Intent::None);
+    CHECK(s.selected() == 2);
+    CHECK(s.handle(Key::Char, "g") == Intent::None);
     CHECK(s.selected() == 2);
     CHECK(s.handle(Key::Char, "g") == Intent::None);
     CHECK(s.selected() == 0);
@@ -441,7 +443,7 @@ TEST_CASE("List: Esc clears a filter and does nothing when it is empty") {
 }
 
 TEST_CASE("List: unknown letters do nothing, including Turkish dotless i and uppercase actions") {
-    for (const std::string_view letter : {"x", "h", "A", "N", "Q", "ı", "İ", "ş", "ğ", " "}) {
+    for (const std::string_view letter : {"w", "h", "A", "N", "Q", "ı", "İ", "ş", "ğ", " "}) {
         CAPTURE(letter);
         auto s = in_focus(Focus::List);
         s.handle(Key::Down);
@@ -478,7 +480,7 @@ TEST_CASE("Ctrl-O is the same as n and never opens the external editor") {
 
 TEST_CASE("empty list: d, r and Enter are no-ops in List while a, n, / still work") {
     tui::TuiState s;
-    for (const std::string_view letter : {"d", "r", "g", "G", "j", "k"})
+    for (const std::string_view letter : {"d", "r", "g", "g", "G", "j", "k"})
         CHECK(s.handle(Key::Char, letter) == Intent::None);
     CHECK(s.handle(Key::Enter) == Intent::None);
     CHECK(s.handle(Key::Char, "a") == Intent::NewRow);
@@ -521,15 +523,15 @@ TEST_CASE("Search: typing filters on each key") {
     CHECK(s.focus() == Focus::Search);
 }
 
-TEST_CASE("Search: arrows and Ctrl-P/N move the selection while staying in Search") {
+TEST_CASE("Search: arrows move the selection while staying in Search") {
     auto s = in_focus(Focus::Search);
     s.handle(Key::Down);
     CHECK(s.selected() == 1);
-    s.handle(Key::CtrlN);
+    s.handle(Key::Down);
     CHECK(s.selected() == 2);
     s.handle(Key::Up);
     CHECK(s.selected() == 1);
-    s.handle(Key::CtrlP);
+    s.handle(Key::Up);
     CHECK(s.selected() == 0);
     CHECK(s.focus() == Focus::Search);
 }
@@ -548,19 +550,21 @@ TEST_CASE("Search: Enter keeps the selection and returns to List, no match creat
     CHECK(empty.handle(Key::Enter) == Intent::None);
 }
 
-TEST_CASE("Search: Tab toggles the mode and stays in Search") {
+TEST_CASE("Search: Ctrl+T toggles the mode and stays in Search") {
     auto s = in_focus(Focus::Search);
     s.set_content_searcher(fake_searcher());
-    CHECK(s.handle(Key::Tab) == Intent::None);
+    CHECK(s.handle(Key::CtrlT) == Intent::None);
     CHECK(s.mode() == Mode::Content);
     CHECK(s.focus() == Focus::Search);
 }
 
-TEST_CASE("Search: left and right change nothing and do not leave Search") {
+TEST_CASE("Search: left and right move the cursor and do not leave Search") {
     auto s = in_focus(Focus::Search);
     s.handle(Key::Char, "o");
-    CHECK(s.handle(Key::Right) == Intent::None);
     CHECK(s.handle(Key::Left) == Intent::None);
+    CHECK(s.search_line().cursor() == 0);
+    CHECK(s.handle(Key::Right) == Intent::None);
+    CHECK(s.search_line().cursor() == 1);
     CHECK(s.focus() == Focus::Search);
     CHECK(s.query() == "o");
 }
@@ -575,7 +579,7 @@ TEST_CASE("Search: Esc returns to List with the filter, then d acts on the filte
     CHECK(s.query() == "tod");
     CHECK(s.rows().size() == 1);
     CHECK(s.handle(Key::Char, "d") == Intent::TrashSelected);
-    CHECK(selected_path(s) == "personal/todo.md");
+    CHECK(selected_path(s) == "personal-todo.md");
     CHECK(s.query() == "tod");
 }
 
@@ -820,20 +824,20 @@ TEST_CASE("Editor: leaving returns to Preview at the given line, or to List for 
 
 TEST_CASE("select_note moves the selection without touching focus or query") {
     auto s = in_focus(Focus::Editor);
-    CHECK(s.select_note(core::NotePath::parse("snippets/sort.java").value()));
-    CHECK(selected_path(s) == "snippets/sort.java");
+    CHECK(s.select_note(core::NotePath::parse("snippets-sort.java").value()));
+    CHECK(selected_path(s) == "snippets-sort.java");
     CHECK(s.focus() == Focus::Editor);
     CHECK_FALSE(s.select_note(core::NotePath::parse("nope.md").value()));
-    CHECK(selected_path(s) == "snippets/sort.java");
+    CHECK(selected_path(s) == "snippets-sort.java");
 }
 
 TEST_CASE("select_note clears a filter that hides the saved note") {
     auto s = in_focus(Focus::List);
     type(s, "tod");
     s.handle(Key::Escape);
-    CHECK(s.select_note(core::NotePath::parse("snippets/sort.java").value()));
+    CHECK(s.select_note(core::NotePath::parse("snippets-sort.java").value()));
     CHECK(s.query().empty());
-    CHECK(selected_path(s) == "snippets/sort.java");
+    CHECK(selected_path(s) == "snippets-sort.java");
 }
 
 TEST_CASE("Ctrl-Z suspends only outside the editor; Ctrl-C in a modal quits only outside it") {
@@ -858,10 +862,12 @@ TEST_CASE("Ctrl keys, F1 and F9 work in List and Search") {
         CHECK(s.handle(Key::F1) == Intent::ShowHelp);
         CHECK(s.handle(Key::F9) == Intent::ShowSettings);
         CHECK(s.handle(Key::CtrlC) == Intent::Quit);
-        s.handle(Key::CtrlN);
-        CHECK(s.selected() == 1);
-        s.handle(Key::CtrlP);
-        CHECK(s.selected() == 0);
+        if (focus == Focus::List) {  // Aramada Ctrl-P/N geçmiştir
+            s.handle(Key::CtrlN);
+            CHECK(s.selected() == 1);
+            s.handle(Key::CtrlP);
+            CHECK(s.selected() == 0);
+        }
         CHECK(s.focus() == focus);
     }
 }
@@ -876,7 +882,7 @@ TEST_CASE("Ctrl-R and Ctrl-D stay no-ops without a selection") {
 
 TEST_CASE("reveal returns to List so the saved note can be acted on") {
     auto s = in_focus(Focus::Search);
-    CHECK(s.reveal(core::NotePath::parse("snippets/sort.java").value()));
+    CHECK(s.reveal(core::NotePath::parse("snippets-sort.java").value()));
     CHECK(s.focus() == Focus::List);
 }
 
@@ -885,13 +891,13 @@ TEST_CASE("deleting keeps the selection on a neighbor, on a filtered list too") 
     auto s = in_focus(Focus::List);
     s.handle(Key::Down);
     const std::size_t index = s.selected();
-    s.set_notes({note("work/meeting.md", 0), note("snippets/sort.java", 2)});
+    s.set_notes({note("work-meeting.md", 0), note("snippets-sort.java", 2)});
     s.select_index(index);
-    CHECK(selected_path(s) == "snippets/sort.java");  // silinenin yerine gelen
+    CHECK(selected_path(s) == "snippets-sort.java");  // silinenin yerine gelen
 
-    s.set_notes({note("work/meeting.md", 0)});
+    s.set_notes({note("work-meeting.md", 0)});
     s.select_index(index);
-    CHECK(selected_path(s) == "work/meeting.md");  // son satır silindi: bir üstü
+    CHECK(selected_path(s) == "work-meeting.md");  // son satır silindi: bir üstü
 
     auto filtered = in_focus(Focus::List, {note("a1.md", 0), note("a2.md", 1), note("b.md", 2)});
     type(filtered, "a");

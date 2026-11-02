@@ -11,7 +11,7 @@
 namespace noteapp::search {
 
 struct FuzzyMatch {
-    double score;
+    double score{};
     std::vector<std::size_t>
         positions;  // sorgu karakteri başına, adayın özgün UTF-8'indeki bayt ofseti (vurgulama için)
 };
@@ -21,7 +21,7 @@ struct FuzzyMatch {
 std::optional<FuzzyMatch> fuzzy_match(std::string_view query, std::string_view candidate);
 
 struct Ranked {
-    std::size_t index;  // notes içindeki sıra
+    std::size_t index{};  // notes içindeki sıra
     FuzzyMatch match;
 };
 

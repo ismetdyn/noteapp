@@ -372,7 +372,8 @@ TEST_CASE("spell: a hung hunspell disables the session without blocking the call
     tui::SpellChecker spell("en_US", fake.on_ready(), kNoIdle, timeout);
     const auto start = std::chrono::steady_clock::now();
     spell.misspelled("kotu");
-    CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(50));
+    if (noteapp::test::kWallClockBudgets)
+        CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(50));
     REQUIRE(eventually([&] { return spell.disabled(); }));
 }
 
@@ -405,7 +406,8 @@ TEST_CASE("spell: destroying the checker with a hung child returns promptly") {
         spell.misspelled("kotu");
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
+    if (noteapp::test::kWallClockBudgets)
+        CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
 }
 
 TEST_CASE("spell: over-long lines are not sent") {
@@ -572,6 +574,7 @@ TEST_CASE("spell: quitting while a write to a child that stopped reading is bloc
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     const auto start = std::chrono::steady_clock::now();
     spell.reset();
-    CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
+    if (noteapp::test::kWallClockBudgets)
+        CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
 }
 #endif

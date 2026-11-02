@@ -15,9 +15,12 @@ set(FTXUI_BUILD_EXAMPLES OFF)
 set(FTXUI_BUILD_DOCS OFF)
 set(FTXUI_BUILD_TESTS OFF)
 set(FTXUI_ENABLE_INSTALL OFF)
+# Yama: FTXUI her karede tüm ekranı yazar ve çıktı kancası yoktur; gerekçe yama dosyasının başında.
+find_package(Patch REQUIRED)
 FetchContent_Declare(ftxui
     URL https://github.com/ArthurSonzogni/FTXUI/archive/refs/tags/v7.0.3.tar.gz
     URL_HASH SHA256=e7c62ffe19009759821b4f0f8df7f2a6fb83784c3a9f1477d81f56d3ee723c88
+    PATCH_COMMAND ${Patch_EXECUTABLE} -p1 --binary -i ${CMAKE_CURRENT_LIST_DIR}/patches/ftxui-7.0.3-frame-writer.patch
     SYSTEM)
 FetchContent_MakeAvailable(ftxui)
 

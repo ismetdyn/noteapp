@@ -28,6 +28,7 @@ fs::path from_utf8(const std::string& s) {
 
 struct ExportArgs {
     bool pdf = false;
+    bool ignore_skipped = false;
     std::optional<std::string> all;
     std::optional<std::string> output;
     std::vector<std::string> positional;
@@ -40,6 +41,8 @@ std::expected<ExportArgs, int> parse_export_args(const std::vector<std::string>&
         const std::string& arg = rest[i];
         if (arg == "--pdf") {
             parsed.pdf = true;
+        } else if (arg == "--ignore-skipped") {
+            parsed.ignore_skipped = true;
         } else if (arg == "--all") {
             if (i + 1 >= rest.size()) {
                 std::cerr << core::tr("cli.missing_value", {{"option", arg}}) << '\n';
@@ -73,9 +76,9 @@ int run_export(const ParsedArgs& args, const core::Config& config) {
             std::cerr << core::tr("cli.export_usage") << '\n';
             return kExitUsage;
         }
-        return run_export_all(*parsed->all, config);
+        return run_export_all(*parsed->all, parsed->ignore_skipped, config);
     }
-    if (!parsed->pdf || parsed->positional.size() != 1) {
+    if (!parsed->pdf || parsed->ignore_skipped || parsed->positional.size() != 1) {
         std::cerr << core::tr("cli.export_usage") << '\n';
         return kExitUsage;
     }

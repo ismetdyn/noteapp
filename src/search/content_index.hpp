@@ -17,14 +17,14 @@ namespace noteapp::search {
 // Bir eşleşen satır. `line` 1 tabanlıdır; `ranges` kesit (`snippet`) içindeki bayt aralıklarıdır [başlangıç,
 // bitiş).
 struct Hit {
-    std::size_t line;
+    std::size_t line{};
     std::string snippet;
     std::vector<std::pair<std::size_t, std::size_t>> ranges;
 };
 
 struct ContentResult {
     core::NotePath path;
-    std::size_t hit_count;        // en az bir terim geçen satır sayısı
+    std::size_t hit_count{};      // en az bir terim geçen satır sayısı
     std::vector<Hit> first_hits;  // ilk 3 eşleşen satır
 };
 
@@ -62,7 +62,7 @@ private:
     struct Entry {
         std::filesystem::file_time_type mtime;
         core::Revision revision;
-        std::uintmax_t size;
+        std::uintmax_t size{};
         std::string text;                         // özgün metin (kesitler buradan kesilir)
         std::u32string folded;                    // katlanmış kod noktaları; refresh'te bir kez hesaplanır
         std::vector<std::uint32_t> byte_offsets;  // kod noktası -> özgün bayt ofseti

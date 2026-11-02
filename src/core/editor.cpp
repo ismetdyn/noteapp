@@ -54,7 +54,7 @@ std::expected<std::filesystem::path, Error> create_private_temp_file(std::string
 #endif
     constexpr int kMaxAttempts = 100;  // çakışma döngüsünün sonsuza gitmesine karşı sigorta
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
-        const fs::path file = dir / ("noteapp-" + random_name_part() + "." + std::string(type));
+        fs::path file = dir / ("noteapp-" + random_name_part() + "." + std::string(type));
         const FileWriteResult written = write_new_file(file, initial, true);
         if (written.already_exists)
             continue;

@@ -45,6 +45,8 @@ struct LayoutScene {
         noteapp::core::init_i18n("tr");
         fixture.add_note(kLongNotePath, "# Toplantı\n\nGündem maddeleri burada.\n");
         fixture.add_note("kısa.md", "kısa not\n", 5);
+        for (const char* typed : {"betik.sh", "ayar.toml", "veri.json", "kod.py", "tablo.csv"})
+            fixture.add_note(typed, "x\n", 6);  // liste ikonlarının türleri görüntüde seçilsin
         state = fixture.make_state();
         state->layout().width = width;
         state->layout().height = height;

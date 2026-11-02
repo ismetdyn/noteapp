@@ -2,14 +2,18 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
+#include <cstdint>
 #include <ctime>
+#include <system_error>
+#include <utility>
 
 namespace noteapp::core {
 
 namespace {
 
 constexpr std::string_view kStampPrefix = "note-";
-constexpr std::string_view kStampFormat = "%Y%m%d-%H%M%S";
+constexpr const char* kStampFormat = "%Y%m%d-%H%M%S";
 
 bool is_continuation(unsigned char byte) {
     return (byte & 0xC0) == 0x80;
@@ -29,7 +33,7 @@ std::string timestamp_name(std::chrono::system_clock::time_point now) {
     localtime_r(&time, &local);
 #endif
     std::array<char, 32> buffer{};
-    const std::size_t length = std::strftime(buffer.data(), buffer.size(), kStampFormat.data(), &local);
+    const std::size_t length = std::strftime(buffer.data(), buffer.size(), kStampFormat, &local);
     return std::string(kStampPrefix) + std::string(buffer.data(), length);
 }
 
@@ -45,7 +49,7 @@ std::string_view trimmed(std::string_view text) {
 
 struct Assignment {
     std::string_view key;
-    char separator;
+    char separator{};
     std::string_view value;
 };
 
@@ -153,6 +157,29 @@ std::optional<std::u32string> decode_utf8(std::string_view utf8) {
     return out;
 }
 
+std::string decode_html_entity(std::string_view entity) {
+    constexpr std::string_view kReplacement = "\xEF\xBF\xBD";
+    constexpr std::pair<std::string_view, std::string_view> kNamed[] = {
+        {"&amp;", "&"}, {"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&apos;", "'"}, {"&nbsp;", " "},
+    };
+    for (const auto& [name, value] : kNamed)
+        if (entity == name)
+            return std::string(value);
+    if (entity.size() <= 3 || entity[1] != '#')
+        return std::string(entity);
+    const bool is_hex = entity[2] == 'x' || entity[2] == 'X';
+    const std::string_view digits = entity.substr(is_hex ? 3 : 2, entity.size() - (is_hex ? 4 : 3));
+    std::uint32_t value = 0;
+    const auto [end, ec] =
+        std::from_chars(digits.data(), digits.data() + digits.size(), value, is_hex ? 16 : 10);
+    // Sınırların dışı (vekil, 0, 10FFFF üstü) ve denetim karakteri metne girmesin.
+    const bool is_valid = ec == std::errc{} && end == digits.data() + digits.size() && value >= 0x20 &&
+                          value <= 0xFFFF && !(value >= 0xD800 && value <= 0xDFFF);
+    if (!is_valid)
+        return std::string(kReplacement);
+    return encode_utf8(std::u32string(1, static_cast<char32_t>(value)));
+}
+
 std::string encode_utf8(std::u32string_view codepoints) {
     std::string out;
     out.reserve(codepoints.size());
@@ -199,8 +226,6 @@ std::string transliterate_turkish(std::string_view utf8) {
             cp = U'G';
             break;
         case U'ı':
-            cp = U'i';
-            break;
         case U'İ':
             cp = U'i';
             break;

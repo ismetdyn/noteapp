@@ -2,7 +2,8 @@
 # Linux'ta konteynerde Windows ikilileri üretir: out/windows-x86_64/{note,notes,notes-gui}.exe ve licenses/. Host'ta yalnız
 # docker ya da podman gerekir. Kaynak salt-okunur bağlanır; derleme dizini ve FetchContent önbelleği adlı birimde kalır.
 #   scripts/build-windows.sh                 ikilileri üretir (testler derlenmez)
-#   scripts/build-windows.sh --test [ctest argümanları]   önce testleri Wine'da koşar; geçerse ikilileri üretir
+#   scripts/build-windows.sh --test [ctest argümanları]   önce testleri Wine'da koşar, sonuçtan bağımsız ikilileri üretip DLL denetimini
+#                                                         de koşar; test düştüyse sonda sıfırdan farklı çıkar
 # NOTEAPP_WINDOWS_BUILD_VOLUME: derleme birimi; yeni ad = sıfırdan derleme.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -47,11 +48,13 @@ start_wine() {
     wine reg add "HKCU\\Environment" /f /v SDL_RENDER_DRIVER /d software
 }
 
+tests_failed=0
 if [[ "$RUN_TESTS" == 1 ]]; then
     start_wine
     cmake --preset windows-cross-release -B /build/test
     cmake --build /build/test
-    ctest --test-dir /build/test --output-on-failure "$@"
+    # Düşen test DLL denetimini gizlemesin: sonuç en sonda, tar akışından sonra çıkış kodu olur.
+    ctest --test-dir /build/test --output-on-failure "$@" || tests_failed=1
     wineserver -k
 fi
 
@@ -186,7 +189,7 @@ EOF
 #include <windows.h>
 #include <stdio.h>
 int main(void) {
-    static const char keys[] = ",\t\t\t\t\t\t \t\t\t\t\t\t\t\r"; /* Ayarlar, sync.enabled, boşluk, Kaydet, Enter */
+    static const char keys[] = ",\t\t\t\t\t\t\t \t\t\t\t\t\t\t\r"; /* Ayarlar, sync.enabled, boşluk, Kaydet, Enter */
     INPUT_RECORD records[sizeof keys - 1] = {0};
     for (size_t i = 0; i < sizeof keys - 1; ++i) {
         records[i].EventType = KEY_EVENT;
@@ -242,12 +245,15 @@ add_license libstdc++ /usr/share/licenses/mingw64-gcc/COPYING3
 add_license libstdc++ /usr/share/licenses/mingw64-gcc/COPYING.RUNTIME
 
 tar -C /tmp/install/bin -cf - note.exe notes.exe notes-gui.exe licenses >&3
+if [[ "$tests_failed" == 1 ]]; then
+    die "tests failed under Wine (the DLL checks above ran regardless)"
+fi
 ' build-windows "$@" | tar -xf - -C "$output_dir" --no-same-owner
 
 for exe in note.exe notes.exe notes-gui.exe; do
     [[ -s "$output_dir/$exe" ]] || die "$output_dir/$exe was not produced"
 done
-for license in sdl3/LICENSE.txt sdl3/SOURCE-NOTICES.txt libgit2/COPYING libgit2/SOURCE-NOTICES.txt \
+for license in noteapp-icons/LICENSE-NoteappIcons.txt sdl3/LICENSE.txt sdl3/SOURCE-NOTICES.txt libgit2/COPYING libgit2/SOURCE-NOTICES.txt \
     libharu/SOURCE-NOTICES.txt winpthreads/COPYING libstdc++/COPYING.RUNTIME; do
     [[ -s "$output_dir/licenses/$license" ]] || die "$output_dir/licenses/$license was not produced"
 done

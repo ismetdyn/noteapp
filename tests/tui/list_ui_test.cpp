@@ -48,6 +48,11 @@ std::vector<core::NoteInfo> sample() {
             info("snippets/sort.java", 2, 200)};
 }
 
+// Klasörsüz: satırlar doğrudan not (klasör görünümü folder_nav_test'te).
+std::vector<core::NoteInfo> flat_sample() {
+    return {info("meeting.md", 0, 10), info("todo.md", 1, 3000), info("sort.java", 2, 200)};
+}
+
 void type(tui::TuiState& s, std::string_view text) {
     for (char c : text)
         s.handle(Key::Char, std::string_view(&c, 1));
@@ -209,7 +214,7 @@ TEST_CASE("f: global search shows the hit line; Enter opens REVIEW scrolled to t
     REQUIRE(row.hits.size() == 1);
     CHECK(row.hits.front().line == 41);
     CHECK(has(screen_text(f.state), "kelime burada"));
-    CHECK(f.state.handle(Key::Enter) == Intent::None);
+    CHECK(f.state.handle(Key::Enter) == Intent::SavePrefs);  // arama geçmişi yazılır
     CHECK(f.state.focus() == Focus::Preview);
     CHECK(f.state.preview_scroll() == 38);  // eşleşmenin üstünde iki satır bağlam
     f.state.handle(Key::Left);
@@ -446,10 +451,37 @@ TEST_CASE("clicking the trash indicator opens the trash view; the rest of the to
     CHECK(f.state.focus() == Focus::List);
 }
 
-TEST_CASE("clicking the row marker toggles its details and selects it; clicking the path only selects") {
+TEST_CASE("with icons a click on a note's icon or arrow column only selects") {
     core::init_i18n("en");
     tui::TuiState s;
     s.set_notes(sample());
+    s.set_window(kWidth, kHeight);
+    s.set_icon_style(core::IconStyle::Nerd);
+    constexpr int kFirstRowY = 2;
+    const int marker = tui::row_marker_column(s);
+    const test::TempDir dir;
+    core::NoteStore store(dir.path());
+    std::mutex mutex;
+    std::string clip;
+    tui::EditorSession editor(
+        tui::EditorHost{store, mutex, clip, plain_width, 1024, core::kDefaultSlugMaxLength,
+                        [](std::string_view) { return std::string("md"); }, [](const core::NotePath&) {},
+                        [] {}, [](std::optional<std::size_t>) {}, [](const core::Error&) {}, [] {}});
+    const auto click = [&](int x, int y) {
+        tui::route_mouse({x, y, tui::MouseButton::Left, tui::MouseMotion::Press}, s, editor);
+    };
+    click(marker + 2, kFirstRowY + 1);  // ikon hücresi
+    CHECK(s.selected() == 1);
+    CHECK(s.row_height(1) == 1);
+    click(marker, kFirstRowY + 2);
+    CHECK(s.selected() == 2);
+    CHECK(s.row_height(2) == 1);
+}
+
+TEST_CASE("clicking a note row only selects, wherever it lands; details stay on the keys") {
+    core::init_i18n("en");
+    tui::TuiState s;
+    s.set_notes({info("a.md"), info("b.md"), info("c.md")});
     s.set_window(kWidth, kHeight);
     constexpr int kFirstRowY = 2;
     constexpr int kMarkerX = 4;  // kenar, seçim, numara, boşluk
@@ -470,13 +502,13 @@ TEST_CASE("clicking the row marker toggles its details and selects it; clicking 
     CHECK(s.row_height(1) == 1);
     click(kMarkerX, kFirstRowY + 1);
     CHECK(s.selected() == 1);
+    CHECK(s.row_height(1) == 1);
+    s.handle(Key::Char, " ");
     CHECK(s.row_height(1) == 6);
-    // Açık satırın ayrıntı satırlarında işaret yok: aynı sütuna tıklamak yalnız seçer.
+    // Ayrıntı satırına tıklamak açık satırı seçer, kapatmaz.
     click(kMarkerX, kFirstRowY + 2);
     CHECK(s.selected() == 1);
     CHECK(s.row_height(1) == 6);
-    click(kMarkerX, kFirstRowY + 1);
-    CHECK(s.row_height(1) == 1);
 }
 
 TEST_CASE("Alt arrows and page keys work in the trash view") {
@@ -513,7 +545,7 @@ TEST_CASE("an editor open on a trashed note follows the not-found path") {
 TEST_CASE("Alt arrows expand and collapse rows; navigation and clicks walk over the extra lines") {
     core::init_i18n("en");
     tui::TuiState s;
-    s.set_notes(sample());
+    s.set_notes(flat_sample());
     CHECK(s.row_height(0) == 1);
     s.handle(Key::AltRight);
     CHECK(s.row_height(0) == 6);
@@ -537,6 +569,7 @@ TEST_CASE("Alt arrows expand and collapse rows; navigation and clicks walk over 
     CHECK(s.row_at(10, 7) == 2);
 
     // Seçili satır pencerede kalır; açık satır yukarıdan sayılır.
+    s.handle(Key::Char, "g");
     s.handle(Key::Char, "g");
     s.handle(Key::AltRight);
     s.handle(Key::Char, "G");
@@ -571,7 +604,7 @@ TEST_CASE("a click on an expanded line selects its row") {
 TEST_CASE("v cycles the right column; o opens the sort menu; both are saved") {
     core::init_i18n("en");
     tui::TuiState s;
-    s.set_notes(sample());
+    s.set_notes(flat_sample());
     using Column = tui::ListColumn;
     CHECK(s.list_column() == Column::SizeAndDate);
     CHECK(has(screen_text(s), "2.9 KiB"));
@@ -585,12 +618,12 @@ TEST_CASE("v cycles the right column; o opens the sort menu; both are saved") {
     CHECK(s.focus() == Focus::List);
     CHECK(s.list_sort().field == search::SortField::Size);
     CHECK(s.list_sort().descending);
-    CHECK(row_paths(s).front() == "personal/todo.md");
+    CHECK(row_paths(s).front() == "todo.md");
     CHECK(has(screen_text(s), "size"));
     s.handle(Key::Char, "o");
     CHECK(s.handle(Key::Char, "r") == Intent::SavePrefs);
     CHECK_FALSE(s.list_sort().descending);
-    CHECK(row_paths(s).front() == "work/meeting.md");
+    CHECK(row_paths(s).front() == "meeting.md");
     s.handle(Key::Char, "o");
     s.handle(Key::Char, "n");
     CHECK(s.list_sort().field == search::SortField::Name);
@@ -715,6 +748,7 @@ TEST_CASE("graph store: created and origin really show in row details, the v col
     REQUIRE(meta->created_at.has_value());
     REQUIRE(meta->origin.has_value());
     const std::string origin = *meta->origin;
+    REQUIRE(meta->created_at.has_value());
     const std::string created = tui::local_time_text(*meta->created_at);
 
     f.select("eski.md");
@@ -822,3 +856,17 @@ TEST_CASE("u: a failed restore keeps the item, the next u brings it back") {
     CHECK(f.exists("a.md"));
     CHECK_FALSE(f.in_trash("a.md"));
 }
+
+#ifndef _WIN32
+TEST_CASE("tui-state.toml holds search history, so only its owner can read it") {
+    constexpr auto kOwnerOnly = fs::perms::owner_read | fs::perms::owner_write;
+    StoreFixture f;
+    const fs::path file = core::state_dir() / "tui-state.toml";
+    f.actions.run(tui::Intent::SavePrefs, f.confirm);
+    CHECK(fs::status(file).permissions() == kOwnerOnly);
+    // Eski sürümün 0644 bıraktığı dosya da ilk kayıtta daralır.
+    fs::permissions(file, kOwnerOnly | fs::perms::group_read | fs::perms::others_read);
+    f.actions.run(tui::Intent::SavePrefs, f.confirm);
+    CHECK(fs::status(file).permissions() == kOwnerOnly);
+}
+#endif

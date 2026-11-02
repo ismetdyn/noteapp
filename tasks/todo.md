@@ -426,13 +426,27 @@
 - [x] T65: Başarısız geri almada öğe korunur. Kanıt: `ctest` 10/10 (`8b8ff7e`).
 - [x] T63: Önizleme, öneri tablosu, `hunspell` çıkışı. Kanıt: `ctest` 10/10 (`83e7ed8`).
 - [x] T66: `a` liste içi ad, dosya sonuna dokunmama. Kanıt: e2e 179/0 (`7d0a657`).
-- [ ] T67: `main`'den sonra C++ kalite turu: internetten C++ ve grafik programlama skill ve araç araştırması (Anthropic, GitHub); bellek sızıntısı taraması (LSan, Valgrind, heaptrack); performans profili; sahiplik denetimi: ham `new`/`delete` ve sahip ham işaretçi yerine RAII, `unique_ptr`/`shared_ptr`; clang-tidy `modernize`, `cppcoreguidelines`, `performance` denetimleri.
-- [ ] T68: TUI metin girişleri: ortak giriş bileşeni, gri öneri, `Tab` listesi (klasör, ad, tip, arama argümanı), renkli arama satırı, `Ctrl+P`/`Ctrl+N` arama geçmişi, `/` modu `Ctrl+T`. Bağımlılık yok. Depends: T67.
-- [ ] T73: Simgeler: Symbols Nerd Font'u GUI'ye göm (ImGui); TUI için `note font install` ile kullanıcı font dizinine kurma; `icons = auto | nerd | off`.
-- [ ] T69: REVIEW Markdown görünümü (md4c, yeni bağımlılık yok), `R` ham metin; CSV tablo, JSON düzenli görünüm. Depends: `main`'e alma.
-- [ ] T70: TUI klasör gezinmesi (`←`/`h` üst, `→`/`l` içeri), klasör içi numara, `a` ile `klasör/`, `F2` ile klasör adı, simgeler. Depends: T69, T73 ile birlikte.
-- [ ] T71: Çoklu seçim `x`, `y`/`p`, `g` atlamaları. Depends: T70.
+- [x] T67: C++ kalite turu, RAII, clang-tidy, cppcheck, sızıntı taraması. Kanıt: `ctest` 10/10; Valgrind definite/indirect 0; ASan/LSan 0 (`a1e45fc`). `bugprone-unchecked-optional-access` 140 uyarı kapalı, ~30 örneklendi.
+- [x] T68: Metin girişlerinde öneri, `Tab` listesi, renkli arama, geçmiş. Kanıt: `ctest` 10/10, e2e 185/0 (`ed9f9db`).
+- [x] T73: Simge tablosu, `icons` ayarı, 30 glifli GUI fontu, lisanslar. Kanıt: `ctest` 10/10, `build-windows.sh` exit 0 (`eb8f727`).
+- [x] T69: REVIEW Markdown, CSV, JSON görünümü, `R`. Kanıt: `ctest` 10/10, e2e 194/0 (`497e7af`).
+- [x] T70: TUI klasör gezinmesi, klasör içi numara, klasör işlemleri. Kanıt: `ctest` 10/10, e2e 218/0, Release `nav perf` exit 0 (`e6271d3`).
+- [x] T71: Çoklu seçim, `y`/`m`/`p`, `g` atlamaları. Kanıt: `ctest` 10/10, e2e 250/0 (`23d884a`).
+- [x] T74: Ağaç liste, `t` taşı, dolu ok, Nerd simgeler. Kanıt: `ctest` 10/10, e2e 250/0 (`23d884a`).
+- [x] T75: TUI hızı: değişen hücre çıktısı (tuş başına 3.318 → 228 bayt), tek kare, `install-local.sh`. Kanıt: `ctest` 12/12, pty bayt testi (`abb085f`).
+- [~] T76: Yazi görünümü geri alındı (kullanıcı kararı, 2026-11-02); hız işi T75 kalıyor.
+- [x] T77: G7 bulguları, atlanan dosya kaydı, perf testi, Windows DLL kontrolü, statik analiz. Kanıt: `ctest` 12/12, e2e 258/0, tidy `src` 0 (`db435b9`).
+- [x] T86: Klasör kopyası, `install-local.sh`, atlanan dosya temizleme. Kanıt: `ctest` 12/12 (`03ee16b`).
+- [x] T87: Geçişte okunamayan dizin raporu, `.trash`, README, sanitizer kurulumu. Kanıt: `ctest` 12/12, Wine `note_graph` exit 0, ASan `cli`+`note_graph` exit 0 (`9ac5cc9`).
+- [ ] T78: Bağlantılar paneli: gelen, giden `[[bağlantı]]`, `RELATED_TO`, etiketler; TUI ve GUI. Depends: `main`.
+- [ ] T79: TUI komut paleti (`:`). Depends: T78.
+- [ ] T80: Etiket: `#etiket` metinden, `tag:` arama argümanı. Depends: T79.
+- [ ] T81: Kayıtlı Cypher görünümleri. Depends: T80.
+- [ ] T82: GUI'yi TUI ile eşitle: ağaç liste, sağ bilgi, sıra no, Markdown önizleme. Depends: T81.
+- [ ] T83: TUI `main` fonksiyonunu böl (CCN 79). Depends: T82.
 - [ ] T59: LSP istemcisi, varsayılan kapalı. Depends: graph.
 - [~] T56: LadybugDB denemesi iptal: kullanıcı dış bağımlılık yerine kendi küçük graph depomuzu istedi (2026-11-01).
+- [ ] T84: GUI'de grafik not haritası. Depends: T59.
+- [ ] T85: Sekmeler. Depends: T84.
 - [ ] Elle (kullanıcı): Fedora KDE'de gerçek pencere, Türkçe giriş, koyu tema, PDF göz kontrolü.
 - [ ] Elle (kullanıcı): Windows 11'de çapraz derlenmiş `.exe`, Türkçe IME, koyu tema, pano.

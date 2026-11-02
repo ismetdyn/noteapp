@@ -14,10 +14,10 @@
 namespace noteapp::core {
 
 struct SyncConfig {
-    bool enabled;
+    bool enabled{};
     std::string remote;
     std::string branch;
-    int idle_seconds;
+    int idle_seconds{};
     std::string author_name;
     std::string author_email;
 
@@ -47,14 +47,15 @@ struct Config {
     std::string default_type;
     std::string default_folder;
     std::vector<std::string> types;
-    SyncConfig sync;
-    Tuning tuning;
+    std::string icons;  // nerd | off; dosyadaki `auto` nerd okunur
+    SyncConfig sync{};
+    Tuning tuning{};
 
     bool operator==(const Config&) const = default;
 };
 
 struct LoadedConfig {
-    Config config;
+    Config config{};
     std::vector<Error> warnings;  // code=ConfigInvalid; metin format_error ile üretilir
 };
 

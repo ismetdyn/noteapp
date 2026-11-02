@@ -11,7 +11,8 @@
 
 int main(int /*argc*/, char* /*argv*/[]) {
     noteapp::core::restrict_dll_search_to_system32();
-    // Dil ve log eşiği config'ten gelir; yükleme uyarıları log'a düşer, pencere açılınca durum çubuğunda görünür.
+    // Dil ve log eşiği config'ten gelir; yükleme uyarıları log'a düşer, pencere açılınca durum çubuğunda
+    // görünür.
     const noteapp::core::LoadedConfig loaded = noteapp::core::load_config();
     noteapp::core::init_i18n(loaded.config.language);
     noteapp::core::init_log(loaded.config.tuning.log_max_bytes);

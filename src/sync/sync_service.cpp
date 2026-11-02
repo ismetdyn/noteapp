@@ -11,6 +11,7 @@
 #include "core/process.hpp"
 #include "graph/graph.hpp"
 #include "sync/auth.hpp"
+#include "sync/git_free.hpp"
 #include "sync/lock.hpp"
 #include "sync/text_merge.hpp"
 
@@ -67,9 +68,6 @@ constexpr std::size_t kMaxExtensionBytes = 32;  // bundan uzunu uzantı sayılma
 constexpr std::string_view kUnknownUser = "noteapp";
 constexpr std::string_view kUnknownHost = "localhost";
 
-template <auto Free> struct GitFree {
-    template <class T> void operator()(T* ptr) const { Free(ptr); }
-};
 using Repository = std::unique_ptr<git_repository, GitFree<git_repository_free>>;
 using Remote = std::unique_ptr<git_remote, GitFree<git_remote_free>>;
 using Index = std::unique_ptr<git_index, GitFree<git_index_free>>;
@@ -142,6 +140,7 @@ std::optional<std::chrono::system_clock::time_point> parse_iso_utc(const std::st
     unsigned month = 0, day = 0;
     int hour = 0, minute = 0, second = 0;
     char zone = 0;
+    // NOLINTNEXTLINE(bugprone-unchecked-string-to-number-conversion) -- alan sayısı aşağıda denetlenir
     if (std::sscanf(text.c_str(), "%d-%u-%uT%d:%d:%d%c", &year, &month, &day, &hour, &minute, &second,
                     &zone) != 7 ||
         zone != 'Z')
@@ -159,6 +158,7 @@ std::string os_user() {
     std::string user = core::get_env_utf8("USERNAME").value_or("");
 #else
     std::string user = core::get_env_utf8("USER").value_or("");
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) -- süreçte getpw* çağıran tek yer; sonuç hemen kopyalanır
     if (const passwd* entry = getpwuid(getuid()); user.empty() && entry != nullptr)
         user = entry->pw_name;
 #endif
@@ -1173,13 +1173,13 @@ std::expected<void, core::Error> enable_locked(const core::Config& config, std::
 
 // Bir senkron döngüsünün ortak durumu. Adımlar SPEC-sync'teki sırayla çağrılır.
 struct LogCycle {
-    git_repository* repo;
-    git_remote* remote;
+    git_repository* repo{};
+    git_remote* remote{};
     const Credentials& credentials;
     const core::Config& config;
     core::NoteStore& store;
     fs::path log_dir;
-    std::uint64_t pushed_before;
+    std::uint64_t pushed_before{};
     SyncResult& result;
     std::vector<core::Error> set_aside;
     const SyncTestHooks& hooks;
@@ -1327,7 +1327,7 @@ retry_rejected_push(const std::function<std::expected<bool, core::Error>()>& exc
     return result;
 }
 
-SyncService::SyncService(const core::Config& config) : config_(config) {}
+SyncService::SyncService(core::Config config) : config_(std::move(config)) {}
 
 std::expected<void, core::Error> SyncService::enable(std::string_view remote, bool replace_origin) {
     // Kilit: kurulum sürerken bir arka plan senkronu yarım depoda commit atıp ilgisiz geçmiş doğurmasın.

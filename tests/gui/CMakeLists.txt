@@ -1,6 +1,7 @@
 noteapp_add_test(gui
     content_search_test.cpp
     folders_test.cpp
+    icon_font_test.cpp
     layout_test.cpp
     main_window_test.cpp
     note_list_model_test.cpp

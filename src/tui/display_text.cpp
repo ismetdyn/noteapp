@@ -1,5 +1,6 @@
 #include "tui/display_text.hpp"
 
+#include "core/i18n.hpp"
 #include "core/text.hpp"
 
 #include <array>
@@ -84,6 +85,11 @@ std::string short_time_text(std::filesystem::file_time_type time, std::chrono::s
     const std::tm today = local_tm(now);
     const bool same_day = local.tm_year == today.tm_year && local.tm_yday == today.tm_yday;
     return format_tm(local, same_day ? "%H:%M" : "%Y-%m-%d");
+}
+
+std::string count_text(std::string_view key, std::size_t count) {
+    const std::string full = std::string(key) + (count == 1 ? "_one" : "");
+    return core::tr(full, {{"count", std::to_string(count)}});
 }
 
 std::string human_size(std::uintmax_t bytes) {

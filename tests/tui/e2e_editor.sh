@@ -27,7 +27,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$notes" "$work/home/config"
-printf 'notes_dir = "/data/notes"\nlanguage = "en"\n' >"$work/home/config/config.toml"
+printf 'notes_dir = "/data/notes"\nlanguage = "en"\nicons = "off"\n' >"$work/home/config/config.toml"
 
 # create idempotent değil: var olan birim hata verir.
 if ! podman volume exists "$volume"; then
@@ -108,9 +108,13 @@ check() {
 }
 
 screen_has() { screen | grep -qF -- "$1"; }
+top_line_has() { screen | sed -n 1p | grep -qF -- "$1"; }
 # Renk kaçışlarıyla ekran: mod rengi ve sözdizimi vurgusu gerçek terminalde görünsün.
 screen_ansi() { tmux capture-pane -p -e -t "$session" 2>/dev/null || true; }
 ansi_has() { screen_ansi | grep -qF -- "$1"; }
+# Seçim yalnız satır vurgusudur: ters renkli satır.
+selected_mark=$'\e\[7m'
+selected_row_has() { screen_ansi | grep -a "$selected_mark" | grep -qF -- "$1"; }
 clear_prompt() {
     local count
     for ((count = 0; count < $1; count++)); do
@@ -251,7 +255,8 @@ check_bytes "n: folder, slug and default type from detect" "$notes/İş/toplanti
 check "Enter saves and stays in the editor" screen_has "New note"
 keys C-q
 wait_screen "Enter edit"
-check "closing returns to two panes with the note selected" screen_has "▸ İş/toplanti-notu.md"
+check "closing returns to two panes with the note selected" screen_has " 1   toplanti-notu.md"
+check "the list went to the folder of the saved note" top_line_has "notes/İş"
 check "the list label is back" screen_has " LIST "
 
 # 6b. env yapıştırma: tuş olayı olarak gelir, ad isteminde .env görünür, değer ada girmez.
@@ -364,10 +369,10 @@ wait_screen "g.md"
 mouse_press 0 10 4
 mouse_release 0 10 4
 sleep 0.2
-check "a click selects the second row" screen_has "▸ f.md"
+check "a click selects the second row" selected_row_has "f.md"
 mouse_press 64 5 5
 sleep 0.2
-check "wheel up over the list moves the selection" screen_has "▸ g.md"
+check "wheel up over the list moves the selection" selected_row_has "g.md"
 
 # 10b. Dış değişiklik tuşa basmadan ekrana gelir: temiz tampon yenilenir, kirli tampona dokunulmaz.
 keys Enter
@@ -535,7 +540,7 @@ printf '# veritabani\nexport DB_HOST=localhost\nDB_PORT=5432\nAPI_URL="https://e
 printf 'import os\n\n"""belge\nmetni"""\ndef topla(a: int, b: int) -> int:\n    # yorum\n    return a + b + 42\n\nprint(topla(1, 2), "bitti", None)\n' | put_note ornek.py 2020-01-01
 start_app
 for shot in java:ornek.java env:ornek.env py:ornek.py; do
-    wait_screen "▸ ${shot##*:}"
+    wait_screen " ${shot##*:}"
     keys Right
     wait_screen "← list"
     sleep 0.2
@@ -563,7 +568,7 @@ keys f
 wait_screen "Enter open"
 literal 'aranan'
 wait_screen "kelime"
-check "f searches content and shows the best line" screen_has "▸ a.md"
+check "f searches content and shows the best line" screen_has " a.md"
 check "f shows its mode on the top line" screen_has "[all]"
 keys Enter
 wait_screen "← list"
@@ -631,6 +636,7 @@ check "the saved sort is restored" screen_has "size↓"
 
 # 17. T61: REVIEW'da sürükleme kopyalar (konteynerde araç yok: OSC 52, iç pano); Ctrl+V iç panodan yapıştırır.
 keys g
+keys g
 keys Right
 wait_screen "← list"
 # Sol panel 40 sütun, kenar 1; SGR 1 tabanlı: metnin ilk hücresi 42, ilk satır 3.
@@ -674,6 +680,57 @@ wait_screen "← list"
 keys q
 wait_exit >/dev/null
 
+# 19. T68: girdi satırı. Gölge, Tab listesi, renk, Ctrl+T, geçmiş; aynı model `a`da da çalışır.
+clear_notes
+printf 'plan\n' | put_note work/plan.md
+printf 'todo\n' | put_note personal/todo.cpp
+start_app "→ open"
+keys /
+literal 'pla'
+wait_screen "pla▏n.md"
+check "the search ghost is dim" ansi_has $'\e[2mn.md'
+keys Right
+wait_screen "plan.md▏"
+for _ in 1 2 3 4 5 6 7; do keys BSpace; done
+literal 'sort:'
+keys Tab
+wait_screen "Complete"
+check "Tab lists argument values" screen_has "sort:updated"
+keys Down
+keys Enter
+wait_screen "sort:size▏"
+keys C-t
+sleep 0.2
+check "Ctrl+T keeps the search input" screen_has "sort:size▏"
+literal ' sync:nope'
+sleep 0.3
+check "the invalid value is red at once" ansi_has $'\e[31mnope'
+for _ in 1 2 3 4 5 6 7 8 9 10; do keys BSpace; done
+keys C-t
+keys Enter
+sleep 0.3
+keys /
+for _ in 1 2 3 4 5 6 7 8 9; do keys BSpace; done
+keys C-p
+wait_screen "sort:size▏"
+keys Escape
+sleep 0.2
+keys a
+literal 'wo'
+wait_screen "wo▏rk/"
+keys Right
+wait_screen "work/▏"
+keys Tab
+wait_screen "Complete"
+check "the name row lists notes" screen_has "work/plan.md"
+keys Escape
+sleep 0.2
+keys Escape
+sleep 0.2
+keys q
+wait_exit >/dev/null
+check "history is stored locally in tui-state.toml" grep -qF 'search_history = ["sort:size"' "$work/home/state/tui-state.toml"
+
 # 17. G6: eski düzen notları varken açılış nedenini söyler, liste boş kalsa da kullanıcı notların kaybolduğunu sanmaz.
 clear_notes
 rm -f "$work/home/data/migrated-notes-dirs"
@@ -686,10 +743,10 @@ rm -f "$notes/eski.md"
 
 # 18. T64: Türkçe; her genişlikte T, Space, o, v, f; satır işareti, çöp, F2, ayarlar, sayfalama. Gerçek ev dizini yok.
 clear_notes
-printf 'birinci metin\n' | put_note is/a.md
+printf 'birinci metin\n' | put_note a.md
 printf 'ikinci metin\n' | put_note b.md
 printf 'ucuncu metin\n' | put_note c.md
-printf 'notes_dir = "/data/notes"\nlanguage = "tr"\n' >"$work/home/config/config.toml"
+printf 'notes_dir = "/data/notes"\nlanguage = "tr"\nicons = "off"\n' >"$work/home/config/config.toml"
 rm -f "$work/home/state/tui-state.toml"
 ready_text="Enter düzenle"
 start_app
@@ -712,29 +769,26 @@ for width in 60 80 110 160; do
     check "the list bar at $width columns shows the main keys" bar_has 30 "T çöp" "Space detay" "o sırala" "v sütun" "f ara" "? yardım"
 done
 keys g
+keys g
 tmux resize-window -t "$session" -x 100 -y 30
 sleep 0.5
 check "totals are above the hints" bar_has 29 "Toplam 3 not" "sayfa 1/1"
-check "rows are numbered with a closed marker" screen_has "1 ▸ "
+check "notes are numbered and carry no arrow" screen_has "1   "
 
 # Satır ayrıntısı: Space, tıklama, I.
 keys Space
 wait_screen "boyut:"
-check "Space opens the details and the marker turns" screen_has "1 ▾ "
+check "note details have no marker" screen_lacks "▾"
 keys Space
 sleep 0.2
 check "Space closes the details" screen_lacks "boyut:"
 mouse_press 0 5 3
 mouse_release 0 5 3
-wait_screen "boyut:"
-check "clicking the marker opens the details" screen_has "1 ▾ "
-mouse_press 0 5 3
-mouse_release 0 5 3
 sleep 0.2
-check "clicking the marker again closes them" screen_lacks "boyut:"
+check "clicking a note row only selects, no details" screen_lacks "boyut:"
 keys I
 sleep 0.2
-check "I opens every row" screen_lacks "2 ▸ "
+check "I opens every row" test "$(screen | grep -c "boyut:")" = 3
 keys I
 sleep 0.2
 
@@ -751,8 +805,9 @@ sleep 0.2
 check "v changes the right column" bar_has 3 "B"
 
 # Çöp: d, gösterge, T, salt okunur içerik, u, D, E, fare. Sıra ada göre: kök ve klasördeki notlar karışır, seçili not ekrandan okunur.
-selected_name() { screen | grep -E '┃>' | grep -oE '(is/)?[abc]\.md' | head -1; }
-content_of() { case "$1" in is/a.md) echo birinci ;; b.md) echo ikinci ;; c.md) echo ucuncu ;; esac; }
+selected_name() { screen_ansi | grep -a "$selected_mark" | grep -oE '[abc]\.md' | head -1; }
+content_of() { case "$1" in a.md) echo birinci ;; b.md) echo ikinci ;; c.md) echo ucuncu ;; esac; }
+keys g
 keys g
 sleep 0.2
 first="$(selected_name)"
@@ -797,6 +852,7 @@ first="$(selected_name)"
 keys d
 wait_screen "çöp: 1"
 keys g
+keys g
 keys d
 wait_screen "çöp: 2"
 keys T
@@ -822,7 +878,7 @@ clear_notes
 printf 'bir\n' | put_note x.md
 printf 'iki\n' | put_note y.md
 start_app
-selected_note="$(screen | grep -E '┃>' | grep -oE '[xy]\.md' | head -1)"
+selected_note="$(screen_ansi | grep -a "$selected_mark" | grep -oE '[xy]\.md' | head -1)"
 other_note=x.md
 if [[ "$selected_note" == x.md ]]; then other_note=y.md; fi
 keys F2
@@ -859,9 +915,10 @@ wait_exit >/dev/null
 clear_notes
 for i in $(seq 10 69); do printf 'n%s\n' "$i" | put_note "n$i.md"; done
 python3 -c "
-for i in range(500): print(f'L{i:03d}')" | put_note zz.md
+for i in range(500): print(f'L{i:03d}')" | put_note zz.txt
 printf 'sort = "name"\nsort_descending = false\ncolumn = "none"\nversion = 2\n' >"$work/home/state/tui-state.toml"
 start_app
+keys g
 keys g
 keys PageDown
 sleep 0.2
@@ -884,6 +941,41 @@ sleep 0.2
 keys q
 wait_exit >/dev/null
 
+# Biçimli görünümde kaydırma birimi görüntü satırıdır: Pnnn satırı 2+2n'de (öncesinde akan paragraf ve boşluk).
+python3 -c "
+print('L000\nL001\n')
+for i in range(100): print(f'P{i:03d}\n')" | put_note zzz.md
+start_app
+keys G
+sleep 0.2
+keys Right
+wait_screen "L000 L001"
+check "soft line breaks flow into one rendered paragraph" bar_has 3 "L000 L001"
+keys C-d
+sleep 0.2
+check "Ctrl+D moves rendered REVIEW by half a page" bar_has 3 "P005"
+keys J
+sleep 0.2
+check "J moves rendered REVIEW by five display lines" bar_has 4 "P008"
+check "J left the earlier block behind" screen_lacks "P007"
+mouse_press 65 70 5
+sleep 0.3
+check "the wheel moves rendered REVIEW by three display lines" bar_has 3 "P009"
+keys R
+sleep 0.2
+check "R keeps the same block on top of the raw view" bar_has 3 "P009"
+check "the pane label names the raw view" screen_has "· ham"
+keys J
+sleep 0.2
+check "raw REVIEW scrolls by source lines" bar_has 4 "P012"
+keys R
+sleep 0.2
+check "the pane label names the rendered view" screen_has "· görünüm"
+keys Left
+sleep 0.2
+keys q
+wait_exit >/dev/null
+
 # 19. T66: `a` listenin başında ad satırı; alt satır girdi değildir. Enter boş notu oluşturup EDIT açar.
 clear_notes
 printf 'bir\n' | put_note ilk.md
@@ -892,8 +984,8 @@ start_app
 keys a
 wait_screen "Enter oluştur"
 literal 'deneme.cpp'
-check "a: the name row is the first row of the list pane" bar_has 3 "┃>" "+ deneme.cpp▏"
-check "a: the row number column stays aligned" bar_has 4 "┃ 1 ▸ ilk.md"
+check "a: the name row is the first row of the list pane" bar_has 3 "┃ " "+ deneme.cpp▏"
+check "a: the row number column stays aligned" bar_has 4 "┃ 1   ilk.md"
 check "a: the bottom line holds no input" test "$(bottom_line 30 | grep -c deneme)" = 0
 check "a: nothing is created while typing" test "$(note_tool count)" = 1
 keys Escape
@@ -977,7 +1069,7 @@ keys Enter
 wait_screen "> ilk"
 keys a
 wait_screen "Enter oluştur"
-check "a: the row is visible under an active filter" bar_has 3 "┃>"
+check "a: the row is visible under an active filter" bar_has 3 "┃ " "+ "
 literal 'filtre-disi.md'
 keys Enter
 wait_screen " DÜZENLE "
@@ -1070,10 +1162,259 @@ sleep 0.2
 keys q
 wait_exit >/dev/null
 
+# 21b. T70: klasör gezinmesi. `a` ile klasör, içine not, numara yeniden başlar, ad değiştir, geri dön, sil.
+clear_notes
+printf 'kok\n' | put_note kok.md
+printf 'notes_dir = "/data/notes"\nlanguage = "en"\nicons = "off"\n' >"$work/home/config/config.toml"
+rm -f "$work/home/state/tui-state.toml"
+ready_text="Enter edit"
+start_app
+keys a
+literal 'proje/'
+wait_screen "proje/▏"
+keys Enter
+wait_screen "Folder created: proje"
+check "a with a slash stays in the list, no editor" screen_has "LIST"
+check "the folder row comes first" screen_has "1 ▸ proje/"
+check "the note row follows" screen_has "2   kok.md"
+check "the top line is the root" top_line_has "notes"
+check "the totals count the folder" screen_has "Folder: 2 items · Total 1 note"
+keys Up
+wait_screen "a add, name/ = folder"
+check "the hint bar names rename on a folder" screen_has "F2 rename"
+keys l
+wait_screen "notes/proje"
+check "an empty folder shows the add hint" screen_has "a add, name/ = folder"
+keys a
+literal 'ic.md'
+wait_screen "ic.md▏"
+keys Enter
+wait_screen "Ctrl+S save"
+literal 'icerik'
+keys C-s
+wait_screen "Saved"
+keys C-q
+wait_screen "← list"
+check_bytes "a note is created inside the current folder" "$notes/proje/ic.md" 'icerik'
+keys h
+wait_screen "Enter edit"
+check "numbers restart inside the folder" screen_has "1   ic.md"
+check "the short name is shown" screen_lacks "proje/ic.md"
+keys a
+literal 'alt/iki.md'
+keys Enter
+wait_screen "Ctrl+S save"
+keys C-q
+wait_screen "← list"
+keys h
+wait_screen "notes/proje/alt"
+keys h
+wait_screen "1 ▸ alt/"
+check "going back selects the left folder" screen_has "1 item"
+keys h
+wait_screen "▸ proje/"
+check "going back to the root keeps the folder" top_line_has "notes"
+keys F2
+wait_screen "proje▏"
+for _ in 1 2 3 4 5; do keys BSpace; done
+literal 'yeni'
+keys Enter
+wait_screen "Moved: proje -> yeni"
+check "the folder is renamed in the list" screen_has "▸ yeni/"
+check_bytes "the note moved with the folder" "$notes/yeni/ic.md" 'icerik'
+keys /
+literal 'ic'
+wait_screen "yeni/ic.md"
+check "search is flat with full paths" screen_has "yeni/ic.md"
+keys Enter
+wait_screen "Enter edit"
+keys Left
+wait_screen "notes/yeni"
+check "left on a result goes to its folder" screen_has "ic.md"
+keys h
+wait_screen "▸ yeni/"
+keys d
+wait_screen "Trash folder"
+check "the confirmation shows the counts" screen_has "2 notes"
+keys Enter
+sleep 0.3
+check "default Cancel keeps the folder" screen_has "▸ yeni/"
+keys d
+wait_screen "Trash folder"
+keys Right
+keys Enter
+wait_screen "Moved to trash: yeni, 2 notes"
+check "the folder left the list" screen_lacks "▸ yeni/"
+check "the note is in the trash" note_tool in-trash yeni/ic.md
+keys u
+wait_screen "Restored: yeni, 2 notes"
+check_bytes "u brings the note back" "$notes/yeni/ic.md" 'icerik'
+keys D
+wait_screen "Delete folder"
+keys Right
+keys Enter
+wait_screen "Deleted: yeni"
+check "D removed the folder" screen_lacks "▸ yeni/"
+check "D is not the trash" not_in_trash yeni/ic.md
+keys q
+wait_exit >/dev/null
+
+# 21c. T71: çoklu seçim, toplu `d` ve `u`, `y` `p`, çakışma `-2`, `g` öneki.
+clear_notes
+printf 'A\n' | put_note a.md
+printf 'B\n' | put_note b.md
+printf 'C\n' | put_note c.md
+printf 'K\n' | put_note hedef/a.md
+printf 'sort = "name"\nsort_descending = false\ncolumn = "none"\nversion = 2\n' >"$work/home/state/tui-state.toml"
+start_app "→ open"
+keys Down
+keys x
+keys x
+wait_screen "selected: 2"
+check "marked rows carry the text marker" screen_has "*2"
+check "marked rows are yellow" ansi_has $'\e[1m\e[33m*'
+keys d
+wait_screen "Moved to trash: 2 items"
+check "d trashes the selection" note_tool in-trash a.md
+check "d trashes the whole selection" note_tool in-trash b.md
+keys u
+wait_screen "Restored: 2 items"
+check "one u restores the batch" note_tool has a.md
+check "one u restores all of it" note_tool has b.md
+keys g
+wait_screen "gg top"
+keys g
+sleep 0.2
+keys Down
+keys y
+wait_screen "copy: 1"
+keys g
+keys g
+keys Enter
+wait_screen "notes/hedef"
+keys p
+wait_screen "1 done, 0 failed"
+check "the collision is reported" screen_has "a-2.md"
+check_bytes "copy got -2" "$notes/hedef/a-2.md" 'A\n'
+check_bytes "copy overwrote nothing" "$notes/hedef/a.md" 'K\n'
+keys Escape
+sleep 0.2
+keys h
+wait_screen "→ open"
+keys Down
+keys y
+wait_screen "copy: 1"
+keys Escape
+sleep 0.2
+check "Esc cancels the pending yank" screen_lacks "copy: 1"
+keys q
+wait_exit >/dev/null
+
+# 21d. T74: yerinde açılan ağaç, `m`, satır görünümü (60 ve 110 sütun, 30 satır), Nerd Font glif baytları.
+clear_notes
+printf 'n\n' | put_note proje/alt/derin/not.md
+printf 'p\n' | put_note proje/alt/b.py
+printf 'c\n' | put_note proje/c.cpp
+printf 'o\n' | put_note oku.md
+printf '{}\n' | put_note veri.json
+printf 'x\n' | put_note dokuman/x.md
+printf 'notes_dir = "/data/notes"\nlanguage = "en"\nicons = "auto"\n' >"$work/home/config/config.toml"
+printf 'sort = "name"\nsort_descending = false\ncolumn = "size"\nversion = 2\n' >"$work/home/state/tui-state.toml"
+start_app "→ open"
+tmux resize-window -t "$session" -x 110 -y 30
+sleep 0.5
+keys Down
+keys Space
+wait_screen "▾ "
+check "Space opens the folder in place" top_line_has "notes"
+check "children are numbered within their folder, indented" screen_has "   1 ▸ "
+check "no selection marker at the far left" screen_lacks ">1"
+check "the selected row is highlighted" selected_row_has "proje/"
+keys Down
+keys Space
+sleep 0.2
+keys Down
+keys Space
+sleep 0.3
+snapshot tree-110
+icon_gap_holds() { screen | grep -qF -- "$(printf '\xf3\xb0\x8d\x94')  oku.md"; }
+check "the glyph keeps an empty cell before the name" icon_gap_holds
+tree_file="$(mktemp)"
+screen >"$tree_file"
+glyph_in_capture() { grep -qF -- "$(printf '%b' "$1")" "$tree_file"; }
+check "folder closed glyph bytes (U+F024B)" glyph_in_capture '\xf3\xb0\x89\x8b'
+check "folder open glyph bytes (U+F0770)" glyph_in_capture '\xf3\xb0\x9d\xb0'
+check "markdown glyph bytes (U+F0354)" glyph_in_capture '\xf3\xb0\x8d\x94'
+check "python glyph bytes (U+E606)" glyph_in_capture '\xee\x98\x86'
+check "cpp glyph bytes (U+E646)" glyph_in_capture '\xee\x99\x86'
+check "json glyph bytes (U+E60B)" glyph_in_capture '\xee\x98\x8b'
+rm -f "$tree_file"
+check "the folder glyph is blue" ansi_has $'\e[34m'
+check "the python glyph is green" ansi_has $'\e[32m'
+keys h
+sleep 0.2
+tmux resize-window -t "$session" -x 60 -y 30
+sleep 0.5
+check "the tree fits 60 columns" screen_has "▾ "
+check "folder hints stay at 60 columns" bar_has 30 "→ open" "F2 rename"
+snapshot tree-60
+tmux resize-window -t "$session" -x 110 -y 30
+sleep 0.5
+keys q
+wait_exit >/dev/null
+check "the open set is saved" grep -qF 'open_folders = ' "$work/home/state/tui-state.toml"
+start_app "→ open"
+check "the open set is restored" screen_has "▾ "
+keys g
+keys g
+keys Down
+keys Space
+sleep 0.2
+keys g
+keys g
+keys m
+wait_screen "Move to:"
+literal 'hedef/yeni/'
+keys Enter
+wait_screen "Moved to: hedef/yeni"
+check_bytes "m moves a folder into a new nested folder" "$notes/hedef/yeni/dokuman/x.md" 'x\n'
+keys h
+sleep 0.2
+keys h
+wait_screen "→ open"
+keys q
+wait_exit >/dev/null
+printf 'x2\n' | put_note hedef/oku.md
+printf 'sort = "name"\nsort_descending = false\ncolumn = "size"\nversion = 2\n' >"$work/home/state/tui-state.toml"
+start_app "→ open"
+keys G
+keys k
+sleep 0.2
+keys m
+wait_screen "Move to:"
+literal 'hed'
+keys Tab
+sleep 0.3
+check "Tab completes the folder" screen_has "hedef/"
+keys Enter
+sleep 0.3
+check "a collision stays inline" screen_has "Move to:"
+check_bytes "the collision overwrote nothing" "$notes/hedef/oku.md" 'x2\n'
+check_bytes "the source stays after a collision" "$notes/oku.md" 'o\n'
+keys Escape
+sleep 0.2
+keys q
+wait_exit >/dev/null
+printf 'notes_dir = "/data/notes"\nlanguage = "en"\nicons = "off"\n' >"$work/home/config/config.toml"
+start_app "→ open"
+check "icons off shows no glyph" test "$(screen | grep -c "$(printf '\xf3\xb0\x89\x8b')")" = 0
+keys q
+wait_exit >/dev/null
+
 # 22. NOTEAPP_HOME: varsayılan notes_dir `home/notes`, depo `home/data`. Eski not yalnız notes_dir'de aranır.
 check "the store is under data_dir" test -s "$work/home/data/graph.db"
 check "no store in notes_dir" test ! -e "$notes/graph.db"
-printf 'language = "tr"\n' >"$work/home/config/config.toml"
+printf 'language = "tr"\nicons = "off"\n' >"$work/home/config/config.toml"
 mkdir -p "$work/home/notes"
 rm -f "$work/home/data/migrated-notes-dirs"
 printf 'eski' >"$work/home/notes/eski-duz.md"
@@ -1082,6 +1423,80 @@ check "the default notes_dir sits under NOTEAPP_HOME" screen_has "note graph mig
 keys q
 wait_exit >/dev/null
 unset ready_text
+
+# 23. Fark çıktısı (T75): terminale yalnız değişen hücre yazılır. Uzun oturumdan sonra ekran, Ctrl+L ile baştan
+# çizilenle ve yeni süreçle hücre hücre aynı olmalı: Türkçe, CJK, birleşik işaret ve Nerd Font glifiyle.
+capture_settled() { sleep 0.5; screen_ansi; }
+matches_repaint() {
+    local before after
+    before="$(capture_settled)"
+    keys C-l
+    after="$(capture_settled)"
+    if [[ "$before" != "$after" ]]; then
+        diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -20
+        return 1
+    fi
+}
+clear_notes
+printf 'notes_dir = "/data/notes"\nlanguage = "en"\nicons = "auto"\neditor = "true"\n' >"$work/home/config/config.toml"
+for index in 1 2 3 4 5 6 7 8; do
+    printf '# başlık %s\nışğü İŞĞÜ 漢字語 e\xcc\x81 satır %s\n\n- madde\n' "$index" "$index" | put_note "şablon-$index.md"
+done
+printf '漢字語 geniş\n' | put_note "漢字語-not.md"
+printf '{"anahtar": "değer"}\n' | put_note proje/veri.json
+start_app "→ open"
+for round in 1 2 3 4 5 6 7 8 9 10; do
+    keys j j j j j k k j k j j k k k k k k k
+done
+check "selection walk leaves no artifacts" matches_repaint
+keys F1
+sleep 0.2
+keys Escape
+check "a closed modal leaves no artifacts" matches_repaint
+keys /
+literal 'şab'
+keys Escape
+sleep 0.2
+check "a cancelled search leaves no artifacts" matches_repaint
+keys j
+keys Enter
+sleep 0.3
+literal 'yazı ğü 漢字 '
+keys Left Left Up Down BSpace
+check "the editor leaves no artifacts" matches_repaint
+keys C-q
+wait_screen "Unsaved changes"
+keys Enter
+wait_screen "← list"
+keys Escape
+wait_screen "Enter edit"
+keys Escape  # süzgeç temizlenir: yeni süreçle karşılaştırma aynı listeyi görsün
+sleep 0.3
+keys E
+sleep 0.5
+check "the external editor return repaints cleanly" matches_repaint
+tmux resize-window -t "$session" -x 130 -y 35
+check "growing the terminal repaints cleanly" matches_repaint
+tmux resize-window -t "$session" -x 70 -y 20
+check "shrinking the terminal repaints cleanly" matches_repaint
+tmux resize-window -t "$session" -x 100 -y 30
+for round in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    keys k
+done
+long_session="$(capture_settled)"
+keys q
+wait_exit >/dev/null
+start_app "→ open"
+fresh_start="$(capture_settled)"
+same_as_fresh() {
+    if [[ "$long_session" != "$fresh_start" ]]; then
+        diff <(printf '%s\n' "$long_session") <(printf '%s\n' "$fresh_start") | head -20
+        return 1
+    fi
+}
+check "the long session equals a fresh process" same_as_fresh
+keys q
+wait_exit >/dev/null
 
 echo "passed=$passed failed=$failed"
 [[ "$failed" -eq 0 ]]

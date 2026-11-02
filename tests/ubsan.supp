@@ -1,0 +1,3 @@
+# UBSan çalışma zamanı bastırmaları; yalnız scripts/check-sanitize.sh kullanır, ürün derlemesini etkilemez.
+# libgit2 üçüncü parti SHA-1 (sha1dc): sha1.c:391 x86'da kasıtlı hizasız 32 bit okur. Yalnız bu dosya + bu denetim.
+alignment:sha1.c

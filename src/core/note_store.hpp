@@ -34,7 +34,7 @@ struct Revision {
 struct NoteInfo {
     NotePath path;
     std::filesystem::file_time_type mtime;  // Note.updated_at: sıralama ve gösterim içindir
-    std::uintmax_t size;
+    std::uintmax_t size{};
     Revision revision{};
     std::optional<std::filesystem::file_time_type> created_at = std::nullopt;
     std::optional<std::string> origin = std::nullopt;
@@ -61,7 +61,7 @@ struct NoteMeta {
 struct TrashItem {
     NotePath path;
     std::filesystem::file_time_type trashed_at;  // Note.deleted_at
-    std::uintmax_t size;
+    std::uintmax_t size{};
     std::optional<std::filesystem::file_time_type> created_at = std::nullopt;
     std::optional<std::string> origin = std::nullopt;
 };
@@ -177,6 +177,12 @@ public:
     // Klasör adları NotePath kurallarıyla doğrulanır. Boş klasör bir Folder düğümüdür.
     std::expected<void, Error> create_folder(std::string_view folder);
     std::expected<void, Error> rename_folder(std::string_view from, std::string_view to);
+    // Alt ağacı boş klasörleriyle kopyalar, baytlar aynen, uzantısız not da. Hedef doluysa AlreadyExists,
+    // kendi içine ise InvalidPath, kaynak yoksa NotFound; ezme ve birleşme yok. Toplu işlem: not başına ayrı
+    // yazma binlerce notta saniyeler sürerdi. Çerçeve sınırında bölünür, işlemler arası değişiklik yol
+    // sırasıyla izlenir. İlk işlemdeki hata hiçbir şey yazmaz. Sonraki işlemdeki hata geri alınmaz:
+    // yazılanlar yerinde kalır, kaynak değişmez, PartialCopy ({path}, {count} = kopyalanan not) döner.
+    std::expected<void, Error> copy_folder(std::string_view from, std::string_view to);
     // Not içeren klasör force olmadan NotEmpty ({count} = not sayısı) verir ve hiçbir şey silinmez; force
     // özyinelemeli siler.
     std::expected<void, Error> remove_folder(std::string_view folder, bool force);

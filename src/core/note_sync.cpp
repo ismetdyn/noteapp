@@ -55,7 +55,7 @@ ingest_note_logs(NoteStore& store, std::span<const std::filesystem::path> logs, 
     const std::shared_ptr<const Snapshot> before = impl.current();
     if (!before && impl.last_error)
         return std::unexpected(*impl.last_error);
-    auto merged = impl.graph->ingest_logs(logs);
+    auto merged = impl.opened_graph().ingest_logs(logs);
     if (!merged)
         return std::unexpected(from_graph(merged.error(), path_utf8(impl.database())));
     impl.snapshot.reset();
@@ -99,7 +99,7 @@ std::expected<graph::ExportReport, Error> export_note_log(NoteStore& store,
     const std::scoped_lock lock(impl.mutex);
     if (auto opened = impl.open_for_write(); !opened)
         return std::unexpected(opened.error());
-    auto exported = impl.graph->export_log(directory);
+    auto exported = impl.opened_graph().export_log(directory);
     if (!exported)
         return std::unexpected(from_graph(exported.error(), path_utf8(directory)));
     return *exported;
@@ -110,7 +110,7 @@ std::expected<std::string, Error> own_log_name(NoteStore& store) {
     const std::scoped_lock lock(impl.mutex);
     if (auto opened = impl.open_for_write(); !opened)
         return std::unexpected(opened.error());
-    return hex_of(impl.graph->device()) + ".oplog";
+    return hex_of(impl.opened_graph().device()) + ".oplog";
 }
 
 std::expected<int, Error> count_local_changes(NoteStore& store, std::uint64_t since) {
@@ -131,7 +131,7 @@ std::expected<std::uint64_t, Error> own_last_seq(NoteStore& store) {
     const std::scoped_lock lock(impl.mutex);
     if (auto opened = impl.open_for_write(); !opened)
         return std::unexpected(opened.error());
-    auto seq = impl.graph->last_seq();
+    auto seq = impl.opened_graph().last_seq();
     if (!seq)
         return std::unexpected(from_graph(seq.error(), path_utf8(impl.database())));
     return *seq;

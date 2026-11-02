@@ -9,19 +9,20 @@
 ## Yerleşim
 
 ```
-                                                  [ad] 42/5000   ✓ 14:32
+notlar/work                                       [ad] 42/5000   ✓ 14:32
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┌──────────────────────────────────────┐
-┃▸ work/meeting-notes.md     ┃│# Toplantı notları                    │
-┃  personal/todo.md          ┃│- bütçe onayı                         │
-┃  snippets/sort.java        ┃│...                                   │
+┃ 1 ▾ work/                  ┃│# Toplantı notları                    │
+┃   1   plan.md              ┃│- bütçe onayı                         │
+┃ 2 ▸ personal/              ┃│...                                   │
+┃ 3   meeting-notes.md       ┃│                                      │
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛└──────────────────────────────────────┘
 Enter düzenle  → önizle  / ara  n yeni  a ekle  d sil  ? yardım  ...
 ```
-- Sol: göreli yol listesi, eşleşen karakterler vurgulu. Sağ: Liste ve Aramada seçili notun önizlemesi; seçim değişince aynı karede güncellenir. Önizlemede uzun satır kırpılmaz, panele sarılır (`cat`). Editör odağında aynı panel gömülü editördür; editörden seçim değişmez.
-- Üst: yalnız mod (`[ad]` / `[içerik]`), sonuç/toplam, senkron durumu (`kapalı` / `✓ saat` / `⟳` / `⚠`).
+- Sol: geçerli klasörün çocukları (bkz. "Klasör görünümü"); aramada ve çöpte tam yollu düz liste, eşleşen karakterler vurgulu. Sağ: Liste ve Aramada seçili notun önizlemesi; seçim değişince aynı karede güncellenir. Önizlemede uzun satır kırpılmaz, panele sarılır (`cat`). Editör odağında aynı panel gömülü editördür; editörden seçim değişmez.
+- Üst: klasör yolu, mod (`[ad]` / `[içerik]`), süzgeçte eşleşme/toplam, klasör görünümünde ve çöpte yalnız not sayısı (`6 not`; satır klasör de sayar, oran yanıltır), senkron durumu (`kapalı` / `✓ saat` / `⟳` / `⚠`).
 - Alt: odağa göre kısayol çubuğu (i18n; Editörde üstünde durum çubuğu) ya da tek satırlık girdi (arama, not içi arama, ad istemi, yol girdisi). Katalogdaki sıra önem sırasıdır; sığmayan ipucu ve ardındakiler bütün olarak düşer. Listede `T`, `Space`, `o`, `v`, `f`, `?` her genişlikte (60 sütundan) görünür, seyrek olanlar `?`tedir. Listede kalan süzgeç (`> sorgu`) ve Önizlemede eşleşme sayacı (`3/12`) ipuçlarının başındadır; uzun süzgecin sonu kısalır, ilk beş ipucunu düşürmez. En küçük boyut 60×15; altında "pencere çok küçük" mesajı.
-- **Odak görünümü:** odaklı panel kalın, kipe göre renkli ve etiketli çerçeve alır, diğeri ince: `LIST` camgöbeği, `REVIEW` yeşil (Önizleme ve salt-okunur not), `EDIT` eflatun, kaydedilmemişse `EDIT *`. Renk tek sinyal değildir. Girdide imleç `▏`, Editörde gerçek terminal imleci. Sağ panel odaklıyken seçili satır `>` ile işaretli kalır, ters renk olmaz. Satır: `>`, sağa yaslı soluk numara (genişlik satır sayısından), `▸` (ayrıntı kapalı) ya da `▾` (açık), yol, sağ sütun; işarete tıklamak satırı seçip ayrıntıyı açar/kapatır.
-- **Toplamlar:** kısayol çubuğunun üstünde `Toplam 248 not · 12 eşleşme · sayfa 2/7` (eşleşme yalnız süzgeçte; sayfa = seçili satır / panel yüksekliği, kaydırma sanaldır). Editörde aynı satırı durum çubuğu kullanır.
+- **Odak görünümü:** odaklı panel kalın, kipe göre renkli ve etiketli çerçeve alır, diğeri ince: `LIST` camgöbeği, `REVIEW` yeşil (Önizleme ve salt-okunur not), `EDIT` eflatun, kaydedilmemişse `EDIT *`. Renk tek sinyal değildir. Girdide imleç `▏`, Editörde gerçek terminal imleci. Seçim yalnız satır vurgusudur: liste odağında ters renk, sağ panel odaklıyken soluk arka plan. Satır: seçim işareti hücresi (`*`), girinti, sağa yaslı soluk numara (genişlik en büyük numaradan), klasörde `▸` (kapalı) ya da `▾` (açık), not satırında aynı iki hücre boş, ikon, ad, sağ sütun. Notun açık ayrıntısı yalnız girintili bloktur, işareti yoktur. Oka tıklamak klasörü yerinde açar/kapatır; not satırına tıklamak yalnız seçer.
+- **Toplamlar:** kısayol çubuğunun üstünde klasör görünümünde `Klasör: 12 öğe · Toplam 248 not · sayfa 2/7`, süzgeçte `Toplam 248 not · 12 eşleşme · sayfa 2/7` (eşleşme yalnız süzgeçte; sayfa = seçili satır / panel yüksekliği, kaydırma sanaldır). Editörde aynı satırı durum çubuğu kullanır.
 - **Sağ sütun (`v`):** varsayılan boyut + tarih (`2.0 KiB  12:03`, bugün değilse yalnız tarih). Dar panelde önce tarih, sonra boyut düşer, değer yarım kesilmez; yol en az 16 hücre tutar. `created` ve `origin` boşken "bilinmiyor".
 - **Üst satır:** çöp doluysa en solda `çöp: 3`, tıklayınca çöp görünümü açılır; boşsa yok. Yalnız metin: simge karakterinin genişliği terminale göre değişir, satır kayardı. Çöp görünümünde aynı yerde `ÇÖP KUTUSU` başlığı.
 - **Boyut:** Liste ve Önizlemede `<` `>` sol paneli 5 sütun değiştirir (sol en az 16, sağ en az 24 sütun; 60 sütunda da geçerli), `z` odaklı paneli tam ekran yapar ve geri alır (F11 değil: Konsole'un). Fareyle bölücü sürüklenir. Genişlik ve yakınlaştırma oturumluktur, config'e yazılmaz. Yakınlaştırmada odak değişirse gösterilen panel de değişir.
@@ -36,51 +37,69 @@ Dört odak vardır: **Liste** (açılış), **Arama**, **Önizleme**, **Editör*
 | Tuş | Eylem |
 |---|---|
 | `↑` `k`, `↓` `j` | Listede gezin, sağ panel canlı izler |
-| `g` `G` | İlk / son not |
+| `gg` `G` | İlk / son satır. `g` öneki sıradaki tuşu bekler, alt satır ne beklediğini söyler (süre yok): `gg` baş, `gh` kök klasör, `gt` çöp; başka tuş vazgeçer ve başka iş yapmaz |
+| `x` `X` `Ctrl+A` | Satırı seç ve aşağı in, seçimi temizle, görünen satırları seç (bkz. "Çoklu seçim ve yank") |
+| `y` `p` | Seçimi ya da satırı kopya için işaretle, geçerli klasöre yapıştır |
 | `PgUp` `PgDn` | Önizlemeyi kaydır |
-| `→` `l` | Önizleme odağı |
-| `Enter` `e` | Seçili notu sağ panelde düzenle; liste boşsa etkisiz |
+| `→` `l` | Notta önizleme odağı, klasörde içeri girer |
+| `←` `h` | Üst klasör, seçim çıkılan klasörde kalır; kökte etkisiz. Arama sonucunda notun klasörüne gider |
+| `Enter` `e` | Seçili notu sağ panelde düzenle, klasörde içeri girer; liste boşsa etkisiz |
 | `E` | Harici editörde aç (`EDITOR`); terminali ona bırakır |
-| `F2` | Altta tek satırlık yol girdisi: `klasör/ad.uzantı` ön dolu, imleç adın sonunda; `Enter` `NoteStore::move` (hedef doluysa hata girdide kalır, ezme yok), `Esc` vazgeçer. Önizlemede de çalışır |
-| `PgUp` `PgDn` | Listede sayfa sayfa gezer (önizleme yalnız kendi odağında kayar); `g` `G` baş ve son |
+| `F2` | Altta tek satırlık yol girdisi: klasör görünümünde geçerli klasöre göre ad ön dolu (düz listede tam yol), `/` içeren yol taşır, imleç adın sonunda; klasörde `rename_folder`; `Enter` `NoteStore::move` (hedef doluysa hata girdide kalır, ezme yok), `Esc` vazgeçer. Önizlemede de çalışır |
+| `PgUp` `PgDn` | Listede sayfa sayfa gezer (önizleme yalnız kendi odağında kayar); `gg` `G` baş ve son |
 | `,` | Ayarlar (Önizlemede de); `F9` her odakta |
 | `/` | Arama girdisi (altta) |
 | `n` `Ctrl-O` | Yeni not: tüm terminali alan boş editör |
-| `a` | Listenin başında odaklı ad satırı (bkz. "Yeni not"); `Enter` boş notu oluşturur ve sağ panelde EDIT'te açar; `Esc` ve boş girdi hiçbir şey yazmaz; geçersiz ya da dolu ad satırın altında kırmızı görünür, satır metniyle açık kalır |
+| `a` | Listenin başında odaklı ad satırı, ad geçerli klasöre göredir; `/` ile biten ad klasör oluşturur, Listede kalır, klasör seçilir, editör açılmaz (bkz. "Yeni not", "Klasör görünümü"); `Enter` boş notu oluşturur ve sağ panelde EDIT'te açar; `Esc` ve boş girdi hiçbir şey yazmaz; geçersiz ya da dolu ad satırın altında kırmızı görünür, satır metniyle açık kalır |
 | `f` | Genel arama girdisi (altta): ad ve içerik birlikte (`search_all`), içerik eşleşmesinin en iyi satırı yolun altında; `Enter` Önizlemede eşleşmeye kayar; Listede `Esc` kapatır |
-| `d` `Ctrl-D` | Çöpe at, onaysız; seçim komşu satıra geçer. `u` bu oturumda son atılanı geri alır |
+| `d` `Ctrl-D` | Çöpe at, onaysız; seçim komşu satıra geçer. `u` bu oturumda son atılanı geri alır. Klasörde bkz. "Klasör görünümü" |
 | `D` | Kalıcı sil (onay, varsayılan "Vazgeç") |
 | `T` | Çöp görünümü: `↑↓` gezin, `u` seçileni geri getir, `D` kalıcı sil (onay), `E` tümünü boşalt (onay, varsayılan "Vazgeç"), `q` `Esc` `T` geri. Liste komutları çalışmaz. Sağ panel çöpteki notu salt okunur gösterir (`PgUp` `PgDn` ve tekerlek kaydırır; odak listede kalır) |
-| `c` | Notun özgün baytlarını sistem panosuna kopyalar; ikili ya da UTF-8 olmayan notta nedenini söyler, kopyalamaz |
-| `Space` `i` `I` | Seçili satırı aç/kapat; `I` tüm satırları. `Alt+→` `Alt+←` aynı işi yapar ama her terminalde gelmez |
+| `c` | Klasörde yolunu kopyalar; notta özgün baytlarını sistem panosuna kopyalar; ikili ya da UTF-8 olmayan notta nedenini söyler, kopyalamaz |
+| `Space` | Klasörü yerinde aç/kapat (bkz. "Ağaç"); notta ayrıntıyı aç/kapat |
+| `i` `I` | Seçili satırın ayrıntısı, klasörde de; `I` tüm satırları. `Alt+→` `Alt+←` aynı işi yapar ama her terminalde gelmez |
+| `m` | Seçimi ya da satırı klasöre taşı: altta tek satırlık girdi, geçerli klasörle dolu (bkz. "Ağaç") |
 | `Alt+→` `Alt+←` | Satırı aç / kapat: boyut, güncelleme, oluşturma, senkron, kaynak; `created` ve `origin` boşken "bilinmiyor". Birden çok satır açık kalır, gezinme not satırlarını yürür |
 | `v` | Sağ sütun döngüsü: boyut + tarih, boyut, güncelleme, oluşturma, senkron, kaynak, yok. `tui-state.toml`da `version` yoksa eski `column = "none"` yeni varsayılana taşınır |
 | `o` | Sıralama menüsü (alt satır): `n` ad, `u` güncelleme, `c` oluşturma, `s` boyut, `r` ters, `Esc` vazgeç; etkin sıra üst satırda |
-| `r` | Ad/klasör/tip diyaloğu |
+| `r` | Ad/klasör/tip diyaloğu; klasörde `F2` |
 | `s` | Şimdi senkronla |
 | `<` `>` `z` | Panel genişliği, yakınlaştırma |
 | `?` | Yardım |
 | `q` | Çık |
-| `Tab` | Ad ↔ içerik modu |
-| `Esc` | Süzgeç doluysa temizle; boşsa etkisiz, çıkmaz |
+| `Tab` | Ad ↔ içerik modu (Aramada `Ctrl-T`) |
+| `Esc` | Bekleyen yank varsa ondan vazgeç; süzgeç doluysa temizle; boşsa etkisiz, çıkmaz |
 
 Sıra ve sağ sütun `<state>/tui-state.toml`'da kalır; bozuk değer varsayılana döner (`updated` azalan, sütun yok).
 
-`/` ve `f` sorgu argümanlarını alır (`SPEC-search`): `sort:-size` `type:md` `in:work/` `size:>1mb` `updated:7d` `sync:modified`. Bozuk değer metin sayılmaz: girdide yeriyle `format_error` görünür, liste son geçerli haliyle kalır, taslak açılmaz. Argümanlı sorguda eşleşme yokken `Enter` taslak açmaz. `sort:` yoksa metinli sorgu fuzzy sırasındadır, boş sorgu `o` sırasındadır.
+`/` ve `f` her zaman kökten, klasörler arası düz sonuç verir: tam yol, sonuçlar boyunca numara. `/` metin yazılana dek klasör görünümünü bırakır. `/` ve `f` sorgu argümanlarını alır (`SPEC-search`): `sort:-size` `type:md` `in:work/` `size:>1mb` `updated:7d` `sync:modified`. Bozuk değer metin sayılmaz: girdide yeriyle `format_error` görünür, liste son geçerli haliyle kalır, taslak açılmaz. Argümanlı sorguda eşleşme yokken `Enter` taslak açmaz. `sort:` yoksa metinli sorgu fuzzy sırasındadır, boş sorgu `o` sırasındadır.
 
 **Arama (fzf davranışı, girdi altta)**
 
 | Tuş | Eylem |
 |---|---|
 | yazı | Sorguyu düzenler, liste anında süzülür; `d` gibi harfler yalnız metindir |
-| `↑` `↓` `Ctrl-P` `Ctrl-N` | Aramada kalarak seçimi gez |
+| `↑` `↓` | Aramada kalarak seçimi gez |
+| `Ctrl-P` `Ctrl-N` | Geçmişte, şu anki metni (katlamalı alt dize) içeren önceki aramalar; en yeninin ötesinde yazılan metne döner, yazmak yeni süzgeç başlatır |
 | `PgUp` `PgDn` | Önizlemeyi kaydır |
 | `Enter` | Seçimi tutup Listeye dön; **eşleşme yoksa** sorgu ilk satır olacak şekilde kaydedilmemiş taslak (nvALT) |
-| `Tab` | Ad ↔ içerik modu |
-| `←` `→` | Etkisiz |
-| `Esc` | Süzgeç kalarak Listeye dön |
+| `Tab` | Tamamlama: tek aday doğrudan yazılır, çoksa açılır liste (bkz. "Girdi satırı") |
+| `Ctrl-T` | Ad ↔ içerik modu |
+| `←` `→` `Home` `End` `Delete` | İmleç ve silme; metnin sonunda `→` gölge öneriyi alır |
+| `Esc` | Açık listeyi kapatır; yoksa süzgeç kalarak Listeye dön |
 
-**Liste ve Arama ortak:** `Ctrl-O` yeni not · `Ctrl-R` ad/klasör/tip · `Ctrl-D` çöpe at · `Ctrl-S` senkron · `Ctrl-P` `Ctrl-N` gezin · `Alt+→` `Alt+←` satır ayrıntısı.
+**Liste ve Arama ortak:** `Ctrl-O` yeni not · `Ctrl-R` ad/klasör/tip · `Ctrl-D` çöpe at · `Ctrl-S` senkron · `Alt+→` `Alt+←` satır ayrıntısı. Listede `Ctrl-P` `Ctrl-N` gezer, `Tab` ad ↔ içerik modudur.
+
+**Girdi satırı (`InputLine`):** `f`, `/`, `F2`, ad istemi, editörde bul ve `a` satırı aynı saf bileşeni kullanır (`tui/input_line`, FTXUI'siz; çizim `tui/input_view`). REVIEW'daki `/` ve kaydet diyaloğu dışarıdadır.
+
+| Özellik | Davranış |
+|---|---|
+| Gölge öneri (soluk) | İmleç metnin sonundayken. `f` `/`: önce geçmiş (tüm satır), sonra son sözcükle başlayan not adları. `a` `F2` ad istemi: klasörler, sonra adlar. Editörde bul: nottaki sözcükler. `→` alır |
+| `Tab` | Adaylar: `klasör/`, not adları, `.cpp` gibi tipler (yolda yalnız uzantıyı değiştirir); `f` `/`'de ayrıca `sort:name\|size\|updated\|created`, `type:<tipler>`, `in:<klasörler>`, `size:`, `updated:`, `created:`, `origin:windows\|linux\|macos\|android\|unknown`, `sync:`. Tek aday doğrudan yazılır, çoksa fzf gibi liste: yazı süzer, `↑↓` gezer, `Enter` ekler, `Esc` kapatır. Boşluklu aday `f` `/`'de tırnaklanır |
+| Renk (`f` `/`) | Geçerli argümanın anahtarı camgöbeği, değeri yeşil; bozuk değer `parse_query`'nin yerini bildirdiği aralıkta anında kırmızı; düz metin normal. Aralıklar bayt ofsetidir, UTF-8 imleci bölmez |
+| Geçmiş (`f` `/`) | `Enter`le kullanılan arama `<state>/tui-state.toml`da `search_history`e girer: en yeni başta, yinelenmez, en çok 200, kayıt başına en çok 1 KiB, senkrona girmez. Bozuk sorgu ve taslak açan eşleşmesiz sorgu girmez. `KEY=değer`, `anahtar: değer` (argüman anahtarı hariç; `core` sır kuralı) ve 20 bayt üstü harf-rakam jetonu taşıyan ya da sözcüğü bir not adıyla birebir aynı olan sorgu yazılmaz |
+
+`Ctrl+Space` yalnız editördedir. Editörde bul'da `Ctrl+P` `Ctrl+N` `↑` `↓` eşleşme gezmeye devam eder, geçmiş yoktur. Adaylar bellekteki listelerden gelir (`TuiState::input_sources`, notlar değişince ilk istekte kurulur); tuş başına depo okunmaz.
 
 `Alt+ok` dizileri: `ESC [1;3C` / `ESC [1;3D` (xterm ailesi), `ESC [3C` / `ESC [3D`, `ESC f` / `ESC b` (macOS Terminal). rxvt'nin `ESC ESC [ C` dizisi tuş değildir: FTXUI 7.0.3 onu `ESC ESC` ve `[C` diye böler.
 
@@ -90,7 +109,7 @@ Sıra ve sağ sütun `<state>/tui-state.toml`'da kalır; bozuk değer varsayıla
 |---|---|
 | `↑` `k`, `↓` `j` | Satır satır kaydır |
 | `PgUp` `PgDn` | Sayfa sayfa kaydır |
-| `g` `G` | Başa / sona |
+| `g` `G` | Başa / sona (önek değil, tek tuş) |
 | `c` | Notun özgün baytlarını kopyalar (Listedeki gibi) |
 | `e` `Enter` | Görünen ilk satırdan Editöre geç |
 | `E` | Harici editör |
@@ -124,13 +143,54 @@ Liste komutları içerik panelinde çalışmaz: `a d r s ?` ve `Ctrl-D` `Ctrl-R`
 
 **Her odakta:** `F1` yardım · `F9` ayarlar. `Ctrl-C` Editör dışında acil çıkıştır, Editörde kopyalar; yardım editörün üstündeyken de çıkmaz. `q` Liste ve Önizlemede çıkar; Editörde ve hiçbir girdi satırında çıkmaz.
 
+**Çizim:** terminale yalnız değişen hücre yazılır (`tui/frame_diff`, synchronized update ile sarılı); FTXUI'nin çıktı kancası `cmake/patches/` yamasındadır. Kuyruktaki girdi tek karede işlenir. `Ctrl+L` her odakta ekranı silip baştan çizer; harici editörden dönüş, askıdan dönüş ve boyut değişimi de öyle.
+
 **Akış denetimi:** `Ctrl+Q` XON, `Ctrl+S` XOFF'tur. FTXUI 7.0.3 oturumda `IXON`'u kapatır ve çıkışta eski termios'u geri yükler (`app.cpp`); e2e başlangıçta `IXON` açık pty'de iki tuşun ulaştığını, oturumda `-ixon`, normal çıkış ve SIGTERM sonrası `ixon` olduğunu doğrular. Bu yüzden ek terminal kodu yoktur.
 
 İçerik modunda liste not başına eşleşme sayısını gösterir; önizleme ilk eşleşmeye kayar ve eşleşmeleri vurgular.
 
+## Klasör görünümü
+
+Varsayılan liste klasör tabanlıdır (`src/tui/folder_tree.*`, saf). Ağaç `NoteStore::list` ve `folders`in bellekteki anlık görüntüsünden yalnız liste değişince kurulur (`O(not × derinlik)`); gezinme, klasöre girme ve çıkma depoya gitmez, klasör satırı önizleme okuması tetiklemez.
+
+- **Satır:** önce klasörler, sonra notlar; `file_icons` ikonu (klasörde açık ya da kapalı ikon), ad kısa (`arşiv/`, `plan.md`), klasör adı `/` ile biter. `o` her grubun içinde uygulanır: klasörde ad, alt ağacın toplam boyutu, son güncellemesi, son oluşturması; bilinmeyen tarih azalan sırada sonda. Numara klasörle birlikte 1'den başlar, klasör başına yeniden başlar; numara genişliği ve `row_marker_column` en büyük numaradan gelir.
+- **Ağaç:** `Space` klasörü yerinde açar: not ve alt klasörler altında, seviye başına iki hücre girintili (panelin en çok yarısı), her derinlikte; numara kendi klasöründe yeniden başlar. `→` `l` yine içeri girer (yazi), `←` `h` her zaman üst klasöre gider, açık satırı kapatmaz. Açık küme girip çıkınca kalır, `tui-state.toml`da `open_folders`; kalmayan klasörler yazarken düşer (taramada değil: senkron geri getirebilir). Seçim, sayfalama, toplamlar, fare satır eşlemesi, `x` ve toplu işlemler ağaç satırlarında çalışır; `p` ve `m`'nin ön değeri üst satırdaki klasördür. Liste yalnız değişimde kurulur (`O(görünür satır + açık klasörlerin çocukları)`), gezinme depo okumaz, çizim görünene orantılıdır: 20.000 satırlık açılış testi vardır.
+- **`m` taşı:** seçim ya da satır için altta `Taşı:` girdisi, geçerli klasörle dolu; `Tab` yalnız klasörleri önerir (boşlar dahil, ağaçtan), çoksa fuzzy liste. `Enter` not için `NoteStore::move`, klasör için `rename_folder`; yazılan iç içe klasörler oluşur. Hiçbir şey ezilmez: hedefte ad doluysa hiçbir öğe taşınmaz, hata girdide kalır. Aynı klasör hiçbir şey yapmaz; kendi içine taşıma hata verir. `Esc` vazgeçer. Kopyadan farkı: `p` ad çakışmasında `-2` verir, `m` hata verir.
+- **Üst satır:** çöp göstergesi, açık klasör ikonu, `notlar/work/sub`. Sığmazsa baştaki parçalar `…/` olur, bulunulan klasör görünür kalır. Sağ taraf için `kTopBarRightCells` (44) ayrılır. Parçaya tıklamak o klasöre gider, ayırıcı ve `…` tıklanmaz. Adlar `terminal_safe`ten geçer.
+- **Sağ sütun:** klasörde `v` seçiminden bağımsız `12 öğe` (`yok` hariç). **Ayrıntı** (`i`): yol, öğe/not/klasör sayısı, toplam boyut, son güncelleme.
+- **REVIEW:** klasör seçiliyken özet: öğe sayısı, toplam boyut, son güncelleme, alt ağacın en yeni beş notu (`FolderTree::kRecentNotes`). `→` klasörde içeri girdiği için panele fareyle gelinir.
+- **Dönüş:** üst klasöre çıkışta çıkılan klasör seçili kalır. Süzgeçten dönüşte klasör ve seçim yerinde (`saved_spot_`); çöpten dönüşte klasör yerinde, seçim ilk satırda. Aramada `Esc` süzgeç kalarak Listeye döner (eski kural), ikinci `Esc` klasör görünümüne.
+- **Silinen klasör:** yeniden taramada geçerli klasör gitmişse en yakın duran ataya düşülür. Kaydedilen ya da seçilen not başka klasördeyse (`select_note`, `reveal`) liste oraya gider.
+- **Fare:** tıklama seçer, aynı satıra 400 ms içinde ikinci tıklama klasöre girer; `▸` `▾` okuna tıklama klasörü yerinde açar/kapatır, ikinci tıklama sayılmaz.
+- **İpuçları:** klasör satırında ve boş klasörde `key_hints_folder`: `→ aç  ← üst  a ekle, ad/ = klasör  F2 ad değiştir  d çöpe at` 60 sütunda görünür.
+
+**Klasör işlemleri**
+
+| Tuş | Davranış |
+|---|---|
+| `a` `ad/` | `create_folder`; `sub/x.md` gerekli klasörleri oluşturur. Kökte klasörsüz ad köke gider (`default_folder` düz listede ve `n`'de kalır). Uzantı kuralı değişmez; klasör parçası slug'lanmaz. Var olan klasör adı onu seçer, "zaten var" der, yazmaz |
+| `F2` `r` `Ctrl-R` | `rename_folder`; hedef doluysa ya da kendi içineyse hata girdide kalır. Klasör adındaki nokta uzantı değildir |
+| `d` `Ctrl-D` | Notsuz klasör onaysız kaldırılır (boş alt klasörleriyle). Notlu klasör onay ister, sayıları söyler, varsayılan Vazgeç. Çöp not başına olduğu için `remove_folder(force)` kullanılmaz (notları kalıcı siler): `ListActions` notları tek tek `trash`ler, sonra boşalan klasörü `remove_folder(false)` ile kaldırır. Arada gelen not `NotEmpty` verir, klasör ve o not kalır, atılanlar `u` ile döner |
+| `u` | Son adımın tamamı: klasörler (boş alt klasörler dahil) ve notlar; ad doluysa çöp kuralı `-2` |
+| `D` | Kalıcı, onaylı (sayılar, varsayılan Vazgeç): `remove_folder(force=true)` |
+| `c` | Klasörün yolunu kopyalar |
+
+## Çoklu seçim ve yank
+
+Yazi'den esinli; tuş kararı `TuiState`, yan etki `ListActions` (`main` yalnız `Ctrl+A` eşlemesini bilir).
+
+- **Seçim:** `x` satırı (not ya da klasör) seçer ve aşağı iner, `X` temizler, `Ctrl+A` görünen tüm satırları seçer; arama sonuçlarında tam yolla çalışır. Satırda `*` ve sarı ad; renk tek sinyal değildir. Klasör değişince kalır, alt satırda `seçili: 3`. Yeniden taramada kaybolan öğe düşer. Çöpün ayrı seçimi vardır (ayrı ad uzayı), çöpten çıkınca silinir.
+- **Hedef:** `d` `D` `y` `m` (taşıma, bkz. "Ağaç") seçim doluysa onu, değilse geçerli satırı işler. Seçili klasörün içinde ayrıca seçilmiş öğe tek sayılır, ikinci kez işlenip hata vermez.
+- **`d`:** onaysız çöpe; seçimde notlu klasör varsa toplam sayıyla sorar, varsayılan Vazgeç (tek klasör kuralı). Tek `u` adımın tamamını geri alır.
+- **`D`:** kalıcı, toplam öğe ve not sayısıyla sorar, varsayılan Vazgeç.
+- **`y` `p`:** `y` kopya için işaretler, seçim tüketilir, alt satırda `kopya: 2`. `p` geçerli klasöre yapıştırır, düz listede klasör ister; kaynak yerinde kalır. Not kopyası baytları okuyup `create_exact`, klasör kopyası `NoteStore::copy_folder` (boş alt klasörleriyle, toplu işlem). Hiçbir şey ezilmez: dolu ad `-2`, `-3` (`a.tar.gz` -> `a.tar-2.gz`; klasör `iş-2`), her biri raporlanır. Klasör kendi içine kopyalanmaz. `Esc` bekleyen yank'ten vazgeçer. `c` sistem panosudur, yank'e karışmaz. Uzantısız not kopyalanamaz (`create_exact` tip ister), hata raporlanır, kaynak yerinde kalır.
+- **Kısmi hata:** kalan öğeler sürer. Sorunsuz işlem alt satırda tek ileti; hata ya da ad değişimi varsa öğe öğe küçük pencere (`2 tamam, 1 başarısız`), sıradaki tuş kapatır. `u` da aynıdır: geri gelmeyen not raporlanır, çöpte artık yoksa adımı kilitlemez.
+- **Çöp:** `x` `X` `Ctrl+A` ile `u` geri getirir, `D` kalıcı siler (sayıyla, varsayılan Vazgeç).
+- **Senkron:** değişiklik yapan her işlem sonda bir kez `notify_changed` çağırır.
+
 ## Yeni not
 
-- `a` notu adıyla başlatır: listenin üstünde, liste panelinin içinde boş bir satır açılır, tuşlar oraya gider (alt satırda yalnız ipuçları). Liste satırın ve seçili notun görüneceği kadar kayar, numara sütunu hizasını korur (satırın numarası boştur, yol aynı hücrede başlar). `Enter` notu **hemen ve boş** oluşturur, sağ panel EDIT'te açılır; boş bırakılsa da kalır. Ad `klasör/ad.uzantı` olabilir; klasör yoksa `n`'deki gibi seçili notun klasörü, o da yoksa `default_folder`. Uzantı yoksa `default_type` (`detect` yok: daha içerik yok). `-2` eklenmez: dolu ad hatadır. **Süzgeç açıkken** satır süzgeçten etkilenmez; yeni not süzgeçten geçiyorsa süzgeç kalır, geçmiyorsa süzgeç temizlenir ki not görünsün (`select_note` kuralı).
+- `a` notu adıyla başlatır: listenin üstünde, liste panelinin içinde boş bir satır açılır, tuşlar oraya gider (alt satırda yalnız ipuçları). Liste satırın ve seçili notun görüneceği kadar kayar, numara sütunu hizasını korur (satırın numarası boştur, yol aynı hücrede başlar). `Enter` notu **hemen ve boş** oluşturur, sağ panel EDIT'te açılır; boş bırakılsa da kalır. Ad `klasör/ad.uzantı` olabilir, klasör görünümünde geçerli klasöre göredir; düz listede klasör yoksa `n`'deki gibi seçili notun klasörü, o da yoksa `default_folder`. Uzantı yoksa `default_type` (`detect` yok: daha içerik yok). `-2` eklenmez: dolu ad hatadır. **Süzgeç açıkken** satır süzgeçten etkilenmez; yeni not süzgeçten geçiyorsa süzgeç kalır, geçmiyorsa süzgeç temizlenir ki not görünsün (`select_note` kuralı).
 - `n` ya da `Ctrl-O` önce ad sormadan, harici editör olmadan boş editörü tüm terminalde açar: liste ve üst çubuk gizlenir (panel yakınlaştırması), üst satır "Yeni not" der. **İlk kayda dek dosya yoktur.**
 - İlk `Ctrl+S` altta tek satırlık ad girdisi açar, ilk satırın slug'ı ve `detect` uzantısıyla dolu gelir. `Enter` kaydeder ve düzenlemede kalır; `Esc` hiçbir şey yazmadan düzenlemeye döner. Boş taslakta `Ctrl+S` ne sorar ne dosya oluşturur. Geçersiz yol ya da yazma hatası girdide görünür, girdi açık kalır.
 - Ad `klasör/ad.uzantı` olabilir; klasör yoksa seçili notun klasörü, o da yoksa `default_folder` (girdinin etiketinde yazar); açık uzantı kazanır (bkz. "Uzantı kuralı"), uzantı yoksa `detect`. Çakışmada mevcut `-2` kuralı. Girdi boşaltılırsa zaman damgalı ad.
@@ -174,6 +234,23 @@ Tampon `EditorBuffer` (saf, FTXUI bilmez), tuş ve kayıt kararları `EditorSess
 - **Reddedilen veri:** NUL içeren metin kopyalanmaz; NUL ya da geçersiz UTF-8 içeren ve 32 MiB'ten büyük pano yapıştırılmaz, metin değişmez, neden söylenir.
 - **REVIEW fare seçimi:** sürükleme seçer, ters renkli gösterir, bırakınca kopyalar. Uçlar mantıksal konumdur: sarma ve gutter kopyaya girmez, satır sonları dosyadaki gibidir (CRLF). İşaretçinin altındaki karakter seçime dahildir. Panel kenarını geçen fare en yakın hücreye kenetlenir; sürüklerken tekerlek kaydırır, çapa yerinde kalır, uç aynı hücrenin yeni metnine gelir. Tıklama seçmez ve kopyalamaz. Sol tuş bırakılmadan başka olay gelirse (Release kaybı) sürükleme biter ve kopyalar. Geçersiz UTF-8 notta seçim kopyalanmaz, neden söylenir. Tuş ve yeni tıklama seçimi kaldırır; bölücü sürükleme ve liste tıklaması aynı kalır.
 
+## REVIEW biçimli görünüm
+
+`src/tui/markdown_view.*` (md4c, `render_markdown`), `src/tui/data_view.cpp` (`render_csv`, `render_json`), `src/tui/styled_view.*` (sarma, tablo yerleşimi): kaynak baytlar + genişlik -> biçimli satırlar. Saf: ağ, dosya, terminal kaçışı yok; FTXUI'ye yalnız `view.cpp` boyarken değer. Uzantı seçer: `md`/`markdown`, `csv`, `json`; diğer notlarda yalnız ham metin vardır, `R` etkisizdir, etiket `REVIEW` kalır.
+
+- **Markdown:** başlık düzey işaretiyle (`#`, `##` soluk; her düzey ayrı biçim), kalın, eğik, üstü çizili, satır içi kod, kuşatılmış kod (`syntax` tokenizer'ı dil etiketinden; `python`, `javascript` gibi tam adlar da, bilinmeyen dil düz camgöbeği), alıntı `│` ile, iç içe sıralı ve işaretli liste, görev listesi `[x]` `[ ]`, sarılan hücreli tablo, yatay çizgi, bağlantı metin + soluk URL (terminal hyperlink kaçışı yok), görsel `[görsel: alt]`, HTML yazıldığı gibi. Renkler 16 ANSI setinden, aynı `token_styled` paleti.
+- **CSV:** ayırıcı `detect` kuralıyla (`detect::table_delimiter`: ilk 200 dolu satır); tırnaklı alan, `""`, tırnak içi satır sonu boşluğa iner. İlk satır başlık. Tutarlı tablo değilse ham metin + not.
+- **JSON:** katı RFC 8259 denetiminden geçerse girintilenir, `syntax` JSON renkleriyle; geçersizse ham metin + not. Derinlik sınırı `kMaxJsonDepth` (128).
+- **Geri düşüş:** görünüm olmadıysa (geçersiz, tablo değil, `kMaxRenderedViewBytes` 256 KiB üstü) ham vurgulu metin ve toplamlar satırında soluk neden. Not içerik satırı değildir: kaydırma, fare ve arama eşlemesi bozulmaz. Etiket `ham` der.
+- **Güvenilmez içerik:** çıkan her metin `terminal_safe`ten geçer (C0, C1, DEL, bidi, ESC yok). Süre girdiyle doğrusal; sınırlar görünürdür: `kMaxViewLines` (100.000), `kMaxTableRows` (5.000), `kMaxTableColumns` (128), sığmayan sütun ve kesilen satır soluk satırla söylenir. İç içelik öneki panelin en çok yarısını alır, ek derinlik girinti katmaz.
+- **`R`:** görünüm / ham, oturum boyunca tüm notlarda; `REVIEW · görünüm`, `REVIEW · ham` etiketi (Türkçe katalogda çerçeve adı `İNCELEME`). EDIT her zaman ham metindir. Kaydırma geçişte aynı kaynak bloğunda kalır.
+- **Arama (`/`, `n`, `N`):** gösterilen metinde çalışır; biçimli görünümde `**` bulunmaz, `kalın` bulunur. Eşleşme görüntü satırı içindedir: sarmanın böldüğü sözcük bulunmaz. İçerik aramasının (`Tab`, `f`) satır vurguları ham satıra aittir, biçimli görünümde boyanmaz; önizleme yine eşleşen bloğa kayar.
+- **Kopya:** fare seçimi gösterilen metni kopyalar (satırlar `\n` ile, tablo kenarları ve liste imleri dahil; geçersiz UTF-8 not da arındırılmış haliyle kopyalanır). `c` her zaman notun özgün baytlarını kopyalar.
+- **`e` / `Enter`:** üstte görünen bloğun kaynak satırında EDIT açılır: `RenderedView::source_lines` görüntü satırı -> kaynak satırı eşlemesidir (kod ve tablo satırı başına, diğerleri blok başına). md4c konum vermez; metin geri çağrısının gösterdiği adresten bulunur, metni olmayan blok (çizgi) sonraki dolu satırdır. EDIT'ten dönüş o bloğa iner.
+- **Önbellek:** `PreviewCache` not sürümü ve genişlik başına bir kez üretir; hızlı gezinmede `throttled` okumayı ertelediği için görünüm de üretilmez. Genişlik değişince yeniden sarılır; art arda değişimlerde önceki yerleşim kalır, `kResizeSettleMs` (120 ms) durunca üretilir, sakin kullanıcının tek değişimi beklemez. Üretim UI iş parçacığındadır, bu yüzden boyut sınırı 50 ms bütçesinden gelir (ölçüm aşağıda). `main.cpp` değişmedi: eşleme `throttled` içinde modele bildirilir.
+
+Ölçüm (T69, Release, 80 sütun, üç koşunun en kötüsü, sınır boyutunda girdi): 2 MiB'te karışık md 155 ms, bağlantı 144, kod 120, JSON 86 ile 50 ms bütçesini aştı; 512 KiB'te hepsi 33 ms altına indi ama `[` yığını 85 ms kaldı. 256 KiB'te en kötü `[` yığını 45 ms, JSON 12, uçtan uca genişlik değişimi (karışık md) 9, diğerleri 10 ms ve altı. Üretimi arka iş parçacığına almak yerine sınır düşürüldü: daha büyük not ham metinle zaten okunur, görünüm iptali ve eski sonuç yarışı eklenmez.
+
 ## Tamamlama ve yazım denetimi
 
 - **Gölge öneri:** yalnız satır sonunda, yazılan her harften sonra; önek en az 2 bayt. Önce bu nottan imlece en yakın sözcük, sonra diğer notlardan en sık geçen. Her tuş bir önceki öneriyi düşürür, hareket ve `Esc` yeni üretmez. Soluk çizilir, panele kırpılır, sarmaya ve bayta girmez. Bu not imleç çevresinde ±256 KiB taranır: tuş süresi not boyutundan bağımsızdır, daha uzaktaki sözcük önerilmez.
@@ -192,9 +269,34 @@ REVIEW ve EDIT'te; tablo güdümlü, bağımlılıksız satır ayrıştırıcı 
 - **Renkler:** 16 ANSI. Yorum yeşil, dizge/değer eflatun, sayı/sabit açık kırmızı, tip/kod camgöbeği, anahtar sözcük/anahtar/etiket açık mavi, başlık kalın açık mavi, vurgu kalın. Sarı aramaya ayrılmıştır.
 - **Değişmezler:** bayt, sarma, imleç hesabı ve kontrol baytı arındırması değişmez (renk yalnız hücrenin ilk baytına bakar); arama ve seçim sözdizimi renginin önüne geçer.
 
+## Dosya ikonları
+
+`src/core/file_icons.*` saf tablosu: uzantı ya da `Dockerfile`/`Makefile` adı → Nerd Font kod noktası, renk (16 ANSI); ayrıca
+varsayılan dosya, açık/kapalı klasör, çöp. Eşleşme yolun son parçasına bakar, büyük/küçük harf duyarsızdır. Klasör satırı
+ağaçtaki durumuna göre açık ya da kapalı, üst satırdaki yol açık klasör ikonunu kullanır; REVIEW çerçevesi notun glifini taşır.
+
+| `icons` | TUI |
+|---|---|
+| `nerd` (varsayılan) | Nerd Font glifi, ardında boş hücreyle. Mono olmayan Nerd Font (Konsole'da `MesloLGS Nerd Font`: glif en çok 1,45 hücre) boş hücreye taşarak tam boyutunda çizilir; `Nerd Font Mono` tek hücrede küçük kalır. Terminal hücresinde font boyutu değiştirilemez: ikon boyutu terminal fontunu izler. Terminalin fontu sorulamaz, **Nerd Font yoksa glifler kutu görünür: `icons off` ayarlayın** |
+| `off` | İkon sütunu yok |
+
+Eski `auto` değeri `nerd` okunur ve `note config set` onu kabul eder; düz Unicode yedek kaldırıldı.
+
+Satır: ` 1 ▸ <glif>  work/`, not ` 2   <glif>  plan.md`. İkon oktan sonra, adın önündedir ve taşma hücresi ile boşluğuyla 3 hücre tutar; ikon
+tıklaması yalnız satırı seçer. Sağ sütun bu 3 hücreyi hesaba katar, ad satırı (`a`) aynı hizaya kayar. Seçili satırda renk de
+ters çevrilir. Çöp göstergesi ve çöp başlığı çöp ikonuyla başlar.
+
+Kod noktaları Nerd Fonts v3.5.1'in `SymbolsNerdFontMono-Regular.ttf` cmap'inde doğrulandı; yalnız Material Design ve Seti
+kümelerinden seçildi. TUI font gömmez: terminalde font kullanıcınındır, uygulama yalnız kod noktası yazar.
+
+Tam Symbols Nerd Font gömülmez: arşiv `LICENSE`'ı ve `fonts.json` MIT der, kök `LICENSE` OFL-1.1 der, dosyada OFL, CC BY ve
+markalı kümeler de vardır; birleşik dosyanın lisansı üstten belirlenemiyor. Kullanıcı kararı: GUI yalnız tablodaki 30 glifi
+taşır (SPEC-gui "Dosya ikonları"); kaynak ve metinler `resources/fonts/LICENSE-NoteappIcons.txt`. `note font install` yoktur.
+
 ## Ayarlar ekranı (`,` `F9`)
 
-SPEC-core config alanlarının formu: dil (döngü), notes_dir, editör, varsayılan tip (döngü), varsayılan klasör,
+SPEC-core config alanlarının formu: dil (döngü), notes_dir, editör, varsayılan tip (döngü), varsayılan klasör, tipler,
+dosya ikonları (döngü),
 senkron açık/kapalı, remote, dal, idle süresi, yazar adı/e-posta; remote https ise **token** alanı (maskeli;
 "kasada kayıtlı ✓" göstergesi, Kaydet/Sil). Kaydet → doğrula → `config.toml` atomik yazılır → uygulanır
 (dil anında; notes_dir değişirse liste yeniden yüklenir; senkron açıldıysa `enable` akışı, hata satır içinde).
@@ -235,8 +337,24 @@ görünür; `Enter` ile dış editör `NoteStore::edit_in_temp_file`'dan geçer 
 ile askıya alma/geri dönme, pencere yeniden boyutlandırma.
 
 ## Kapsam dışı
-LSP, eklenti, çoklu imleç, makro, takas dosyası; fare desteği (FTXUI varsayılanı dışında), klasör silme/yeniden adlandırma
-(GUI'de), PDF dışa aktarma (CLI/GUI'de), tema seçimi.
+LSP, eklenti, çoklu imleç, makro, takas dosyası; fare desteği (FTXUI varsayılanı dışında), PDF dışa aktarma (CLI/GUI'de), tema seçimi.
+
+## Değişiklik 2026-11-02
+
+Ölçüm (T71, Release, 1 KiB'lik 2.000 not, `folder copy perf`): klasör kopyası not başına yazmayla 28,7 sn (her yazma görüntüyü yeniden kurar, UI iş parçacığında donar); `NoteStore::copy_folder` toplu işlemiyle 105 ms. Aynı not başına maliyet çoklu not kopyası ve `d` klasöründe duruyor.
+
+Ağaç, `t`, satır görünümü, ikonlar (T74); kararlar kullanıcının.
+
+- **ADDED** "Ağaç": `Space` klasörü yerinde açar, `open_folders` kalıcı. Klasör ayrıntısı `i`'ye taşındı; `Space` notta ayrıntıdır.
+- **ADDED** `m`: klasör girdisiyle taşı, `InputKind::Folder`. Kısayol adları İngilizce sözcüklerden gelir (yank, paste, move).
+- **MODIFIED** Satır: en soldaki `>` kalktı, seçim satır vurgusudur; `▸` `▾` yalnız klasörde; notta ok ve `▸` `▾` yok. Notta oka tıklama kalktı.
+- **MODIFIED** `icons` `nerd | off`, varsayılan `nerd`; `auto` `nerd` okunur, `note config set icons auto` kabul edilir. Düz Unicode semboller (`▰`, `≡`) kalktı.
+- **MODIFIED** Renkler: md camgöbeği, c/cpp eflatun, py yeşil, json sarı, klasör mavi; 16 ANSI.
+
+Çoklu seçim, yank, `g` öneki (T71); kararlar kullanıcının.
+
+- **ADDED** Bölüm "Çoklu seçim ve yank"; `x` `X` `Ctrl+A` `y` `p`; çöpte `x` ile `u` `D`.
+- **MODIFIED** Listede ve çöpte `g` tek başına başa gitmez, önektir: `gg` `gh` `gt`. REVIEW'da `g` `G` aynı.
 
 ## Değişiklik 2026-11-01
 

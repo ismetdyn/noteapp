@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -46,10 +47,10 @@ public:
     // Son karede çizilen adlı öğeler (ekran koordinatı): testler fareyle tıklar ve çakışma arar. Ad sabit
     // kimliktir, etiket değil. Klasör satırı "folder:<yol>"; kök "folder:".
     struct ItemRect {
-        float min_x;
-        float min_y;
-        float max_x;
-        float max_y;
+        float min_x{};
+        float min_y{};
+        float max_x{};
+        float max_y{};
         bool disabled = false;
     };
     std::pair<float, float> button_center(const std::string& name) const {
@@ -64,11 +65,16 @@ public:
     // Pencere koordinatındaki arayüz ölçeği: SDL_GetWindowDisplayScale / SDL_GetWindowPixelDensity.
     static float ui_scale_for(float display_scale, float pixel_density);
     static int token_input_flags();  // maskeli olduğunun testi için
+    // Satır ikonu metinden büyük çizilir, satır yüksekliğine girmez; yuva adların aynı sütunda başlamasını
+    // sağlar.
+    static constexpr float kRowIconScale = 1.3F;
+    static constexpr float kRowIconSlotEms = 1.6F;
+
+    struct Platform;
+    // Platform yalnız create()'te kurulur; public olması dışarıya yol açmaz (make_unique için).
+    View(GuiState& state, std::unique_ptr<Platform> platform);
 
 private:
-    struct Platform;
-
-    View(GuiState& state, std::unique_ptr<Platform> platform);
     void pump_events();
     void render(const std::function<void()>& overlay);
     void apply_theme();
@@ -107,7 +113,7 @@ private:
     void begin_setting_row(const std::string& label, const std::string& label_name);
     void draw_setting_field(const std::string& key);
     void draw_setting_input(const std::string& key);
-    void draw_language_combo(std::string& value);
+    void draw_choice_combo(const std::string& key, std::span<const char* const> choices, std::string& value);
     void draw_token_row();
     void draw_connection_test_row();
     bool button(const std::string& name, const std::string& label);

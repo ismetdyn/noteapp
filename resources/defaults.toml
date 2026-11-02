@@ -7,6 +7,7 @@ editor = ""              # boş: $VISUAL -> $EDITOR -> platform varsayılanı
 default_type = "md"
 default_folder = ""      # hızlı notların klasörü ("" = kök)
 types = ["md", "txt", "csv", "cpp", "java", "py", "json", "sh", "env", "properties", "yaml", "toml", "ini", "xml", "html", "css", "js", "ts", "sql", "c", "go", "rs", "dockerfile", "makefile"]
+icons = "nerd"           # nerd | off; Nerd Font yoksa off (auto = nerd)
 
 [sync]
 enabled = false

@@ -100,7 +100,7 @@ public:
 private:
     struct Key {
         std::array<std::byte, 16> id;
-        std::uint32_t sub;
+        std::uint32_t sub{};
         bool operator==(const Key&) const = default;
     };
     struct KeyHash {

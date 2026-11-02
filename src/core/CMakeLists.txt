@@ -5,6 +5,7 @@ add_library(noteapp_core
     config.cpp
     console.cpp
     editor.cpp
+    file_icons.cpp
     file_stat.cpp
     migration.cpp
     note_path.cpp

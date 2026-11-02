@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <string>
 
 using namespace noteapp::test;
@@ -17,7 +18,10 @@ namespace {
 
 void write_plain(const fs::path& file, std::string_view bytes) {
     fs::create_directories(file.parent_path());
-    std::ofstream(file, std::ios::binary) << bytes;
+    std::ofstream out(file, std::ios::binary);
+    out << bytes;
+    out.flush();
+    REQUIRE_MESSAGE(out.good(), "cannot write test file: ", noteapp::test::utf8(file));
 }
 
 // Dizindeki düz dosyalar: göreli yol → bayt.
@@ -127,6 +131,127 @@ TEST_CASE("a file over 60 MiB is skipped by name: original untouched, gate open,
     CHECK(box.run({"-n", "n", "metin"}).exit_code == 0);
 }
 
+TEST_CASE("files the migration left out stay visible until resolved: status and export --all exit 1") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "iyi.md", "iyi\n");
+    const fs::path huge = box.notes() / "dev.bin";
+    write_plain(huge, std::string(std::size_t{61} * 1024U * 1024U, 'x'));
+#ifdef _WIN32
+    // Windows'ta `nul` aygıttır: böyle bir dosya oluşamaz, geçersiz ad dalı yalnız POSIX'te sınanır.
+    constexpr const char* kLeftOutSummary = "NOT migrated (1,";
+    const auto has_invalid = [](const std::string&) { return true; };
+#else
+    constexpr const char* kLeftOutSummary = "NOT migrated (2,";
+    write_plain(box.notes() / "ham" / "nul.bin", "x");
+    const auto has_invalid = [](const std::string& err) { return err.find("nul.bin") != std::string::npos; };
+#endif
+    const TempDir out;
+
+    const auto clean_before = box.run({"graph", "status"});
+    CHECK(clean_before.exit_code == 1);  // henüz geçirilmedi: "kalan yok" denemez
+    CHECK(clean_before.err.find("not migrated yet") != std::string::npos);
+
+    const auto migrated = box.run({"graph", "migrate"});
+    CHECK_MESSAGE(migrated.exit_code == 0, migrated.err);
+    CHECK(migrated.err.find(kLeftOutSummary) != std::string::npos);
+    CHECK(migrated.err.find("do not delete") != std::string::npos);
+
+    const auto listed = [&](const RunResult& result) {
+        return result.err.find("dev.bin") != std::string::npos && has_invalid(result.err) &&
+               result.err.find("NOT in any export") != std::string::npos;
+    };
+    const auto exported = box.run({"export", "--all", utf8(out.path() / "a")});
+    CHECK(exported.exit_code == 1);
+    CHECK(listed(exported));
+    CHECK(slurp(out.path() / "a" / "iyi.md") == "iyi\n");  // sağlam notlar yine çıkar
+    CHECK_FALSE(fs::exists(out.path() / "a" / "dev.bin"));
+
+    const auto accepted = box.run({"export", "--all", utf8(out.path() / "b"), "--ignore-skipped"});
+    CHECK(accepted.exit_code == 0);
+    CHECK(listed(accepted));  // kabul de adları gizlemez
+
+    const auto status = box.run({"graph", "status"});
+    CHECK(status.exit_code == 1);
+    CHECK(listed(status));
+    const auto ignored = box.run({"graph", "status", "--ignore-skipped"});
+    CHECK(ignored.exit_code == 0);
+    CHECK(listed(ignored));
+    // Liste yazıldıysa "hiçbir şey kalmadı" yalan olur: dosyalar hâlâ veritabanında değil.
+    CHECK(ignored.out.find("Nothing was left out") == std::string::npos);
+    CHECK(ignored.out.find("NOT in the database") != std::string::npos);
+    CHECK(box.run({"graph", "status", "--yok"}).exit_code == 2);
+    CHECK(box.run({"export", "--pdf", "iyi", "--ignore-skipped"}).exit_code == 2);
+
+    // Yeni süreçte de bilir; sorun çözülüp geçiş yinelenince liste boşalır.
+    fs::remove(huge);
+    fs::remove_all(box.notes() / "ham");
+    const auto again = box.run({"graph", "migrate"});
+    CHECK_MESSAGE(again.exit_code == 0, again.err);
+    CHECK(again.err.find("NOT migrated") == std::string::npos);
+    const auto clean = box.run({"graph", "status"});
+    CHECK_MESSAGE(clean.exit_code == 0, clean.err);
+    CHECK(clean.out.find("Nothing was left out") != std::string::npos);
+    CHECK(box.run({"export", "--all", utf8(out.path() / "c")}).exit_code == 0);
+}
+
+TEST_CASE("a damaged list of left-out files fails loudly instead of saying nothing was skipped") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "iyi.md", "iyi\n");
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    write_plain(box.data() / "migration-skipped", "bozuk satir\n");
+    CHECK(box.run({"graph", "status"}).exit_code == 3);
+    const TempDir out;
+    CHECK(box.run({"export", "--all", utf8(out.path() / "a"), "--ignore-skipped"}).exit_code == 3);
+}
+
+TEST_CASE("status covers the current notes_dir only; --clear-skipped forgets the list, not the files") {
+    const Sandbox box("en");
+    const TempDir outside;
+    write_plain(box.notes() / "iyi.md", "iyi\n");
+    REQUIRE(make_dir_link(outside.path(), box.notes() / "bag"));
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    const fs::path list = box.data() / "migration-skipped";
+    // Ad öneki paylaşan kardeş dizin de başka köktür.
+    const std::string sibling = utf8(fs::weakly_canonical(box.notes())) + "-eski/kardes.bin";
+    write_plain(list, slurp(list) + "too_large\t/baska/kok/dev.bin\ntoo_large\t" + sibling + "\n");
+
+    const auto status = box.run({"graph", "status"});
+    CHECK(status.exit_code == 1);
+    CHECK(status.err.find("bag") != std::string::npos);
+    CHECK(status.err.find("dev.bin") == std::string::npos);
+    CHECK(status.err.find("kardes.bin") == std::string::npos);
+    CHECK(status.err.find("(2)") != std::string::npos);
+    CHECK(status.err.find("--clear-skipped") != std::string::npos);
+
+    CHECK(box.run({"graph", "status", "--clear-skipped", "--ignore-skipped"}).exit_code == 2);
+    CHECK(fs::exists(list));
+
+    const auto cleared = box.run({"graph", "status", "--clear-skipped"});
+    CHECK_MESSAGE(cleared.exit_code == 0, cleared.err);
+    CHECK(cleared.err.find("dev.bin") != std::string::npos);  // unutulmadan önce adları yazılır
+    CHECK(cleared.out.find("(3)") != std::string::npos);
+    CHECK_FALSE(fs::exists(list));
+    CHECK(fs::exists(box.notes() / "bag"));  // özgünlere dokunulmadı
+    CHECK(slurp(box.notes() / "iyi.md") == "iyi\n");
+    CHECK(box.run({"graph", "status"}).exit_code == 0);
+    CHECK(box.run({"graph", "status", "--clear-skipped"}).exit_code == 0);  // tekrar etkisiz
+
+    // Geçiş yinelenince dosyalar yine listelenir: temizlemek dosyayı geçirilmiş saymaz.
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    CHECK(box.run({"graph", "status"}).exit_code == 1);
+}
+
+TEST_CASE("another notes_dir's records alone do not fail status") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "iyi.md", "iyi\n");
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    write_plain(box.data() / "migration-skipped", "too_large\t/baska/kok/dev.bin\n");
+    const auto status = box.run({"graph", "status"});
+    CHECK_MESSAGE(status.exit_code == 0, status.err);
+    CHECK(status.err.find("(1)") != std::string::npos);
+    CHECK(box.run({"help", "graph"}).out.find("--clear-skipped") != std::string::npos);
+}
+
 TEST_CASE("link in the old tree is never followed and is reported") {
     const Sandbox box("en");
     const TempDir outside;
@@ -156,6 +281,37 @@ TEST_CASE("note export --all output is byte-identical to the originals") {
     expected.erase("bos/.keep");
     CHECK(tree_of(target) == expected);
     CHECK(fs::is_directory(target / "bos"));
+}
+
+TEST_CASE(
+    "old trash in a subfolder creates no live folder: the export tree is exact, restore brings it back") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "iyi.md", "iyi\n");
+    write_plain(box.notes() / ".trash" / "eski" / "alt" / "cop.md", "cop\n");
+    const auto migrated = box.run({"graph", "migrate"});
+    REQUIRE_MESSAGE(migrated.exit_code == 0, migrated.err);
+    CHECK_FALSE(folder_exists(box.data(), "eski"));
+    CHECK(note_in_trash(box.data(), "eski/alt/cop.md"));
+
+    const TempDir out;
+    const auto exported = box.run({"export", "--all", utf8(out.path() / "c")});
+    REQUIRE_MESSAGE(exported.exit_code == 0, exported.err);
+    std::set<std::string> entries;
+    for (const auto& entry : fs::recursive_directory_iterator(out.path() / "c"))
+        entries.insert(entry.path().lexically_relative(out.path() / "c").generic_string());
+    const std::set<std::string> exact{"iyi.md", ".trash", ".trash/eski", ".trash/eski/alt",
+                                      ".trash/eski/alt/cop.md"};
+    CHECK(entries == exact);
+    CHECK(slurp(out.path() / "c" / ".trash" / "eski" / "alt" / "cop.md") == "cop\n");
+
+    noteapp::core::NoteStore store(box.data());
+    const auto item = noteapp::core::NotePath::parse("eski/alt/cop.md");
+    REQUIRE(item.has_value());
+    const auto restored = store.restore(*item);
+    REQUIRE(restored.has_value());
+    CHECK(restored->string() == "eski/alt/cop.md");
+    CHECK(store.read(*restored)->text == "cop\n");
+    CHECK(folder_exists(box.data(), "eski/alt"));
 }
 
 TEST_CASE("note export --all never overwrites and never goes through a link") {
@@ -567,9 +723,14 @@ TEST_CASE(
     CHECK(skipped.err.find("NOT migrated: okunamaz.md") != std::string::npos);
     CHECK(fs::exists(bad));
     CHECK(run_unprivileged(box, {"-n", "n", "metin"}).exit_code == 0);
+    const auto status = run_unprivileged(box, {"graph", "status"});
+    CHECK(status.exit_code == 1);
+    CHECK(status.err.find("okunamaz.md") != std::string::npos);
     CHECK(box.run({"graph", "migrate", "--yok"}).exit_code == 2);
 }
 
+// Yalnız Linux: PATH_MAX dizini açtırır, derin dosyayı adıyla görürüz. Windows'ta MinGW _wopendir MAX_PATH'te
+// durur, dosya görülemez; o yol note_limits_test'te atasının raporuyla sınanır.
 TEST_CASE("a file too deep for the store stops migration; --skip-failed names it, keeps it, opens the gate") {
     const Sandbox box("en");
     std::string deep = "d";
@@ -599,5 +760,98 @@ TEST_CASE("an unreadable file left in place: fixing it and migrating again finis
     const auto done = run_unprivileged(box, {"graph", "migrate"});
     CHECK_MESSAGE(done.exit_code == 0, done.err);
     CHECK(box.body("okunamaz.md") == "x\n");
+}
+
+namespace {
+
+// Test düşse de izin geri gelir: yetkisiz koşuda TempDir kilitli dizini silemezdi.
+class ScopedMode {
+public:
+    ScopedMode(fs::path path, fs::perms mode) : path_(std::move(path)) {
+        fs::permissions(path_, mode, fs::perm_options::replace);
+    }
+    ScopedMode(const ScopedMode&) = delete;
+    ScopedMode& operator=(const ScopedMode&) = delete;
+    ~ScopedMode() { restore(); }
+    void restore() {
+        std::error_code ignored;
+        fs::permissions(path_, fs::perms::owner_all, fs::perm_options::replace, ignored);
+    }
+
+private:
+    fs::path path_;
+};
+
+}  // namespace
+
+TEST_CASE(
+    "an unreadable folder is never silent: migrate, status and export --all name it until it is fixed") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "iyi.md", "iyi\n");
+    write_plain(box.notes() / "kilitli" / "degerli.md", "degerli\n");
+    ScopedMode locked(box.notes() / "kilitli", fs::perms::none);
+    const std::string named = "/kilitli (this folder cannot be read";  // kayıtlı liste tam yol yazar
+    const std::string relative_name = "NOT migrated: kilitli (this folder cannot be read";
+
+    const auto failed = run_unprivileged(box, {"graph", "migrate"});
+    CHECK_MESSAGE(failed.exit_code == 1, failed.err);
+    CHECK(failed.err.find(relative_name) != std::string::npos);
+    CHECK(run_unprivileged(box, {"-n", "n", "metin"}).exit_code != 0);  // kapı kapalı
+
+    const auto skipped = run_unprivileged(box, {"graph", "migrate", "--skip-failed"});
+    CHECK_MESSAGE(skipped.exit_code == 0, skipped.err);
+    CHECK(skipped.err.find(relative_name) != std::string::npos);
+
+    const auto status = run_unprivileged(box, {"graph", "status"});
+    CHECK_MESSAGE(status.exit_code == 1, status.err);
+    CHECK(status.err.find(named) != std::string::npos);
+    const fs::path out = box.notes().parent_path() / "cikti";
+    const auto exported = run_unprivileged(box, {"export", "--all", utf8(out)});
+    CHECK_MESSAGE(exported.exit_code == 1, exported.err);
+    CHECK(exported.err.find(named) != std::string::npos);
+
+    locked.restore();
+    const auto done = run_unprivileged(box, {"graph", "migrate"});
+    CHECK_MESSAGE(done.exit_code == 0, done.err);
+    const auto clean = run_unprivileged(box, {"graph", "status"});
+    CHECK_MESSAGE(clean.exit_code == 0, clean.err);
+    CHECK(box.body("kilitli/degerli.md") == "degerli\n");
+}
+
+TEST_CASE(
+    "a tree holding only an unreadable folder still counts as old notes: status does not say all clear") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "kilitli" / "degerli.md", "degerli\n");
+    const ScopedMode locked(box.notes() / "kilitli", fs::perms::none);
+    const auto status = run_unprivileged(box, {"graph", "status"});
+    CHECK_MESSAGE(status.exit_code == 1, status.err);
+    CHECK(status.err.find("not migrated yet") != std::string::npos);
+}
+
+TEST_CASE("a folder that lists but cannot be entered names each entry; the unknown type is not guessed") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "yalniz-liste" / "degerli.md", "degerli\n");
+    const ScopedMode listed(box.notes() / "yalniz-liste", fs::perms::owner_read);
+    const auto failed = run_unprivileged(box, {"graph", "migrate"});
+    CHECK_MESSAGE(failed.exit_code == 1, failed.err);
+    CHECK(failed.err.find("NOT migrated: yalniz-liste/degerli.md (it cannot be read)") != std::string::npos);
+}
+
+TEST_CASE("unreadable old trash is reported under its real .trash path") {
+    const Sandbox box("en");
+    write_plain(box.notes() / ".trash" / "kilitli" / "cop.md", "cop\n");
+    write_plain(box.notes() / ".trash" / "okunamaz.md", "cop\n");
+    fs::permissions(box.notes() / ".trash" / "okunamaz.md", fs::perms::none, fs::perm_options::replace);
+    {
+        const ScopedMode folder(box.notes() / ".trash" / "kilitli", fs::perms::none);
+        const auto inner = run_unprivileged(box, {"graph", "migrate"});
+        CHECK_MESSAGE(inner.exit_code == 1, inner.err);
+        CHECK(inner.err.find("NOT migrated: .trash/kilitli (this folder") != std::string::npos);
+        CHECK(inner.err.find("NOT migrated: .trash/okunamaz.md (it cannot be read)") != std::string::npos);
+    }
+    const ScopedMode whole(box.notes() / ".trash", fs::perms::none);
+    const auto root = run_unprivileged(box, {"graph", "migrate"});
+    CHECK_MESSAGE(root.exit_code == 1, root.err);
+    CHECK(root.err.find("NOT migrated: .trash (this folder") != std::string::npos);
 }
 #endif

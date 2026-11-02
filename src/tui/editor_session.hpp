@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <expected>
 #include <filesystem>
 #include <functional>
@@ -49,11 +50,13 @@ std::string sanitized_utf8(std::string_view raw);
 // Oturumun dış dünyası; testler sahte geri çağrılarla kurar, main gerçek olanlarla.
 struct EditorHost {
     core::NoteStore& store;
+    // cppcheck-suppress uninitMemberVarNoCtor ; referans üye, ilk atama derlemede zorunlu
     std::mutex& store_mutex;  // yeniden tarama iş parçacığı aynı store'u listeler
-    std::string& clipboard;   // oturumdan uzun yaşar: bir nottan kopyalanan diğerine yapıştırılır
-    EditorBuffer::CellWidth cell_width;
-    std::uintmax_t max_bytes;  // bundan büyük not salt-okunur açılır (Tuning::max_note_bytes)
-    std::size_t slug_max_length;
+    // cppcheck-suppress uninitMemberVarNoCtor ; referans üye, ilk atama derlemede zorunlu
+    std::string& clipboard;  // oturumdan uzun yaşar: bir nottan kopyalanan diğerine yapıştırılır
+    EditorBuffer::CellWidth cell_width{};
+    std::uintmax_t max_bytes{};  // bundan büyük not salt-okunur açılır (Tuning::max_note_bytes)
+    std::size_t slug_max_length{};
     std::function<std::string(std::string_view content)> suggest_type;  // ilk kayıtta tip (detect)
     std::function<void(const core::NotePath&)> on_saved;  // diske yazıldı: liste, indeks, senkron
     std::function<void()> on_opened;                      // odak editöre geçti
@@ -85,8 +88,8 @@ public:
     // Boş taslak açar. İlk kayda dek dosya yoktur; ad ilk Ctrl+S'te alt satırda sorulur.
     void begin_new_note(std::string default_folder);
     // Doğrudan taslak (nvALT: eşleşme yoksa sorgu ilk satır); ad ilk kayıtta içerikten gelir.
-    void begin_draft(std::string first_text, std::string folder);
-    void handle(Key key, std::string_view text = {});
+    void begin_draft(std::string_view first_text, std::string folder);
+    void handle(Key key, std::string_view text = {}, const SharedInputSources& sources = {});
     // Çizimden önce çağrılır: boyut değişse de imleç görünür kalır, PgUp/PgDn adımı buradan gelir. `columns`
     // panelin iç genişliğidir; numara sütunu buradan düşülür.
     void layout(int columns, int rows);
@@ -105,7 +108,7 @@ public:
     bool is_draft() const { return draft_.has_value(); }
     // Sorularda gösterilen ad: notun yolu, taslakta verilen ad, adsız taslakta katalog metni.
     std::string display_name() const;
-    const std::string& name_input() const { return name_input_; }
+    const std::string& name_input() const { return name_line_.text(); }
     const std::string& name_folder() const { return name_folder_; }
     std::span<const ByteRange> find_matches() const { return find_matches_; }
     std::string find_label() const;
@@ -113,7 +116,9 @@ public:
     bool message_is_error() const { return message_is_error_; }
     bool deleted_on_disk() const { return deleted_on_disk_; }
     bool changed_on_disk() const { return changed_on_disk_; }
-    const std::string& find_query() const { return find_query_; }
+    const std::string& find_query() const { return find_line_.text(); }
+    const InputLine& find_line() const { return find_line_; }
+    const InputLine& name_line() const { return name_line_; }
     LeaveChoice leave_choice() const { return leave_choice_; }
     ConflictChoice conflict_choice() const { return conflict_choice_; }
     SyntaxLanguage syntax_language() const { return language_; }
@@ -184,12 +189,23 @@ private:
     bool overwrite_disk();
     bool load_disk();
     std::string body() const;
+    // handle() ve açma yolları dışında çağrılmaz: tampon doluyken ya taslak ya yol vardır. İhlal bug'dır:
+    // durur.
+    auto& open_buffer(this auto& self) {
+        if (!self.buffer_)
+            std::abort();
+        return *self.buffer_;
+    }
+    const core::NotePath& note_path() const {
+        if (!path_)
+            std::abort();
+        return *path_;
+    }
 
     EditorHost host_;
     std::optional<EditorBuffer> buffer_;
     std::optional<core::NotePath> path_;
     std::optional<DraftName> draft_;  // doluysa dosya henüz yok: ilk kayıt oluşturur
-    std::string name_input_;
     std::string name_folder_;
     core::Revision revision_{};  // write()'ın beklediği, içerikle aynı anda okunan değer
     bool bom_ = false;           // tamponda görünmez, kayıtta geri konur
@@ -204,7 +220,8 @@ private:
     std::vector<std::string> completion_items_;
     std::string completion_query_;
     std::size_t completion_selected_ = 0;
-    std::string find_query_;
+    InputLine find_line_{InputKind::Find};
+    InputLine name_line_{InputKind::Path};
     std::size_t find_origin_ = 0;
     std::vector<ByteRange> find_matches_;
     std::size_t find_index_ = 0;

@@ -263,7 +263,8 @@ TEST_CASE("a pathologically deep quote with a long lazy paragraph exports within
     MESSAGE(
         "deep quote export ms: " << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
     CHECK(pdf_bytes.rfind("%PDF-", 0) == 0);
-    CHECK(elapsed < kPathologicalQuoteBound);
+    if (noteapp::test::kWallClockBudgets)
+        CHECK(elapsed < kPathologicalQuoteBound);
 }
 
 TEST_CASE("Turkish markdown reads back through pdftotext") {

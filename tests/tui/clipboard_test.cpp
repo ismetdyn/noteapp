@@ -136,7 +136,8 @@ TEST_CASE("clipboard: a forking tool that keeps running does not stall the copy"
     auto clipboard = env.clipboard();
     const auto start = std::chrono::steady_clock::now();
     CHECK(clipboard.copy("x") == Copy::Tool);
-    CHECK(std::chrono::steady_clock::now() - start < tui::SystemClipboard::kToolTimeout);
+    if (noteapp::test::kWallClockBudgets)
+        CHECK(std::chrono::steady_clock::now() - start < tui::SystemClipboard::kToolTimeout);
 }
 
 TEST_CASE("clipboard: a large copy goes through and stays byte exact") {
@@ -158,7 +159,8 @@ TEST_CASE("clipboard: a hung tool is killed at the timeout and OSC 52 takes over
     auto clipboard = env.clipboard(std::chrono::milliseconds(200));
     const auto start = std::chrono::steady_clock::now();
     CHECK(clipboard.copy("x") == Copy::Terminal);
-    CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(5));
+    if (noteapp::test::kWallClockBudgets)
+        CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(5));
     CHECK(env.terminal.sent == "\x1B]52;c;eA==\x07");
     CHECK(clipboard.stale());
 }

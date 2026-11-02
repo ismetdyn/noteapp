@@ -15,7 +15,9 @@ namespace noteapp::tui {
 namespace {
 
 constexpr std::array<std::string_view, 3> kLanguages = {"auto", "tr", "en"};
+constexpr std::array<std::string_view, 2> kIconModes = {"nerd", "off"};
 constexpr std::string_view kLanguageKey = "language";
+constexpr std::string_view kIconsKey = "icons";
 constexpr std::string_view kDefaultTypeKey = "default_type";
 constexpr std::string_view kTypesKey = "types";
 constexpr std::string_view kToggleKey = "sync.enabled";
@@ -25,7 +27,7 @@ constexpr std::size_t kMaskCells = 10;
 constexpr char kDelete = 0x7f;
 
 SettingsState::Kind kind_of(std::string_view key) {
-    if (key == kLanguageKey || key == kDefaultTypeKey)
+    if (key == kLanguageKey || key == kDefaultTypeKey || key == kIconsKey)
         return SettingsState::Kind::Choice;
     return key == kToggleKey ? SettingsState::Kind::Toggle : SettingsState::Kind::Text;
 }
@@ -67,7 +69,8 @@ std::string to_utf8(const std::filesystem::path& p) {
 // Kullanıcının config.toml'u okunamıyorsa save_config onu varsayılanlarla ezerdi (note config set ile aynı
 // kural).
 bool user_config_broken() {
-    for (const core::Error& warning : core::load_config().warnings)
+    const core::LoadedConfig loaded = core::load_config();
+    for (const core::Error& warning : loaded.warnings)
         if (warning.message_key == "config.syntax_error" || warning.message_key == "config.unreadable")
             return true;
     return false;
@@ -111,6 +114,8 @@ void SettingsState::cycle(int delta) {
     std::vector<std::string> options;
     if (row.key == kLanguageKey) {
         options.assign(kLanguages.begin(), kLanguages.end());
+    } else if (row.key == kIconsKey) {
+        options.assign(kIconModes.begin(), kIconModes.end());
     } else {
         // default_type seçenekleri, ekranda o an yazılı `types`'tan gelir (kaydedilmemiş düzenleme dahil).
         const auto types = std::ranges::find(rows_, kTypesKey, &Row::key);
@@ -328,7 +333,7 @@ std::expected<void, core::Error> SettingsState::persist(const core::Config& next
 }
 
 std::optional<core::Config> SettingsState::commit(const core::Config& base) {
-    const auto next = build(base);
+    auto next = build(base);
     if (!next)
         return std::nullopt;
     if (const auto saved = persist(*next); !saved) {

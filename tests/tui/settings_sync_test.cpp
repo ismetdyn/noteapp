@@ -158,7 +158,7 @@ bool has(const std::string& haystack, std::string_view needle) {
 
 }  // namespace
 
-TEST_CASE("the token row exists only for an https remote and lives outside the 12 config rows") {
+TEST_CASE("the token row exists only for an https remote and lives outside the 13 config rows") {
     World w;
     for (const char* remote :
          {"", "git@github.com:me/notes.git", "C:/local/repo.git", "http://example.com/r.git"}) {
@@ -168,15 +168,15 @@ TEST_CASE("the token row exists only for an https remote and lives outside the 1
             return c;
         }());
         CHECK_FALSE(s.token_visible());
-        CHECK(s.rows().size() == 12);
-        CHECK(s.slot_count() == 13);  // yalnız Kaydet düğmesi eklenir
+        CHECK(s.rows().size() == 13);
+        CHECK(s.slot_count() == 14);  // yalnız Kaydet düğmesi eklenir
     }
     auto c = w.config();
     c.sync.remote = "https://GitHub.com/me/notes.git";
     const auto s = w.form(c);
     CHECK(s.token_visible());
-    CHECK(s.rows().size() == 12);
-    CHECK(s.slot_count() == 14);
+    CHECK(s.rows().size() == 13);
+    CHECK(s.slot_count() == 15);
     CHECK(s.token_row().kind == SettingsState::Kind::Token);
 }
 
@@ -196,7 +196,7 @@ TEST_CASE("focus runs rows, then the token row, then the save button") {
     c.sync.remote = "https://github.com/me/notes.git";
     auto s = w.form(c);
     focus_token(s);
-    CHECK(s.focus() == 12);
+    CHECK(s.focus() == 13);
     CHECK_FALSE(s.on_button());
     s.handle(Key::Down);
     CHECK(s.on_button());

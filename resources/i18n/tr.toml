@@ -6,6 +6,7 @@ invalid_path = "Geçersiz yol '{path}': {reason}"
 io = "'{path}' için G/Ç hatası: {detail}"
 not_found = "Bulunamadı: {path}"
 already_exists = "Zaten var: {path}"
+copy_folder_partial = "{path} klasörüne kopya yarıda kaldı: {count} not kopyalandı ve orada duruyor, kaynak değişmedi. Yarım kopyayı sil ya da başka adla yeniden kopyala. Neden: {detail}"
 modified_externally = "Açıldıktan sonra uygulama dışında değiştirilmiş: {path}"
 not_empty = "Klasör boş değil: {path} (öğe sayısı: {count})"
 config_invalid = "Geçersiz yapılandırma: {detail}"
@@ -54,6 +55,7 @@ must_be_type_name = "noktasız, boş olmayan bir ad olmalı"
 must_be_table = "bir tablo olmalı"
 must_not_be_empty = "boş olmamalı"
 must_be_language = "auto, tr veya en olmalı"
+must_be_icons = "nerd ya da off olmalı (auto = nerd)"
 remote_has_credentials = "kullanıcı adı ya da token içermemeli; token'ı 'note sync login' ile kaydedin"
 must_be_sort_field = "name, size, updated ya da created olmalı; başına '-' gelebilir"
 must_be_size_bound = ">1mb ya da <10kb biçiminde olmalı (birimler: b, kb, mb, gb)"
@@ -62,6 +64,7 @@ must_be_sync_state = "synced, modified, new, conflict_copy ya da sync_off olmal�
 must_be_folder = "not klasörü içinde geçerli bir klasör olmalı"
 too_large = "60 MiB sınırından büyük"
 unreadable = "okunamıyor"
+unreadable_folder = "bu klasör okunamıyor (izin yok ya da yol çok uzun); içinde ne olduğu bilinmiyor, geçirilmedi"
 verify_failed = "kaydedilen baytlar farklı"
 exists = "orada zaten bir dosya var"
 invalid_folder = "klasör adı geçersiz ya da çok derin"
@@ -82,18 +85,28 @@ sync_off = "senkron kapalı"
 status_lines = "{count} satır"
 frame_list = "LİSTE"
 frame_review = "İNCELEME"
+review_rendered = "görünüm"
+review_raw = "ham"
+md_image = "[görsel: {alt}]"
+md_image_no_alt = "[görsel]"
+view_rows_cut = "… {count} satır daha gösterilmiyor"
+view_columns_cut = "… {count} sütun sığmadı"
+view_truncated = "… görünüm burada kesildi; tamamı için R"
+view_note_too_large = "biçimli görünüm için büyük (en çok {limit}), ham metin"
+view_note_not_table = "tablo değil, ham metin"
+view_note_invalid_json = "geçersiz JSON, ham metin"
 frame_edit = "DÜZENLE"
-key_hints_list = "T çöp  Space detay  o sırala  v sütun  f ara  ? yardım  Enter düzenle  → önizle  / süz  n yeni  a ekle  d çöpe at  u geri al  F2 ad değiştir  PgDn sayfa  c kopya  q çık  D kalıcı sil  E harici  r taşı  s senkron  Alt+→ detay  I tümü  < > genişlik  z yakınlaştır  Tab içerik  , ayar"
-key_hints_search = "Enter tut  Esc kapat  ↑↓ seç  Tab içerik  F1 yardım  ^O yeni  ^R taşı  ^D çöp  ^S senkron  F9 ayar"
-key_hints_preview = "← liste  e düzenle  ↑↓ kaydır  / bul  n/N sonraki  c kopya  q çık  g/G baş/son  J/K 5 satır  ^U/^D yarım sayfa  F2 ad değiştir  z yakınlaştır  < > genişlik  E harici  F1 yardım  , ayar"
+key_hints_list = "T çöp  Space detay  o sırala  v sütun  f ara  ? yardım  Enter düzenle  → önizle  / süz  n yeni  a ekle  d çöpe at  ← üst  u geri al  x seç  y kopya  p yapıştır  m taşı  gg baş  F2 ad değiştir  PgDn sayfa  c kopya  q çık  D kalıcı sil  E harici  r taşı  s senkron  Alt+→ detay  I tümü  < > genişlik  z yakınlaştır  Tab içerik  , ayar"
+key_hints_search = "Enter tut  Esc kapat  ↑↓ seç  Tab tamamla  ^T içerik  ^P geçmiş  → öneri  F1 yardım  ^O yeni  ^R taşı  ^D çöp  ^S senkron  F9 ayar"
+key_hints_preview = "← liste  e düzenle  ↑↓ kaydır  / bul  n/N sonraki  c kopya  R ham/görünüm  q çık  g/G baş/son  J/K 5 satır  ^U/^D yarım sayfa  F2 ad değiştir  z yakınlaştır  < > genişlik  E harici  F1 yardım  , ayar"
 key_hints_editor = "Ctrl+S kaydet  Ctrl+Q çık  Ctrl+F bul  Ctrl+Z geri al  F1 yardım  Ctrl+Y yinele  ^X kes  ^C kopyala  ^V yapıştır  F9 ayar"
 key_hints_editor_readonly = "Ctrl+Q çık  ↑↓ kaydır  Ctrl+F bul  ^C kopyala  F1 yardım"
 find_label = "Bul:"
 note_find_hints = "Enter tut  ↑↓ sonraki  Esc temizle"
-editor_find_hints = "Enter/F3 sonraki  ^P önceki  Esc kapat"
+editor_find_hints = "Enter/F3 sonraki  ^P önceki  Esc kapat  Tab tamamla"
 new_note_header = "Yeni not"
 new_note_label = "Farklı kaydet:"
-new_note_hints = "Enter kaydet  Esc geri  klasör/ad.uzantı"
+new_note_hints = "Enter kaydet  Esc geri  klasör/ad.uzantı  Tab tamamla"
 editor_not_found = "Eşleşme yok"
 editor_saved = "Kaydedildi"
 editor_no_changes = "Kaydedilecek değişiklik yok"
@@ -118,7 +131,7 @@ editor_choice_overwrite = "Benimkini disktekinin üstüne yaz"
 editor_exit_saved = "Kaydedilmemiş metin kaydedildi: {path}"
 editor_exit_kept = "'{path}' kaydedilemedi ({detail}). Metniniz şurada: {temp}"
 editor_exit_lost = "'{path}' kaydedilemedi, kopya da alınamadı: {detail}"
-new_row_hints = "ad yaz  Enter oluştur ve düzenle  Esc vazgeç"
+new_row_hints = "ad yaz, ad/ = klasör  Enter oluştur  Esc vazgeç  Tab tamamla  → öneri"
 too_small = "Pencere çok küçük (en az 60x15)"
 binary_preview = "(ikili dosya - önizleme yok)"
 not_yet = "Henüz kullanılamıyor"
@@ -145,16 +158,31 @@ help_body = """
 Liste
 /             ara: yazdıkça notları süz
 ↑ ↓  k j      gezin, sağ panel izler
-g G           ilk / son not
-→ l           önizle
+gg G          ilk / son satır
+gh gt         kök klasör, çöp
+x             satırı seç, aşağı in
+X  Ctrl+A     seçimi temizle, görünenleri seç
+y             seçimi ya da satırı kopyala
+p             buraya yapıştır; dolu ada -2
+m             klasöre taşı (girdi, Tab listeler)
+Esc           bekleyen y'den vazgeç
+→ l           önizle; klasörde içeri gir
+← h           üst klasör (kökte etkisiz);
+              arama sonucunda notun klasörüne git
+Fare          tıklama seçer, çift tıklama girer,
+              üstteki yol parçasına tıklama atlar
 Enter e       sağ panelde düzenle
 E             harici editörde aç ($EDITOR)
+F2 r klasörde ad değiştir, buradan göreli
 F2            yol ve adı değiştir (altta)
 n ^O          yeni not: tam ekran editör
+a  ad/        burada yeni klasör, Listede kalır
 a             yeni not: ad listenin başında
 c             notun tamamını kopyala
 f             ad ve içerikte ara, argümanlar da
 d ^D          çöpe at, sormaz  u geri al
+d D klasörde  sorar, sayıları söyler; u d'yi alır
+c klasörde    yolunu kopyala
 D             kalıcı sil (önce sorar)
 T             çöp kutusu (aşağıda)
 Space i I     satır ayrıntısı (aşağıda)
@@ -169,24 +197,34 @@ q             çık
 Esc           süzgeci temizle
 Arama (girdi altta)
 yazı          listeyi süz
-↑ ↓  ^P ^N    seçimi gez
+↑ ↓           seçimi gez
 Enter         seçimi tut (eşleşme yoksa yeni not)
-Tab           ad / içerik araması
-Esc           kapat, süzgeç kalır
+^T            ad / içerik araması
+^P ^N         metni içeren önceki aramalar
+Tab           tamamla: tekse yazar, yoksa liste
+→             sondaki soluk öneriyi alır
+← → Home End  imleci oynatır
+Esc           önce listeyi, sonra girdiyi kapatır
+Girdiler (a, F2, ad, editörde bul)
+→             sondaki soluk öneriyi alır
+Tab           tamamla: tekse yazar, yoksa liste
 Liste ve arama
-^P ^N         seçimi gez
+^P ^N         seçimi gez (Liste)
 PgUp PgDn     sayfa sayfa gez
 ^O yeni  ^R taşı  ^D çöpe at  ^S senkron
 Çöp kutusu (T ya da üstte çöp: N tıkla)
+x  Ctrl+A     u ve D için satır seç
 u             seçili notu geri getir
 D             kalıcı sil (önce sorar)
 E             tümünü boşalt (önce sorar)
 ↑ ↓  k j      gez, sağda içerik salt okunur
 PgUp PgDn     sağ paneli kaydır
 Esc q T       listeye dön
+Ağaç
+▸ ▾           klasör kapalı / açık; oka tıkla
+Space         klasör: yerinde aç; not: ayrıntı
 Satır ayrıntısı
-▸ ▾           kapalı / açık; işarete tıkla
-Space i       seçili satırı aç / kapat
+i             seçili satırı aç / kapat
 I             tüm satırları aç / kapat
 Alt+→ Alt+←   aç / kapat
               boyut, tarih, senkron, kaynak
@@ -209,6 +247,7 @@ PgUp PgDn     sayfa sayfa kaydır
 F2            yol ve adı değiştir
 g G           baş / son
 c             notun tamamını kopyala
+R             biçimli / ham görünüm (md csv json)
 e Enter       üstteki satırdan düzenle
 E             harici editör ($EDITOR)
 /             notta bul (I = ı = i)
@@ -238,9 +277,12 @@ Satıra ya da panele tıkla
 ▸ ▾ tıkla: satır ayrıntısı
 Üstte çöp: N tıkla: çöp kutusu
 REVIEW'da sürükle: seç ve kopyala
+Biçimli görünümde sürükleme görüneni kopyalar
+c ise her zaman özgün baytları
 Shift+sürükle terminal metnini seçer
 Her yerde
 F1 yardım  F9 ayarlar (Liste, önizleme: ,)
+Ctrl+L        ekranı baştan çiz
 ^C çık (editörde kopyalar)
 """
 settings_title = "Ayarlar"
@@ -250,6 +292,7 @@ settings_editor = "Editör"
 settings_default_type = "Varsayılan tip"
 settings_default_folder = "Varsayılan klasör"
 settings_types = "Tipler"
+settings_icons = "Dosya ikonları"
 settings_sync_enabled = "Senkron açık"
 settings_sync_remote = "Uzak depo"
 settings_sync_branch = "Dal"
@@ -274,16 +317,62 @@ completion_hints = "↑↓ gez  Enter ekle  Esc kapat"
 mode_global = "[tümü]"
 mode_trash = "[çöp]"
 global_label = "Tümü>"
-key_hints_global = "Enter aç  Esc kapat  ↑↓ seç  F1 yardım"
-key_hints_trash = "u geri getir  D kalıcı sil  E boşalt  Esc/q geri  ↑↓ seç  ? yardım  PgUp PgDn kaydır  Alt+→ detay  z yakınlaştır"
+key_hints_global = "Enter aç  Esc kapat  ↑↓ seç  Tab tamamla  ^P geçmiş  → öneri  F1 yardım"
+key_hints_trash = "u geri getir  D kalıcı sil  E boşalt  Esc/q geri  x seç  ↑↓ seç  ? yardım  PgUp PgDn kaydır  Alt+→ detay  z yakınlaştır"
 trash_title = "ÇÖP KUTUSU"
-totals = "Toplam {total} not"
-totals_matches = " · {count} eşleşme"
+totals = "Toplam {total}"
+totals_matches = " · {count}"
 totals_page = " · sayfa {page}/{pages}"
+totals_folder = "Klasör: {count} · "
+breadcrumb_root = "notlar"
+count_items = "{count} öğe"
+count_items_one = "{count} öğe"
+count_notes = "{count} not"
+count_notes_one = "{count} not"
+count_folders = "{count} klasör"
+count_folders_one = "{count} klasör"
+count_subfolders = "{count} alt klasör"
+count_subfolders_one = "{count} alt klasör"
+count_matches = "{count} eşleşme"
+count_matches_one = "{count} eşleşme"
+folder_counts = "{items} · {notes} · {folders}"
+folder_total_size = "toplam boyut: {value}"
+folder_recent = "Son güncellenenler"
+meta_path = "yol: {value}"
+folder_created = "Klasör oluşturuldu: {path}"
+folder_exists = "Klasör zaten var: {path}"
+folder_trashed = "Çöpe atıldı: {path}, {count}  (u geri alır)"
+folder_restored = "Geri getirildi: {path}, {count}"
+folder_trash_title = "Klasörü çöpe at"
+folder_delete_title = "Klasörü sil"
+confirm_trash_folder = "'{path}' içindeki {notes} çöpe atılsın, klasör ve {folders} kaldırılsın mı?"
+confirm_delete_folder = "'{path}', {notes} ve {folders} ile kalıcı silinsin mi? Bu işlem geri alınamaz."
+key_hints_folder = "→ aç  ← üst  a ekle, ad/ = klasör  F2 ad değiştir  d çöpe at  Space aç  i detay  T çöp  o sırala  v sütun  f ara  ? yardım  Enter aç  c yol kopyala  u geri al  x seç  y kopya  p yapıştır  m taşı  gg baş  D kalıcı sil  q çık  / süz  n yeni  r ad değiştir  s senkron  I tümü  < > genişlik  z yakınlaştır  , ayar"
 rename_label = "Yeni yol:"
-rename_hints = "Enter kaydet  Esc vazgeç"
+move_to_label = "Taşı:"
+moved_to = "Taşındı: {to}"
+rename_hints = "Enter kaydet  Esc vazgeç  Tab tamamla"
+marked_count = "seçili: {count}"
+yank_copy = "kopya: {count}"
+g_hints = "g…  gg baş  gh kök  gt çöp  başka tuş vazgeçer"
+batch_title = "Sonuç"
+batch_hints = "herhangi bir tuş kapatır"
+batch_counts = "{done} tamam, {failed} başarısız"
+batch_more = "{count} satır daha"
+batch_item_failed = "{path}: {error}"
+batch_item_renamed = "{from} -> {to}"
+batch_trashed = "Çöpe atıldı: {count}  (u geri alır)"
+batch_restored = "Geri alındı: {count}"
+batch_deleted = "Silindi: {count}"
+batch_trash_title = "Çöpe at"
+confirm_trash_batch = "{items} ({notes}) çöpe atılsın mı?"
+confirm_delete_batch = "{items} ({notes}) kalıcı silinsin mi? Geri alınamaz."
+paste_done = "Yapıştırıldı: {count}"
+paste_nothing = "Yapıştırılacak öğe yok: önce y ile kopyala"
+paste_needs_folder = "Yapıştırmak için bir klasör aç"
+paste_into_itself = "klasör kendi içine kopyalanamaz"
 trash_indicator = "çöp: {count}"
-confirm_empty_trash = "Çöpteki {count} not kalıcı silinsin mi? Bu işlem geri alınamaz."
+confirm_empty_trash = "Çöpteki {count} kalıcı silinsin mi? Bu işlem geri alınamaz."
 empty_trash_title = "Çöpü boşalt"
 trash_emptied = "Çöp boşaltıldı"
 sort_menu = "Sırala: n ad  u güncelleme  c oluşturma  s boyut  r ters  Esc vazgeç"
@@ -405,6 +494,7 @@ setting_editor = "Editör komutu"
 setting_default_type = "Varsayılan tip"
 setting_default_folder = "Varsayılan klasör"
 setting_types = "Tipler (virgülle ayrılmış)"
+setting_icons = "Dosya ikonları"
 setting_sync_enabled = "Senkronu aç"
 setting_sync_remote = "Uzak adres"
 setting_sync_branch = "Dal"
@@ -427,9 +517,12 @@ settings_group_general = "Genel"
 settings_group_sync = "Senkron"
 settings_unsaved = "Kaydedilmemiş değişiklikler"
 language_auto = "Sistem dili"
+icons_nerd = "Nerd Font"
+icons_off = "Kapalı"
 language_tr = "Türkçe"
 language_en = "English"
 setting_hint_editor = "Boşsa $VISUAL, sonra $EDITOR kullanılır."
+setting_hint_icons = "Bu pencerenin kendi ikon fontu var. Terminal uygulamasında (notes) ikon için Nerd Font gerekir; yoksa Kapalı seçin, yoksa glifler kutu görünür."
 setting_hint_sync_remote = "Örnek: https://github.com/kisi/notlar.git ya da git@github.com:kisi/notlar.git"
 setting_hint_sync_idle_seconds = "Son değişiklikten bu kadar saniye sonra senkronlanır."
 close_settings_title = "Kaydedilmemiş ayarlar"
@@ -480,7 +573,7 @@ binary_note = "İkili not gösterilemez: {path}"
 ls_usage = "Kullanım: note ls [SORGU] [-f KLASÖR]"
 show_usage = "Kullanım: note show SORGU"
 edit_usage = "Kullanım: note edit SORGU"
-export_usage = "Kullanım: note export --pdf SORGU|YOL [-o ÇIKTI] | note export --all DİZİN"
+export_usage = "Kullanım: note export --pdf SORGU|YOL [-o ÇIKTI] | note export --all DİZİN [--ignore-skipped]"
 exported = "Dışa aktarıldı: {path}"
 find_usage = "Kullanım: note find TERİM... [--limit N]"
 find_no_match = "'{query}' geçen not yok"
@@ -550,11 +643,20 @@ sync_token_prompt = "{host} için erişim token'ı (yazılanlar görünmez): "
 sync_login_done = "{host} token'ı sistem anahtar kasasına kaydedildi"
 sync_logout_done = "{host} token'ı silindi"
 sync_status_head = "{device} cihazı: günlük {log}, uygulanan {applied}"
-graph_usage = "Kullanım: note graph migrate [--skip-failed] | note graph export --format jsonl [-o DOSYA] | note graph import [--overwrite] DOSYA"
+graph_usage = "Kullanım: note graph migrate [--skip-failed] | note graph status [--ignore-skipped | --clear-skipped] | note graph export --format jsonl [-o DOSYA] | note graph import [--overwrite] DOSYA"
 graph_bad_line = "İçe aktarmanın {line}. satırı geçersiz ({reason}); önceki partilerin değişikliği kalır, başka bir şey uygulanmadı"
 graph_imported = "{nodes} düğüm ve {edges} kenar içe aktarıldı"
 graph_import_refused = "Reddedildi: {id} farklı içerikle zaten var; --overwrite üzerine yazar"
 migrate_summary = "{imported} not geçirildi ({unchanged} zaten vardı), {folders} klasör. Yedek: {backup}"
+skipped_header = "Veritabanında ve dışa aktarımda OLMAYAN eski dosyalar ({count}). Eski dosyaları silersen bunlar kaybolur:"
+skipped_file = "Geçirilmedi: {path} ({reason})"
+skipped_exit_hint = "Güvenli bir yere taşı ya da düzeltip 'note graph migrate'i yeniden çalıştır; --ignore-skipped kaybı kabul eder, çıkış 0 olur"
+skipped_other_dirs = "Başka not dizinlerinin kayıtları, burada listelenmedi ({count}): 'note graph status --clear-skipped' unutturur"
+skipped_cleared = "Dışarıda kalan dosya listesi unutuldu ({count}). Dosyalara dokunulmadı, hâlâ veritabanında değiller; 'note graph migrate' yeniden listeler"
+graph_status_ok = "Dışarıda kalan yok: tüm eski dosyalar veritabanında"
+graph_status_accepted = "Yukarıdaki {count} kayıt veritabanında YOK; --ignore-skipped bunu kabul eder, düzeltmez"
+graph_status_pending = "{path} içindeki eski notlar henüz geçirilmedi: 'note graph migrate' çalıştır"
+migrate_left_behind = "GEÇİRİLMEDİ ({count}, yukarıda): bunları ötekilerle birlikte silme, başka yerde yoklar. 'note graph status' yeniden listeler; 'note export --all' bunlar durdukça 1 ile çıkar"
 migrate_skipped = "Atlandı, dosya yerinde kalıyor: {path} ({reason})"
 migrate_failed = "GEÇİRİLMEDİ: {path} ({reason})"
 migrate_incomplete = "Geçiş tamamlanmadı: yazma reddedilmeye devam eder, eski dosyalara dokunulmadı. Yukarıdaki dosyaları düzeltip 'note graph migrate' komutunu yeniden çalıştırın"
@@ -562,7 +664,7 @@ migrate_remove_repo = "Eski dosyalar SİLİNMEDİ, senkron da onlara dokunmaz. N
 migrate_remove_plain = "Eski dosyalar SİLİNMEDİ. Notlarınızı denetleyin (note export --all DİZİN); sonra {path} içindeki eski dosyaları kendiniz silebilirsiniz"
 export_all_done = "{count} not {path} dizinine çıkarıldı"
 export_all_refused = "Çıkarılmadı: {path} ({reason})"
-help_graph = "note graph migrate | export --format jsonl [-o DOSYA] | import DOSYA   Eski düz dosya notları içe aktar; tüm graph'ı JSON satırları olarak çıkar ya da yükle"
+help_graph = "note graph migrate | status [--ignore-skipped | --clear-skipped] | export --format jsonl [-o DOSYA] | import DOSYA   Eski düz dosya notları içe aktar; tüm graph'ı JSON satırları olarak çıkar ya da yükle. status geçerli notes_dir'i denetler; --clear-skipped dışarıda kalan dosya listesini tüm notes_dir'ler için yazıp unutur, eski dosyalara asla dokunmaz"
 migrate_backup_hint = "Yedek {path} altında (özel). Gerekmediğinde kendiniz silin: rm -r {path}"
 export_all_unreachable = "Çıkarılmadı, güvenli yolu yok: {name} (kimlik {id}, {reason}). Baytları şurada: note graph export --format jsonl"
 

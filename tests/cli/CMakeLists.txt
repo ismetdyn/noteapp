@@ -9,3 +9,8 @@ target_compile_definitions(cli_tests PRIVATE NOTEAPP_NOTE_EXE="$<TARGET_FILE:not
 target_link_libraries(cli_tests PRIVATE noteapp_core noteapp_sync noteapp_graph)
 # confirm.hpp gibi yalnız-başlık cli yardımcıları doğrudan birim test edilir.
 target_include_directories(cli_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+
+# scripts/install-local.sh geçici HOME'da sınanır.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME install_local COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/install_local_test.sh ${PROJECT_SOURCE_DIR})
+endif()

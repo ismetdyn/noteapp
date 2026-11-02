@@ -6,6 +6,7 @@ invalid_path = "Invalid path '{path}': {reason}"
 io = "I/O error at '{path}': {detail}"
 not_found = "Not found: {path}"
 already_exists = "Already exists: {path}"
+copy_folder_partial = "Folder copy to {path} stopped: {count} note(s) were copied and stay there, the source is unchanged. Delete the partial copy or copy again under another name. Cause: {detail}"
 modified_externally = "Modified outside the app since it was opened: {path}"
 not_empty = "Folder is not empty: {path} (items: {count})"
 config_invalid = "Invalid configuration: {detail}"
@@ -54,6 +55,7 @@ must_be_type_name = "must be a non-empty name without dots"
 must_be_table = "must be a table"
 must_not_be_empty = "must not be empty"
 must_be_language = "must be one of auto, tr, en"
+must_be_icons = "must be nerd or off (auto means nerd)"
 remote_has_credentials = "must not contain a user name or token; store the token with 'note sync login'"
 must_be_sort_field = "must be name, size, updated or created, with an optional leading '-'"
 must_be_size_bound = "must look like >1mb or <10kb (units: b, kb, mb, gb)"
@@ -62,6 +64,7 @@ must_be_sync_state = "must be synced, modified, new, conflict_copy or sync_off"
 must_be_folder = "must be a valid folder inside the notes folder"
 too_large = "larger than the 60 MiB limit"
 unreadable = "it cannot be read"
+unreadable_folder = "this folder cannot be read (no permission, or the path is too long); what is inside is unknown and was not migrated"
 verify_failed = "the saved bytes differ"
 exists = "a file is already there"
 invalid_folder = "its folder name is invalid or too deep"
@@ -82,18 +85,28 @@ sync_off = "sync off"
 status_lines = "{count} lines"
 frame_list = "LIST"
 frame_review = "REVIEW"
+review_rendered = "rendered"
+review_raw = "raw"
+md_image = "[image: {alt}]"
+md_image_no_alt = "[image]"
+view_rows_cut = "… {count} more rows not shown"
+view_columns_cut = "… {count} columns did not fit"
+view_truncated = "… view cut here; press R for all of it"
+view_note_too_large = "too large for the rendered view (limit {limit}), raw text"
+view_note_not_table = "not a table, raw text"
+view_note_invalid_json = "invalid JSON, raw text"
 frame_edit = "EDIT"
-key_hints_list = "T trash  Space details  o sort  v column  f search  ? help  Enter edit  → preview  / filter  n new  a add  d to trash  u undo  F2 rename  PgDn page  c copy  q quit  D delete  E external  r move  s sync  Alt+→ details  I all  < > width  z zoom  Tab content  , config"
-key_hints_search = "Enter keep  Esc close  ↑↓ select  Tab content  F1 help  ^O new  ^R move  ^D trash  ^S sync  F9 config"
-key_hints_preview = "← list  e edit  ↑↓ scroll  / find  n/N next  c copy  q quit  g/G top/end  J/K 5 lines  ^U/^D half page  F2 rename  z zoom  < > width  E external  F1 help  , config"
+key_hints_list = "T trash  Space details  o sort  v column  f search  ? help  Enter edit  → preview  / filter  n new  a add  d to trash  ← up  u undo  x select  y copy  p paste  m move  gg top  F2 rename  PgDn page  c copy  q quit  D delete  E external  r move  s sync  Alt+→ details  I all  < > width  z zoom  Tab content  , config"
+key_hints_search = "Enter keep  Esc close  ↑↓ select  Tab complete  ^T content  ^P history  → accept  F1 help  ^O new  ^R move  ^D trash  ^S sync  F9 config"
+key_hints_preview = "← list  e edit  ↑↓ scroll  / find  n/N next  c copy  R raw/rendered  q quit  g/G top/end  J/K 5 lines  ^U/^D half page  F2 rename  z zoom  < > width  E external  F1 help  , config"
 key_hints_editor = "Ctrl+S save  Ctrl+Q quit  Ctrl+F find  Ctrl+Z undo  F1 help  Ctrl+Y redo  ^X cut  ^C copy  ^V paste  F9 config"
 key_hints_editor_readonly = "Ctrl+Q quit  ↑↓ scroll  Ctrl+F find  ^C copy  F1 help"
 find_label = "Find:"
 note_find_hints = "Enter keep  ↑↓ next  Esc clear"
-editor_find_hints = "Enter/F3 next  ^P prev  Esc close"
+editor_find_hints = "Enter/F3 next  ^P prev  Esc close  Tab complete"
 new_note_header = "New note"
 new_note_label = "Save as:"
-new_note_hints = "Enter save  Esc back  folder/name.ext"
+new_note_hints = "Enter save  Esc back  folder/name.ext  Tab complete"
 editor_not_found = "No match"
 editor_saved = "Saved"
 editor_no_changes = "No changes to save"
@@ -118,7 +131,7 @@ editor_choice_overwrite = "Write mine over the disk version"
 editor_exit_saved = "Unsaved text was saved: {path}"
 editor_exit_kept = "Could not save '{path}' ({detail}). Your text is in: {temp}"
 editor_exit_lost = "Could not save '{path}' and could not keep a copy: {detail}"
-new_row_hints = "type a name  Enter create and edit  Esc cancel"
+new_row_hints = "type a name, name/ = folder  Enter create  Esc cancel  Tab complete  → accept"
 too_small = "Window too small (minimum 60x15)"
 binary_preview = "(binary file - no preview)"
 not_yet = "Not available yet"
@@ -145,16 +158,31 @@ help_body = """
 List
 /             search: filter notes as you type
 ↑ ↓  k j      move, the right pane follows
-g G           first / last note
-→ l           preview
+gg G          first / last row
+gh gt         root folder, trash
+x             select the row, moves down
+X  Ctrl+A     clear selection, select all
+y             copy the selection or row
+p             paste here; a taken name gets -2
+m             move to a folder (input, Tab lists)
+Esc           cancel the pending y
+→ l           preview; on a folder: enter
+← h           parent folder (root: nothing);
+              on a search result: go to its folder
+Mouse         click selects, double click enters,
+              click a path segment on top to jump
 Enter e       edit in the right pane
 E             open in external editor ($EDITOR)
+F2 r on folder rename, relative to here
 F2            change path and name (below)
 n ^O          new note: full-screen editor
+a  name/      new folder here, stays in the list
 a             new note: name atop the list
 c             copy the whole note
 f             search names and content, args too
 d ^D          to trash, no question  u undo
+d D on folder  ask, show counts; u undoes d
+c on folder   copy its path
 D             delete for good (asks first)
 T             trash (see below)
 Space i I     row details (see below)
@@ -169,24 +197,34 @@ q             quit
 Esc           clear filter
 Search (input below)
 type          filter the list
-↑ ↓  ^P ^N    move the selection
+↑ ↓           move the selection
 Enter         keep selection (no match: new note)
-Tab           switch name / content search
-Esc           close, filter stays
+^T            switch name / content search
+^P ^N         previous searches matching the text
+Tab           complete: one inserts, else a list
+→             take the dim suggestion at the end
+← → Home End  move the cursor
+Esc           close the list, then the input
+Inputs (a, F2, name, editor find)
+→             take the dim suggestion at the end
+Tab           complete: one inserts, else a list
 List and search
-^P ^N         move the selection
+^P ^N         move the selection (List)
 PgUp PgDn     move by a page
 ^O new  ^R move  ^D to trash  ^S sync
 Trash (T, or click trash: N on the top line)
+x  Ctrl+A     select rows for u and D
 u             restore the selected note
 D             delete for good (asks first)
 E             empty it all (asks first)
 ↑ ↓  k j      move, the right pane is read-only
 PgUp PgDn     scroll the right pane
 Esc q T       back to the list
+Tree
+▸ ▾           folder closed / open; click arrow
+Space         folder: open in place; note: details
 Row details
-▸ ▾           closed / open; click the marker
-Space i       open / close the selected row
+i             open / close the selected row
 I             open / close all rows
 Alt+→ Alt+←   open / close
               size, dates, sync, origin
@@ -209,6 +247,7 @@ PgUp PgDn     scroll by page
 F2            change path and name
 g G           top / bottom
 c             copy the whole note
+R             rendered / raw view (md csv json)
 e Enter       edit from the top visible line
 E             external editor ($EDITOR)
 /             find in note (I = ı = i)
@@ -237,9 +276,12 @@ Click a row or a pane
 Click ▸ ▾: row details
 Click trash: N on the top line: the trash
 Drag in REVIEW selects and copies
+In the rendered view a drag copies what is shown
+c always copies the original bytes
 Shift+drag selects terminal text
 Everywhere
 F1 help  F9 settings (List, preview: ,)
+Ctrl+L        redraw the screen
 ^C quit (copy in the editor)
 """
 settings_title = "Settings"
@@ -249,6 +291,7 @@ settings_editor = "Editor"
 settings_default_type = "Default type"
 settings_default_folder = "Default folder"
 settings_types = "Types"
+settings_icons = "File icons"
 settings_sync_enabled = "Sync enabled"
 settings_sync_remote = "Remote"
 settings_sync_branch = "Branch"
@@ -273,16 +316,62 @@ completion_hints = "↑↓ move  Enter insert  Esc close"
 mode_global = "[all]"
 mode_trash = "[trash]"
 global_label = "All>"
-key_hints_global = "Enter open  Esc close  ↑↓ select  F1 help"
-key_hints_trash = "u restore  D delete forever  E empty  Esc/q back  ↑↓ select  ? help  PgUp PgDn scroll  Alt+→ details  z zoom"
+key_hints_global = "Enter open  Esc close  ↑↓ select  Tab complete  ^P history  → accept  F1 help"
+key_hints_trash = "u restore  D delete forever  E empty  Esc/q back  x select  ↑↓ select  ? help  PgUp PgDn scroll  Alt+→ details  z zoom"
 trash_title = "TRASH"
-totals = "Total {total} notes"
-totals_matches = " · {count} matches"
+totals = "Total {total}"
+totals_matches = " · {count}"
 totals_page = " · page {page}/{pages}"
+totals_folder = "Folder: {count} · "
+breadcrumb_root = "notes"
+count_items = "{count} items"
+count_items_one = "{count} item"
+count_notes = "{count} notes"
+count_notes_one = "{count} note"
+count_folders = "{count} folders"
+count_folders_one = "{count} folder"
+count_subfolders = "{count} subfolders"
+count_subfolders_one = "{count} subfolder"
+count_matches = "{count} matches"
+count_matches_one = "{count} match"
+folder_counts = "{items} · {notes} · {folders}"
+folder_total_size = "total size: {value}"
+folder_recent = "Recently updated"
+meta_path = "path: {value}"
+folder_created = "Folder created: {path}"
+folder_exists = "Folder already exists: {path}"
+folder_trashed = "Moved to trash: {path}, {count}  (u restores)"
+folder_restored = "Restored: {path}, {count}"
+folder_trash_title = "Trash folder"
+folder_delete_title = "Delete folder"
+confirm_trash_folder = "Move {notes} in '{path}' to trash and remove the folder and its {folders}?"
+confirm_delete_folder = "Permanently delete '{path}' with {notes} and {folders}? This cannot be undone."
+key_hints_folder = "→ open  ← up  a add, name/ = folder  F2 rename  d to trash  Space open  i details  T trash  o sort  v column  f search  ? help  Enter open  c copy path  u undo  x select  y copy  p paste  m move  gg top  D delete  q quit  / filter  n new  r rename  s sync  I all  < > width  z zoom  , settings"
 rename_label = "New path:"
-rename_hints = "Enter save  Esc cancel"
+move_to_label = "Move to:"
+moved_to = "Moved to: {to}"
+rename_hints = "Enter save  Esc cancel  Tab complete"
+marked_count = "selected: {count}"
+yank_copy = "copy: {count}"
+g_hints = "g…  gg top  gh root  gt trash  other key cancels"
+batch_title = "Result"
+batch_hints = "any key closes"
+batch_counts = "{done} done, {failed} failed"
+batch_more = "{count} more"
+batch_item_failed = "{path}: {error}"
+batch_item_renamed = "{from} -> {to}"
+batch_trashed = "Moved to trash: {count}  (u restores)"
+batch_restored = "Restored: {count}"
+batch_deleted = "Deleted: {count}"
+batch_trash_title = "Move to trash"
+confirm_trash_batch = "Move {items} ({notes}) to trash?"
+confirm_delete_batch = "Permanently delete {items} ({notes})? This cannot be undone."
+paste_done = "Pasted: {count}"
+paste_nothing = "Nothing to paste: y copies first"
+paste_needs_folder = "Open a folder to paste into"
+paste_into_itself = "a folder cannot be copied into itself"
 trash_indicator = "trash: {count}"
-confirm_empty_trash = "Permanently delete the {count} notes in the trash? This cannot be undone."
+confirm_empty_trash = "Permanently delete {count} in the trash? This cannot be undone."
 empty_trash_title = "Empty the trash"
 trash_emptied = "Trash emptied"
 sort_menu = "Sort: n name  u updated  c created  s size  r reverse  Esc cancel"
@@ -404,6 +493,7 @@ setting_editor = "Editor command"
 setting_default_type = "Default type"
 setting_default_folder = "Default folder"
 setting_types = "Types (comma separated)"
+setting_icons = "File icons"
 setting_sync_enabled = "Enable sync"
 setting_sync_remote = "Remote address"
 setting_sync_branch = "Branch"
@@ -426,9 +516,12 @@ settings_group_general = "General"
 settings_group_sync = "Sync"
 settings_unsaved = "Unsaved changes"
 language_auto = "System language"
+icons_nerd = "Nerd Font"
+icons_off = "Off"
 language_tr = "Türkçe"
 language_en = "English"
 setting_hint_editor = "Empty uses $VISUAL, then $EDITOR."
+setting_hint_icons = "This window has its own icon font. In the terminal app (notes) icons need a Nerd Font; without one set Off, otherwise glyphs show as boxes."
 setting_hint_sync_remote = "Example: https://github.com/you/notes.git or git@github.com:you/notes.git"
 setting_hint_sync_idle_seconds = "Syncs this many seconds after the last change."
 close_settings_title = "Unsaved settings"
@@ -479,7 +572,7 @@ binary_note = "Binary note cannot be shown: {path}"
 ls_usage = "Usage: note ls [QUERY] [-f FOLDER]"
 show_usage = "Usage: note show QUERY"
 edit_usage = "Usage: note edit QUERY"
-export_usage = "Usage: note export --pdf QUERY|PATH [-o OUTPUT] | note export --all DIR"
+export_usage = "Usage: note export --pdf QUERY|PATH [-o OUTPUT] | note export --all DIR [--ignore-skipped]"
 exported = "Exported: {path}"
 find_usage = "Usage: note find TERM... [--limit N]"
 find_no_match = "No note contains '{query}'"
@@ -549,11 +642,20 @@ sync_token_prompt = "Access token for {host} (input is hidden): "
 sync_login_done = "The token for {host} was saved in the system keychain"
 sync_logout_done = "The token for {host} was removed"
 sync_status_head = "Device {device}: log {log}, applied {applied}"
-graph_usage = "Usage: note graph migrate [--skip-failed] | note graph export --format jsonl [-o FILE] | note graph import [--overwrite] FILE"
+graph_usage = "Usage: note graph migrate [--skip-failed] | note graph status [--ignore-skipped | --clear-skipped] | note graph export --format jsonl [-o FILE] | note graph import [--overwrite] FILE"
 graph_bad_line = "Line {line} of the import is not valid ({reason}); changes from earlier batches stay, nothing else was applied"
 graph_imported = "Imported {nodes} nodes and {edges} edges"
 graph_import_refused = "Refused: {id} already exists with different content; --overwrite replaces it"
 migrate_summary = "Migrated {imported} notes ({unchanged} already there), {folders} folders. Backup: {backup}"
+skipped_header = "Old files NOT in the database and NOT in any export ({count}). Deleting the old files loses them:"
+skipped_file = "NOT migrated: {path} ({reason})"
+skipped_exit_hint = "Move them somewhere safe, or fix them and run 'note graph migrate' again; --ignore-skipped accepts the loss and exits 0"
+skipped_other_dirs = "Records from other notes directories, not listed here ({count}): 'note graph status --clear-skipped' forgets them"
+skipped_cleared = "Forgot the list of left-out files ({count}). The files were not touched and are still not in the database; 'note graph migrate' lists them again"
+graph_status_ok = "Nothing was left out: every old file is in the database"
+graph_status_accepted = "The {count} entries listed above are NOT in the database; --ignore-skipped accepts that, it does not fix it"
+graph_status_pending = "Old notes in {path} are not migrated yet: run 'note graph migrate'"
+migrate_left_behind = "NOT migrated ({count}, listed above): do not delete these with the rest, they exist nowhere else. 'note graph status' lists them again; 'note export --all' exits 1 while they remain"
 migrate_skipped = "Skipped, the file stays where it is: {path} ({reason})"
 migrate_failed = "NOT migrated: {path} ({reason})"
 migrate_incomplete = "Migration is not complete: writes stay refused and old files were not touched. Fix the files above and run 'note graph migrate' again"
@@ -561,7 +663,7 @@ migrate_remove_repo = "Old files were NOT deleted and sync will leave them alone
 migrate_remove_plain = "Old files were NOT deleted. Check your notes (note export --all DIR); after that you can delete the old files in {path} yourself"
 export_all_done = "Exported {count} notes to {path}"
 export_all_refused = "Not exported: {path} ({reason})"
-help_graph = "note graph migrate | export --format jsonl [-o FILE] | import FILE   Import old plain-file notes; dump or load the whole graph as JSON lines"
+help_graph = "note graph migrate | status [--ignore-skipped | --clear-skipped] | export --format jsonl [-o FILE] | import FILE   Import old plain-file notes; dump or load the whole graph as JSON lines. status checks the current notes_dir; --clear-skipped forgets the list of left-out files for every notes_dir after printing it, old files are never touched"
 migrate_backup_hint = "Backup kept at {path} (private). When you no longer need it, delete it yourself: rm -r {path}"
 export_all_unreachable = "Not exported, no safe path: {name} (id {id}, {reason}). Its bytes are in: note graph export --format jsonl"
 

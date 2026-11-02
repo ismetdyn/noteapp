@@ -100,13 +100,12 @@ void append_line(std::string_view level, std::string_view message) {
         if (!out)
             return;
         out << timestamp() << ' ' << level << ' ' << current_pid() << ' ' << log_safe(message) << '\n';
-    } catch (...) {
-        // bilerek boş: bkz. yukarıdaki yorum
+    } catch (...) {  // NOLINT(bugprone-empty-catch) -- log hatası yutulur; bkz. yukarıdaki yorum
     }
 }
 
 void write(std::string_view level, std::string_view message) {
-    const std::lock_guard lock(g_mutex);
+    const std::scoped_lock lock(g_mutex);
     append_line(level, message);
 }
 
@@ -123,7 +122,7 @@ void log_error(std::string_view message) {
 }
 
 void init_log(std::size_t max_bytes) {
-    const std::lock_guard lock(g_mutex);
+    const std::scoped_lock lock(g_mutex);
     g_max_bytes = max_bytes;
 }
 

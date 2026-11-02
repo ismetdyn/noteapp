@@ -2,6 +2,7 @@
 
 #include "core/config.hpp"
 #include "core/error.hpp"
+#include "core/file_icons.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
 #include "gui/note_list_model.hpp"
@@ -11,6 +12,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <expected>
 #include <filesystem>
 #include <functional>
@@ -183,6 +185,10 @@ public:
     void show_sync_status(const sync::SyncStatus& status, bool running);
 
     SettingsPage& settings() { return settings_; }
+    // Pencerenin kendi ikon fontu var: terminaldeki font şartı burada yok.
+    core::IconStyle icon_style() const {
+        return config_.icons == "off" ? core::IconStyle::Off : core::IconStyle::Nerd;
+    }
 
     // --- Yaşam döngüsü ---
     // Kaydedilmemiş iş çözülür ve durum yazılır; false = kapanış iptal, tampon yerinde.
@@ -213,7 +219,7 @@ private:
     bool save_new();
     bool resolve_conflict();
     bool save_copy();
-    bool move_current(const SaveDetails& target);
+    bool move_saved(const core::NotePath& note, const SaveDetails& target);
     bool adopt_saved(const core::NotePath& path);
     bool confirm_close();
     bool confirm_close_settings();
@@ -229,7 +235,14 @@ private:
     bool shown_in(const std::string& folder) const;
     void report(const core::Error& error);
     void fail(const core::Error& error);
-    SaveDialogRequest move_request() const;
+    SaveDialogRequest move_request(const core::NotePath& note) const;
+    bool flush_for(const core::NotePath& note);
+    // Kayıt yolu yalnız gösterilen not varken girer (save_now, flush, tick). İhlal bug'dır: durur.
+    auto& shown_note(this auto& self) {
+        if (!self.shown_)
+            std::abort();
+        return *self.shown_;
+    }
     void load_gui_state();
     void save_gui_state() const;
     bool run_posted();

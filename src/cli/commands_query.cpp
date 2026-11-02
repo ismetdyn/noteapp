@@ -296,11 +296,13 @@ std::string to_table(const graph::QueryResult& result) {
         return "";
     std::vector<std::vector<std::string>> rows;
     std::vector<std::string> header;
+    header.reserve(result.columns.size());
     for (const std::string& column : result.columns)
         header.push_back(table_text(column));
     rows.push_back(std::move(header));
     for (const auto& row : result.rows) {
         std::vector<std::string> cells;
+        cells.reserve(row.size());
         for (const QueryValue& value : row)
             cells.push_back(cell_text(value));
         rows.push_back(std::move(cells));

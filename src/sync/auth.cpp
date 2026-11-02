@@ -195,7 +195,7 @@ std::string without_userinfo(std::string url) {
 }
 
 std::expected<RemoteEndpoint, core::Error> validate_remote(std::string_view url) {
-    const RemoteEndpoint endpoint = parse_remote(url);
+    RemoteEndpoint endpoint = parse_remote(url);
     // Önce bu: adres, içindeki kimlikle birlikte hata argümanına (oradan log/durum dosyasına) girmesin.
     if (endpoint.auth != Auth::Ssh && !endpoint.userinfo.empty())
         return std::unexpected(sync_error("sync.remote_has_credentials"));

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <vector>
 
@@ -43,6 +44,7 @@ std::optional<std::string> get_env(std::string_view name) {
     const std::u8string utf8 = fs::path(std::wstring(value)).u8string();
     return std::string(utf8.begin(), utf8.end());
 #else
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) -- üründe setenv/putenv yok, salt okuma yarışmaz
     const char* value = std::getenv(std::string(name).c_str());
     if (value == nullptr || *value == '\0')
         return std::nullopt;
@@ -162,12 +164,12 @@ std::error_code create_private_directories(const fs::path& dir) {
         if (at == at.parent_path())
             break;
     }
-    for (auto it = missing.rbegin(); it != missing.rend(); ++it) {
-        fs::create_directory(*it, ec);
+    for (const fs::path& created : missing | std::views::reverse) {
+        fs::create_directory(created, ec);
         if (ec)
             return ec;
 #ifndef _WIN32
-        fs::permissions(*it, fs::perms::owner_all, fs::perm_options::replace, ec);
+        fs::permissions(created, fs::perms::owner_all, fs::perm_options::replace, ec);
         if (ec)
             return ec;
 #endif

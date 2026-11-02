@@ -28,7 +28,10 @@ NotePath np(const std::string& text) {
 
 void write_plain(const fs::path& file, std::string_view bytes) {
     fs::create_directories(file.parent_path());
-    std::ofstream(file, std::ios::binary) << bytes;
+    std::ofstream out(file, std::ios::binary);
+    out << bytes;
+    out.flush();
+    REQUIRE_MESSAGE(out.good(), "cannot write test file: ", noteapp::test::utf8(file));
 }
 
 graph::Graph open_raw(const fs::path& dir) {
@@ -344,14 +347,20 @@ TEST_CASE(
     const std::string deep = deep_folder(129) + "/derin.md";
     const fs::path deep_file = notes.path() / deep;
     write_plain(deep_file, "derin");
+    const auto covers_deep = [&](const SkippedFile& file) {
+#ifdef _WIN32
+        // MinGW _wopendir MAX_PATH'te durur (kaç düzey olduğu köke bağlı): dosya görülemez, atası raporlanır.
+        return deep.starts_with(file.path + "/") && file.reason == "unreadable_folder";
+#else
+        return file.path == deep && file.reason == "invalid_folder";
+#endif
+    };
 
     const auto stopped = migrate_legacy_notes(notes.path(), data.path());
     REQUIRE(stopped.has_value());
     CHECK_FALSE(stopped->complete);
     CHECK(stopped->imported == 1);
-    CHECK(std::ranges::any_of(stopped->failed, [&](const SkippedFile& file) {
-        return file.path == deep && file.reason == "invalid_folder";
-    }));
+    CHECK(std::ranges::any_of(stopped->failed, covers_deep));
     CHECK(legacy_notes_pending(notes.path(), data.path()));
     {
         const NoteStore store(data.path());
@@ -362,7 +371,7 @@ TEST_CASE(
     const auto skipped = migrate_legacy_notes(notes.path(), data.path(), {.skip_failed = true});
     REQUIRE(skipped.has_value());
     CHECK(skipped->complete);
-    CHECK(std::ranges::any_of(skipped->failed, [&](const SkippedFile& file) { return file.path == deep; }));
+    CHECK(std::ranges::any_of(skipped->failed, covers_deep));
     CHECK(fs::exists(deep_file));
     CHECK(NoteStore(data.path()).unreachable().empty());
 }
@@ -529,9 +538,11 @@ TEST_CASE("migration takes created_at from the file's birth time where the files
         std::chrono::file_clock::to_sys(*metas[0].created_at).time_since_epoch());
     if ((info.stx_mask & STATX_BTIME) != 0) {
         CHECK(created.count() == info.stx_btime.tv_sec);
+        REQUIRE(metas[0].created_at.has_value());
         CHECK(*metas[0].created_at < metas[0].updated_at);
     } else {
         MESSAGE("dosya sistemi doğum zamanı vermiyor: mtime'a düşer");
+        REQUIRE(metas[0].created_at.has_value());
         CHECK(*metas[0].created_at == metas[0].updated_at);
     }
 }

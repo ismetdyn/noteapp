@@ -17,6 +17,20 @@
 
 namespace noteapp::test {
 
+// Sanitizer 2-20 kat yavaşlatır, yük de eklenince duvar saati sınırı ürün değil makine ölçer. GCC UBSan için
+// makro vermez: yükü küçük olduğundan sınır onda durur.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+inline constexpr bool kWallClockBudgets = false;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || __has_feature(memory_sanitizer)
+inline constexpr bool kWallClockBudgets = false;
+#else
+inline constexpr bool kWallClockBudgets = true;
+#endif
+#else
+inline constexpr bool kWallClockBudgets = true;
+#endif
+
 namespace fs = std::filesystem;
 
 // Ortam değişkenini atar/siler; yıkıcıda eski değere döner (başarısız testte de). Boş değer "tanımsız"

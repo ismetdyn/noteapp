@@ -1,8 +1,11 @@
 #include "sync/text_merge.hpp"
 
+#include "sync/git_free.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <git2.h>
+#include <memory>
 
 namespace noteapp::sync {
 
@@ -28,11 +31,10 @@ std::optional<std::string> merge_text(std::string_view base, std::string_view ou
     git_merge_file_result result{};
     if (git_merge_file(&result, &inputs[0], &inputs[1], &inputs[2], &options) < 0)
         return std::nullopt;
-    std::optional<std::string> merged;
-    if (result.automergeable != 0)
-        merged.emplace(result.ptr == nullptr ? "" : result.ptr, result.len);
-    git_merge_file_result_free(&result);
-    return merged;
+    const std::unique_ptr<git_merge_file_result, GitFree<git_merge_file_result_free>> owner(&result);
+    if (result.automergeable == 0)
+        return std::nullopt;
+    return std::string(result.ptr == nullptr ? "" : result.ptr, result.len);
 }
 
 }  // namespace noteapp::sync

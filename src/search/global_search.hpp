@@ -16,7 +16,7 @@ namespace noteapp::search {
 
 // Not başına tek sonuç. Sorgu metni yoksa (yalnız argüman) ikisi de false'tur.
 struct GlobalHit {
-    std::size_t index;  // notes içindeki sıra
+    std::size_t index{};  // notes içindeki sıra
     core::NotePath path;
     bool name_matched = false;
     bool content_matched = false;

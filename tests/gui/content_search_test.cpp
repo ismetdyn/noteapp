@@ -5,6 +5,7 @@
 #include <chrono>
 #include <doctest/doctest.h>
 #include <imgui.h>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -67,6 +68,177 @@ TEST_CASE_FIXTURE(ContentFixture, "content mode lists matches with their line co
     state->toggle_search_mode();
     CHECK(rows(*state) == std::vector<std::string>{"alpha.md  (2)", "beta.md  (1)"});  // alpha: 2 satır
     CHECK(state->current_path().has_value());                                          // ilk sonuç seçili
+}
+
+// Kayıt listeyi tazeler: düzenleme notu aramadan düşürürse editör başka nota geçer ya da boşalır. Kaydı
+// tetikleyen işlem yine başladığı nota uygulanmalı (alpha.md -> beta.txt olayı).
+struct DroppedNoteFixture : ContentFixture {
+    std::unique_ptr<GuiState> state;
+    std::optional<noteapp::gui::SaveDialogRequest> asked;
+    std::optional<noteapp::gui::SaveDetails> answer;
+
+    // `other`: arama sonucunda ikinci eşleşme kalır mı.
+    void open_beta_then_drop_it(bool other = true) {
+        if (other)
+            add_note("alpha.md", "istanbul", 10);
+        add_note("work/beta.md", "istanbul tek", 20);
+        state = make_state();
+        state->deciders.save_dialog = [this](const noteapp::gui::SaveDialogRequest& request) {
+            asked = request;
+            return answer;
+        };
+        state->deciders.confirm_delete = [](const std::string&) { return true; };
+        state->toggle_search_mode();
+        state->set_query("istanbul");
+        state->select_row(state->model().index_of(*noteapp::core::NotePath::parse("work/beta.md")));
+        REQUIRE(state->current_path().has_value());
+        REQUIRE(state->current_path()->string() == "work/beta.md");
+        state->edit_text("no match");
+    }
+    void check_alpha_untouched() const {
+        CHECK(read_note("alpha.md") == "istanbul");
+        CHECK_FALSE(note_exists("alpha.txt"));
+    }
+};
+
+TEST_CASE_FIXTURE(DroppedNoteFixture, "type change moves the note it started on, not the next match") {
+    open_beta_then_drop_it();
+    state->change_type("txt");
+    CHECK(read_note("work/beta.txt") == "no match");
+    CHECK_FALSE(note_exists("work/beta.md"));
+    check_alpha_untouched();
+}
+
+TEST_CASE_FIXTURE(DroppedNoteFixture, "save as moves the note it started on, not the next match") {
+    answer = noteapp::gui::SaveDetails{"renamed", "", "md"};
+    open_beta_then_drop_it();
+    state->save_as();
+    REQUIRE(asked.has_value());
+    CHECK(asked->initial.name == "beta");
+    CHECK(read_note("renamed.md") == "no match");
+    CHECK_FALSE(note_exists("work/beta.md"));
+    check_alpha_untouched();
+}
+
+TEST_CASE_FIXTURE(DroppedNoteFixture, "folder move moves the note it started on, not the next match") {
+    answer = noteapp::gui::SaveDetails{"ignored", "work/sub", "ignored"};
+    open_beta_then_drop_it();
+    state->move_note();
+    REQUIRE(asked.has_value());
+    CHECK(asked->initial.name == "beta");
+    CHECK(read_note("work/sub/beta.md") == "no match");
+    CHECK_FALSE(note_exists("work/beta.md"));
+    check_alpha_untouched();
+}
+
+TEST_CASE_FIXTURE(DroppedNoteFixture, "pdf export offers the note it started on, not the next match") {
+    open_beta_then_drop_it();
+    std::string suggested;
+    state->deciders.export_path = [&suggested](const std::string& name) {
+        suggested = name;
+        return std::optional<std::string>{};
+    };
+    state->export_pdf();
+    CHECK(suggested == "beta.pdf");
+}
+
+TEST_CASE_FIXTURE(DroppedNoteFixture, "permanent delete removes the note it started on") {
+    open_beta_then_drop_it();
+    state->delete_note();
+    CHECK_FALSE(note_exists("work/beta.md"));
+    check_alpha_untouched();
+}
+
+TEST_CASE_FIXTURE(DroppedNoteFixture, "trash takes the note it started on") {
+    open_beta_then_drop_it();
+    state->trash_note();
+    CHECK(note_exists(".trash/work/beta.md"));
+    check_alpha_untouched();
+}
+
+TEST_CASE_FIXTURE(DroppedNoteFixture, "folder rename keeps the other match and the saved note") {
+    open_beta_then_drop_it();
+    state->deciders.folder_name = [](const std::string&, const std::string&) {
+        return std::optional<std::string>("archive");
+    };
+    state->rename_folder("work");
+    CHECK(read_note("archive/beta.md") == "no match");
+    check_alpha_untouched();
+}
+
+TEST_CASE_FIXTURE(DroppedNoteFixture, "folder delete keeps the other match and clears only its own note") {
+    open_beta_then_drop_it();
+    state->delete_folder("work");
+    CHECK_FALSE(note_exists("work/beta.md"));
+    check_alpha_untouched();
+}
+
+TEST_CASE_FIXTURE(DroppedNoteFixture, "move actions still reach the note when it was the only match") {
+    answer = noteapp::gui::SaveDetails{"renamed", "", "md"};
+    open_beta_then_drop_it(false);
+    state->save_as();
+    CHECK(read_note("renamed.md") == "no match");
+    CHECK_FALSE(note_exists("work/beta.md"));
+}
+
+TEST_CASE_FIXTURE(DroppedNoteFixture, "type change still reaches the note when it was the only match") {
+    open_beta_then_drop_it(false);
+    state->change_type("txt");
+    CHECK(read_note("work/beta.txt") == "no match");
+}
+
+TEST_CASE_FIXTURE(ContentFixture, "a note deleted outside stops save as with a message, no dialog") {
+    add_note("alpha.md", "body", 10);
+    auto state = make_state();
+    int dialogs = 0;
+    state->deciders.save_dialog = [&dialogs](const noteapp::gui::SaveDialogRequest&) {
+        ++dialogs;
+        return std::optional(noteapp::gui::SaveDetails{"renamed", "", "md"});
+    };
+    remove_note("alpha.md");
+    state->save_as();
+    CHECK(dialogs == 0);
+    CHECK_FALSE(state->status().empty());
+    CHECK_FALSE(note_exists("renamed.md"));
+}
+
+TEST_CASE_FIXTURE(ContentFixture, "a dirty note deleted outside is kept as new and the action stops") {
+    add_note("alpha.md", "body", 10);
+    auto state = make_state();
+    int dialogs = 0;
+    state->deciders.save_dialog = [&dialogs](const noteapp::gui::SaveDialogRequest&) {
+        ++dialogs;
+        return std::optional(noteapp::gui::SaveDetails{"kept", "", "md"});
+    };
+    state->edit_text("edited");
+    remove_note("alpha.md");
+    state->change_type("txt");
+    CHECK(dialogs == 1);  // yalnız yeni not kaydı; taşıma durur
+    CHECK(read_note("kept.md") == "edited");
+    CHECK_FALSE(note_exists("kept.txt"));
+    CHECK_FALSE(note_exists("alpha.txt"));
+    CHECK_FALSE(state->status().empty());
+}
+
+TEST_CASE_FIXTURE(ContentFixture,
+                  "exporting a new draft under a filter offers the draft, not the filtered note") {
+    add_note("beta.md", "b", 10);
+    auto state = make_state();
+    state->set_query("beta");
+    state->new_note();
+    state->edit_text("draft body");
+    state->deciders.save_dialog = [](const noteapp::gui::SaveDialogRequest&) {
+        return std::optional(noteapp::gui::SaveDetails{"draft", "", "md"});
+    };
+    std::string suggested;
+    state->deciders.export_path = [&suggested](const std::string& name) {
+        suggested = name;
+        return std::optional<std::string>{};
+    };
+    state->export_pdf();
+    CHECK(suggested == "draft.pdf");
+    REQUIRE(state->current_path().has_value());
+    CHECK(state->current_path()->string() == "draft.md");
 }
 
 TEST_CASE_FIXTURE(ContentFixture, "toggle button, API and Tab from the search box switch the mode") {
@@ -167,6 +339,7 @@ TEST_CASE_FIXTURE(ContentFixture, "selection clears on edit, query change and mo
     state->edit_text(state->buffer() + "x");  // kullanıcı düzenlemesi: ofsetler eskidi
     CHECK_FALSE(state->editor_selection().has_value());
 
+    REQUIRE(state->current_path().has_value());
     state->set_query("istanbul tek");  // sorgu değişti: beta seçilir, yeni seçim
     CHECK(state->current_path()->string() == "beta.md");
     CHECK(selected_text(*state) == "istanbul");

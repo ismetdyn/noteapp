@@ -50,7 +50,7 @@ void AutoSync::start() {
 
 void AutoSync::notify_changed() {
     {
-        const std::lock_guard lock(mutex_);
+        const std::scoped_lock lock(mutex_);
         if (stopping_)
             return;
         changed_ = true;
@@ -64,7 +64,7 @@ void AutoSync::notify_changed() {
 
 void AutoSync::request_now() {
     {
-        const std::lock_guard lock(mutex_);
+        const std::scoped_lock lock(mutex_);
         if (stopping_)
             return;
         due_ = Clock::now();
@@ -76,7 +76,7 @@ void AutoSync::stop(std::chrono::seconds timeout) {
     if (!worker_.joinable())
         return;  // zaten durdu (stop sonrası yıkıcı)
     {
-        const std::lock_guard lock(mutex_);
+        const std::scoped_lock lock(mutex_);
         stopping_ = true;
         stop_deadline_ = Clock::now() + timeout;
         // Son senkron yalnız kaydedilmemiş değişiklik için; çıkışta "hemen" istekleri düşer.
@@ -124,7 +124,7 @@ void AutoSync::run_once() {
                 break;  // çıkış kodu önemsiz: sonucu süreç durum dosyasına yazdı
             auto deadline = started + timeout_;
             {
-                const std::lock_guard lock(mutex_);
+                const std::scoped_lock lock(mutex_);
                 if (stopping_)
                     deadline = std::min(deadline, stop_deadline_);
             }

@@ -433,7 +433,7 @@ int compare_lists_for_order(const QueryList& left, const QueryList& right) {
 
 template <class Id> int compare_ids(const Id& left, const Id& right) {
     const auto order = left <=> right;
-    return order < 0 ? -1 : (order > 0 ? 1 : 0);
+    return std::is_lt(order) ? -1 : (std::is_gt(order) ? 1 : 0);
 }
 
 void append_size(std::string& out, std::size_t size) {

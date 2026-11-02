@@ -1,6 +1,7 @@
 #include "core/atomic_file.hpp"
 
 #include "core/log.hpp"
+#include "core/unique_handle.hpp"
 
 #include <algorithm>
 #include <array>
@@ -48,19 +49,18 @@ Error io_error(const fs::path& path, const std::error_code& ec) {
 // (ör. modsuz dosya sistemi) kayıt yine yapılır, uyarı loglanır; içerik kaybından iyidir. O_NOFOLLOW: geçici
 // adın yerine bağ konmuşsa bağın hedefine dokunulmaz.
 void copy_mode(const fs::path& tmp, const struct stat& like) {
-    const int fd = ::open(tmp.c_str(), O_WRONLY | O_NOFOLLOW | O_CLOEXEC);
-    if (fd < 0) {
+    const UniqueFd fd(::open(tmp.c_str(), O_WRONLY | O_NOFOLLOW | O_CLOEXEC));
+    if (!fd) {
         log_warn("atomic write: cannot keep the mode of '" + tmp.string() +
                  "': " + std::error_code(errno, std::generic_category()).message());
         return;
     }
-    if (::fchown(fd, like.st_uid, like.st_gid) != 0) {
+    if (::fchown(fd.get(), like.st_uid, like.st_gid) != 0) {
         // Başka sahip/grup yalnız yetkiyle verilebilir (EPERM); mod yine kopyalanır.
     }
-    if (::fchmod(fd, like.st_mode & 07777) != 0)
+    if (::fchmod(fd.get(), like.st_mode & 07777) != 0)
         log_warn("atomic write: cannot keep the mode of '" + tmp.string() +
                  "': " + std::error_code(errno, std::generic_category()).message());
-    ::close(fd);
 }
 #endif
 
@@ -70,9 +70,9 @@ FileWriteResult write_new_file(const fs::path& file, std::string_view content, b
     FileWriteResult result;
 #ifdef _WIN32
     (void)owner_only;  // Windows: izinler üst dizinden miras kalır (kullanıcıya özel durum dizini)
-    const HANDLE h =
-        CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) {
+    const auto handle = own_win_handle<UniqueHandle>(
+        CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!handle) {
         const DWORD err = GetLastError();
         result.already_exists = err == ERROR_FILE_EXISTS || err == ERROR_ALREADY_EXISTS;
         result.ec = std::error_code(static_cast<int>(err), std::system_category());
@@ -82,25 +82,25 @@ FileWriteResult write_new_file(const fs::path& file, std::string_view content, b
     while (done < content.size()) {
         const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(content.size() - done, 1U << 30));
         DWORD written = 0;
-        if (!WriteFile(h, content.data() + done, chunk, &written, nullptr)) {
+        if (!WriteFile(handle.get(), content.data() + done, chunk, &written, nullptr)) {
             result.ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
             break;
         }
         done += written;
     }
-    if (!result.ec && !FlushFileBuffers(h))
+    if (!result.ec && !FlushFileBuffers(handle.get()))
         result.ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
-    CloseHandle(h);
 #else
-    const int fd = ::open(file.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, owner_only ? 0600 : 0666);
-    if (fd < 0) {
+    const UniqueFd fd(
+        ::open(file.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, owner_only ? 0600 : 0666));
+    if (!fd) {
         result.already_exists = errno == EEXIST;
         result.ec = std::error_code(errno, std::generic_category());
         return result;
     }
     std::size_t done = 0;
     while (done < content.size()) {
-        const ssize_t n = ::write(fd, content.data() + done, content.size() - done);
+        const ssize_t n = ::write(fd.get(), content.data() + done, content.size() - done);
         if (n < 0) {
             if (errno == EINTR)
                 continue;
@@ -109,21 +109,21 @@ FileWriteResult write_new_file(const fs::path& file, std::string_view content, b
         }
         done += static_cast<std::size_t>(n);
     }
-    if (!result.ec && ::fsync(fd) != 0)
+    if (!result.ec && ::fsync(fd.get()) != 0)
         result.ec = std::error_code(errno, std::generic_category());
-    ::close(fd);
 #endif
     return result;
 }
 
-std::expected<void, Error> write_file_atomically(const fs::path& target, std::string_view bytes) {
+std::expected<void, Error> write_file_atomically(const fs::path& target, std::string_view bytes,
+                                                 bool owner_only) {
     // Aynı dizinde geçici dosya: rename aynı birimde kalır, yani atomik olur.
     fs::path tmp = target.parent_path() / ".";
     tmp += target.filename();
     tmp += "." + random_hex() + ".tmp";
 
     std::error_code ec;
-    const FileWriteResult written = write_new_file(tmp, bytes);
+    const FileWriteResult written = write_new_file(tmp, bytes, owner_only);
     if (written.ec) {
         if (!written.already_exists)
             fs::remove(tmp, ec);  // başkasının dosyasına dokunma
@@ -141,7 +141,7 @@ std::expected<void, Error> write_file_atomically(const fs::path& target, std::st
 #else
     struct stat existing{};
     const bool existed = ::stat(target.c_str(), &existing) == 0;
-    if (existed)
+    if (existed && !owner_only)
         copy_mode(tmp, existing);
 #endif
     // MinGW (GCC 13) ve POSIX'te std::filesystem::rename mevcut dosyanın üzerine yazar.

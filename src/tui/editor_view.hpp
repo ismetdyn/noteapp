@@ -26,6 +26,8 @@ struct RowPaint {
     int columns = 0;                             // gölgenin kırpılacağı genişlik
 };
 ftxui::Element paint_row(const EditorBuffer& buffer, const VisualRow& row, const RowPaint& paint);
+// Sözdizimi türünün renk ve biçimi; REVIEW'un biçimli görünümü de aynı paleti kullanır.
+ftxui::Element token_styled(ftxui::Element element, TokenKind token);
 
 // `show_cursor`: üstte modal yokken gerçek terminal imleci buraya konur; arama ve soru tuşları alırken
 // gizlidir.
