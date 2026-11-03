@@ -235,4 +235,8 @@ private:
     std::unique_ptr<detail::Store> store_;
 };
 
+// Sorguyu çalıştırmadan ayrıştırır ve planlar: sözdizimi, eksik parametre ve salt-okunur ihlali query()'yle
+// aynı hatayı verir. Depo gerekmez; saklanıp sonra çalıştırılacak sorgunun kayıttaki denetimidir.
+Result<void> check_query(std::string_view cypher, QueryMode mode, const Params& params = {});
+
 }  // namespace noteapp::graph

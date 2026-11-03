@@ -2,6 +2,7 @@
 
 #include "core/file_stat.hpp"
 #include "core/i18n.hpp"
+#include "core/log.hpp"
 #include "tui/display_text.hpp"
 #include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
@@ -29,6 +30,7 @@ constexpr std::string_view kEllipsis = "…";  // ContentIndex kesitlerinin kena
 constexpr int kFrameLabelOffset = 1;         // etiket köşeyi örtmesin
 constexpr int kPriorityHints = 5;            // Listede süzgeç yüzünden düşmeyen ilk ipuçları
 constexpr std::string_view kIconGap = "  ";  // taşma hücresi ve boşluk
+constexpr std::string_view kBom = "\xEF\xBB\xBF";
 
 // UTF-8 kod noktasının bayt uzunluğu (baş bayttan).
 std::size_t cp_length(unsigned char lead) {
@@ -204,8 +206,10 @@ ftxui::Element top_bar(const TuiState& state, const StatusLine& status) {
                                    : count_text("tui.count_notes", state.total());
     const std::string left =
         state.trash_view() ? trash_prefix(state) + core::tr("tui.trash_title") : breadcrumb_text(state);
+    // Senkron metni uzak hata ayrıntısı taşıyabilir: çizim noktasında arınır.
     return hbox({text(left) | bold, filler(),
-                 text(sort_label(state) + "  " + mode_label(state) + " " + counts + "   " + status.sync)});
+                 text(sort_label(state) + "  " + mode_label(state) + " " + counts + "   " +
+                      terminal_safe(status.sync))});
 }
 
 // `n` görünümünün üst satırı: liste ve sayaçlar gizli, kaydedildiyse notun yolu.
@@ -705,7 +709,8 @@ ftxui::Element preview_pane(const TuiState& state, const Preview& preview, int h
 
 // Kaydet diyaloğunun iç genişliği; en küçük pencerede (60) kenarlara sığar.
 constexpr int kDialogWidth = 52;
-constexpr int kLabelWidth = 9;  // "Klasör:" + boşluk
+constexpr int kLabelWidth = 9;     // "Klasör:" + boşluk
+constexpr int kPaletteWidth = 58;  // en küçük pencerede (60) kenarlara sığar
 
 ftxui::Element dialog_field(std::string label, const std::string& value, bool focused,
                             ftxui::Element extra = ftxui::emptyElement()) {
@@ -850,6 +855,8 @@ const char* hints_key(const TuiState& state) {
         return "tui.key_hints_trash";
     if (state.focus() == Focus::Preview)
         return "tui.key_hints_preview";
+    if (state.focus() == Focus::Links)
+        return "tui.key_hints_links";
     // Boş alt klasörde de `a` ve üst klasör söylenir; boş kök liste ipuçlarında kalır.
     const bool empty_folder =
         state.in_folder_view() && state.rows().empty() && !state.current_folder().empty();
@@ -873,8 +880,11 @@ std::string totals_text(const TuiState& state, int panel_height) {
 
 // Yol girdisi: imleç metnin içindedir; uzun yolda imleç çevresi görünür kalır.
 ftxui::Element rename_bar(const RenameState& rename, int width) {
-    return input_line_bar(core::tr(rename.is_move_to() ? "tui.move_to_label" : "tui.rename_label"),
-                          rename.line(), {}, rename.ghost(), core::tr("tui.rename_hints"), width);
+    const char* label = rename.is_link()      ? "tui.link_label"
+                        : rename.is_move_to() ? "tui.move_to_label"
+                                              : "tui.rename_label";
+    return input_line_bar(core::tr(label), rename.line(), {}, rename.ghost(), core::tr("tui.rename_hints"),
+                          width);
 }
 
 // Yeri belli hata: "6: sync değeri geçersiz: nope ...". Metin sayılmadığını kullanıcı burada görür.
@@ -940,7 +950,7 @@ ftxui::Element bottom_bar(const TuiState& state, const StatusLine& status, const
     if (rename) {
         if (rename->error().empty())
             return rename_bar(*rename, width);
-        return vbox({text(rename->error()) | color(Color::Red), rename_bar(*rename, width)});
+        return vbox({text(terminal_safe(rename->error())) | color(Color::Red), rename_bar(*rename, width)});
     }
     if (new_row)
         return text(fit_hints(core::tr("tui.new_row_hints"), width)) |
@@ -953,8 +963,11 @@ ftxui::Element bottom_bar(const TuiState& state, const StatusLine& status, const
         return text(fit_hints(core::tr("tui.sort_menu"), width)) | bold;
     if (state.awaiting_prefix())
         return text(fit_hints(core::tr("tui.g_hints"), width)) | bold;
+    // İleti ve ipucu çoğu kez yol taşır; her kaynağı ayrı ayrı arındırmak yerine burada tek yerde.
     if (!status.message.empty())
-        return text(status.message) | bold;
+        return text(terminal_safe(status.message)) | bold;
+    if (!status.notice.empty())
+        return text(fit_hints(terminal_safe(status.notice), width)) | dim;
     const std::string hints = core::tr(hints_key(state));
     const std::string selection = selection_text(state);
     const std::string filter =
@@ -999,6 +1012,62 @@ ftxui::Element settings_box(const SettingsState& settings, int window_height) {
            size(WIDTH, EQUAL, kSettingsWidth) | clear_under;
 }
 
+// Paletin kapladığı satırlar dışında kalan: kenarlık 2, girdi, ipucu.
+constexpr int kPaletteChromeLines = 4;
+constexpr int kPaletteRows = 8;
+constexpr int kPaletteTitleCells = 30;  // uzun yolun sonu görünür
+
+// Komutların üzerinde çalışacağı şey: not adı güvenilmezdir.
+std::string palette_title(const TuiState& state) {
+    std::string target;
+    if (state.marked_count() > 0)
+        target = core::tr("tui.marked_count", {{"count", std::to_string(state.marked_count())}});
+    else if (const Row* row = state.selected_entry())
+        target = tail_cells(terminal_safe(row->path.string()), kPaletteTitleCells);
+    const std::string title = core::tr("tui.palette_title");
+    return " " + (target.empty() ? title : title + ": " + target) + " ";
+}
+
+ftxui::Element palette_row(const PaletteRow& row, bool selected) {
+    using namespace ftxui;
+    const Command& command = *row.command;
+    std::string left = std::string(command.id) + " — " + core::tr(command.label_key);
+    if (row.reason)
+        left += " (" + core::tr(row.reason) + ")";
+    std::string keys(command.keys);
+    if (!command.alias.empty())
+        keys += " " + std::string(command.alias);
+    Element line = hbox({text(left) | flex, text(keys.empty() ? keys : " " + keys + " ")});
+    if (row.reason)
+        line = line | dim;
+    return selected ? line | inverted : line;
+}
+
+// Seçili satır pencere içinde kalır; satır uzunsa kırpılır, neden ipucu satırında yine görünür.
+ftxui::Element palette_box(const TuiState& state, int window_height) {
+    using namespace ftxui;
+    const std::vector<PaletteRow> rows = state.palette_rows();
+    const Command* selected = state.palette_selected();
+    const auto found = std::ranges::find(rows, selected, &PaletteRow::command);
+    const auto selected_at = static_cast<std::size_t>(found - rows.begin());
+    const auto visible =
+        static_cast<std::size_t>(std::clamp(window_height - kPaletteChromeLines, 1, kPaletteRows));
+    const std::size_t first = selected_at < visible ? 0 : selected_at + 1 - visible;
+
+    InputCells input = input_text_cells(state.palette_line(), {}, {}, kPaletteWidth - kFrameCells - 2);
+    Elements filter = {text(std::string(TuiState::kPaletteKey) + " ") | bold};
+    std::ranges::move(input.cells, std::back_inserter(filter));
+    Elements body = {hbox(std::move(filter))};
+    for (std::size_t i = first; i < rows.size() && i < first + visible; ++i)
+        body.push_back(palette_row(rows[i], i == selected_at));
+    if (rows.empty())
+        body.push_back(text(core::tr("tui.editor_not_found")) | dim);
+    const bool blocked = found != rows.end() && found->reason;
+    body.push_back(text(core::tr(blocked ? found->reason : "tui.palette_hints")) | dim);
+    return window(text(palette_title(state)) | bold, vbox(std::move(body))) |
+           size(WIDTH, EQUAL, kPaletteWidth) | clear_under;
+}
+
 // Birden çoğu açıksa öncelik: yardım > onay > diyalog > ayarlar.
 ftxui::Element open_modal(const TuiState& state, const HelpState* help, const ConfirmState* confirm,
                           const SaveDialogState* dialog, const SettingsState* settings, int window_height) {
@@ -1010,6 +1079,8 @@ ftxui::Element open_modal(const TuiState& state, const HelpState* help, const Co
         return save_dialog_box(*dialog);
     if (settings)
         return settings_box(*settings, window_height);
+    if (state.palette_open())
+        return palette_box(state, window_height);
     return state.summary().empty() ? nullptr : summary_box(state.summary(), window_height);
 }
 
@@ -1037,10 +1108,75 @@ const EditorSession* active_editor(const TuiState& state, const EditorSession* e
     return state.focus() == Focus::Editor ? editor : nullptr;
 }
 
+// Ayırıcı: bölüm taşıyorsa konum (başlıklar sayılmaz), sonra notun etiketleri. Etiket güvenilmezdir.
+ftxui::Element links_separator(const LinkPanel& panel, std::size_t visible) {
+    using namespace ftxui;
+    Elements cells;
+    if (panel.lines().size() > visible)
+        cells.push_back(
+            text(std::to_string(panel.selected_ordinal()) + "/" + std::to_string(panel.item_count()) + " ") |
+            dim);
+    if (!panel.links().tags.empty()) {
+        std::string tags;
+        for (const std::string& tag : panel.links().tags)
+            tags += "#" + terminal_safe(tag) + " ";
+        cells.push_back(text(std::move(tags)));
+    }
+    if (cells.empty())
+        return separator();
+    cells.push_back(separatorCharacter("─") | flex);
+    return hbox(std::move(cells));
+}
+
+// Ad güvenilmezdir ve panelden uzun olabilir: sonu (dosya adı) görünür kalır.
+ftxui::Element link_row(const TuiState& state, const core::LinkLine& line, int columns) {
+    using namespace ftxui;
+    const core::NoteLinks& links = state.link_panel().links();
+    if (line.is_header)
+        return text(core::tr(core::link_group_key(line.group), {{"count", std::to_string(line.index)}})) |
+               bold;
+    const std::string safe = terminal_safe(core::link_text(links, line));
+    const auto room = static_cast<std::size_t>(std::max(columns - 8, 1));
+    Elements cells = {text("  ")};
+    if (line.group == core::LinkGroup::Missing) {
+        // Renk tek sinyal değildir: köşeli ayraçlar çözülmemiş metni söyler.
+        cells.push_back(text("[[" + tail_cells(safe, room) + "]]") | dim);
+    } else {
+        if (state.icon_style() != core::IconStyle::Off) {
+            const core::FileIcon icon = core::file_icon(safe);
+            cells.push_back(text(core::icon_text(icon, state.icon_style())) | color(icon_color(icon.color)));
+            cells.push_back(text(std::string(kIconGap)));
+        }
+        cells.push_back(text(tail_cells(safe, room)));
+    }
+    return hbox(std::move(cells));
+}
+
+// Yalnız görünen satırlar çizilir: binlerce bağlantıda kare maliyeti sabittir.
+ftxui::Element links_section(const TuiState& state, int rows, int columns) {
+    using namespace ftxui;
+    const LinkPanel& panel = state.link_panel();
+    const auto visible = static_cast<std::size_t>(rows);
+    const std::size_t top = panel.top(visible);
+    const bool focused = state.focus() == Focus::Links;
+    Elements lines = {links_separator(panel, visible)};
+    for (std::size_t i = top; i < panel.lines().size() && i < top + visible; ++i) {
+        Element row = link_row(state, panel.lines()[i], columns);
+        lines.push_back(focused && i == panel.selected() ? std::move(row) | inverted : std::move(row));
+    }
+    return vbox(std::move(lines));
+}
+
 ftxui::Element right_pane(const TuiState& state, const Preview& preview, const EditorSession* editing,
                           int height, int columns, bool show_cursor, SpellChecker* spell) {
-    return editing && editing->is_open() ? editor_pane(*editing, show_cursor, spell)
-                                         : preview_pane(state, preview, height, columns, spell);
+    using namespace ftxui;
+    if (editing && editing->is_open())
+        return editor_pane(*editing, show_cursor, spell);
+    const int reserved = state.links_reserved_rows(height);
+    Element body = preview_pane(state, preview, height - reserved, columns, spell);
+    if (reserved == 0)
+        return body;
+    return vbox({std::move(body) | yflex, links_section(state, reserved - 1, columns)});
 }
 
 std::optional<PaneMode> right_mode(const TuiState& state, const Preview& preview,
@@ -1107,7 +1243,20 @@ std::optional<std::string> breadcrumb_folder_at(const TuiState& state, int x) {
 }
 
 const Preview& PreviewCache::get(const core::NoteStore& store, const Row* row) {
-    return load(row, false, [&] { return store.read(row->path); });
+    const std::size_t before = revision_;
+    const Preview& loaded = load(row, false, [&] { return store.read(row->path); });
+    if (revision_ == before)
+        return loaded;
+    if (auto links = store.links(row->path))
+        links_ = std::move(*links);
+    else if (links.error().code != core::Error::Code::NotFound)
+        core::log_warn("note links: " + core::format_error(links.error()));
+    return loaded;
+}
+
+void PreviewCache::clear_links() {
+    links_ = {};
+    ++links_generation_;
 }
 
 const Preview& PreviewCache::get_trashed(const core::NoteStore& store, const Row* row) {
@@ -1200,6 +1349,7 @@ bool PreviewCache::update_rendered(bool wanted, int width, std::chrono::steady_c
 }
 
 const Preview& PreviewCache::publish(TuiState& state, std::chrono::steady_clock::time_point now) {
+    state.set_links(links_, links_generation_, path_);
     const int width = editor_viewport({state.window_width(), state.window_height()}, state.layout()).columns;
     const bool wanted = state.review_rendered() && preview_.kind == Preview::Kind::Text &&
                         preview_.view_kind != ViewKind::None;
@@ -1220,14 +1370,36 @@ int row_marker_column(const TuiState& state, std::size_t row) {
     return kCellsBeforeNumber + indent + digit_count(state.max_row_number()) + kCellsAfterNumber;
 }
 
+namespace {
+
+void split_preview_lines(Preview& preview) {
+    std::string_view rest = preview.text;
+    while (true) {
+        const std::size_t eol = rest.find('\n');
+        std::string_view line = rest.substr(0, eol);
+        if (line.ends_with('\r'))
+            line.remove_suffix(1);
+        preview.lines.emplace_back(line);
+        preview.line_starts.push_back(static_cast<std::size_t>(rest.data() - preview.text.data()));
+        if (eol == std::string_view::npos)
+            break;
+        rest.remove_prefix(eol + 1);
+    }
+}
+
+}  // namespace
+
 const Preview& PreviewCache::load(const Row* row, bool from_trash, const Reader& read) {
     if (!row) {
+        if (!links_.empty())
+            clear_links();
         path_.reset();
         preview_ = {};
         return preview_;
     }
     if (path_ && *path_ == row->path && from_trash_ == from_trash)
         return preview_;
+    clear_links();
     path_ = row->path;
     from_trash_ = from_trash;
     preview_ = {};
@@ -1257,18 +1429,11 @@ const Preview& PreviewCache::load(const Row* row, bool from_trash, const Reader&
         preview_.display_only = true;
     }
     preview_.text = std::move(content->text);
-    std::string_view rest = preview_.text;
-    while (true) {
-        const std::size_t eol = rest.find('\n');
-        std::string_view line = rest.substr(0, eol);
-        if (line.ends_with('\r'))
-            line.remove_suffix(1);
-        preview_.lines.emplace_back(line);
-        preview_.line_starts.push_back(static_cast<std::size_t>(rest.data() - preview_.text.data()));
-        if (eol == std::string_view::npos)
-            break;
-        rest.remove_prefix(eol + 1);
-    }
+    // Baştaki BOM metin değil kodlama işaretidir: editör de atar. Kalsaydı ilk satırda gizli karakter
+    // işareti olarak görünürdü.
+    if (preview_.text.starts_with(kBom))
+        preview_.text.erase(0, kBom.size());
+    split_preview_lines(preview_);
     return preview_;
 }
 

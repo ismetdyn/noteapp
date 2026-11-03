@@ -319,9 +319,9 @@ TEST_CASE("the list bar teaches Space for details in both languages") {
     core::init_i18n("tr");
     tui::TuiState s;
     s.set_notes({info("a.md")});
-    CHECK(row_of(draw(s, 60, 15), 14).find("Space detay") != std::string::npos);
+    CHECK(row_of(draw(s, 60, 15), 14).find("Space aç") != std::string::npos);
     core::init_i18n("en");
-    CHECK(row_of(draw(s, 60, 15), 14).find("Space details") != std::string::npos);
+    CHECK(row_of(draw(s, 60, 15), 14).find("Space open") != std::string::npos);
 }
 
 // ---- C: sağ sütun ----

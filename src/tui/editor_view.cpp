@@ -7,6 +7,8 @@
 #include "tui/view.hpp"
 
 #include <algorithm>
+#include <cstdint>
+#include <format>
 #include <ftxui/screen/string.hpp>
 #include <string>
 #include <string_view>
@@ -37,8 +39,31 @@ struct CellLook {
     CellStyle style = CellStyle::Plain;
     TokenKind token = TokenKind::Plain;
     bool misspelled = false;
+    // Unspecified: tanı yok (DiagnosticMark bu değeri taşımaz).
+    core::lsp::DiagnosticSeverity diagnostic = core::lsp::DiagnosticSeverity::Unspecified;
+    bool hidden = false;  // görünmez bidi/sıfır genişlikli karakterin işareti
     bool operator==(const CellLook&) const = default;
 };
+
+// Editörlerin alışılmış dili: hata kırmızı, uyarı sarı, bilgi mavi; ipucu yalnız soluk alt çizgi. Sarı arama
+// vurgusu kalın çizilir ve tanının önüne geçer, alt çizgi uyarıyı ondan ayırır.
+ftxui::Element severity_styled(ftxui::Element element, core::lsp::DiagnosticSeverity severity) {
+    using namespace ftxui;
+    using Severity = core::lsp::DiagnosticSeverity;
+    switch (severity) {
+    case Severity::Unspecified:
+        return element;
+    case Severity::Error:
+        return element | color(Color::Red);
+    case Severity::Warning:
+        return element | color(Color::Yellow);
+    case Severity::Information:
+        return element | color(Color::BlueLight);
+    case Severity::Hint:
+        return element | dim;
+    }
+    return element;
+}
 
 }  // namespace
 
@@ -76,7 +101,12 @@ namespace {
 ftxui::Element styled(const std::string& run, CellLook look) {
     using namespace ftxui;
     Element element = text(run);
-    if (look.misspelled)
+    // Arka plan uyarısı seçim, arama ve sözdizimi renginin altında da görünür: işaret hiçbir bakışta
+    // sıradan bir U+FFFD gibi okunmaz.
+    if (look.hidden)
+        element = element | color(Color::White) | bgcolor(Color::Red);
+    const bool diagnosed = look.diagnostic != core::lsp::DiagnosticSeverity::Unspecified;
+    if (look.misspelled || diagnosed)
         element = element | underlined;
     switch (look.style) {
     case CellStyle::Highlight:
@@ -86,6 +116,8 @@ ftxui::Element styled(const std::string& run, CellLook look) {
     case CellStyle::Plain:
         break;
     }
+    if (diagnosed)
+        return severity_styled(std::move(element), look.diagnostic);
     return token_styled(std::move(element), look.token);
 }
 
@@ -93,6 +125,16 @@ bool is_misspelled(std::size_t offset, const RowPaint& paint) {
     return std::ranges::any_of(paint.misspelled, [offset](const ByteRange& range) {
         return offset >= range.begin && offset < range.end;
     });
+}
+
+// Örtüşen tanılardan en önemlisi (Error = 1 en küçük değerdir).
+core::lsp::DiagnosticSeverity diagnostic_at(std::size_t offset, const RowPaint& paint) {
+    auto worst = core::lsp::DiagnosticSeverity::Unspecified;
+    for (const DiagnosticMark& mark : paint.diagnostics)
+        if (offset >= mark.range.begin && offset < mark.range.end &&
+            (worst == core::lsp::DiagnosticSeverity::Unspecified || mark.severity < worst))
+            worst = mark.severity;
+    return worst;
 }
 
 std::size_t first_code_point_bytes(std::string_view text) {
@@ -160,6 +202,19 @@ ftxui::Element gutter_cell(const EditorBuffer& buffer, const VisualRow& row, int
     return current ? text(std::move(label)) | bold : text(std::move(label)) | dim;
 }
 
+// İmlecin üstündeki görünmez karakterin adı: "Gizli karakter U+202E RIGHT-TO-LEFT OVERRIDE"; değilse boş.
+std::string hidden_char_notice(const EditorBuffer& buffer) {
+    if (buffer.cursor() >= buffer.text().size())
+        return {};
+    const char32_t hidden = buffer.glyph_at(buffer.cursor(), 0).hidden;
+    const core::HiddenControl* control = core::find_hidden_control(hidden);
+    if (control == nullptr)
+        return {};
+    return core::tr("tui.editor_hidden_char",
+                    {{"code", std::format("U+{:04X}", static_cast<std::uint32_t>(control->code_point))},
+                     {"name", std::string(control->name)}});
+}
+
 std::string status_notice(const EditorSession& session) {
     if (!session.message().empty())
         return session.message();
@@ -184,7 +239,8 @@ ftxui::Elements choice_rows(std::initializer_list<std::string> labels, int selec
 
 ftxui::Element prompt_box(const std::string& title, const std::string& question, ftxui::Elements choices) {
     using namespace ftxui;
-    Elements body = {paragraph(question) | bold, text("")};
+    // Soru not adını taşır (senkrondan gelebilir): çizim noktasında arınır.
+    Elements body = {paragraph(terminal_safe(question)) | bold, text("")};
     for (Element& choice : choices)
         body.push_back(std::move(choice));
     return window(text(" " + title + " ") | bold, vbox(std::move(body))) | size(WIDTH, EQUAL, kPromptWidth) |
@@ -206,7 +262,8 @@ ftxui::Element paint_row(const EditorBuffer& buffer, const VisualRow& row, const
     int cell = 0;
     for (std::size_t at = row.begin; at < row.end;) {
         const Glyph glyph = buffer.glyph_at(at, cell);
-        const CellLook look{style_at(at, paint), tokens.at(at), is_misspelled(at, paint)};
+        const CellLook look{style_at(at, paint), tokens.at(at), is_misspelled(at, paint),
+                            diagnostic_at(at, paint), glyph.hidden != 0};
         const bool at_cursor = paint.cursor && at == *paint.cursor;
         if ((look != run_look || at_cursor) && !run.empty()) {
             parts.push_back(styled(run, run_look));
@@ -246,12 +303,19 @@ ftxui::Element editor_pane(const EditorSession& session, bool show_cursor, Spell
     Elements rows;
     std::vector<SyntaxSpan> spans;
     std::vector<ByteRange> misspelled;
-    std::optional<std::size_t> spans_line;  // sarılan satır aynı aralıkları yeniden hesaplamasın
+    std::vector<DiagnosticMark> line_marks;  // yalnız bu satıra değenler: hücre başına tüm liste taranmasın
+    std::optional<std::size_t> spans_line;   // sarılan satır aynı aralıkları yeniden hesaplamasın
     const bool check_spelling = spell && spellcheck_applies_to(session.shown_type());
     for (const VisualRow& row : buffer.visible_rows(session.columns(), session.rows())) {
         if (spans_line != row.line) {
             spans = session.syntax_spans(row.line);
             spans_line = row.line;
+            const std::size_t line_begin = buffer.line_start(row.line);
+            const std::size_t line_end = line_begin + buffer.line_text(row.line).size();
+            line_marks.clear();
+            for (const DiagnosticMark& mark : session.diagnostics())
+                if (mark.range.begin <= line_end && mark.range.end > line_begin)
+                    line_marks.push_back(mark);
             misspelled.clear();
             if (check_spelling)
                 misspelled = spell->misspelled(buffer.line_text(row.line));
@@ -260,9 +324,9 @@ ftxui::Element editor_pane(const EditorSession& session, bool show_cursor, Spell
                 range.end += buffer.line_start(row.line);
             }
         }
-        const RowPaint paint{
-            cursor,     buffer.selection(), session.find_matches(), spans, buffer.line_start(row.line),
-            misspelled, session.ghost(),    session.columns()};
+        const RowPaint paint{cursor,          buffer.selection(),          session.find_matches(),
+                             spans,           buffer.line_start(row.line), misspelled,
+                             session.ghost(), session.columns(),           line_marks};
         const bool current = row.line == current_line;
         Element line =
             hbox({gutter_cell(buffer, row, gutter, current), paint_row(buffer, row, paint), filler()});
@@ -291,7 +355,8 @@ ftxui::Element editor_info_bar(const EditorSession& session, int width) {
         (session.path() ? session.path()->string() : "[" + session.display_name() + "]") +
         (session.dirty() ? std::string(kDirtyMark) : "");
     const int room = width - string_width(fields) - kInfoBarPadding;
-    const std::string shown = tail_cells(name, static_cast<std::size_t>(std::max(room, 1)));
+    // Yol senkrondan gelebilir: kesmeden önce arınır, hücre ölçüsü çizilen metinle aynı olsun.
+    const std::string shown = tail_cells(terminal_safe(name), static_cast<std::size_t>(std::max(room, 1)));
     return hbox({text(" " + shown), filler(), text(fields + " ")}) | inverted;
 }
 
@@ -311,19 +376,30 @@ ftxui::Element editor_status_bar(const EditorSession& session, int width) {
                               session.find_label(), session.message());
 
     const bool read_only = session.read_only() != EditorSession::ReadOnly::No;
-    const std::string notice = status_notice(session);
+    // İleti çoğu kez yol taşır (kopya, yeni not, hata ayrıntısı): kaynağı ne olursa olsun burada arınır.
+    const std::string notice = terminal_safe(status_notice(session));
     Elements cells;
     int used = 0;
     if (!notice.empty()) {
         Element shown = text(notice) | bold;
         cells.push_back(session.message_is_error() ? shown | color(Color::Red) : shown);
         used += string_width(notice) + static_cast<int>(kHintGap.size());
+    } else if (const std::string hidden = hidden_char_notice(*session.buffer()); !hidden.empty()) {
+        // Tanıdan önce: işaret hücresi yalnız "burada bir şey var" der, ne olduğunu bu satır söyler.
+        cells.push_back(text(hidden) | bold | color(Color::Red));
+        used += string_width(hidden) + static_cast<int>(kHintGap.size());
+    } else if (const DiagnosticMark* mark = session.diagnostic_at_cursor()) {
+        // Sunucu metni güvenilmez: denetim/bidi karakteri terminale gitmez, satır sonu ileti satırını bölmez.
+        std::string message = terminal_safe(mark->message);
+        cells.push_back(severity_styled(text(message), mark->severity));
+        used += string_width(message) + static_cast<int>(kHintGap.size());
     }
+    const bool has_notice = !cells.empty();
     // Hata ya da ileti varken kısayol sığdığı kadar yanında kalır; kelime ortasında kesilmez.
     const std::string hints = fit_hints(
         core::tr(read_only ? "tui.key_hints_editor_readonly" : "tui.key_hints_editor"), width - used);
     if (!hints.empty())
-        cells.push_back(text((notice.empty() ? "" : std::string(kHintGap)) + hints) | dim);
+        cells.push_back(text((has_notice ? std::string(kHintGap) : "") + hints) | dim);
     return hbox(std::move(cells));
 }
 

@@ -6,6 +6,7 @@
 #include "tui/completion.hpp"
 #include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
+#include "tui/language_servers.hpp"
 #include "tui/spellcheck.hpp"
 #include "tui/syntax.hpp"
 #include "tui/tui_state.hpp"
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <chrono>
 #include <doctest/doctest.h>
+#include <filesystem>
 #include <fstream>
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
@@ -21,6 +23,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace noteapp;
@@ -254,4 +257,66 @@ TEST_CASE("editor latency: pathological lines tokenize in linear time") {
     MESSAGE("tokenizer at the 64 KiB line limit: worst " << worst_large << " ms, worst 8x ratio "
                                                          << worst_ratio);
     CHECK(worst_large <= kBudgetMs);
+}
+
+TEST_CASE("editor latency: a language server stays within 50 ms per key") {
+    using namespace std::chrono_literals;
+    core::init_i18n("en");
+    // Sınırın hemen altında: daha büyük not sunucuya gitmez. Boşta süresi 0: her tuş tam metni gönderir (en
+    // kötü durum); tanılar her karede güncel tampona yeniden kısılır.
+    std::string content;
+    while (content.size() + 64 < tui::kMaxLspNoteBytes)
+        content += "def handler(event, context):\n    return {'status': 200, 'body': 'ok'}\n";
+    const test::TempDir dir;
+    test::upsert_note(dir.path(), "big.py", content);
+    core::NoteStore store(dir.path());
+    std::mutex mutex;
+    std::string clipboard;
+    tui::TuiState state;
+    state.set_notes(store.list());
+    tui::EditorSession session(tui::EditorHost{store,
+                                               mutex,
+                                               clipboard,
+                                               tui::terminal_cell_width,
+                                               content.size() * 2,
+                                               core::kDefaultSlugMaxLength,
+                                               [](std::string_view) { return std::string("py"); },
+                                               [](const core::NotePath&) {},
+                                               [&] { state.enter_editor(); },
+                                               [](std::optional<std::size_t>) {},
+                                               [](const core::Error&) {},
+                                               [] {}});
+    core::LspConfig config;
+    config.enabled = true;
+    // Mutlak yol: sunucu yalnız mutlak yolla aranır, Wine'da derleme tanımı sürücüsüzdür.
+    const std::string fake_server = std::filesystem::absolute(NOTEAPP_FAKE_LSP_SERVER).string();
+    config.servers.emplace("python", std::vector<std::vector<std::string>>{{fake_server, "normal"}});
+    tui::LanguageServers servers(config, dir.path() / "workspace", store, [] {}, 0ms, 0ms);
+    session.open(state.selected_row()->path);
+    REQUIRE(session.read_only() == tui::EditorSession::ReadOnly::No);
+    session.handle(Key::CtrlEnd);
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
+        servers.update(session, std::chrono::steady_clock::now());
+        std::this_thread::sleep_for(10ms);
+    }
+    REQUIRE_FALSE(session.diagnostics().empty());
+
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth), ftxui::Dimension::Fixed(kHeight));
+    const auto viewport = tui::editor_viewport({kWidth, kHeight}, state.layout());
+    std::vector<double> samples;
+    for (int i = 0; i < kKeystrokes; ++i) {
+        const auto start = std::chrono::steady_clock::now();
+        session.handle(Key::Char, "x");
+        session.layout(viewport.columns, viewport.rows);
+        servers.update(session, std::chrono::steady_clock::now());
+        ftxui::Render(screen, tui::render(state, {}, {"", ""}, {kWidth, kHeight}, nullptr, nullptr, nullptr,
+                                          nullptr, nullptr, &session));
+        samples.push_back(
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+    }
+    std::ranges::sort(samples);
+    MESSAGE("2 MiB python with a language server: median " << samples[samples.size() / 2] << " ms, worst "
+                                                             << samples.back() << " ms");
+    CHECK(samples.back() <= kBudgetMs);
 }

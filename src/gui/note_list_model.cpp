@@ -1,6 +1,8 @@
 #include "gui/note_list_model.hpp"
 
+#include "core/i18n.hpp"
 #include "search/fuzzy.hpp"
+#include "search/query.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -50,21 +52,64 @@ void NoteListModel::rebuild_scope() {
                          [&prefix](const core::NoteInfo& n) { return n.path.string().starts_with(prefix); });
 }
 
+// TUI kuralı: bozuk değer metin sayılmaz, liste son geçerli sorguyla kalır. Satırlar yine de her seferinde o
+// sorguyla bu kapsamdan kurulur: kapsam değiştiyse (senkron, klasör) eski satırın konumu taşardı.
 void NoteListModel::refilter() {
+    if (auto parsed = search::parse_query(query_, views_)) {
+        query_error_.reset();
+        valid_query_ = std::move(*parsed);
+    } else {
+        query_error_ = core::format_error(parsed.error().error);
+    }
+    const search::ParsedQuery* parsed = &valid_query_;
     ++resets_;
     rows_.clear();
+    // Argümansız sorguda tuş başına NoteMeta kopyası yok.
+    std::vector<core::NoteMeta> metas;
+    std::vector<std::size_t> allowed;
+    if (parsed->filters.empty() && !parsed->sort) {
+        allowed.resize(scope_.size());
+        for (std::size_t i = 0; i < allowed.size(); ++i)
+            allowed[i] = i;
+    } else {
+        metas.reserve(scope_.size());
+        for (const core::NoteInfo& note : scope_)
+            metas.push_back(core::meta_of(note));
+        allowed = search::apply(parsed->filters, std::nullopt, metas);
+    }
     if (content_) {
-        // Sıralamayı ContentIndex verdi; yalnız klasör kapsamındaki (ve hâlâ listede olan) notlar kalır.
+        // Sıralamayı ContentIndex verdi; yalnız kapsamdaki, argümandan geçen (ve hâlâ listede olan) notlar
+        // kalır.
         std::map<core::NotePath, std::size_t> in_scope;
-        for (std::size_t i = 0; i < scope_.size(); ++i)
+        for (const std::size_t i : allowed)
             in_scope.emplace(scope_[i].path, i);
         for (const auto& result : *content_)
             if (const auto found = in_scope.find(result.path); found != in_scope.end())
                 rows_.push_back({found->second, {}, result.hit_count});
-        return;
+    } else {
+        std::vector<core::NoteInfo> subset;
+        subset.reserve(allowed.size());
+        for (const std::size_t i : allowed)
+            subset.push_back(scope_[i]);
+        for (auto& ranked : search::rank_notes(parsed->text, subset))
+            rows_.push_back({allowed[ranked.index], std::move(ranked.match.positions), 0});
     }
-    for (auto& ranked : search::rank_notes(query_, scope_))
-        rows_.push_back({ranked.index, std::move(ranked.match.positions), 0});
+    if (parsed->sort)
+        sort_rows(*parsed->sort, metas);
+}
+
+void NoteListModel::sort_rows(const search::SortSpec& sort, std::span<const core::NoteMeta> metas) {
+    std::vector<std::size_t> order;
+    order.reserve(rows_.size());
+    std::map<std::size_t, Row> by_scope;
+    for (Row& row : rows_) {
+        order.push_back(row.scope_index);
+        by_scope.emplace(row.scope_index, std::move(row));
+    }
+    search::sort_notes(order, sort, metas);
+    rows_.clear();
+    for (const std::size_t index : order)
+        rows_.push_back(std::move(by_scope.at(index)));
 }
 
 void NoteListModel::set_content_results(std::optional<std::vector<search::ContentResult>> results) {

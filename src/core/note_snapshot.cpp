@@ -462,11 +462,16 @@ graph::Result<std::optional<LoadedNote>> load_note(graph::ReadTxn& txn, const No
     }
 
     const auto updated = time_of(best_head(*heads, kUpdatedAt)).value_or(0);
-    LoadedNote loaded{NoteRow{id, NoteInfo{std::move(*parsed), from_ms(updated), 0}, {}, false}, *trashed};
+    LoadedNote loaded{NoteRow{id, NoteInfo{std::move(*parsed), from_ms(updated), 0}, {}, false, {}},
+                      *trashed};
     if (auto filled = fill_info(txn, id, *heads, device, loaded.row.info, loaded.row.conflicted); !filled)
         return std::unexpected(filled.error());
     if (*trashed)
         loaded.row.trashed_at = from_ms(std::get<graph::Timestamp>(deleted->value).unix_ms);
+    auto targets = text_of(txn, id, best_head(*heads, kLinkTargets));
+    if (!targets)
+        return std::unexpected(targets.error());
+    loaded.row.link_targets = std::move(*targets);
     return std::optional<LoadedNote>(std::move(loaded));
 }
 
@@ -499,6 +504,10 @@ graph::Result<Snapshot> build_snapshot(graph::ReadTxn& txn, const std::array<std
         log_warn("note store: skipped " + std::to_string(snapshot.unreachable.size()) +
                  " unreachable notes, first: '" + snapshot.unreachable.front().name + "' (" +
                  snapshot.unreachable.front().reason + ")");
+    for (std::size_t i = 0; i < snapshot.live.size(); ++i)
+        snapshot.live_by_id.emplace(snapshot.live[i].id, i);
+    if (auto tagged = load_tags(txn, snapshot); !tagged)
+        return std::unexpected(tagged.error());
     snapshot.infos.reserve(snapshot.live.size());
     for (const NoteRow& row : snapshot.live)
         snapshot.infos.push_back(row.info);
@@ -523,6 +532,7 @@ std::shared_ptr<const Snapshot> NoteStore::Impl::current() {
             return nullptr;
         }
         graph = std::move(*opened);
+        index_derived_once();
     }
     auto txn = graph->read();
     auto fresh = txn ? refresh_in(*txn) : std::unexpected(from_graph(txn.error(), path_utf8(database())));
@@ -568,6 +578,7 @@ std::expected<void, Error> NoteStore::Impl::open_for_write() {
     if (!opened)
         return std::unexpected(from_graph(opened.error(), path_utf8(database())));
     graph = std::move(*opened);
+    index_derived_once();
     return {};
 }
 

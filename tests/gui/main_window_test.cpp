@@ -1,5 +1,6 @@
 #include "core/config.hpp"
 #include "core/i18n.hpp"
+#include "core/text.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/save_dialog.hpp"
 #include "gui/view.hpp"
@@ -102,14 +103,17 @@ TEST_CASE_FIXTURE(WindowFixture, "Up/Down in the search box move the list select
     state->focus_search();
     settle(*view);
 
-    press(*view, ImGuiKey_DownArrow);
+    // Ağaç sırası adladır (kök, alpha, beta, gamma); açılışta en yeni not (gamma) seçilidir.
+    REQUIRE(current(*state) == "gamma.md");
+    press(*view, ImGuiKey_UpArrow);
     CHECK(current(*state) == "beta.md");
     CHECK(state->buffer() == "beta body");
     press(*view, ImGuiKey_DownArrow);
     press(*view, ImGuiKey_DownArrow);  // sınırda kenetlenir
-    CHECK(current(*state) == "alpha.md");
+    CHECK(current(*state) == "gamma.md");
     press(*view, ImGuiKey_UpArrow);
-    CHECK(current(*state) == "beta.md");
+    press(*view, ImGuiKey_UpArrow);
+    CHECK(current(*state) == "alpha.md");
 }
 
 TEST_CASE_FIXTURE(WindowFixture, "Enter in the search box focuses the editor") {
@@ -194,15 +198,13 @@ TEST_CASE_FIXTURE(WindowFixture, "the folder tree selects by click and Enter und
     CHECK(state->current_folder().empty());
     CHECK(state->model().row_count() == 3);
 
-    // Kökten aşağı ok ilk klasöre (home) gider; Enter onu seçer, gezinme tek başına seçmez.
+    // Kökten aşağı ok ilk klasörü (home) hemen seçer (TUI gibi); yukarı ok köke döner.
     press(*view, ImGuiKey_DownArrow);
-    CHECK(state->current_folder().empty());
-    press(*view, ImGuiKey_Enter);
     CHECK(state->current_folder() == "home");
     CHECK(state->model().row_count() == 1);
     press(*view, ImGuiKey_UpArrow);
-    press(*view, ImGuiKey_Enter);
     CHECK(state->current_folder().empty());
+    CHECK(state->model().row_count() == 3);
 }
 
 TEST_CASE_FIXTURE(WindowFixture,
@@ -289,6 +291,55 @@ TEST_CASE_FIXTURE(WindowFixture, "the window draws a Turkish note with glyphs fr
     CHECK(ImGui::GetDrawData()->TotalVtxCount > 0);
     for (const ImWchar glyph : {0x00E7, 0x011F, 0x0131, 0x0130, 0x00F6, 0x015F, 0x00FC})
         CHECK(ImGui::GetIO().Fonts->Fonts[0]->IsGlyphInFont(glyph));
+}
+
+TEST_CASE_FIXTURE(WindowFixture, "every GUI font draws bidi and zero-width characters as a visible glyph") {
+    add_note("a.md", "a");
+    auto state = make_state();
+    auto view = make_view(*state);
+    for (ImFont* font : ImGui::GetIO().Fonts->Fonts) {
+        ImFontBaked* baked = font->GetFontBaked(ImGui::GetFontSize());
+        REQUIRE(baked != nullptr);
+        for (const noteapp::core::HiddenControl& hidden : noteapp::core::hidden_controls()) {
+            CAPTURE(static_cast<unsigned>(hidden.code_point));
+            const ImFontGlyph* glyph = baked->FindGlyph(static_cast<ImWchar>(hidden.code_point));
+            REQUIRE(glyph != nullptr);
+            CHECK(glyph->Visible);
+            CHECK(glyph->AdvanceX > 0.0F);
+        }
+    }
+}
+
+TEST_CASE_FIXTURE(WindowFixture,
+                  "a note with hidden bidi or zero-width characters gets a header warning with the count") {
+    const std::string content = "if (a\xE2\x80\xAE) {}\n\xE2\x80\x8Bx\xE2\x81\xA6\n";
+    add_note("trojan.md", content);
+    auto state = make_state();
+    auto view = make_view(*state);
+    REQUIRE(state->buffer() == content);
+    CHECK(state->hidden_controls() == 3);
+    {
+        const gui_test::RenderedText text;
+        settle(*view);
+        REQUIRE(view->item_rects().contains("hidden_controls"));
+        CHECK(text.contains(noteapp::core::tr("gui.hidden_controls", {{"count", "3"}})));
+    }
+    // Açmak ve kaydetmek baytlara dokunmaz.
+    state->save_now();
+    CHECK(read_note("trojan.md") == content);
+    state->edit_text(content + "\xE2\x80\x8F");
+    CHECK(state->hidden_controls() == 4);
+    state->save_now();
+    CHECK(read_note("trojan.md") == content + "\xE2\x80\x8F");
+
+    state->edit_text("x\xE2\x80\x8Fy");
+    CHECK(state->hidden_controls() == 1);
+    CHECK(state->hidden_controls_label() == noteapp::core::tr("gui.hidden_controls_one"));
+    state->edit_text("temiz");
+    settle(*view);
+    CHECK(state->hidden_controls() == 0);
+    CHECK(state->hidden_controls_label().empty());
+    CHECK_FALSE(view->item_rects().contains("hidden_controls"));
 }
 
 TEST_CASE_FIXTURE(WindowFixture, "typing Turkish text in the editor edits the buffer and autosaves") {
@@ -432,9 +483,10 @@ TEST_CASE_FIXTURE(WindowFixture, "Up/Down in the focused list move the selection
     auto view = make_view(*state);
     state->request_focus(FocusRequest::List);
     settle(*view);
-    press(*view, ImGuiKey_DownArrow);
-    CHECK(current(*state) == "alpha.md");
+    // Ağaç sırası adladır: kök, alpha, beta; açılışta en yeni not (beta) seçilidir.
     press(*view, ImGuiKey_UpArrow);
+    CHECK(current(*state) == "alpha.md");
+    press(*view, ImGuiKey_DownArrow);
     CHECK(current(*state) == "beta.md");
 }
 

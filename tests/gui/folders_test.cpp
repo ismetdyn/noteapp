@@ -367,16 +367,15 @@ TEST_CASE_FIXTURE(FolderFixture,
     wire(*state);
     name_answer = "proj";
 
-    // Arama → liste → ağaç (Shift+Tab iki kez), Enter içine; imleç "Tümü"de başlar, ok "work"e iner.
+    // Arama → liste (Shift+Tab), Enter içine; imleç seçili notta (work/a.md) başlar, yukarı ok klasörü seçer.
     state->focus_search();
-    settle(*view);
-    press(*view, ImGuiMod_Shift | ImGuiKey_Tab);
     settle(*view);
     press(*view, ImGuiMod_Shift | ImGuiKey_Tab);
     settle(*view);
     press(*view, ImGuiKey_Enter);
     settle(*view);
-    press(*view, ImGuiKey_DownArrow);
+    press(*view, ImGuiKey_UpArrow);
+    settle(*view);
     press(*view, ImGuiMod_Shift | ImGuiKey_F10);
     settle(*view);
     press(*view, ImGuiKey_DownArrow);  // menü imleci "Yeni klasör"de açılır: alttaki "Yeniden adlandır"

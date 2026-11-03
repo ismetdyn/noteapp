@@ -9,6 +9,7 @@
 #include <cctype>
 #include <charconv>
 #include <climits>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
@@ -27,6 +28,102 @@ constexpr std::array<std::string_view, 3> kIconModes = {"auto", "nerd", "off"};
 
 bool is_valid_type(std::string_view type) {
     return !type.empty() && type.find('.') == std::string_view::npos;
+}
+
+// LSP languageId'leri küçük harf ASCII'dir ("cpp", "shellscript"); bu küme TOML'da çıplak anahtar da olur.
+bool is_valid_language_id(std::string_view id) {
+    return !id.empty() && id.size() <= LspConfig::kMaxLanguageIdBytes && std::ranges::all_of(id, [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+    });
+}
+
+// Kabuksuz argv: boş olmayan dizgeler, boyut sınırlı. NUL exec'te argümanı keserdi, reddedilir. Boş dizi
+// geçerlidir: o dilin (varsayılan) sunucusunu kapatır.
+std::optional<std::vector<std::string>> server_command(const toml::node& node) {
+    const auto* array = node.as_array();
+    if (array == nullptr || array->size() > LspConfig::kMaxArguments)
+        return std::nullopt;
+    std::vector<std::string> argv;
+    for (const toml::node& element : *array) {
+        const auto* value = element.as_string();
+        if (value == nullptr || value->get().empty() || value->get().size() > LspConfig::kMaxArgumentBytes ||
+            value->get().find('\0') != std::string::npos)
+            return std::nullopt;
+        argv.push_back(value->get());
+    }
+    return argv;
+}
+
+// Tek argv (["clangd"]) ya da argv listesi ([["a"], ["b"]]): dilin bütün sunucuları. Boş dizi tek argv
+// yolundan geçer ve o dilin sunucularını kapatır; listedeki her argv boş olmamalıdır.
+std::optional<std::vector<std::vector<std::string>>> server_commands(const toml::node& node) {
+    const auto* array = node.as_array();
+    if (array == nullptr || array->empty() || !array->front().is_array()) {
+        auto command = server_command(node);
+        if (!command)
+            return std::nullopt;
+        if (command->empty())
+            return std::vector<std::vector<std::string>>{};
+        return std::vector<std::vector<std::string>>{std::move(*command)};
+    }
+    if (array->size() > LspConfig::kMaxServersPerLanguage)
+        return std::nullopt;
+    std::vector<std::vector<std::string>> commands;
+    for (const toml::node& element : *array) {
+        auto command = server_command(element);
+        if (!command || command->empty())
+            return std::nullopt;
+        commands.push_back(std::move(*command));
+    }
+    return commands;
+}
+
+// [lsp.settings.<dil>] düğümünün JSON karşılığı. JSON'da karşılığı olmayan (tarih, saat, nan/inf) ya da
+// sınırı aşan değer reddedilir: sunucuya yarım ayar gitmesin.
+std::optional<Json> settings_json(const toml::node& node, int depth, std::size_t& values) {
+    if (depth > LspConfig::kMaxSettingsDepth || ++values > LspConfig::kMaxSettingsValues)
+        return std::nullopt;
+    if (const auto* table = node.as_table()) {
+        Json out{.kind = Json::Kind::Object};
+        for (const auto& [key, value] : *table) {
+            auto field = settings_json(value, depth + 1, values);
+            if (!field)
+                return std::nullopt;
+            out.fields.emplace(std::string(key.str()), std::move(*field));
+        }
+        return out;
+    }
+    if (const auto* array = node.as_array()) {
+        Json out{.kind = Json::Kind::Array};
+        for (const toml::node& element : *array) {
+            auto item = settings_json(element, depth + 1, values);
+            if (!item)
+                return std::nullopt;
+            out.items.push_back(std::move(*item));
+        }
+        return out;
+    }
+    if (const auto* text = node.as_string())
+        return Json{.kind = Json::Kind::String, .text = text->get()};
+    if (const auto* flag = node.as_boolean())
+        return Json{.kind = Json::Kind::Bool, .text = flag->get() ? "true" : "false"};
+    if (const auto* integer = node.as_integer())
+        return Json{.kind = Json::Kind::Number,
+                    .text = std::to_string(integer->get()),
+                    .number = static_cast<double>(integer->get())};
+    if (const auto* real = node.as_floating_point()) {
+        const double value = real->get();
+        if (!std::isfinite(value))
+            return std::nullopt;
+        std::array<char, 32> buffer{};
+        const auto [end, error] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+        if (error != std::errc{})
+            return std::nullopt;
+        std::string token(buffer.data(), end);
+        // to_chars tamsayı görünümlü double'ı "2" yazar; JSON için yine geçerli sayıdır.
+        return Json{.kind = Json::Kind::Number, .text = std::move(token), .number = value};
+    }
+    return std::nullopt;  // tarih/saat
 }
 
 // Bir TOML tablosunu okur: tür uyuşmazlığı ve bilinmeyen anahtar uyarı olur, değer uygulanmaz.
@@ -117,6 +214,49 @@ public:
         return out;
     }
 
+    // [lsp.servers]: languageId -> argv. Bozuk girdi tek tek uyarı olur ve atlanır, geçerliler kalır: tek
+    // yazım hatası diğer dillerin sunucusunu kapatmasın.
+    std::optional<std::map<std::string, std::vector<std::vector<std::string>>>>
+    server_table(std::string_view key) {
+        const toml::table* table = table_of(key);
+        if (table == nullptr)
+            return std::nullopt;
+        std::map<std::string, std::vector<std::vector<std::string>>> out;
+        for (const auto& [id, value] : *table) {
+            const std::string entry = std::string(key) + "." + std::string(id.str());
+            if (!is_valid_language_id(id.str()))
+                invalid(entry, "must_be_language_id");
+            else if (auto commands = server_commands(value); !commands)
+                invalid(entry, "must_be_server_command");
+            else if (out.size() >= LspConfig::kMaxServers)
+                invalid(entry, "too_many_servers");
+            else
+                out.emplace(id.str(), std::move(*commands));
+        }
+        return out;
+    }
+
+    // [lsp.settings]: languageId -> JSON nesnesi. Bozuk dil girdisi uyarı olur ve atlanır.
+    std::optional<std::map<std::string, Json>> settings_table(std::string_view key) {
+        const toml::table* table = table_of(key);
+        if (table == nullptr)
+            return std::nullopt;
+        std::map<std::string, Json> out;
+        for (const auto& [id, value] : *table) {
+            const std::string entry = std::string(key) + "." + std::string(id.str());
+            std::size_t values = 0;
+            if (!is_valid_language_id(id.str()))
+                invalid(entry, "must_be_language_id");
+            else if (auto json = value.is_table() ? settings_json(value, 0, values) : std::nullopt; !json)
+                invalid(entry, "must_be_settings_table");
+            else if (out.size() >= LspConfig::kMaxServers)
+                invalid(entry, "too_many_servers");
+            else
+                out.emplace(id.str(), std::move(*json));
+        }
+        return out;
+    }
+
     // Alt tablo; var ama tablo değilse uyarı verir.
     std::optional<Section> subsection(std::string_view key) {
         const toml::node* node = find(key);
@@ -142,6 +282,17 @@ private:
     const toml::node* find(std::string_view key) {
         known_.emplace_back(key);
         return table_.get(key);
+    }
+
+    // Anahtar yoksa ya da tablo değilse (uyarıyla) nullptr.
+    const toml::table* table_of(std::string_view key) {
+        const toml::node* node = find(key);
+        if (node == nullptr)
+            return nullptr;
+        if (const auto* table = node->as_table())
+            return table;
+        invalid(key, "must_be_table");
+        return nullptr;
     }
 
     const toml::table& table_;
@@ -199,6 +350,24 @@ void apply_sync(Section& s, SyncConfig& sync) {
     s.warn_unknown();
 }
 
+void apply_lsp(Section& s, LspConfig& lsp) {
+    if (auto v = s.boolean("enabled"))
+        lsp.enabled = *v;
+    // Girdi girdi önceki katmanın (varsayılanların) üstüne biner: kullanıcı bir dili ekleyince diğerleri
+    // kalır.
+    if (auto v = s.server_table("servers"))
+        for (auto& [id, commands] : *v) {
+            if (commands.empty())
+                lsp.servers.erase(id);
+            else
+                lsp.servers.insert_or_assign(id, std::move(commands));
+        }
+    if (auto v = s.settings_table("settings"))
+        for (auto& [id, json] : *v)
+            lsp.settings.insert_or_assign(id, std::move(json));
+    s.warn_unknown();
+}
+
 void apply_tuning(Section& s, Tuning& tuning) {
     if (auto v = s.positive_integer("slug_max_length"))
         tuning.slug_max_length = static_cast<std::size_t>(*v);
@@ -220,6 +389,8 @@ void apply_tuning(Section& s, Tuning& tuning) {
         tuning.sync_stale_lock_minutes = static_cast<int>(*v);
     if (auto v = s.positive_integer("sync_timeout_seconds", INT_MAX))
         tuning.sync_timeout_seconds = static_cast<int>(*v);
+    if (auto v = s.positive_integer("graph_batch_ops", static_cast<std::int64_t>(kMaxGraphBatchOps)))
+        tuning.graph_batch_ops = static_cast<std::size_t>(*v);
     s.warn_unknown();
 }
 
@@ -258,6 +429,8 @@ void apply(const toml::table& root, Config& config, std::vector<Error>& warnings
     }
     if (auto sync = top.subsection("sync"))
         apply_sync(*sync, config.sync);
+    if (auto lsp = top.subsection("lsp"))
+        apply_lsp(*lsp, config.lsp);
     if (auto tuning = top.subsection("tuning"))
         apply_tuning(*tuning, config.tuning);
     top.warn_unknown();
@@ -346,8 +519,8 @@ std::string fraction_text(double value) {
     return out.str();
 }
 
-const std::array<TuningKey, 10>& tuning_keys() {
-    static const std::array<TuningKey, 10> table = {{
+const std::array<TuningKey, 11>& tuning_keys() {
+    static const std::array<TuningKey, 11> table = {{
         {"slug_max_length", [](const Tuning& t) { return std::to_string(t.slug_max_length); }},
         {"min_confidence", [](const Tuning& t) { return fraction_text(t.min_confidence); }},
         {"max_scan_bytes", [](const Tuning& t) { return std::to_string(t.max_scan_bytes); }},
@@ -359,8 +532,32 @@ const std::array<TuningKey, 10>& tuning_keys() {
         {"sync_stale_lock_minutes",
          [](const Tuning& t) { return std::to_string(t.sync_stale_lock_minutes); }},
         {"sync_timeout_seconds", [](const Tuning& t) { return std::to_string(t.sync_timeout_seconds); }},
+        {"graph_batch_ops", [](const Tuning& t) { return std::to_string(t.graph_batch_ops); }},
     }};
     return table;
+}
+
+// Uygulama [lsp]'yi düzenlemez: kayıt, bölümü dosyada şu an nasılsa öyle (bozuk girdiler dahil) geri yazar.
+// Bellekteki açılış kopyası yazılsaydı uygulama açıkken dosyadan kapatılan LSP ilk ayar kaydında geri
+// açılırdı. Dosya yoksa, okunamıyorsa ya da bölüm yoksa boş: varsayılan geçerli olur.
+std::string lsp_section_on_disk() {
+    std::ifstream in(config_file(), std::ios::binary);
+    if (!in)
+        return {};
+    const std::string text(std::istreambuf_iterator<char>(in), {});
+    Error ignored{Error::Code::ConfigInvalid, "", {}};
+    const auto table = parse_table(text, ignored);
+    const toml::table* lsp = table ? table->get_as<toml::table>("lsp") : nullptr;
+    if (lsp == nullptr)
+        return {};  // tablo olmayan değer yüklemede zaten yok sayılır; yazılırsa her açılışta uyarı olur
+    // Kökteki satır içi tablo (`lsp = { … }`) [sync]'ten sonra yazılınca `sync.lsp` olurdu: başlıklı yazılır.
+    toml::table copy = *lsp;
+    copy.is_inline(false);
+    toml::table section;
+    section.insert("lsp", std::move(copy));
+    std::ostringstream out;
+    out << "\n" << section << "\n";  // toml++ [lsp] ve [lsp.servers] başlıklarını kendisi yazar
+    return out.str();
 }
 
 std::string_view trim(std::string_view text) {
@@ -507,6 +704,7 @@ std::expected<void, Error> save_config(const Config& config) {
     out << "idle_seconds = " << config.sync.idle_seconds << "\n";
     out << "author_name = " << quote(config.sync.author_name) << "\n";
     out << "author_email = " << quote(config.sync.author_email) << "\n";
+    out << lsp_section_on_disk();
 
     const Tuning defaults = parse_config("").config.tuning;
     std::string tuning;

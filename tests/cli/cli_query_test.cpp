@@ -59,6 +59,20 @@ TEST_CASE("query_write_creates_the_database_and_reads_back_as_a_table") {
     CHECK(silent.out.empty());
 }
 
+// Tablo insan içindir ve her zaman temizlenir (denetim baytı gibi); betik ham değeri --json ile alır.
+TEST_CASE("query_table_shows_bidi_characters_as_a_marker_and_json_keeps_them") {
+    const Sandbox box;
+    write_ok(box, {"CREATE (:Note {name: 'gpj\xE2\x80\xAE"
+                   "exe'})"});
+    const auto table = box.run({"query", "MATCH (n:Note) RETURN n.name"});
+    CHECK(table.exit_code == 0);
+    CHECK(table.out == "n.name\ngpj\xEF\xBF\xBD"
+                       "exe\n");
+    const auto json = box.run({"query", "--json", "MATCH (n:Note) RETURN n.name"});
+    CHECK(json.exit_code == 0);
+    CHECK_FALSE(contains(json.out, "\xEF\xBF\xBD"));
+}
+
 TEST_CASE("query_is_read_only_without_write_flag") {
     const Sandbox box;
     write_ok(box, {"CREATE (:Note {name: 'a'})"});

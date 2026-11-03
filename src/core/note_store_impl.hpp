@@ -1,12 +1,14 @@
 #pragma once
 
 // İç başlık (core ve note_sync). Uygulama şeması burada: motor nottan habersizdir (SPEC-graph ilke 5).
+#include "core/config.hpp"
 #include "core/error.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
 #include "core/text_merger.hpp"
 #include "graph/graph.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -18,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -40,6 +43,11 @@ inline constexpr std::string_view kFolderLabel = "Folder";
 inline constexpr std::string_view kInFolder = "IN_FOLDER";
 inline constexpr std::string_view kChildOf = "CHILD_OF";
 inline constexpr std::string_view kLinksTo = "LINKS_TO";
+inline constexpr std::string_view kRelatedTo = "RELATED_TO";
+inline constexpr std::string_view kTagLabel = "Tag";
+inline constexpr std::string_view kTagged = "TAGGED";
+// Tag.name eşleştirme anahtarıdır (tag_key); gösterim etiketin ilk yazıldığı hali.
+inline constexpr std::string_view kTagDisplay = "display";
 inline constexpr std::string_view kName = "name";
 inline constexpr std::string_view kType = "type";
 inline constexpr std::string_view kBody = "body";
@@ -54,6 +62,10 @@ inline constexpr std::string_view kMigratedSha = "migrated_sha";
 // Gövde yazmasının gördüğü head'ler: (cihaz 16 bayt, seq 8 bayt LE) dizisi. Üç yönlü birleştirmenin tabanı
 // buradan bulunur.
 inline constexpr std::string_view kBodyParents = "body_parents";
+// Gövdedeki [[hedef]]ler (scan_links), '\n' ile birleşik; bağlantısız notta yok. Gövdenin saf fonksiyonudur:
+// her cihaz aynı değeri yazar, gidip gelmez. Sonradan oluşan hedefin kaynaklarını gövde taramadan bulur
+// (SPEC-graph "Sonradan oluşan hedef").
+inline constexpr std::string_view kLinkTargets = "link_targets";
 
 #if defined(__ANDROID__)
 inline constexpr std::string_view kOrigin = "android";
@@ -65,6 +77,11 @@ inline constexpr std::string_view kOrigin = "macos";
 inline constexpr std::string_view kOrigin = "linux";
 #endif
 inline constexpr std::string_view kOriginUnknown = "unknown";
+
+// Motorun çerçeve sınırı (graph op.hpp kMaxFrameOps; uzak cihaz çerçeveyi bununla çözer): tek işlem bunu
+// aşamaz. Bütçe (Tuning::graph_batch_ops) en çok yarısıdır: bütçe dolunca yeni iş başlamaz, kalan sonraki
+// işleme kalır; bir iş birimi (not başına bağlantılar, etiketler, kenarlar) kalan yarıya sığar.
+inline constexpr std::size_t kMaxTxnOps = 2 * kMaxGraphBatchOps;
 
 // Görüntünün çözdüğü en derin ve en uzun klasör yolu; sınır aşan yol kümenin saf fonksiyonudur, her cihazda
 // aynı klasörler geçersiz sayılır. Yazma aynı sınırı dayatır: yoksa kayıt başarılı döner, not görünmez
@@ -80,6 +97,13 @@ Error already_exists(std::string_view path);
 Error from_graph(const graph::Error& error, std::string_view path);
 std::string path_utf8(const std::filesystem::path& path);
 std::string id_hex(const graph::NodeId& id);
+inline std::span<const std::byte> as_bytes(std::string_view text) {
+    return std::as_bytes(std::span(text.data(), text.size()));
+}
+// Kimliğin ham 16 baytı: türetilmiş kenar kimliklerinin girdisi.
+inline std::string id_text(const graph::NodeId& id) {
+    return std::string(reinterpret_cast<const char*>(id.bytes.data()), id.bytes.size());
+}
 std::expected<NotePath, Error> numbered_path(const NotePath& path, int number);
 
 struct NoteParts {
@@ -93,8 +117,12 @@ struct NoteRow {
     graph::NodeId id;
     NoteInfo info;  // info.path gösterilen yol: çakışmada -2 alır, saklanmaz
     std::filesystem::file_time_type trashed_at{};
-    bool conflicted = false;  // gövdede birden çok head
+    bool conflicted = false;   // gövdede birden çok head
+    std::string link_targets;  // kLinkTargets değeri
 };
+
+// [[hedef]] metni -> canlı not. Yazma ve panel aynı kuralla çözer.
+using LinkIndex = std::unordered_map<std::string, graph::NodeId>;
 
 // Bir okumanın tüm türetilmiş yolları. Yazma ve okuma aynı kuralı kullansın diye tek yerde kurulur.
 struct Snapshot {
@@ -102,19 +130,46 @@ struct Snapshot {
     std::vector<NoteRow> trash;
     std::vector<NoteInfo> infos;
     std::unordered_map<std::string, std::size_t> live_by_path;
+    std::map<graph::NodeId, std::size_t> live_by_id;
     std::unordered_map<std::string, std::size_t> trash_by_path;
+    // İlk çözümde kurulur (link_index_of), hiç bağlantısı olmayan kullanıcı bedel ödemez. Impl::mutex
+    // altında.
+    mutable std::optional<LinkIndex> link_index;
     std::vector<UnreachableNote> unreachable;
     std::map<std::string, std::vector<graph::NodeId>>
-        folders;  // aynı yolda eşzamanlı kurulmuş birden çok düğüm olabilir
+        folders;                 // aynı yolda eşzamanlı kurulmuş birden çok düğüm olabilir
+    std::vector<TagCount> tags;  // canlı notu olan etiketler, ada göre
+    // `view:` süzgecinin sonucu, görünüm anahtarı -> notlar ya da hata. İlk istekte kurulur (view_notes): tuş
+    // başına süzme sorguyu yeniden çalıştırmaz, görüntü değişince düşer. Hata da saklanır: senkronla gelen
+    // bozuk görünüm (süre sınırı, not döndürmeyen sonuç) her tuşta kilidi saniyelerce tutmasın. Impl::mutex
+    // altında.
+    mutable std::map<std::string, std::expected<std::vector<NotePath>, Error>> view_results;
     bool path_taken(const std::string& path) const {
         return live_by_path.contains(path) || folders.contains(path);
     }
 };
 
 graph::Result<Snapshot> build_snapshot(graph::ReadTxn& txn, const std::array<std::byte, 16>& device);
+// Canlı notların NoteInfo::tags'ini ve snapshot.tags'i doldurur; live_by_id kurulmuş olmalı.
+graph::Result<void> load_tags(graph::ReadTxn& txn, Snapshot& snapshot);
+// Notun TAGGED komşularının gösterim adları, anahtar sırasıyla.
+graph::Result<std::vector<std::string>> read_note_tags(graph::ReadTxn& txn, const graph::NodeId& id);
 
-// [[bağlantı]] hedefleri; "|takma ad" ve "#başlık" atılır.
+// `[[` ile `]]` arasındaki ham metnin çözüm anahtarı: "|takma ad" ve "#başlık" atılır, kenar boşlukları
+// kırpılır. Çok uzun ya da satır sonlu hedef bağlantı değildir: boş döner.
+std::string_view link_target(std::string_view raw);
+// [[bağlantı]] hedefleri (link_target kuralıyla), sıralı ve tekil.
 std::vector<std::string> scan_links(std::string_view body);
+const LinkIndex& link_index_of(const Snapshot& snapshot);
+// kLinkTargets'inde anahtarlardan biri olan notlar (canlı ve çöp). Bellekteki küçük metinler üzerinde
+// doğrusal bakar, gövde okumaz.
+std::set<graph::NodeId> notes_linking(const Snapshot& snapshot, std::span<const std::string> keys);
+// Bir yolun çözüm anahtarları, öncelik sırasıyla: yol, uzantısız yol, dosya adı, yalın ad; anlamsız düzey
+// boş.
+std::array<std::string, 4> link_keys(std::string_view path);
+std::vector<std::string> placed_keys(std::span<const std::string> paths);
+// Canlı ya da çöpteki notun yolu; görüntüde yoksa boş.
+std::optional<std::string> note_path_in(const Snapshot& snapshot, const graph::NodeId& id);
 
 std::expected<bool, Error> verify_import(graph::ReadTxn& txn, const ImportedNote& note);
 // Geçiş notunun baytlarını tutabilecek düğümler (asıl ve kopya), UnreachableNote::id biçiminde.
@@ -138,9 +193,30 @@ public:
     std::expected<void, Error> clear_trashed(const graph::NodeId& id, std::string_view path);
     std::expected<std::optional<graph::NodeId>, Error> ensure_folder(std::string_view path);
     std::expected<void, Error> rename_folder(std::span<const graph::NodeId> ids, std::string_view target);
-    std::expected<ImportOutcome, Error> import_notes(std::span<const ImportedNote> notes);
+    // Bütçe dolana dek içe aktarır (en az bir not); consumed işlenen not sayısıdır, kalan yeni işleme kalır.
+    std::expected<ImportOutcome, Error> import_notes(std::span<const ImportedNote> notes,
+                                                     std::size_t& consumed);
     std::expected<void, Error> update_links(const graph::NodeId& id, std::string_view path,
                                             std::string_view body);
+    // Yalnız ekler: gövdenin index'te çözülen ama kenarı olmayan hedeflerine kenar kurar, hiçbir kenarı
+    // silmez. Türetilmiş eklemedir; iki cihaz aynı kenara varır, gidip gelmez.
+    std::expected<void, Error> add_missing_links(const graph::NodeId& id, std::string_view path,
+                                                 std::string_view body, const LinkIndex& index);
+    // Not bu işlemde yeni bir yola geldi (oluşturma, taşıma, geri alma, klasör adı): commit'ten önce
+    // link_appeared onu bağlayan kaynakların kenarlarını kurar.
+    void note_placed(const graph::NodeId& id, std::string path) { placed_.emplace_back(id, std::move(path)); }
+    // Yeni yola gelen notları [[metin]]le bağlayan notlara kenar ekler; çözüm işlem sonrası durumla yapılır.
+    // write_locked commit'ten önce çağırır.
+    std::expected<void, Error> link_appeared(const std::array<std::byte, 16>& device);
+    // Gövdenin `#etiket`lerine göre TAGGED kenarlarını kurar; sahipsiz kalan Tag silinir. path tipi verir.
+    std::expected<void, Error> update_tags(const graph::NodeId& id, std::string_view path,
+                                           std::string_view body);
+    // Notun canlı ya da çöpteki yolu; görüntüde yoksa boş (etiket tipi yoldan okunur).
+    std::optional<std::string> path_of(const graph::NodeId& id) const;
+    std::expected<void, Error> add_relation(const graph::NodeId& from, const graph::NodeId& to,
+                                            std::string_view path);
+    std::expected<void, Error> remove_relation(const graph::NodeId& one, const graph::NodeId& other,
+                                               std::string_view path);
     // Gövdede farklı değerli head'ler varsa kaybedenleri kopya nota çıkarır, gövdeyi kazananda birleştirir.
     // Kopyanın kimliği ve adı (note, kaybeden dot)'tan türer: iki cihaz aynı düğüme varır. Dönüş: yeni
     // kopyalar.
@@ -154,8 +230,20 @@ public:
     std::expected<ConflictStep, Error> resolve_conflict_step(const graph::NodeId& id,
                                                              const TextMerger& merger = {});
 
+    // Bütçe doldu mu: yeni iş birimi bu işlemde başlamaz.
+    bool over_budget() const { return txn.pending_ops() >= budget; }
+
     graph::WriteTxn& txn;
     const Snapshot& snapshot;
+    std::size_t budget = kDefaultGraphBatchOps;
+    // İş bu işleme sığmadı: write_locked commit eder, gövdeyi yeni işlemde yeniden çağırır. Gövde yinelenince
+    // kalan işi yapacak biçimde yazılır (yolu yeniden arar, yapılmışı atlar).
+    bool again = false;
+    // Türetilmiş veri bu işlemde tamamlanmadı: commit'ten önce türetme işaretleri düşer, süreç arada ölürse
+    // sonraki açılış tamamlar (index_derived_once).
+    bool derived_incomplete = false;
+    // Bütçeye sığmayan, eksik kenarları commit'ten hemen sonra ayrı işlemlerde eklenecek notlar.
+    std::vector<graph::NodeId> deferred;
 
 private:
     std::expected<graph::NodeId, Error> add_folder_node(const std::optional<graph::NodeId>& parent,
@@ -170,7 +258,8 @@ private:
     std::expected<void, Error> import_one(const ImportedNote& note, ImportOutcome& outcome);
     std::expected<void, Error> import_existing(const ImportedNote& note, const graph::NodeId& id,
                                                ImportOutcome& outcome);
-    const std::unordered_map<std::string, graph::NodeId>& link_index();
+    std::expected<std::vector<graph::EdgeId>, Error>
+    relation_edges(const graph::NodeId& one, const graph::NodeId& other, std::string_view path);
     std::expected<NotePath, Error> conflict_copy_path(const graph::NodeId& id, const graph::NodeId& copy,
                                                       std::int64_t at);
     // Farklı head'lerin temiz üç yönlü birleşimi; taban yok, ikili, geçersiz UTF-8 ya da çakışma: boş.
@@ -183,11 +272,23 @@ private:
     std::expected<std::optional<NotePath>, Error> copy_losing_head(const graph::NodeId& id,
                                                                    const graph::Version& version);
     std::expected<void, Error> set_body_parents(const graph::NodeId& id, std::string_view path);
+    std::expected<void, Error> ensure_tag(const graph::NodeId& tag, const std::string& key,
+                                          const std::string& display, std::string_view path);
+    std::expected<void, Error> remove_orphan_tag(const graph::NodeId& tag, std::string_view path);
+    std::expected<std::vector<std::pair<graph::EdgeId, graph::NodeId>>, Error>
+    neighbor_edges(const graph::NodeId& id, graph::Direction direction, std::optional<std::string_view> type,
+                   std::string_view path);
     std::expected<bool, Error> is_stale_import(const graph::NodeId& id, const graph::Version& version);
     std::expected<std::int64_t, Error> version_time(const graph::NodeId& id, const graph::Version& version);
 
+    std::expected<void, Error> set_link_targets(const graph::NodeId& id, std::string_view path,
+                                                const std::vector<std::string>& targets);
+    std::expected<void, Error> put_link(const graph::NodeId& from, const graph::NodeId& to,
+                                        std::string_view path);
+
     std::map<std::string, graph::NodeId> added_folders_;
-    std::optional<std::unordered_map<std::string, graph::NodeId>> link_index_;
+    std::vector<std::pair<graph::NodeId, std::string>> placed_;
+    std::set<std::string> written_targets_;  // bu işlemde kLinkTargets'i yazılan notların hedefleri
 };
 
 struct NoteStore::Impl {
@@ -199,6 +300,15 @@ struct NoteStore::Impl {
     std::shared_ptr<const Snapshot> current();
     std::expected<void, Error> check_gate();
     std::expected<void, Error> open_for_write();
+    // Tags: yalnız etiketler. Links: bağlantılar baştan ve etiketler (geçiş). MissingLinks: yalnız eksik
+    // bağlantı kenarları ve kLinkTargets (eski veri).
+    enum class Derive { Tags, Links, MissingLinks };
+    // Gövdeden türeyen veriyi her canlı notta yeniden kurar; işlem bütçesinde bölünür. mutex tutulurken
+    // çağrılır.
+    std::expected<void, Error> rederive_locked(Derive what);
+    // Önceki sürümün grafı: ilk açılışta bir kez etiketler ve sonradan oluşan hedeflerin kenarlarını kurar
+    // (SPEC-graph "Etiketler", "Sonradan oluşan hedef").
+    void index_derived_once();
     std::expected<std::pair<std::string, Revision>, Error> read_body(const graph::NodeId& id,
                                                                      std::string_view path);
 
@@ -215,30 +325,40 @@ struct NoteStore::Impl {
     }
     // keep_snapshot: çağıran art arda küçük yazmalar yapıyor ve eski görüntü işine yarıyor; her adımda
     // yeniden kurulmaz.
+    // Kullanıcı işlemi çerçeve sınırına takılmaz: sığmayan iş (again) gövdenin yeni işlemde yinelenmesiyle,
+    // sığmayan türetilmiş kenarlar (deferred) commit'ten hemen sonraki işlemlerde sürer. Her işlem atomiktir.
     template <class R, class F> std::expected<R, Error> write_locked(F&& body, bool keep_snapshot = false) {
         if (auto opened = open_for_write(); !opened)
             return std::unexpected(opened.error());
-        auto txn = opened_graph().write();
-        if (!txn)
-            return std::unexpected(from_graph(txn.error(), path_utf8(database())));
-        auto fresh = refresh_in(*txn);
-        if (!fresh)
-            return std::unexpected(fresh.error());
-        WriteContext context(*txn, **fresh);
-        auto result = std::forward<F>(body)(context);
-        if (!result)
-            return result;
-        if (auto committed = txn->commit(); !committed)
-            return std::unexpected(from_graph(committed.error(), path_utf8(database())));
-        if (!keep_snapshot)
-            snapshot.reset();
-        return result;
+        while (true) {
+            Pass pass;
+            auto result = write_pass<R>(body, pass);
+            if (!result)
+                return result;
+            if (!keep_snapshot || pass.again || !pass.deferred.empty())
+                snapshot.reset();
+            if (!pass.deferred.empty())
+                derive_follow_up(pass.deferred);
+            if (!pass.again)
+                return result;
+            if (!follow_up_allowed_now())
+                return std::unexpected(io_error(path_utf8(database()), "interrupted"));
+        }
     }
+    // Kullanıcı işleminden sonra bütçeye sığmayan türetilmiş kenarlar. Hata kullanıcı işlemini geri almaz:
+    // loglanır, işaretler düştüğünden sonraki açılış tamamlar. mutex tutulurken çağrılır.
+    void derive_follow_up(const std::vector<graph::NodeId>& ids);
+    // Notların gövdeden türeyen eksik verisi (tags: etiketler de), bütçeli işlemlerle. mutex tutulurken.
+    std::expected<void, Error> derive_notes(const std::vector<graph::NodeId>& ids, bool tags);
+    // Türetme tamamlanmadan commit edilecek işlemden önce: sonraki açılış türetmeyi baştan tamamlar.
+    void drop_derived_markers();
+    bool follow_up_allowed_now() const { return !follow_up_allowed || follow_up_allowed(); }
 
     std::filesystem::path directory;
     std::size_t slug_max_length;
     std::optional<std::filesystem::path> legacy_notes_dir;
-    bool gate_open = false;  // geçiş bir kez doğrulandıysa süreç boyunca yeniden taranmaz
+    bool gate_open = false;        // geçiş bir kez doğrulandıysa süreç boyunca yeniden taranmaz
+    bool derived_checked = false;  // index_derived_once süreç başına bir kez bakar
     std::mutex mutex;
     std::optional<graph::Graph> graph;
     // open_for_write ya da current başarılıysa dolu, sonra hiç boşalmaz. İhlal bug'dır: UB yerine durur.
@@ -250,10 +370,54 @@ struct NoteStore::Impl {
     std::shared_ptr<const Snapshot> snapshot;
     std::uint64_t snapshot_version = 0;
     std::optional<Error> last_error;
+    // Test dikişi: motorun çerçeve sınırının küçültülmüş kopyası. Aşan işlem commit edilmez, bütçe yarısıdır.
+    // 65.000 not kurmadan "sınırı aşan kullanıcı işlemi" sınanır.
+    std::size_t txn_ops_limit = kMaxTxnOps;
+    // Ayar: [tuning] graph_batch_ops (for_config). Bir işlemin bütçesi; sınır değildir, iş bölünür.
+    std::size_t batch_ops = kDefaultGraphBatchOps;
+    // Test dikişi: commit edilmiş bir kullanıcı işleminin ardından gelen işlemlerden önce sorulur; false
+    // süreç orada ölmüş gibi durdurur (sonraki açılışın tamamladığı sınanır).
+    std::function<bool()> follow_up_allowed;
     // Test dikişi: copy_folder'ın iki işlemi arası, kilit tutulmazken. Eşzamanlı yazarı belirlenimli kılar.
     std::function<void()> after_copy_batch;
+    // Test dikişi: rederive_locked'ın iki işlemi arası. Başka bağlantının yazmasını belirlenimli kılar.
+    std::function<void()> after_rederive_batch;
+    // Test dikişi: görünüm sorgusu motora gitmeden hemen önce. Önbelleğin motoru kaç kez çalıştırdığını
+    // sayar.
+    std::function<void()> before_view_run;
 
 private:
+    struct Pass {
+        bool again = false;
+        std::vector<graph::NodeId> deferred;
+    };
+    template <class R, class F> std::expected<R, Error> write_pass(F& body, Pass& pass) {
+        auto txn = opened_graph().write();
+        if (!txn)
+            return std::unexpected(from_graph(txn.error(), path_utf8(database())));
+        auto fresh = refresh_in(*txn);
+        if (!fresh)
+            return std::unexpected(fresh.error());
+        WriteContext context(*txn, **fresh);
+        context.budget = std::max<std::size_t>(1, std::min(batch_ops, txn_ops_limit / 2));
+        auto result = body(context);
+        if (!result)
+            return result;
+        if (auto linked = context.link_appeared(opened_graph().device()); !linked)
+            return std::unexpected(linked.error());
+        if (txn->pending_ops() > txn_ops_limit)  // üretimde motor da reddeder; dikişte küçük sınır burada
+            return std::unexpected(from_graph(graph::Error{graph::Error::Code::LimitExceeded,
+                                                           "graph.limit_exceeded",
+                                                           {{"limit", "frame_ops"}}},
+                                              path_utf8(database())));
+        if (context.derived_incomplete)
+            drop_derived_markers();
+        if (auto committed = txn->commit(); !committed)
+            return std::unexpected(from_graph(committed.error(), path_utf8(database())));
+        pass.again = context.again;
+        pass.deferred = std::move(context.deferred);
+        return result;
+    }
     std::expected<std::shared_ptr<const Snapshot>, Error> refresh_in(graph::ReadTxn& txn);
 };
 

@@ -6,6 +6,7 @@
 #include "core/paths.hpp"
 #include "core/text.hpp"
 #include "tui/display_text.hpp"
+#include "tui/settings.hpp"
 
 #include <algorithm>
 #include <array>
@@ -56,6 +57,9 @@ void value_of(const Table& table, std::string_view name, Value& out) {
 std::filesystem::path prefs_path() {
     return core::state_dir() / std::filesystem::path(kPrefsFile);
 }
+
+constexpr std::string_view kIconsNerd = "nerd";
+constexpr std::string_view kIconsOff = "off";
 
 // Aynı adda yer açarken denenecek en çok ad; depo aynı sınırı kullanır.
 constexpr int kMaxNameTries = 1000;
@@ -130,7 +134,10 @@ std::string format_list_prefs(const ListPrefs& prefs) {
                 ? std::string{}
                 : "search_history = " + format_search_history(prefs.search_history) + "\n") +
            (open_folders.empty() ? std::string{}
-                                 : "open_folders = " + format_search_history(open_folders) + "\n");
+                                 : "open_folders = " + format_search_history(open_folders) + "\n") +
+           (prefs.recent_commands.empty()
+                ? std::string{}
+                : "recent_commands = " + format_search_history(prefs.recent_commands) + "\n");
 }
 
 ListPrefs parse_list_prefs(std::string_view text) {
@@ -158,6 +165,11 @@ ListPrefs parse_list_prefs(std::string_view text) {
         else if (key == "open_folders")
             std::ranges::move(parse_quoted_list(line.substr(equals + 1)),
                               std::inserter(prefs.open_folders, prefs.open_folders.end()));
+        else if (key == "recent_commands") {
+            prefs.recent_commands = parse_quoted_list(line.substr(equals + 1));
+            if (prefs.recent_commands.size() > TuiState::kMaxRecentCommands)
+                prefs.recent_commands.resize(TuiState::kMaxRecentCommands);
+        }
     }
     if (!versioned && prefs.column == ListColumn::None)
         prefs.column = ListColumn::SizeAndDate;
@@ -402,9 +414,24 @@ void ListActions::paste() {
     publish(report, "tui.paste_done");
 }
 
+void ListActions::run(Intent intent, std::optional<ConfirmState>& confirm,
+                      std::optional<RenameState>& rename) {
+    if (intent == Intent::LinkNote)
+        begin_link(rename);
+    else
+        run(intent, confirm);
+}
+
 void ListActions::run(Intent intent, std::optional<ConfirmState>& confirm) {
     batch_pending_ = BatchAction::None;
+    relation_target_.reset();
     switch (intent) {
+    case Intent::UnlinkSelected:
+        begin_unlink(confirm);
+        break;
+    case Intent::LinkMissing:
+        host_.status.message = core::tr("tui.link_missing");
+        break;
     case Intent::CopyNote:
         copy_selected();
         break;
@@ -431,6 +458,9 @@ void ListActions::run(Intent intent, std::optional<ConfirmState>& confirm) {
         break;
     case Intent::SavePrefs:
         save_prefs();
+        break;
+    case Intent::ToggleIcons:
+        toggle_icons();
         break;
     default:
         break;
@@ -780,8 +810,68 @@ void ListActions::empty_trash() {
     host_.notify_changed();
 }
 
+void ListActions::begin_link(std::optional<RenameState>& rename) {
+    if (const Row* row = host_.state.selected_row())
+        rename.emplace(RenameState::LinkTarget{}, row->path, host_.state.input_sources());
+}
+
+void ListActions::submit_link(std::optional<RenameState>& rename) {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
+    RenameState& input = *rename;
+    const auto target = core::NotePath::parse(input.target());
+    if (!target) {
+        input.set_error(core::format_error(target.error()));
+        return;
+    }
+    const auto added = [&] {
+        const std::scoped_lock lock(host_.store_mutex);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+        return host_.store->add_relation(input.from(), *target);
+    }();
+    if (!added) {
+        input.set_error(core::format_error(added.error()));
+        return;
+    }
+    host_.status.message = core::tr("tui.related", {{"path", terminal_safe(target->string())}});
+    rename.reset();
+    host_.refresh_notes();
+    host_.notify_changed();
+}
+
+void ListActions::begin_unlink(std::optional<ConfirmState>& confirm) {
+    const Row* row = host_.state.selected_row();
+    const core::NotePath* other = host_.state.link_panel().selected_path();
+    if (!row || !other)
+        return;
+    relation_target_ = std::pair(row->path, *other);
+    confirm.emplace(core::tr("tui.confirm_unlink", {{"from", terminal_safe(row->path.string())},
+                                                    {"to", terminal_safe(other->string())}}),
+                    core::tr("tui.unlink_title"));
+}
+
+void ListActions::finish_unlink() {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- finish_delete denetledi
+    const auto [first, second] = *std::exchange(relation_target_, std::nullopt);
+    const auto removed = [&] {
+        const std::scoped_lock lock(host_.store_mutex);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+        return host_.store->remove_relation(first, second);
+    }();
+    if (!removed) {
+        host_.status.message = terminal_safe(core::format_error(removed.error()));
+        return;
+    }
+    host_.status.message = core::tr("tui.unlinked", {{"path", terminal_safe(second.string())}});
+    host_.refresh_notes();
+    host_.notify_changed();
+}
+
 void ListActions::finish_delete(std::optional<ConfirmState>& confirm) {
     confirm.reset();
+    if (relation_target_) {
+        finish_unlink();
+        return;
+    }
     if (const BatchAction batch = std::exchange(batch_pending_, BatchAction::None);
         batch != BatchAction::None) {
         if (batch == BatchAction::Trash)
@@ -1041,6 +1131,11 @@ void ListActions::submit_rename(std::optional<RenameState>& rename) {
         return;
     }
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
+    if (rename->is_link()) {
+        submit_link(rename);
+        return;
+    }
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
     const core::NotePath from = rename->from();
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
     const std::string target = rename->target();
@@ -1074,6 +1169,31 @@ void ListActions::submit_rename(std::optional<RenameState>& rename) {
     host_.status.message = core::tr(
         "tui.moved", {{"from", terminal_safe(from.string())}, {"to", terminal_safe(moved->string())}});
     host_.notify_changed();
+}
+
+void ListActions::save_prefs_if_changed() {
+    if (host_.state.take_prefs_changed())
+        save_prefs();
+}
+
+// Ayarlar ekranıyla aynı kural: okunamayan config.toml ezilmez; yazılamazsa eski değer kalır.
+void ListActions::toggle_icons() {
+    if (!host_.config)
+        return;
+    if (user_config_broken()) {
+        const std::u8string path = core::config_file().u8string();
+        host_.status.message = core::tr("tui.settings_config_broken",
+                                        {{"path", terminal_safe(std::string(path.begin(), path.end()))}});
+        return;
+    }
+    core::Config next = *host_.config;
+    next.icons = next.icons == kIconsOff ? kIconsNerd : kIconsOff;
+    if (const auto saved = core::save_config(next); !saved) {
+        host_.status.message = terminal_safe(core::format_error(saved.error()));
+        return;
+    }
+    host_.config->icons = next.icons;
+    host_.state.set_icon_style(core::terminal_icon_style(next.icons));
 }
 
 void ListActions::save_prefs() {

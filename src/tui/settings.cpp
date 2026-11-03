@@ -66,8 +66,8 @@ std::string to_utf8(const std::filesystem::path& p) {
     return std::string(u.begin(), u.end());
 }
 
-// Kullanıcının config.toml'u okunamıyorsa save_config onu varsayılanlarla ezerdi (note config set ile aynı
-// kural).
+}  // namespace
+
 bool user_config_broken() {
     const core::LoadedConfig loaded = core::load_config();
     for (const core::Error& warning : loaded.warnings)
@@ -75,8 +75,6 @@ bool user_config_broken() {
             return true;
     return false;
 }
-
-}  // namespace
 
 TokenStore system_token_store() {
     return {[](std::string_view host) { return sync::has_token(host); },

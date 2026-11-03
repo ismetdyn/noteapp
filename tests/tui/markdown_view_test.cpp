@@ -295,6 +295,18 @@ TEST_CASE("wrapping is by cells and never splits a Turkish code point") {
     check_fits(wide, 10);
 }
 
+TEST_CASE("markdown view: bidi and zero-width characters render as a visible marker in their place") {
+    const std::string joined_text = joined(md("# ba\xe2\x80\xaeşlık\n\nmetin\xe2\x80\x8b"
+                                              "x \xe2\x81\xa6y `k\xe2\x80\x8dz`\n"));
+    CHECK_FALSE(contains(joined_text, "\xe2\x80\xae"));
+    CHECK_FALSE(contains(joined_text, "\xe2\x80\x8b"));
+    CHECK_FALSE(contains(joined_text, "\xe2\x81\xa6"));
+    CHECK(contains(joined_text, "k\xe2\x80\x8dz"));  // ZWJ gizli karakter sayılmaz
+    CHECK(contains(joined_text, "ba\xef\xbf\xbdşlık"));
+    CHECK(contains(joined_text, "metin\xef\xbf\xbdx"));
+    CHECK(contains(joined_text, "\xef\xbf\xbdy"));
+}
+
 TEST_CASE("control and bidi bytes never reach the terminal") {
     const std::string hostile =
         "# ba\x1b[31mşlık\n\nmetin \x1b]8;;http://x\x07y\xc2\x9b z \xe2\x80\xae\x07\n\n"

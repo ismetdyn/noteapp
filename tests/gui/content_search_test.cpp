@@ -401,8 +401,11 @@ TEST_CASE_FIXTURE(ContentFixture, "clicking a folder in the tree limits the cont
     state->toggle_search_mode();
     state->set_query("istanbul");
     REQUIRE(rows(*state).size() == 2);
-    view->draw_frame();
+    // Arama sürerken ağaç gizlidir (düz sonuç): klasör önce ağaçta seçilir, arama onun içinde kalır.
+    state->set_query("");
+    gui_test::settle(*view);
     gui_test::click_button(*view, "folder:work");
+    state->set_query("istanbul");
     CHECK(rows(*state) == std::vector<std::string>{"work/a.md  (1)"});
 }
 

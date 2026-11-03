@@ -8,10 +8,15 @@ add_library(noteapp_tui
     data_view.cpp
     child_process.cpp
     clipboard.cpp
+    commands.cpp
     completion.cpp
     spellcheck.cpp
+    lsp_client.cpp
+    lsp_workspace.cpp
+    language_servers.cpp
+    server_settings.cpp
+    link_panel.cpp
     list_actions.cpp
-    folder_tree.cpp
     input_line.cpp
     input_view.cpp
     sync_status_worker.cpp

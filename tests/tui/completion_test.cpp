@@ -338,6 +338,20 @@ TEST_CASE("spell: the first call never blocks, the answer arrives through on_rea
     CHECK(fake.args().find("-i utf-8") != std::string::npos);
 }
 
+// Windows'ta hunspell'in stdout'u metin kipindedir: her satır \r\n ile biter, yanıt sonu \r\n\r\n olur.
+TEST_CASE("spell: CRLF replies are understood") {
+    FakeHunspell fake;
+    fake.install("{\n" + kFakeBody + "\n} | /usr/bin/sed -u 's/$/\\r/'");
+    tui::SpellChecker spell("en_US", fake.on_ready(), kNoIdle);
+    spell.misspelled("iyi kotu sozcuk");
+    REQUIRE(eventually([&] { return !spell.misspelled("iyi kotu sozcuk").empty(); }));
+    const auto ranges = spell.misspelled("iyi kotu sozcuk");
+    REQUIRE(ranges.size() == 1);
+    CHECK(ranges[0].begin == 4);
+    CHECK(ranges[0].end == 8);
+    CHECK_FALSE(spell.disabled());
+}
+
 TEST_CASE("spell: Turkish words and repeats map to the right bytes; a line cannot run hunspell commands") {
     FakeHunspell fake;
     fake.install(kFakeBody);

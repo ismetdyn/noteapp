@@ -474,7 +474,7 @@ std::expected<std::string, core::Error> save_to_bytes(HPDF_Doc doc) {
 NoteFormat format_for(const std::filesystem::path& note_path) {
     std::string extension = note_path.extension().string();
     std::ranges::transform(extension, extension.begin(), [](unsigned char c) { return std::tolower(c); });
-    return extension == ".md" ? NoteFormat::Markdown : NoteFormat::PlainText;
+    return extension == ".md" || extension == ".markdown" ? NoteFormat::Markdown : NoteFormat::PlainText;
 }
 
 std::expected<void, core::Error> export_pdf(std::string_view text, NoteFormat format,

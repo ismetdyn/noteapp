@@ -29,6 +29,9 @@ constexpr const char* kDelete = "toolbar_delete";
 constexpr const char* kTrash = "toolbar_trash";
 constexpr const char* kMove = "toolbar_move";
 constexpr const char* kExport = "toolbar_export";
+constexpr const char* kRename = "toolbar_rename";
+constexpr const char* kViewTree = "toolbar_view_tree";
+constexpr const char* kViewDetails = "toolbar_view_details";
 const std::string kBinary("bin\0ary", 7);
 
 bool is_disabled(const View& view, const std::string& name) {
@@ -171,6 +174,7 @@ TEST_CASE("toolbar disables selection buttons when no note is selected") {
     scene.open();
     CHECK_FALSE(is_disabled(*scene.view, kNewNote));
     CHECK_FALSE(is_disabled(*scene.view, kNewFolder));
+    CHECK(is_disabled(*scene.view, kRename));
     CHECK(is_disabled(*scene.view, kDelete));
     CHECK(is_disabled(*scene.view, kMove));
     CHECK(is_disabled(*scene.view, kExport));
@@ -183,6 +187,7 @@ TEST_CASE("toolbar enables selection buttons for a normal note") {
     CHECK_FALSE(is_disabled(*scene.view, kDelete));
     CHECK_FALSE(is_disabled(*scene.view, kMove));
     CHECK_FALSE(is_disabled(*scene.view, kExport));
+    CHECK_FALSE(is_disabled(*scene.view, kRename));
 }
 
 TEST_CASE("toolbar Export is disabled on a binary note, which it cannot export") {
@@ -202,6 +207,7 @@ TEST_CASE("toolbar on a draft: Delete and Move off, Export only once there is te
     settle(*scene.view);
     CHECK(is_disabled(*scene.view, kDelete));
     CHECK(is_disabled(*scene.view, kMove));
+    CHECK(is_disabled(*scene.view, kRename));
     // Boş taslakta Ctrl+E taslağı sessizce atar: düğme bunu tıklamayla tetiklememeli.
     CHECK(is_disabled(*scene.view, kExport));
     click_button(*scene.view, kExport);
@@ -229,7 +235,8 @@ TEST_CASE("every toolbar button has a tooltip naming its shortcut, even when dis
     scene.open();
     const std::pair<const char*, const char*> expected[] = {
         {kNewNote, "Ctrl+N"}, {kNewFolder, "New folder"}, {kDelete, "Shift+Del"},
-        {kTrash, "Trash"},    {kMove, "Ctrl+M"},          {kExport, "Ctrl+E"}};
+        {kTrash, "Trash"},    {kMove, "Ctrl+M"},          {kExport, "Ctrl+E"},
+        {kRename, "Rename"},  {kViewTree, "one tree"},    {kViewDetails, "current folder"}};
     for (const auto& [name, text] : expected) {
         CAPTURE(name);
         const auto [x, y] = scene.view->button_center(name);
@@ -260,26 +267,27 @@ TEST_CASE("the empty list tells how to create a note") {
     CHECK_FALSE(rendered.contains("Ctrl+N"));
 }
 
-TEST_CASE("toolbar wraps inside the narrowest sidebar at every scale") {
+TEST_CASE("toolbar spans the window above both panes and wraps in the smallest window at every scale") {
     for (const float scale : {1.0F, 1.25F, 1.5F, 2.0F}) {
         CAPTURE(scale);
-        gui_test::LayoutScene scene(1000, 650, scale);
-        scene.state->layout().left_pane_width = 1.0F;
-        // Ölçek değişimi bölmeyi kayıtlı boyuta yeniden açar; kısıt onu en dar haline indirir.
-        scene.view->set_ui_scale(scale + 0.5F);
-        scene.view->set_ui_scale(scale);
-        settle(*scene.view);
+        gui_test::LayoutScene scene(1, 1, scale);  // en küçük pencere
         const auto& rects = scene.view->item_rects();
+        const float window_width = ImGui::GetIO().DisplaySize.x;
         const auto& left = rects.at("left_pane");
         float lowest_top = 0.0F;
-        for (const char* name : {kNewNote, kNewFolder, kDelete, kTrash, kMove, kExport}) {
+        float lowest_bottom = 0.0F;
+        for (const char* name :
+             {kNewNote, kNewFolder, kRename, kMove, kDelete, kTrash, kExport, kViewTree, kViewDetails}) {
             CAPTURE(name);
             const auto& rect = rects.at(name);
-            CHECK(rect.min_x >= left.min_x);
-            CHECK(rect.max_x <= left.max_x);
+            CHECK(rect.min_x >= 0.0F);
+            CHECK(rect.max_x <= window_width);
             lowest_top = std::max(lowest_top, rect.min_y);
+            lowest_bottom = std::max(lowest_bottom, rect.max_y);
         }
         CHECK(lowest_top > rects.at(kNewNote).min_y);  // gerçekten alt satıra indi
-        CHECK(rects.at(kExport).max_y <= rects.at("note_list").min_y);
+        CHECK(lowest_bottom <= left.min_y);            // iki bölmenin üstünde
+        CHECK(lowest_bottom <= rects.at("editor").min_y);
+        CHECK(rects.at(kViewDetails).max_x > rects.at("editor").min_x);  // sağa yaslı
     }
 }

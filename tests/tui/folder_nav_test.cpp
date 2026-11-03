@@ -6,7 +6,6 @@
 #include "tui/display_text.hpp"
 #include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
-#include "tui/folder_tree.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/mouse.hpp"
 #include "tui/save_dialog.hpp"
@@ -200,7 +199,7 @@ TEST_CASE("folder tree: counts cover the subtree, children only the direct level
     for (const auto& n : notes)
         metas.push_back({.path = n.path, .size = n.size, .updated_at = n.mtime});
     const std::vector<std::string> folders = {"empty", "work/sub/deep"};
-    tui::FolderTree tree;
+    noteapp::core::FolderTree tree;
     tree.rebuild(metas, folders);
 
     const tui::FolderNode* root = tree.find("");
@@ -228,11 +227,11 @@ TEST_CASE("folder tree: recently updated notes are the newest five of the subtre
     for (int i = 0; i < 8; ++i)
         metas.push_back({.path = core::NotePath::parse("d/n" + std::to_string(i) + ".md").value(),
                          .updated_at = std::filesystem::file_time_type{} + std::chrono::hours(i)});
-    tui::FolderTree tree;
+    noteapp::core::FolderTree tree;
     tree.rebuild(metas, {});
     const tui::FolderNode* node = tree.find("d");
     REQUIRE(node);
-    REQUIRE(node->recent.size() == tui::FolderTree::kRecentNotes);
+    REQUIRE(node->recent.size() == noteapp::core::FolderTree::kRecentNotes);
     CHECK(node->recent.front() == 7);
     CHECK(node->recent.back() == 3);
 }

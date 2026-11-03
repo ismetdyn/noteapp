@@ -1,11 +1,13 @@
 #pragma once
 
 #include "core/error.hpp"
+#include "core/json_parser.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -24,6 +26,33 @@ struct SyncConfig {
     bool operator==(const SyncConfig&) const = default;
 };
 
+// Dil sunucuları (TUI). Komut ve ayar yalnız bu yerel dosyadan gelir; not ya da graf verisi ikisini de
+// taşıyamaz.
+struct LspConfig {
+    static constexpr std::size_t kMaxServers = 32;
+    static constexpr std::size_t kMaxServersPerLanguage = 4;
+    static constexpr std::size_t kMaxLanguageIdBytes = 32;
+    static constexpr std::size_t kMaxArguments = 64;
+    static constexpr std::size_t kMaxArgumentBytes = 4096;
+    // [lsp.settings.<dil>] tablosu: iç içe derinlik (dil tablosu 0) ve toplam değer sayısı.
+    static constexpr int kMaxSettingsDepth = 16;
+    static constexpr std::size_t kMaxSettingsValues = 4096;
+
+    bool enabled{};
+    // LSP languageId -> sunucuların kabuksuz argv'leri; hepsi o dilin belgesini alır (html + htmx-lsp).
+    std::map<std::string, std::vector<std::vector<std::string>>> servers{};
+    // LSP languageId -> JSON nesnesi; sunucunun gömülü ayarının (sertleştirme) üstüne anahtar anahtar biner.
+    std::map<std::string, Json> settings{};
+
+    bool operator==(const LspConfig&) const = default;
+};
+
+// Graf yazmasında işlem bütçesinin üst değeri: motorun çerçeve sınırının (65.536 işlem; uzak cihaz çerçeveyi
+// bununla çözer) yarısı. Bütçe dolunca iş sonraki işleme geçer; bir iş birimi kalan yarıya sığar.
+inline constexpr std::size_t kMaxGraphBatchOps = 32768;
+// defaults.toml `graph_batch_ops`ın yapılandırmasız NoteStore'daki (test, geçiş) karşılığı.
+inline constexpr std::size_t kDefaultGraphBatchOps = 30000;
+
 // Arayüzde görünmeyen ayarlar; defaults.toml'dan (ileri düzey kullanıcı geçersiz kılabilir) gelir.
 struct Tuning {
     std::size_t slug_max_length;
@@ -36,6 +65,7 @@ struct Tuning {
     std::uintmax_t log_max_bytes;  // log.txt bu boyutu aşınca log.1.txt'ye döner
     int sync_stale_lock_minutes;   // okunamayan kilit bundan eskiyse bayattır; sahibi canlı kilit devralınmaz
     int sync_timeout_seconds;      // AutoSync bir senkron sürecini bu kadar bekler, sonra sonlandırır
+    std::size_t graph_batch_ops;   // graf işleminin işlem bütçesi; iş bölünür, kullanıcı işlemi reddedilmez
 
     bool operator==(const Tuning&) const = default;
 };
@@ -49,6 +79,7 @@ struct Config {
     std::vector<std::string> types;
     std::string icons;  // nerd | off; dosyadaki `auto` nerd okunur
     SyncConfig sync{};
+    LspConfig lsp{};
     Tuning tuning{};
 
     bool operator==(const Config&) const = default;

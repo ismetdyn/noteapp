@@ -17,12 +17,21 @@ constexpr int kBottomChromeRows = 3;  // panel kenarı, toplamlar ya da editör 
 constexpr int kWheelStep = 3;
 constexpr int kFrameCells = 1;  // panel kenarı
 
-bool right_has_focus(Focus focus) {
-    return focus == Focus::Preview || focus == Focus::PreviewFind || focus == Focus::Editor;
-}
-
 bool in_pane_rows(const TuiState& state, int y) {
     return y >= kFirstPaneRow && y < state.window_height() - kBottomChromeRows;
+}
+
+int pane_rows(const TuiState& state) {
+    return state.window_height() - kFirstPaneRow - kBottomChromeRows;
+}
+
+// Bağlantı bölümü panelin altındadır: ayırıcı dahil ilk satırı.
+int links_first_row(const TuiState& state) {
+    return kFirstPaneRow + pane_rows(state) - state.links_reserved_rows(pane_rows(state));
+}
+
+bool over_links(const TuiState& state, int y) {
+    return state.links_reserved_rows(pane_rows(state)) > 0 && y >= links_first_row(state);
 }
 
 bool over_right(int x, const PaneGeometry& geometry) {
@@ -42,7 +51,9 @@ void handle_wheel(const MouseInput& input, TuiState& state, EditorSession& edito
                 editor.handle(direction < 0 ? Key::Up : Key::Down);
         return;
     }
-    if (right)
+    if (right && over_links(state, input.y))
+        state.scroll_links(direction * kWheelStep);
+    else if (right)
         state.scroll_preview(direction * kWheelStep);
     else
         state.move_selection(direction);
@@ -120,7 +131,7 @@ struct PaneCell {
 
 PaneCell clamped_pane_cell(const MouseInput& input, const TuiState& state, const PaneGeometry& geometry) {
     const int columns = std::max(geometry.right_width - 2 * kFrameCells, 1);
-    const int rows = std::max(state.window_height() - kFirstPaneRow - kBottomChromeRows, 1);
+    const int rows = std::max(pane_rows(state) - state.links_reserved_rows(pane_rows(state)), 1);
     return {std::clamp(input.x - geometry.right_x - kFrameCells, 0, columns - 1),
             std::clamp(input.y - kFirstPaneRow, 0, rows - 1), columns};
 }
@@ -165,6 +176,12 @@ void click_right(const MouseInput& input, TuiState& state, EditorSession& editor
     }
     if (state.trash_view())
         return;  // çöpteki not salt okunur gösterilir; tuşlar çöp listesinde kalır
+    if (over_links(state, input.y)) {
+        // İlk satır ayırıcıdır, tıklama bir şey yapmaz.
+        if (const int row = input.y - links_first_row(state) - 1; row >= 0)
+            state.click_link(static_cast<std::size_t>(row));
+        return;
+    }
     state.focus_preview();
     if (state.focus() == Focus::Preview)
         begin_selection(input, state, geometry);
@@ -190,8 +207,8 @@ MouseResult handle_left_press(const MouseInput& input, TuiState& state, EditorSe
 }  // namespace
 
 MouseResult route_mouse(const MouseInput& input, TuiState& state, EditorSession& editor) {
-    if (!state.summary().empty())
-        return MouseResult::None;  // özet penceresi sıradaki tuşu bekler
+    if (!state.summary().empty() || state.palette_open())
+        return MouseResult::None;  // özet penceresi ve palet sıradaki tuşu bekler
     PaneLayout& layout = state.layout();
     if (layout.dragging()) {
         if (input.motion == MouseMotion::Move && input.button == MouseButton::Left) {
@@ -202,7 +219,7 @@ MouseResult route_mouse(const MouseInput& input, TuiState& state, EditorSession&
         // biter ve olay normal işlenir, bölücü taşınmaz.
         layout.end_drag();
     }
-    const PaneGeometry geometry = layout.geometry(state.window_width(), right_has_focus(state.focus()));
+    const PaneGeometry geometry = layout.geometry(state.window_width(), right_pane_focused(state.focus()));
     if (state.preview_selection_dragging())
         return continue_selection(input, state, geometry);
     if (editor_busy(state, editor) || input.motion != MouseMotion::Press)

@@ -97,6 +97,8 @@ private:
             const auto status = child_.read_some(buffer_, std::min(deadline, now + kStopPoll));
             if (status == ChildProcess::ReadStatus::Eof || status == ChildProcess::ReadStatus::Failed)
                 return false;
+            // Windows'ta hunspell stdout'u metin kipindedir (\r\n): yanıt sonu "\n\n" ancak \r atılınca görünür.
+            std::erase(buffer_, '\r');
         }
     }
 

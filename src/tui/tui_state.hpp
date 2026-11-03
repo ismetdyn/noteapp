@@ -1,15 +1,18 @@
 #pragma once
 
 #include "core/file_icons.hpp"
+#include "core/folder_tree.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
 #include "search/content_index.hpp"
+#include "search/folder_order.hpp"
 #include "search/global_search.hpp"
 #include "search/query.hpp"
+#include "tui/commands.hpp"
 #include "tui/editor_buffer.hpp"
-#include "tui/folder_tree.hpp"
 #include "tui/input_line.hpp"
 #include "tui/key.hpp"
+#include "tui/link_panel.hpp"
 #include "tui/note_find.hpp"
 #include "tui/pane_layout.hpp"
 
@@ -27,6 +30,14 @@
 #include <vector>
 
 namespace noteapp::tui {
+
+using core::folder_of;
+using core::FolderNode;
+using core::FolderTree;
+using core::in_folder;
+using core::join_folder;
+using core::last_component;
+using core::parent_folder;
 
 // Modelin dış dünyadan istediği iş; yan etkileri (editör, diyalog, çıkış) çağıran yürütür.
 enum class Intent {
@@ -53,6 +64,10 @@ enum class Intent {
     SavePrefs,        // sıralama ya da sağ sütun değişti
     Paste,            // `p`: bekleyen yank geçerli klasöre
     MoveTo,           // `m`: altta hedef klasör girdisi
+    LinkNote,         // `L`: altta ilişkilendirilecek not girdisi
+    UnlinkSelected,   // `L` ilişkili satırda: onaylı kaldırma
+    LinkMissing,      // bağlantı panelinde gidilecek notu olmayan satır: nedeni söylenir
+    ToggleIcons,      // palet: `icons` ayarını çevirir, config.toml'a yazar
 };
 
 // Çoklu seçimin ya da yank'in bir öğesi.
@@ -69,7 +84,7 @@ struct PendingYank {
 enum class Mode { Name, Content, Global };
 
 // Tuşların kime gideceğini belirler: harfler aynı anda hem süzüp hem eylem yapamaz (SPEC-tui "Tuşlar").
-enum class Focus { List, Search, Preview, PreviewFind, Editor, SortMenu };
+enum class Focus { List, Search, Preview, PreviewFind, Editor, SortMenu, Links };
 
 // Listede sağ sütunun gösterdiği üst veri (`v`).
 // Sıra `v` döngüsüdür.
@@ -79,8 +94,9 @@ enum class ListColumn { SizeAndDate, Size, Updated, Created, Sync, Origin, None 
 struct ListPrefs {
     search::SortSpec sort{search::SortField::Updated, true};
     ListColumn column = ListColumn::SizeAndDate;
-    std::vector<std::string> search_history = {};  // en yeni başta; yalnız yerel, senkrona girmez
-    std::set<std::string> open_folders = {};       // ağaçta yerinde açık klasörler
+    std::vector<std::string> search_history = {};   // en yeni başta; yalnız yerel, senkrona girmez
+    std::set<std::string> open_folders = {};        // ağaçta yerinde açık klasörler
+    std::vector<std::string> recent_commands = {};  // palet: en yeni başta; bilinmeyen ad yok sayılır
 };
 
 // Listedeki bir satır. Ad modunda `positions` (yol içindeki bayt ofsetleri) vurgu içindir; içerik modunda
@@ -124,6 +140,19 @@ using GlobalSearcher = std::function<std::expected<std::vector<search::GlobalHit
 // için.
 bool same_listing(std::span<const core::NoteInfo> a, std::span<const core::NoteInfo> b);
 
+// Yeniden taramanın karşılaştırdığı depo görüntüsü: biri farklıysa liste ve önizleme tazelenir.
+struct StoreScan {
+    std::vector<core::NoteInfo> notes;
+    std::size_t trash = 0;                // senkron yalnız çöpü de değiştirebilir; okunamayan çöp 0
+    std::vector<std::string> folders;     // boş klasör not listesini değiştirmez
+    std::uint64_t graph_version = 0;      // senkron yalnız ilişki değiştirmiş olabilir: bağlantı bölümü eskir
+    std::vector<std::string> views = {};  // kayıtlı görünüm adları; değişimi graph_version'da görünür
+};
+StoreScan scan_store(const core::NoteStore& store);
+// Kayıtlı görünüm adları ("Run view" ve `view:` tamamlaması).
+std::vector<std::string> view_names(const core::NoteStore& store);
+bool same_scan(const StoreScan& a, const StoreScan& b);
+
 // Sağ panelde mi çalışılıyor (yakınlaştırmada hangi panelin gösterileceği buna bağlı).
 bool right_pane_focused(Focus focus);
 
@@ -144,6 +173,10 @@ public:
     void set_notes(std::vector<core::NoteInfo> notes);
     void set_content_searcher(ContentSearcher searcher) { content_searcher_ = std::move(searcher); }
     void set_global_searcher(GlobalSearcher searcher) { global_searcher_ = std::move(searcher); }
+    // `view:` süzgecinin notları ve "Run view" listesi depodan gelir (model G/Ç yapmaz). Bağlanmazsa `view:`
+    // hiçbir notu geçirmez.
+    void set_view_lookup(search::ViewLookup views) { view_lookup_ = std::move(views); }
+    void set_views(std::vector<std::string> names);
     // İşçiden gelen senkron durumları (UI iş parçacığında): yeniden taramada da korunur.
     void set_sync_states(std::map<core::NotePath, core::SyncState> states);
     std::span<const core::NoteMeta> metas() const { return metas_; }
@@ -246,6 +279,16 @@ public:
     // yenilenir.
     void set_preview_lines(const std::vector<std::string>* lines, std::size_t generation);
 
+    // Seçili notun bağlantıları, önizlemeyle aynı ertelenmiş okumadan; üretim değişmedikçe kopyalanmaz.
+    void set_links(const core::NoteLinks& links, std::size_t generation,
+                   const std::optional<core::NotePath>& note);
+    const LinkPanel& link_panel() const { return links_; }
+    // Önizlemeden alınan satır: editörde ve çöpte bölüm yoktur.
+    int links_reserved_rows(int pane_rows) const;
+    // Bölümün `row`. görünen satırına tıklama: nota gider; eksik hedef ve başlıkta yalnız odaklar.
+    void click_link(std::size_t row);
+    void scroll_links(int delta);
+
     // Fare.
     void scroll_preview(int delta);
     void move_selection(int delta);
@@ -318,7 +361,64 @@ public:
     const std::vector<std::string>& summary() const { return summary_; }
     void show_summary(std::vector<std::string> lines) { summary_ = std::move(lines); }
 
+    // Komut paleti (`:`) ve tek dağıtım tablosu (tui/commands.cpp). Palet odak değiştirmez: açıkken kip
+    // etiketi, yakınlaştırma ve komutların çalışacağı görünüm aynı kalır.
+    static std::span<const Command> commands();
+    static constexpr std::string_view kPaletteKey = ":";
+    static constexpr std::size_t kMaxRecentCommands = 20;
+    bool palette_open() const { return palette_.has_value(); }
+    // Yalnız palette_open() iken.
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- çağıran palette_open() ile denetler
+    const InputLine& palette_line() const { return palette_->line; }
+    // Süzülmüş sıra: çalışanlar önce, sonra puan, sonra son kullanılan. Her çağrıda durumdan hesaplanır:
+    // açıkken gelen yeniden tarama eski kararı bırakmaz.
+    std::vector<PaletteRow> palette_rows() const;
+    // Seçili komut: sıra değişse de aynı komut; yoksa ilk satır, liste boşsa nullptr.
+    const Command* palette_selected() const;
+    // Komut şu an çalışamıyorsa nedenin i18n anahtarı; çalışırsa nullptr.
+    const char* command_block(const Command& command) const;
+    // Çağıran bilir: senkron kapalıyken `sync.now` soluktur.
+    void set_sync_enabled(bool enabled) { sync_enabled_ = enabled; }
+    // Palet son kullanılanları değiştirdi: çağıran tercihleri yazar.
+    bool take_prefs_changed() { return std::exchange(prefs_changed_, false); }
+
 private:
+    struct PaletteState {
+        InputLine line{InputKind::Find};
+        const Command* selected = nullptr;
+    };
+    std::optional<Intent> handle_command_key(Key key, std::string_view text);
+    std::optional<unsigned> command_context() const;
+    const char* needs_block(CommandNeeds needs) const;
+    const Command* bound_command(unsigned context, Key key, std::string_view text) const;
+    Intent run_bound(const Command& command);
+    bool shown_in_palette(const Command& command, unsigned context) const;
+    void step_palette(int delta);
+    Intent run_palette_selection();
+    Intent handle_palette(Key key, std::string_view text);
+    void remember_command(std::string_view id);
+    // Tablonun çalıştırdığı, başka yerden de çağrılan eylemler.
+    Intent enter_selected();
+    Intent right_or_open();
+    Intent move_dialog_intent() const;
+    Intent toggle_row();
+    Intent cycle_column();
+    Intent set_column(ListColumn column);
+    Intent toggle_tree_all();
+    void page_list(int direction);
+    void begin_sort_menu();
+    void select_last();
+    void resize_list(int direction);
+    void toggle_zoom();
+    void focus_links();
+    void toggle_review_view();
+    void scroll_preview_top();
+    void scroll_preview_bottom();
+    void scroll_half_page(int direction);
+    void go_root();
+    void begin_preview_find();
+    void find_step(bool forward);
+
     static std::string row_key(const Row& row);
     const std::set<std::string>& marks() const { return trash_view_ ? trash_marks_ : marks_; }
     std::set<std::string>& active_marks() { return trash_view_ ? trash_marks_ : marks_; }
@@ -326,13 +426,11 @@ private:
     void toggle_mark();
     void mark_all();
     void begin_yank();
-    std::optional<Intent> handle_mark_letter(std::string_view text);
     Intent handle_prefix(Key key, std::string_view text);
     Intent handle_focused(Key key, std::string_view text);
     void escape_list();
 
     Intent handle_trash(Key key, std::string_view text);
-    Intent handle_trash_letter(std::string_view text);
     Intent intent_if_selected(Intent intent) const;
     Intent intent_if_any_row(Intent intent) const;
     std::vector<Row> rows_in_folder();
@@ -345,7 +443,7 @@ private:
     std::vector<Row>::const_iterator find_note_row(const core::NotePath& path) const;
     void set_selected_expanded(bool expanded);
     void toggle_all_expanded();
-    bool handle_details_letter(std::string_view text);
+    void toggle_selected_details();
     void scroll_accelerated(int direction);
     Intent handle_sort_menu(std::string_view text);
     bool filter_rows(std::vector<Row>& rows);
@@ -355,15 +453,20 @@ private:
     void sort_rows(std::vector<Row>& rows, const search::SortSpec& sort) const;
     void rebuild_metas();
     void begin_search(Mode mode);
+    void begin_tag_search();
+    static constexpr std::string_view kTagArgument = "tag:";
+    void begin_view_search();
+    static constexpr std::string_view kViewArgument = "view:";
     Intent search_enter();
     // Liste ve Arama'da ortak tuşlar; ortak olmayan tuşta nullopt.
     std::optional<Intent> handle_shared(Key key);
     Intent handle_list(Key key, std::string_view text);
-    Intent handle_list_letter(std::string_view text);
-    void handle_list_jump_letter(std::string_view text);
-    Intent handle_preview(Key key, std::string_view text);
-    Intent handle_preview_letter(std::string_view text);
+    Intent handle_preview(Key key);
     Intent handle_preview_find(Key key, std::string_view text);
+    Intent handle_links(Key key, std::string_view text);
+    Intent handle_links_letter(std::string_view text);
+    Intent jump_to_selected_link();
+    int pane_rows() const { return window_height_ - kChromeLines; }
     bool handle_layout_letter(std::string_view text);
     void leave_preview();
     void scroll_to_find_match();
@@ -383,6 +486,8 @@ private:
     std::vector<core::NoteInfo> notes_;
     ContentSearcher content_searcher_;
     GlobalSearcher global_searcher_;
+    search::ViewLookup view_lookup_;
+    std::vector<std::string> views_;     // kayıtlı görünüm adları, ada göre
     std::vector<core::NoteMeta> metas_;  // notes_ ile aynı sırada
     std::map<core::NotePath, std::size_t> meta_index_;
     std::map<core::NotePath, core::SyncState> sync_states_;
@@ -415,6 +520,9 @@ private:
     const std::vector<std::string>* preview_text_ = nullptr;
     std::size_t preview_generation_ = 0;
     PreviewFind preview_find_;
+    LinkPanel links_;
+    std::size_t links_generation_ = 0;
+    std::optional<core::NotePath> links_note_;
     bool review_rendered_ = true;
     std::vector<std::size_t> view_source_lines_;  // boş: ham metin
     std::size_t view_generation_ = 0;
@@ -441,6 +549,9 @@ private:
     std::size_t max_row_number_ = 0;
     mutable ListWork work_;
     std::vector<std::string> summary_;
+    std::optional<PaletteState> palette_;
+    bool sync_enabled_ = false;
+    bool prefs_changed_ = false;
     int window_width_ = 80;
     int window_height_ = 24;
 };

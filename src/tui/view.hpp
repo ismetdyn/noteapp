@@ -80,10 +80,13 @@ public:
     void invalidate() { path_.reset(); }
     // Her yeniden okumada artar: not içi arama eşleşmeleri eski metne ait kalmasın.
     std::size_t generation() const { return generation_; }
+    // Seçili notun bağlantıları: gövdeyle aynı ertelenmiş yüklemede okunur, gezinmede depoya gidilmez.
+    const core::NoteLinks& links() const { return links_; }
 
 private:
     using Reader = std::function<std::expected<core::NoteContent, core::Error>()>;
     const Preview& load(const Row* row, bool from_trash, const Reader& read);
+    void clear_links();
     const Preview& publish(TuiState& state, std::chrono::steady_clock::time_point now);
     bool resize_settling(int width, std::chrono::steady_clock::time_point now);
     // Görünümü gerekirse üretir; false: boyutlandırma sürüyor, önceki yerleşim kalır.
@@ -98,6 +101,8 @@ private:
     bool deferred_ = false;
     Preview preview_;
     std::size_t generation_ = 0;
+    core::NoteLinks links_;
+    std::size_t links_generation_ = 0;
     // Biçimli görünüm: `revision_` (her okumada artar) ve genişlik aynıysa yeniden üretilmez.
     Preview rendered_;
     std::size_t revision_ = 0;
@@ -112,8 +117,9 @@ private:
 };
 
 struct StatusLine {
-    std::string sync;     // üst çubuk: senkron durumu metni
-    std::string message;  // geçici ileti; doluysa kısayol çubuğunun yerine geçer
+    std::string sync;         // üst çubuk: senkron durumu metni
+    std::string message;      // geçici ileti; doluysa kısayol çubuğunun yerine geçer
+    std::string notice = {};  // ilk tuşa dek sönük ipucu; hata değildir, message ondan önceliklidir
 };
 
 // Tüm ekran: üst çubuk, sol liste, sağ önizleme, toplamlar, alt çubuk. `window` terminal boyutu (testte ekran

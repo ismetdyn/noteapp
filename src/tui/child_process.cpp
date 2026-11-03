@@ -3,11 +3,15 @@
 #include "core/process.hpp"
 #include "core/unique_handle.hpp"
 
+#include <algorithm>
 #include <array>
 #include <utility>
 
-#ifndef _WIN32
-#include <algorithm>
+#ifdef _WIN32
+#include "core/process_win.hpp"
+
+#include <atomic>
+#else
 #include <cerrno>
 #include <csignal>
 #include <fcntl.h>
@@ -23,36 +27,10 @@ extern char** environ;
 
 namespace noteapp::tui {
 
-#ifdef _WIN32
-
-std::optional<ChildProcess> ChildProcess::start(const std::vector<std::string>&, bool,
-                                                const std::vector<std::string>&) {
-    return std::nullopt;
-}
-
-bool ChildProcess::write_all(std::string_view, Clock::time_point, const std::stop_token&) {
-    return false;
-}
-
-void ChildProcess::close_stdin() {}
-
-ChildProcess::ReadStatus ChildProcess::read_some(std::string&, Clock::time_point) {
-    return ReadStatus::Failed;
-}
-
-std::optional<int> ChildProcess::wait_until(Clock::time_point) {
-    return std::nullopt;
-}
-
-void ChildProcess::kill() {}
-
-void ChildProcess::close_fds() {}
-
-#else
-
 namespace {
 
 // AppRun bunları paketin kendi CA'sı için ayarlar; çocuğun bağlı olduğu host kitaplıklarını şaşırtmasın.
+// Windows'ta da düşer: ortam iki platformda aynı süzülür.
 constexpr std::array kDroppedEnv = {"SSL_CERT_FILE=",
                                     "SSL_CERT_DIR=",
                                     "LD_LIBRARY_PATH=",
@@ -63,8 +41,223 @@ constexpr std::array kDroppedEnv = {"SSL_CERT_FILE=",
                                     "OWD=",
                                     "NOTEAPP_GIT_TOKEN=",
                                     "NOTEAPP_GIT_TOKEN_HOST="};
-constexpr auto kReapPoll = std::chrono::milliseconds(2);
 constexpr std::size_t kReadChunk = 64 * 1024;
+
+// Yazma beklerken durma isteği bu aralıkla yoklanır: takılan çocuk çıkışı geciktirmesin.
+constexpr int kWriteStopPollMs = 50;
+
+int remaining_ms(ChildProcess::Clock::time_point deadline) {
+    const auto left =
+        std::chrono::duration_cast<std::chrono::milliseconds>(deadline - ChildProcess::Clock::now()).count();
+    return static_cast<int>(std::clamp<long long>(left, 0, 60'000));
+}
+
+}  // namespace
+
+#ifdef _WIN32
+
+namespace {
+
+core::EnvOverrides child_env_overrides(const std::vector<std::string>& extra) {
+    core::EnvOverrides overrides;
+    for (const std::string_view prefix : kDroppedEnv)
+        overrides.emplace_back(std::string(prefix.substr(0, prefix.size() - 1)), std::nullopt);
+    for (const std::string& assignment : extra) {
+        const std::size_t equals = assignment.find('=');
+        overrides.emplace_back(assignment.substr(0, equals), assignment.substr(equals + 1));
+    }
+    return overrides;
+}
+
+struct PipeEnds {
+    core::UniqueHandle parent;  // bindirmeli (overlapped)
+    core::UniqueHandle child;   // devredilebilir, eşzamanlı: çocuk sıradan stdin/stdout görür
+};
+
+// Anonim boru (CreatePipe) bindirmeli G/Ç desteklemez; süreli okuma/yazma ve iptal için ebeveyn ucu bindirmeli adlı
+// borudur. Tek örnek + FILE_FLAG_FIRST_PIPE_INSTANCE: adı önceden alan ya da araya giren başka süreç ucu bize
+// veremez, başlatma başarısız olur. İstemci CreateFileW ile bağlandığından ConnectNamedPipe gerekmez.
+// ponytail: çocuk ucu CreateProcessW'e dek devredilebilir; o arada başka iş parçacığının liste kullanmayan
+// CreateProcessW'i (core::run_and_wait) ucu da devralır ve EOF o süreç bitene dek gecikir. Sorun olursa
+// başlatmalar tek kilitle sıralanır.
+std::optional<PipeEnds> open_pipe(bool child_reads) {
+    static std::atomic<unsigned long> serial{0};
+    const std::wstring name = L"\\\\.\\pipe\\noteapp-child-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+                              std::to_wstring(++serial);
+    const DWORD direction = child_reads ? PIPE_ACCESS_OUTBOUND : PIPE_ACCESS_INBOUND;
+    auto parent = core::own_win_handle<core::UniqueHandle>(
+        CreateNamedPipeW(name.c_str(), direction | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1,
+                         kReadChunk, kReadChunk, 0, nullptr));
+    if (!parent)
+        return std::nullopt;
+    SECURITY_ATTRIBUTES inheritable{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    auto child = core::own_win_handle<core::UniqueHandle>(CreateFileW(
+        name.c_str(), child_reads ? GENERIC_READ : GENERIC_WRITE, 0, &inheritable, OPEN_EXISTING, 0, nullptr));
+    if (!child)
+        return std::nullopt;
+    return PipeEnds{std::move(parent), std::move(child)};
+}
+
+struct IoResult {
+    DWORD bytes = 0;
+    DWORD error = ERROR_SUCCESS;  // süre dolumu ya da durma: ERROR_OPERATION_ABORTED
+};
+
+// `issue` tek bindirmeli okuma/yazmayı başlatır. Tamamlanana, `deadline`a ya da durma isteğine dek beklenir; sonra
+// iptal edilir ve iptalin bitmesi beklenir: tampon ancak o zaman serbesttir. İptalle yarışan tamamlanma kaybolmaz,
+// aktarılan bayt yine döner. POSIX dalındaki poll + durma yoklamasının karşılığı.
+template <class Issue>
+IoResult overlapped_io(HANDLE pipe, Issue issue, ChildProcess::Clock::time_point deadline,
+                       const std::stop_token& stop) {
+    const core::UniqueHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!event)
+        return {0, GetLastError()};
+    OVERLAPPED overlapped{};
+    overlapped.hEvent = event.get();
+    if (!issue(&overlapped)) {
+        if (const DWORD error = GetLastError(); error != ERROR_IO_PENDING)
+            return {0, error};
+    }
+    while (true) {
+        const DWORD waited =
+            WaitForSingleObject(event.get(), static_cast<DWORD>(std::min(remaining_ms(deadline), kWriteStopPollMs)));
+        if (waited == WAIT_OBJECT_0)
+            break;
+        if (waited != WAIT_TIMEOUT || stop.stop_requested() || ChildProcess::Clock::now() >= deadline) {
+            CancelIoEx(pipe, &overlapped);
+            break;
+        }
+    }
+    IoResult result;
+    if (!GetOverlappedResult(pipe, &overlapped, &result.bytes, TRUE))
+        result.error = GetLastError();
+    return result;
+}
+
+void close_if_open(void*& handle) {
+    if (handle != nullptr)
+        CloseHandle(handle);
+    handle = nullptr;
+}
+
+}  // namespace
+
+std::optional<ChildProcess> ChildProcess::start(const std::vector<std::string>& argv, bool capture_stdout,
+                                                const std::vector<std::string>& extra_env,
+                                                const std::filesystem::path& working_directory) {
+    if (argv.empty())
+        return std::nullopt;
+    std::optional<PipeEnds> input = open_pipe(true);
+    if (!input)
+        return std::nullopt;
+    std::optional<PipeEnds> output;
+    if (capture_stdout) {
+        output = open_pipe(false);
+        if (!output)
+            return std::nullopt;
+    }
+    // stderr boş aygıta: okunmayan bir boru dolup çocuğu kilitlemesin.
+    const core::UniqueHandle null_device = core::open_null_device();
+    if (!null_device)
+        return std::nullopt;
+    auto spawned = core::spawn_with_stdio(argv, child_env_overrides(extra_env), input->child.get(),
+                                          output ? output->child.get() : null_device.get(), null_device.get(),
+                                          CREATE_NO_WINDOW, working_directory);
+    if (!spawned)
+        return std::nullopt;
+    // Çocuğun uçları burada kapanır: yalnız çocukta kalmalı, yoksa çocuk çıkınca okuyan EOF görmez.
+    ChildProcess child;
+    child.process_ = spawned->process.release();
+    child.job_ = spawned->job.release();
+    child.stdin_pipe_ = input->parent.release();
+    child.stdout_pipe_ = output ? output->parent.release() : nullptr;
+    return child;
+}
+
+bool ChildProcess::write_all(std::string_view data, Clock::time_point deadline, const std::stop_token& stop) {
+    if (stdin_pipe_ == nullptr)
+        return false;
+    while (!data.empty()) {
+        if (stop.stop_requested())
+            return false;
+        const auto size = static_cast<DWORD>(std::min(data.size(), kReadChunk));
+        const IoResult io = overlapped_io(
+            stdin_pipe_,
+            [&](OVERLAPPED* overlapped) { return WriteFile(stdin_pipe_, data.data(), size, nullptr, overlapped); },
+            deadline, stop);
+        if (io.error != ERROR_SUCCESS || io.bytes == 0)
+            return false;  // süre, durma ya da ölü çocuk (ERROR_NO_DATA)
+        data.remove_prefix(io.bytes);
+    }
+    return true;
+}
+
+void ChildProcess::close_stdin() {
+    close_if_open(stdin_pipe_);
+}
+
+ChildProcess::ReadStatus ChildProcess::read_some(std::string& out, Clock::time_point deadline) {
+    if (stdout_pipe_ == nullptr)
+        return ReadStatus::Failed;
+    std::array<char, kReadChunk> chunk{};
+    const IoResult io = overlapped_io(
+        stdout_pipe_,
+        [&](OVERLAPPED* overlapped) {
+            return ReadFile(stdout_pipe_, chunk.data(), static_cast<DWORD>(chunk.size()), nullptr, overlapped);
+        },
+        deadline, {});
+    out.append(chunk.data(), io.bytes);
+    if (io.bytes > 0 || io.error == ERROR_SUCCESS)
+        return ReadStatus::Data;  // sıfır baytlık okuma boş yazmadır, EOF değil
+    if (io.error == ERROR_OPERATION_ABORTED)
+        return ReadStatus::Timeout;
+    return io.error == ERROR_BROKEN_PIPE ? ReadStatus::Eof : ReadStatus::Failed;
+}
+
+std::optional<int> ChildProcess::wait_until(Clock::time_point deadline) {
+    while (process_ != nullptr) {
+        const DWORD waited = WaitForSingleObject(process_, static_cast<DWORD>(remaining_ms(deadline)));
+        if (waited == WAIT_TIMEOUT) {
+            if (Clock::now() >= deadline)
+                return std::nullopt;
+            continue;
+        }
+        DWORD code = 0;
+        const bool exited = waited == WAIT_OBJECT_0 && GetExitCodeProcess(process_, &code);
+        close_if_open(process_);
+        return exited ? std::optional<int>(static_cast<int>(code)) : std::nullopt;
+    }
+    return std::nullopt;
+}
+
+void ChildProcess::kill() {
+    // İş nesnesi torunları da öldürür; çocuk atanamadıysa (iç içe iş desteklenmiyorsa) yalnız doğrudan çocuk.
+    if ((job_ == nullptr || !TerminateJobObject(job_, 1)) && process_ != nullptr)
+        TerminateProcess(process_, 1);
+    if (process_ != nullptr)
+        WaitForSingleObject(process_, INFINITE);
+    close_if_open(process_);
+    close_if_open(job_);
+}
+
+void ChildProcess::close_fds() {
+    close_if_open(stdin_pipe_);
+    close_if_open(stdout_pipe_);
+}
+
+void ChildProcess::take(ChildProcess& other) noexcept {
+    process_ = std::exchange(other.process_, nullptr);
+    job_ = std::exchange(other.job_, nullptr);
+    stdin_pipe_ = std::exchange(other.stdin_pipe_, nullptr);
+    stdout_pipe_ = std::exchange(other.stdout_pipe_, nullptr);
+}
+
+#else
+
+namespace {
+
+constexpr auto kReapPoll = std::chrono::milliseconds(2);
 
 std::vector<std::string> child_environment(const std::vector<std::string>& extra) {
     std::vector<std::string> entries;
@@ -119,15 +312,6 @@ void close_if_open(int& fd) {
     fd = -1;
 }
 
-// Yazma beklerken durma isteği bu aralıkla yoklanır: takılan çocuk çıkışı geciktirmesin.
-constexpr int kWriteStopPollMs = 50;
-
-int remaining_ms(ChildProcess::Clock::time_point deadline) {
-    const auto left =
-        std::chrono::duration_cast<std::chrono::milliseconds>(deadline - ChildProcess::Clock::now()).count();
-    return static_cast<int>(std::clamp<long long>(left, 0, 60'000));
-}
-
 // Yazma sırasında ölü çocuk SIGPIPE üretir, varsayılanı süreci öldürür. İşaret yalnız bu iş parçacığında ve
 // bu kapsamda engellenir; süreç geneli SIG_IGN çocuklara da miras kalırdı.
 class SigpipeGuard {
@@ -161,12 +345,17 @@ private:
 }  // namespace
 
 std::optional<ChildProcess> ChildProcess::start(const std::vector<std::string>& argv, bool capture_stdout,
-                                                const std::vector<std::string>& extra_env) {
+                                                const std::vector<std::string>& extra_env,
+                                                const std::filesystem::path& working_directory) {
     if (argv.empty())
         return std::nullopt;
-    const auto program = core::find_program(argv.front());
+    auto program = core::find_program(argv.front());
     if (!program)
         return std::nullopt;
+    // Çalışma dizini değişince göreli program yolu başka yeri gösterirdi.
+    std::error_code absolute_error;
+    if (!working_directory.empty())
+        program = std::filesystem::absolute(*program, absolute_error);
     std::optional<Pipe> input = open_pipe();
     if (!input)
         return std::nullopt;
@@ -188,6 +377,8 @@ std::optional<ChildProcess> ChildProcess::start(const std::vector<std::string>& 
     else
         posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
     posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    if (!working_directory.empty())
+        posix_spawn_file_actions_addchdir_np(&actions, working_directory.c_str());  // glibc 2.29, macOS 10.15
     posix_spawnattr_t attributes;
     posix_spawnattr_init(&attributes);
     posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP);  // torunlar birlikte öldürülebilsin
@@ -295,19 +486,23 @@ void ChildProcess::close_fds() {
     close_if_open(stdout_fd_);
 }
 
+void ChildProcess::take(ChildProcess& other) noexcept {
+    pid_ = std::exchange(other.pid_, -1);
+    stdin_fd_ = std::exchange(other.stdin_fd_, -1);
+    stdout_fd_ = std::exchange(other.stdout_fd_, -1);
+}
+
 #endif
 
-ChildProcess::ChildProcess(ChildProcess&& other) noexcept
-    : pid_(std::exchange(other.pid_, -1)), stdin_fd_(std::exchange(other.stdin_fd_, -1)),
-      stdout_fd_(std::exchange(other.stdout_fd_, -1)) {}
+ChildProcess::ChildProcess(ChildProcess&& other) noexcept {
+    take(other);
+}
 
 ChildProcess& ChildProcess::operator=(ChildProcess&& other) noexcept {
     if (this != &other) {
         kill();
         close_fds();
-        pid_ = std::exchange(other.pid_, -1);
-        stdin_fd_ = std::exchange(other.stdin_fd_, -1);
-        stdout_fd_ = std::exchange(other.stdout_fd_, -1);
+        take(other);
     }
     return *this;
 }

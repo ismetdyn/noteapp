@@ -15,12 +15,21 @@ foreach(target fuzz_query fuzz_frame)
     noteapp_target_defaults(${target})
 endforeach()
 
-# Yalnız başlık: motora değil cli'nin ayrıştırıcısına bakar.
+# Yalnız başlık: motora değil core'un JSON ayrıştırıcısına bakar.
 add_executable(fuzz_jsonl fuzz_jsonl.cpp)
 target_include_directories(fuzz_jsonl PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_compile_options(fuzz_jsonl PRIVATE -fsanitize=fuzzer)
 target_link_options(fuzz_jsonl PRIVATE -fsanitize=fuzzer)
 noteapp_target_defaults(fuzz_jsonl)
+
+# LSP çerçeveleyicisi ve sunucu mesajı ayrıştırıcıları (core). Ayrıştırıcılar noteapp_core'da derlenir: kütüphane
+# kapsam izlemesiz kalırsa libFuzzer yalnız hedef dosyayı görür, girdi rastgele kalır.
+target_compile_options(noteapp_core PRIVATE -fsanitize=fuzzer-no-link)
+add_executable(fuzz_lsp fuzz_lsp.cpp)
+target_link_libraries(fuzz_lsp PRIVATE noteapp_core)
+target_compile_options(fuzz_lsp PRIVATE -fsanitize=fuzzer)
+target_link_options(fuzz_lsp PRIVATE -fsanitize=fuzzer)
+noteapp_target_defaults(fuzz_lsp)
 
 add_executable(make_frame_seeds make_frame_seeds.cpp)
 target_include_directories(make_frame_seeds PRIVATE ${PROJECT_SOURCE_DIR}/internal)

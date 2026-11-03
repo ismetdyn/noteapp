@@ -289,6 +289,58 @@ TEST_CASE("buffer: control bytes never reach the screen but stay in the text") {
     CHECK_FALSE(b.dirty());
 }
 
+// Terminal bidi ve sıfır genişlikli karakterleri hücresiz çizer: sınama en kötü ölçüyle (0 hücre) yapılır.
+int zero_width_hidden(char32_t cp) {
+    constexpr char32_t kRloCode = 0x202E;
+    constexpr char32_t kZwspCode = 0x200B;
+    return cp == kRloCode || cp == kZwspCode ? 0 : test_width(cp);
+}
+
+TEST_CASE("buffer: a hidden bidi or zero-width character is its own one-cell marker glyph") {
+    constexpr std::string_view kRlo = "\xE2\x80\xAE";   // U+202E
+    constexpr std::string_view kZwsp = "\xE2\x80\x8B";  // U+200B
+    const std::string raw = "a" + std::string(kRlo) + "b" + std::string(kZwsp) + "c";
+    EditorBuffer b(raw, zero_width_hidden);
+    // Hareket: her biri tek adım, önceki harfe yapışmaz.
+    for (const std::size_t expected : {1U, 4U, 5U, 8U, 9U}) {
+        b.move_right(false);
+        CHECK(b.cursor() == expected);
+    }
+    for (const std::size_t expected : {8U, 5U, 4U, 1U, 0U}) {
+        b.move_left(false);
+        CHECK(b.cursor() == expected);
+    }
+    // Çizim: işaret, tek hücre, kod noktası Glyph'te; ham bayt ekrana gitmez.
+    const auto marker = b.glyph_at(1, 1);
+    CHECK(marker.next == 4);
+    CHECK(marker.cells == 1);
+    CHECK(marker.shown == "\xEF\xBF\xBD");
+    CHECK(marker.hidden == char32_t{0x202E});
+    CHECK(b.glyph_at(0, 0).shown == "a");
+    CHECK(b.glyph_at(0, 0).hidden == 0);
+    CHECK(b.glyph_at(5, 3).hidden == char32_t{0x200B});
+    // Sütun ve hücre hesabı tutarlı: 5 karakter, 5 hücre.
+    b.move_end(false);
+    CHECK(b.position().column == 5);
+    CHECK(b.cursor_cell(kWide).cell == 5);
+    const auto rows = b.rows_of_line(0, 3);  // 3 hücrede sarılır: "a?b" + "?c"
+    REQUIRE(rows.size() == 2);
+    CHECK(rows[0].end == 5);
+    // Seç ve sil: yalnız o kod noktasının baytları gider.
+    b.move_to({0, 1});
+    b.move_right(true);
+    CHECK(b.selection()->begin == 1);
+    CHECK(b.selection()->end == 4);
+    b.delete_forward();
+    CHECK(b.text() == "ab" + std::string(kZwsp) + "c");
+    b.move_to({0, 3});
+    b.backspace();
+    CHECK(b.text() == "abc");
+    CHECK(b.undo());
+    CHECK(b.undo());
+    CHECK(b.text() == raw);
+}
+
 TEST_CASE("buffer: CRLF is one step, new lines follow the file and other lines stay untouched") {
     auto b = buffer_of("a\r\nb\nc\r\n");
     b.move_right(false);
@@ -499,4 +551,25 @@ TEST_CASE("buffer: a random edit sequence undoes back to the exact original byte
         }
         CHECK(b.text() == edited);
     }
+}
+
+TEST_CASE("edit_count grows on every text change and not on motion") {
+    EditorBuffer b = buffer_of("ab\ncd");
+    const auto start = b.edit_count();
+    b.move_right(false);
+    b.move_rows(1, kWide, true);
+    b.clear_selection();
+    CHECK(b.edit_count() == start);
+    b.type_text("x");
+    b.type_text("y");  // aynı geri alma adımına birleşir ama iki değişikliktir
+    CHECK(b.edit_count() == start + 2);
+    b.undo();
+    CHECK(b.edit_count() == start + 3);
+    b.redo();
+    b.backspace();
+    b.newline();
+    b.paste("p");
+    CHECK(b.edit_count() == start + 7);
+    b.reload("fresh");
+    CHECK(b.edit_count() == start + 8);
 }

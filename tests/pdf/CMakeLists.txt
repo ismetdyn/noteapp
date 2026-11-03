@@ -1,4 +1,4 @@
-noteapp_add_test(pdf pdf_export_test.cpp)
+noteapp_add_test(pdf markdown_blocks_test.cpp pdf_export_test.cpp)
 target_link_libraries(pdf_tests PRIVATE noteapp_core)
 # Türkçe geri okuma ve yerleşim doğrulaması gerçek PDF okuyucuyla yapılır; Fedora imajı poppler-utils'i kurar.
 # Eksikse durulur: testleri sessizce derlememek yanlış yeşil verirdi.

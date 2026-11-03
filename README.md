@@ -10,8 +10,10 @@ GitHub reposuyla senkron kalır (Windows ↔ Linux).
 - `note "metin"` ile saniyesinde ekleme; stdin'den ya da sevdiğin editörden (`-e`) yazma
 - İçerikten tip önerisi (md, java, py, json…); notun tipi dosya uzantısıdır
 - fzf tarzı bulanık arama (Türkçe katlama dahil) ve tam metin içerik araması
+- `#etiket`ler metinden: `#proje`, iç içe `#proje/alt`, Türkçe `#çalışma`; `tag:proje` ile süz, `note tags` ile say
+- Kayıtlı Cypher görünümleri: `note view save iş "MATCH …"`, `view:iş` ile her aramada süz; salt okunur, notlar gibi senkronlanır
 - `notes`: iki panelli TUI (liste + önizleme), nvALT mantığı: eşleşme yoksa Enter yeni not
-- `notes-gui`: klasör ağacı + liste + editör, otomatik kayıt, ayarlar sekmesi, PDF dışa aktarma
+- `notes-gui`: klasör ve notlar tek ağaçta (ya da Dolphin gibi Ayrıntılar tablosu) + editör, tek araç çubuğu, otomatik kayıt, ayarlar sekmesi, PDF dışa aktarma
 - Veri kaybı yok: atomik yazma, dışarıdan değişiklik tespiti, onaysız silme yok
 - Aç/kapa GitHub senkronu (libgit2; HTTPS+token ya da SSH); çakışmada iki kopya, force push yok
 - Türkçe/İngilizce arayüz, tek `config.toml`; sırlar yalnız OS kasasında
@@ -151,15 +153,17 @@ note -f work/2026 -n plan "ilk taslak"     # klasör + ad → work/2026/plan.md
 note -n deneme.cpp "int x;"                # yazılan uzantı aynen kalır: deneme.cpp, a.tar.gz, notlar.v2
 note                                       # metin yok: editör açılır; boş bırakırsan iptal
 note -e "Başlık"                           # editörü ön içerikle aç
-note ls [SORGU] [-f KLASÖR]                # listele (sorgu: bulanık sıra, yoksa en yeni önce)
+note ls [SORGU] [-f KLASÖR]                # listele (sorgu: bulanık sıra, yoksa en yeni önce); argüman alır: note ls "plan tag:proje type:md"
+note tags [--json]                         # #etiketler ve not sayıları
+note view save AD 'CYPHER' [--force]       # salt okunur sorguyu adla kaydet; view ls|run AD|show AD|rm AD, --json
 note find bütçe onay                       # içerik araması → yol:satır: kesit
 note show SORGU | note edit SORGU          # en iyi eşleşmeyi yazdır / editörde aç
 note mv KAYNAK HEDEF                       # taşı/yeniden adlandır; uzantı değişimi = tip değişimi
 note rm YOL [-y]                           # yalnız tam yol; TTY yoksa -y şart
 note export --pdf YOL [-o ÇIKTI]           # PDF (A4; GUI ve ekran gerekmez)
 note export --all DİZİN [--ignore-skipped]  # tüm notlar bayt bayt düz dosya, çöp .trash/ altında; üzerine yazmaz, bağdan geçmez; ulaşılamayan not ya da geçişte dışarıda kalan dosya varsa çıkış 1
-note graph migrate [--skip-failed]         # eski düz dosya notları içe aktar (aşağıda)
-note graph status [--ignore-skipped | --clear-skipped]  # geçerli notes_dir'de dışarıda kalan dosyaları listeler, varsa çıkış 1; --clear-skipped listeyi unutur
+note graph migrate [--skip-failed | --new]  # eski düz dosya notları içe aktar (aşağıda); --new: yalnız geçişten sonra düşenler
+note graph status [--ignore-skipped | --clear-skipped]  # geçerli notes_dir'de veritabanında olmayan ve dışarıda kalan dosyaları listeler, varsa çıkış 1; --clear-skipped listeyi unutur
 note graph export --format jsonl [-o DOSYA] | note graph import [--overwrite] DOSYA   # tüm graph'ı taşı
 note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]
 note config path | list | get ANAHTAR | set ANAHTAR DEĞER
@@ -173,15 +177,18 @@ bulunamadı) · `2` kullanım hatası · `3` G/Ç/iç hata · `4` senkron hatas�
 
 | Tuş | Eylem |
 |---|---|
+| `:` | Komut paleti (liste, REVIEW, çöp): her komutu adıyla süz ve çalıştır, ör. `move — Taşı  m`. `↑↓`, `Enter`, `Esc`. Sağda tuşu, son kullanılanlar başta; o an çalışamayan soluk ve nedenli. Tuşu olmayanlar da burada: sütun seçimi, tüm klasörleri aç/kapat, dosya ikonları. Tuş ve palet aynı tablodandır |
 | `↑` `↓` `j` `k` | Listede gezin, sağ panel canlı izler. Liste klasör tabanlıdır: önce klasörler, sonra notlar, numara klasör başına; üstte yol (`notlar/work/sub`, parçaya tıkla). Seçim satır vurgusudur |
 | `Space` | Klasörü yerinde aç/kapat (`▸` `▾`, oka tıkla): alt öğeler girintili, her derinlikte, numara kendi klasöründe; açık olanlar `tui-state.toml`'da kalır. Notta ayrıntıyı açar |
 | `m` | Seçimi ya da satırı klasöre taşı: altta girdi, geçerli klasörle dolu, `Tab` klasörleri önerir; yazılan yeni iç içe klasör oluşur. Ezme yok: hedef doluysa hata girdide kalır |
+| `L` | Notu başka nota ilişkilendir: altta girdi, `Tab` not yollarını önerir (liste ve REVIEW). Bağlantı bölümünde ilişkili satırda ilişkiyi kaldırır (sorar, varsayılan Vazgeç) |
+| `b` | REVIEW'da önizleme altındaki bağlantı bölümüne geçer: `Gelen`, `Giden`, `İlişkili`, `Eksik`; `↑↓` seç, `Enter` ya da tıklama nota gider, `Esc` `b` döner |
 | `←` `h` | Üst klasör, seçim çıkılan klasörde kalır; kökte etkisiz; arama sonucunda notun klasörüne gider |
 | `→` `l` | Klasörde içeri girer (`Enter` ve çift tıklama da); notta önizleme (REVIEW, `cat` gibi): `↑↓` `PgUp/PgDn` `g` `G` kaydır, `/` notta bul, `n` `N` gez, `←` `Esc` liste, `q` çık. `md`, `csv`, `json` biçimli açılır, `R` ham metne geçer ve geri döner |
 | `Enter` `e` | Düzenle (EDIT): `Ctrl+S` kaydet, `Ctrl+Q` çık (kaydedilmemişi sorar), `Ctrl+F` bul, `Ctrl+Z/Y`, `Ctrl+X/C/V`; `Esc` yalnız aramayı kapatır ya da seçimi kaldırır, tek başına çıkmaz |
 | `E` | Harici editörde aç (`$EDITOR`) |
 | `/` | Alt satırda ara: `↑↓` seç, `Enter` seçimi tut (eşleşme yoksa taslak), `Ctrl+T` ad/içerik, `Esc` kapat |
-| `f` | Ad ve içerikte ara: eşleşen satır yolun altında, `Enter` REVIEW'da eşleşmeye kayar. `/` ve `f` argüman alır: `sort:-size` `type:md` `in:work/` `size:>1mb` `updated:7d` `sync:modified`; bozuk değer metin sayılmaz, yeriyle hata gösterir |
+| `f` | Ad ve içerikte ara: eşleşen satır yolun altında, `Enter` REVIEW'da eşleşmeye kayar. `/` ve `f` argüman alır: `sort:-size` `type:md` `in:work/` `size:>1mb` `updated:7d` `sync:modified` `tag:proje` `view:iş`; bozuk değer metin sayılmaz, yeriyle hata gösterir |
 | `n` `Ctrl-O` | Yeni not: tüm terminali alan boş editör. Ad ilk `Ctrl+S`'te altta sorulur (`klasör/ad.uzantı`, önerisi ilk satır + algılanan tip), o ana dek dosya yok; `Ctrl+Q` iki panele döner |
 | `a` | Yeni not ya da klasör, ad bulunulan klasöre göre: `ad/` klasör oluşturur ve Listede kalır, `sub/x.md` gereken klasörleri açar. Listenin başında satır açılır, `Enter` boş notu oluşturup EDIT'te açar (yazmaya ya da yapıştırmaya hazır), `Esc` vazgeçer; uzantı yoksa `default_type`; dolu ya da geçersiz ad satırda hata verir · `r` taşı/ad/tip · `s` senkron |
 | `d` `u` `D` | `d` çöpe atar (sormaz), `u` bu oturumda son atılanı geri alır, `D` kalıcı siler (sorar, varsayılan Vazgeç). Klasörde: `d` notları tek tek çöpe atıp klasörü kaldırır (notlu klasörde sorar, varsayılan Vazgeç), `u` hepsini geri getirir; `D` sayıları gösterip sorar, kalıcıdır |
@@ -200,11 +207,17 @@ bulunamadı) · `2` kullanım hatası · `3` G/Ç/iç hata · `4` senkron hatas�
 | `Esc` | Listede süzgeci temizler, çıkmaz |
 | `q` | Liste ve önizlemeden çık (editörde ve girdilerde metindir) · `Ctrl-C` editör dışında acil çıkış (editörde kopyalar) |
 
+Bağlantılar metindeki `[[hedef]]`ten türer. Hedef yeniden adlandırılınca not metni **yeniden yazılmaz**: eski ad `Eksik` listesinde görünür, bağlantıyı metinde sen düzeltirsin. `L` ile kurulan ilişki metne bağlı değildir, ad değişiminde kalır.
+
+Etiketler `md`, `markdown`, `txt` ve uzantısız notlarda metindeki `#etiket`ten türer (harf, rakam, `_`, `-`, `/`; en az bir harf). Başlık (`# Başlık`), kod bloğu, satır içi kod, URL parçası (`sayfa#bolum`) ve `[[not#bölüm]]` etiket değildir; kodda `#include` de değil. Büyük/küçük harf eşleşmede fark etmez, ilk yazılış gösterilir. Notun etiketleri önizlemenin altındaki ayırıcı satırında (`#iş #proje/alt ───`) ve GUI başlığında görünür. `tag:proje` `proje` ve `proje/alt`'ı bulur, `tag:proje/alt` yalnız o dalı; paletteki (`:`) "Etikete göre süz" aramayı `tag:` ile açar ve etiketleri listeler. Çöpteki not sayılmaz. Graf olarak `(:Note)-[:TAGGED]->(:Tag {name})`: `note query "MATCH (n:Note)-[:TAGGED]->(t:Tag {name:'proje'}) RETURN n.name"`. Önceki sürümden gelen notlar ilk açılışta kendiliğinden etiketlenir.
+
+Görünüm, adla saklanmış bir Cypher sorgusudur: `note view save iş "MATCH (n:Note)-[:TAGGED]->(:Tag {name:'iş'}) RETURN n"`. `note view run iş` `note query` ile aynı tabloyu (`--json` ile JSON) verir; `note view ls`, `show`, `rm` yönetir, var olan adı `--force` olmadan ezmez. `view:iş` her aramada (`note ls`, TUI `/` `f`, GUI arama kutusu) listeyi görünümün döndürdüğü notlara süzer: görünüm not düğümünü (`RETURN n`) ya da not yolunu döndürmelidir. TUI paletindeki (`:`) "Görünüm çalıştır" aramayı `view:` ile açar ve görünümleri listeler. Görünümler notlar gibi senkronlanır, bu yüzden **salt okunurdur**: yazan sorgu (`CREATE`, `SET`, `DELETE`…) kaydedilmez, başka cihazdan gelse de çalıştırılmaz, hiçbir şey değiştirmez.
+
 EDIT'te `Ctrl+C` `Ctrl+X` `Ctrl+V` sistem panosunu kullanır: Wayland'de `wl-copy`/`wl-paste`, X11'de `xclip` ya da `xsel`, macOS'ta `pbcopy`/`pbpaste`, Windows'ta Win32. Araç yoksa kopya OSC 52 ile terminale gider (en çok 75 KB, üstünde ileti) ve yapıştırma için `Ctrl+Shift+V` önerilir; `notes` kendi iç panosunu yedek tutar.
 
 EDIT'te satır sonunda soluk öneri çıkar (önce bu nottan, sonra diğer notlardan): `Tab` ya da `→` alır, yazmaya devam etmek düşürür; öneri yokken `Tab` sekme ekler. `Ctrl+Space` fzf gibi süzülen tamamlama listesini açar. `.env`, `properties`, `ini`, `toml`, `yaml`, `sh`, `json` ve benzeri notlardan yalnız anahtarlar önerilir; öbür notlarda da `KEY=değer` satırı yalnız anahtarını verir, değerler başka nota sızmaz. `md` ve `txt`'de PATH'te `hunspell` varsa yanlış sözcüklerin altı çizilir (sözlük dilden: `tr_TR`, `en_US`; içerik makineden çıkmaz); yoksa sessizce kapalıdır.
 
-Girdiler zsh gibi çalışır (`f`, `/`, `a`, `F2`, ad istemi, editörde bul): metnin sonunda soluk öneri çıkar, `→` alır; `Tab` tek adayı yazar, çoksa süzülen liste açar (`↑↓`, `Enter`, `Esc`): klasörler, not adları, `.cpp` gibi tipler; `f` ve `/`'de `sort:` `type:` `in:` `size:` `updated:` `created:` `origin:` `sync:` anahtarları ve değerleri. Arama satırında geçerli argüman renkli, bozuk değer anında kırmızıdır. `Ctrl+P` `Ctrl+N` metni içeren önceki aramalarda gezer (`↑↓` sonuçları gezmeye devam eder); geçmiş `tui-state.toml`da yereldir, en çok 200 kayıt, senkrona girmez, sır benzeri değer ya da not adı taşıyan sorgu yazılmaz.
+Girdiler zsh gibi çalışır (`f`, `/`, `a`, `F2`, ad istemi, editörde bul): metnin sonunda soluk öneri çıkar, `→` alır; `Tab` tek adayı yazar, çoksa süzülen liste açar (`↑↓`, `Enter`, `Esc`): klasörler, not adları, `.cpp` gibi tipler; `f` ve `/`'de `sort:` `type:` `in:` `size:` `updated:` `created:` `origin:` `sync:` `tag:` `view:` anahtarları ve değerleri. Arama satırında geçerli argüman renkli, bozuk değer anında kırmızıdır. `Ctrl+P` `Ctrl+N` metni içeren önceki aramalarda gezer (`↑↓` sonuçları gezmeye devam eder); geçmiş `tui-state.toml`da yereldir, en çok 200 kayıt, senkrona girmez, sır benzeri değer ya da not adı taşıyan sorgu yazılmaz.
 
 Ad verirken yazdığın uzantı değiştirilmez, yerine başkası konmaz, üstüne eklenmez (`a`, `n`, `F2`, `r`, `note -n`, GUI): `deneme.cpp`, `deneme.xyz`, `a.tar.gz`, `notlar.v2` aynen kalır; uzantı yazmadıysan `a` `default_type`, `n` ve `note -n` içerikten algılananı kullanır. `a` ve `n` gövdeyi slug'lar (`Toplantı Notu.CPP` → `toplanti-notu.CPP`); `F2`, `r` ve `note -n` yazdığını aynen alır.
 
@@ -216,16 +229,32 @@ EDIT'te satır numarası sütunu (geçerli satır vurgulu), gerçek terminal iml
 
 ### `notes-gui`
 
+Pencerenin üstünde tek araç çubuğu, dosya yöneticisindeki gibi gruplu: `Yeni not` `Yeni klasör` | `Yeniden adlandır` `Taşı` `Sil` | `Çöp (n)` `PDF'e aktar`, sağda görünüm seçici `Ağaç` / `Ayrıntılar` / `Harita` (seçim `gui-state.toml`'da kalır). Düğmeler seçili satıra uygulanır: klasör satırında klasörü yeniden adlandırır ya da (onayla) siler, not satırında notu; `Yeni not` ve `Yeni klasör` seçili klasörün, not seçiliyse notun klasörünün içine açar. Yapamayacağı işte düğme kapalıdır, ipucu nedenini ve kısayolu söyler.
+
+- **Ağaç** (varsayılan): TUI'deki gibi klasörler ve notlar tek panelde, kök `Tümü`; oka ya da çift tıklayınca klasör açılır/kapanır. Açık klasörler yalnız bu oturumda hatırlanır; seçili not açılışta görünür olur.
+- **Ayrıntılar**: yalnız geçerli klasörün içeriği, sütunlar Ad, Boyut, Değiştirilme, Oluşturulma; önce klasörler. Klasöre çift tıklama ya da `Enter` içine girer; üstte `Yukarı` ve tıklanabilir yol düğmeleri.
+- **Harita**: notlar çizge olarak, editör sağda kalır. Kenarlar `[[bağlantı]]` (oklu) ve ilişki (renkli, oksuz); düğüm rengi not tipinden, gösterilen not halkalı. Üstte `Tüm çizge` (kapalıyken gösterilen notun çevresi), `Derinlik` (varsayılan 2) ve `Etiketler` (etiketler küçük kare). Tıklama notu açar (bekleyen düzenleme önce kendi notuna kaydedilir), çift tıklama açıp Ağaç'a geçer, düğümü sürüklemek onu oraya sabitler. Tekerlek imlecin çevresinde yakınlaştırır; boşluğu sürüklemek ya da orta tuş kaydırır; harita odaktayken oklar kaydırır, `+`/`-` yakınlaştırır, `0` sığdırır. Arama kutusu eşleşen notları vurgular, gerisini soldurur (`tag:` dahil). En çok 2.000 düğüm çizilir, aşılınca üstte uyarı çıkar. Hedefinden önce kaydedilmiş bir notun `[[bağlantı]]`ı, not yeniden kaydedilene dek haritada çizilmez (bağlantı panelinde görünür).
+- Klasör satırı seçilince açık notun bekleyen düzenlemesi önce kaydedilir, sağ panelde editör yerine klasör özeti (yol, not ve klasör sayısı) görünür.
+- Arama kutusuna yazınca liste düz sonuca döner (vurgulu, seçili klasörün içinde); çöp görünümü de düz listedir.
+- **Sıra no:** Ayarlar → Görünüm → `Sıra no` Ağaç ve Ayrıntılar'da TUI'deki gibi satır numarası gösterir (her klasörde 1'den); hemen uygulanır, `gui-state.toml`'da kalır.
+- **Bilgi paneli** (`Ctrl+I` ya da `Bilgi` başlığı): seçili notun boyutu, güncelleme ve oluşturma zamanı, senkron durumu, kaynak cihazı, tipi ve etiketleri; TUI'deki satır ayrıntısıyla aynı alanlar. Başlangıçta kapalıdır.
+- **Önizleme** (`md` ve `markdown` notlarında, `Ctrl+Shift+V` ya da başlıktaki `Önizleme` / `Düzenle`): Markdown biçimli ve salt okunur görünür; başlıklar büyük ve kalın, vurgu, listeler, kod blokları (eş aralıklı, zeminli), alıntı, yatay çizgi, basit tablo. `[[not]]` bağlantısına tıklamak bekleyen düzenlemeyi önce kendi notuna kaydeder, sonra o notu açar; olmayan nota giden `[[ad]]` soluk ve üstü çizilidir, tıklanmaz; dış bağlantı yalnız ipucunda gösterilir, açılmaz. HTML düz metin kalır, görsel yerine alt metni yazılır. Seçim oturum boyunca tüm Markdown notlarında kalır (TUI'deki `R` gibi); 256 KiB'tan büyük notta önizleme kapalıdır.
+
 | Tuş | Eylem |
 |---|---|
 | `Ctrl+K` / `Ctrl+P` | Arama kutusuna odak (`↑↓` listede gezer, `Enter` açar) |
+| `↑↓` `←→` `Enter` (listede) | Görünür satırlarda gezer; `→` klasörü açar ya da içine iner, `←` kapatır ya da üst klasöre çıkar; `Enter` notu editörde açar, Ayrıntılar'da klasöre girer |
 | `Ctrl+N` / `Ctrl+S` | Yeni not / şimdi kaydet |
 | `Ctrl+Shift+S` | Ad/klasör/tip diyaloğu |
 | `Ctrl+M` | Klasöre taşı |
-| `Del` (listede), araç çubuğu Sil | Çöpe at, sormaz; durum çubuğunda Geri al |
+| `Del` (listede), araç çubuğu Sil | Notu çöpe atar, sormaz (durum çubuğunda Geri al); klasör satırında klasörü sorarak siler |
 | `Shift+Del` (listede) | Kalıcı sil (sorar, varsayılan Vazgeç) |
-| Araç çubuğu `Çöp (n)` | Liste panelinde çöp: Geri getir, Kalıcı sil, Boşalt (sorar) |
+| Araç çubuğu `Çöp (n)` | Gezgin panelinde çöp: Geri getir, Kalıcı sil, Boşalt (sorar) |
 | `Ctrl+E` | PDF dışa aktar |
+| `Ctrl+L` | Editör altındaki bağlantı panelini aç ya da kapat (satıra tıklamak o notu açar) |
+| `Ctrl+I` | Bilgi panelini aç ya da kapat |
+| `Ctrl+Shift+V` | `md`/`markdown` notunda önizleme ↔ düzenleme |
+| Oklar / `+` `-` / `0` (harita odaktayken) | Kaydır / yakınlaştır, uzaklaştır / sığdır |
 | `F5` | Şimdi senkronla |
 | `Ctrl+,` | Ayarlar sekmesi |
 
@@ -249,6 +278,8 @@ Senkronlu iki cihazda: A'da `note graph migrate`, `note sync`; B'de `note graph 
 **Silmeden önce `note graph status` çalıştır.** Geçişin dışarıda bıraktığı dosyalar ve okunamayan klasörler (60 MiB üstü, geçersiz ad, bağ, izni olmayan ya da yolu çok uzun dizin, `--skip-failed` ile geçilenler) veritabanında ve dışa aktarımda **yoktur**; tek kopyaları eski dosyalardır, silersen kaybolur. Liste `<veri dizini>/migration-skipped` dosyasında kalır: `note graph status` ve `note export --all` adlarını yazar, 1 ile çıkar. Düzeltip `note graph migrate`i yinelemek listeyi günceller; `--ignore-skipped` kaybı kabul eder, çıkış 0 olur.
 
 `note graph status` yalnız geçerli `notes_dir`i denetler; aynı veri dizinine geçirilmiş başka dizinlerin kayıtlarını yalnız sayar, çıkış kodunu etkilemezler. `note export --all` ise veritabanının tümünü çıkardığı için bütün kayıtları yazmayı sürdürür. `note graph status --clear-skipped` bütün dizinlerin listesini yazıp unutur: yalnız kayıt silinir, eski dosyalara dokunulmaz, dosyalar hâlâ veritabanında değildir ve geçiş yinelenince o dizininkiler yeniden listelenir.
+
+**Notlar artık veritabanındadır, `notes_dir` depo değildir.** Geçişten sonra klasöre bırakılan ya da değiştirilen dosyayı uygulama görmez. `note graph status` bunları (`graph/` taşıyıcıları, `.git` ve gizli dosyalar hariç) listeler, 1 ile çıkar; denetim 100.000 girdi ve 1 GiB okumayla sınırlıdır, sınırda durursa bunu söyler, "kalan yok" demez. `note graph migrate --new` yalnız bunları içe alır, her birini yazar: dosyalar yerinde kalır, tekrar çalıştırmak güvenlidir, sınırlar ve raporlama geçişle aynıdır. Geçirilmiş dosyadan ya da uygulamadaki aynı adlı nottan farklı içerik hiçbir şeyin üzerine yazmaz, kopya olarak görünür. İçe alınan her dosyanın baytları `<veri dizini>/migrated-digests` (0600) içinde kalır: uygulamada sildiğin ya da çöpten kalıcı sildiğin notun eski dosyası yeni sayılmaz, `--new` onu geri getirmez; dosya sonradan değişirse yine listelenir. Bu kayıttan önceki bir sürümle geçirilmiş köklerde kayıt `note graph migrate` ya da `--new` çalışınca, notu hâlâ veritabanında olan dosyalar için dolar. `notes` açılışta (2000 girdi, 8 MiB sınırında) böyle dosya bulursa ilk tuşa kadar sönük bir ipucu gösterir.
 
 ## Yapılandırma
 
@@ -278,8 +309,136 @@ kalır. Ayarlar `note config`, TUI'de `,` ya da `F9`, GUI'de Ayarlar sekmesinden
 | `sync.branch` | Dal (`main`) |
 | `sync.idle_seconds` | TUI/GUI'de son değişiklikten kaç sn sonra senkronlanır |
 | `sync.author_name` / `sync.author_email` | Commit yazarı (boşsa git config → OS kullanıcısı) |
+| `lsp.enabled` / `[lsp.servers]` / `[lsp.settings.<dil>]` | TUI'de dil sunucusu (aşağıda); varsayılan açık, kurulu sunucularla çalışır; yalnız dosyadan düzenlenir |
 
 Bozuk `config.toml` uygulamayı çökertmez (varsayılanlar + log uyarısı), `note config set` bozuk dosyada reddeder.
+
+### Dil sunucusu (LSP, yalnız `notes`)
+
+EDIT'te hatalar altı çizili görünür, imlecin üstündeki hatanın iletisi alt satırdadır; `Ctrl+Space` listesine sunucunun
+önerileri de eklenir. Varsayılan açıktır ama yalnız **kurulu** sunucularla çalışır: program açılışta bir kez PATH'in mutlak
+girdilerinde aranır (`.` ya da `node_modules/.bin` gibi göreli girdiler atlanır: klonlanmış bir depo sunucunun yerine
+geçemesin); bulunamayan sunucu denenmez, hiç sunucusu bulunamayan dilin notları diske yazılmaz, o dilde ilk notu açtığında
+alt satırda bir kez "pyright-langserver bulunamadı, LSP python için kapalı" yazar. Otomatik indirme yoktur; komut kabuksuz
+çalışır.
+
+Varsayılan sunucular (`resources/defaults.toml`) proje kodu çalıştırmayan ve ağa çıkmayanlardır. Üst bölüm bunu kendi
+varsayılan ayarıyla sağlar; alt bölüm (★) ancak noteapp'in gömülü ayarlarıyla, aşağıdaki "Sertleştirme" tablosuna göre:
+
+| Dil kimliği | Komut | Kurulum (Fedora) |
+|---|---|---|
+| `python` | `pyright-langserver --stdio` | `npm install -g pyright` |
+| `c`, `cpp` | `clangd` | `sudo dnf install clang-tools-extra` |
+| `shellscript` | `bash-language-server start` | `sudo dnf install nodejs-bash-language-server` |
+| `markdown` | `marksman server` | [sürüm ikilisi](https://github.com/artempyanykh/marksman/releases) |
+| `lua` | `lua-language-server` | [sürüm ikilisi](https://luals.github.io/#other-install) |
+| `html`, `css`, `scss`, `less` | `vscode-html-language-server --stdio`, `vscode-css-language-server --stdio` | `npm i -g vscode-langservers-extracted` |
+| `html` (ikinci sunucu) | `htmx-lsp` | `cargo install htmx-lsp` |
+| `dockerfile` | `docker-langserver --stdio` | `npm install -g dockerfile-language-server-nodejs` |
+| `sql` | `sql-language-server up --method stdio` | `npm i -g sql-language-server` |
+| ★ `java` | `jdtls` | [milestone arşivi](https://download.eclipse.org/jdtls/milestones/), `bin/jdtls` PATH'e |
+| ★ `go` | `gopls` | `sudo dnf install gopls` |
+| ★ `rust` | `rust-analyzer` | `sudo dnf install rust-analyzer` ya da `rustup component add rust-analyzer` |
+| ★ `javascript`, `typescript` | `typescript-language-server --stdio` | `npm i -g typescript typescript-language-server` |
+| ★ `yaml` | `yaml-language-server --stdio` | `npm i -g yaml-language-server` |
+| ★ `toml` | `taplo lsp --no-auto-config stdio` | `cargo install taplo-cli --locked --features lsp` |
+| ★ `json` | `vscode-json-language-server --stdio` | `npm i -g vscode-langservers-extracted` |
+
+Thymeleaf ve htmx şablonları `.html` olduğu için html'in iki sunucusuna da gider; tanılar birleşir ve sunucu adıyla
+etiketlenir (`htmx-lsp: …`), öneriler aynı listeye eklenir, biri çökerse öteki çalışmayı sürdürür. `config.toml`'daki
+girdiler varsayılanların üstüne biner; bir dili `dil = []`, hepsini `enabled = false` kapatır; bir dile birden çok sunucu
+argv listelerinin listesiyle verilir:
+
+```toml
+[lsp]
+enabled = true            # false: hiçbir sunucu başlamaz, dizin oluşmaz
+
+[lsp.servers]
+markdown = []             # bu dil kapalı
+python = ["pylsp"]        # varsayılanın yerine
+html = [["vscode-html-language-server", "--stdio"]]   # htmx-lsp'siz
+```
+
+**Sertleştirme.** Aşağıdaki ayarlar `src/tui/server_settings.cpp`'deki gömülü tablodan gelir (sunucu program adından
+tanınır: `/opt/x/rust-analyzer` de `rust-analyzer`'dır) ve `initializationOptions`, `workspace/configuration` cevabı ve
+`workspace/didChangeConfiguration` ile gider; her anahtar sunucunun güncel kaynağından doğrulandı:
+
+| Sunucu | Kapatılan | Nasıl |
+|---|---|---|
+| rust-analyzer | `build.rs`, proc-macro, `cargo check`, bağımlılık indirme, araç zinciri indirme | `cargo.buildScripts.enable=false`, `procMacro.enable=false`, `checkOnSave.enable=false` (2023 öncesi sürümler de okur), `cargo.noDeps=true`; ortam `CARGO_NET_OFFLINE=true`, `RUSTUP_AUTO_INSTALL=0` |
+| gopls | araç zinciri/modül indirme, VCS, cgo derleyicisi, komut lensleri | ortam `GOTOOLCHAIN=local`, `GOPROXY=off`, `GOVCS=*:off`, `GOFLAGS=-mod=readonly`, `CGO_ENABLED=0`; `codelenses` hepsi `false`, `vulncheck="Off"` |
+| jdtls | Maven/Gradle içe aktarma, Gradle wrapper indirme, kaynak indirme, anotasyon işleme | `java.import.{maven,gradle}.enabled=false`, `java.import.gradle.wrapper.enabled=false`, `…offline.enabled=true`, `java.{maven,eclipse}.downloadSources=false`, `java.configuration.updateBuildConfiguration="disabled"`; `-data` = durum dizininde `lsp/jdtls-data` (0700) |
+| typescript-language-server | otomatik tip indirme (ATA), çalışma alanındaki TypeScript/eklentiler | `disableAutomaticTypingAcquisition=true`; yerel tsserver eklentisi zaten yüklenmez (`--allowLocalPluginLoads` verilmez) |
+| yaml-language-server | SchemaStore, Kubernetes CRD kataloğu, http(s) şema indirme | `yaml.schemaStore.enable=false`, `yaml.kubernetesCRDStore.enable=false`, `yaml.schemas={}`; `yaml/registerContentRequest` ile http(s) şemaları istemciye sorulur, noteapp reddeder |
+| vscode-json-language-server | `$schema` URL'sinden indirme | `handledSchemaProtocols=["file"]` (http(s) istemciye sorulur, reddedilir), `json.schemas=[]` |
+| taplo | şema, katalog, `taplo.toml` araması | `evenBetterToml.schema.enabled=false`, `schema.catalogs=[]`, `taplo.configFile.enabled=false`; komutta `--no-auto-config` |
+| htmx-lsp | — | ayar okumaz, süreç başlatmaz, ağa çıkmaz |
+
+Notlar sunucunun proje dosyası olduğu için şu notlar çalışma alanına **hiç yazılmaz**: `rust-analyzer.toml` (istemci
+ayarını ezer, `check.overrideCommand` ile komut çalıştırabilir), `rust-toolchain.toml` (araç zinciri indirtir),
+`rust-project.json`, `taplo.toml` ve `node_modules/` altındaki her şey (typescript-language-server çalışma alanının
+`node_modules/typescript`'ini çalıştırır). Ad, büyük/küçük harf duyarsız dosya sistemlerinin (macOS APFS, Windows NTFS)
+denk saydığı yazımlarıyla da (`ruſt-analyzer.toml`, tam genişlik harfler) reddedilir; ayrıca yazılan dosya dosya
+sistemine göre engellenen adın kendisiyse silinir.
+
+**Yalnız Windows'ta:** metninin herhangi bir yerinde ağ yolu geçen not hiçbir sunucuya gitmez ve yansıtılmaz; sunucu
+böyle bir yolu açarsa Windows oraya SMB bağlantısı kurar ve parola özetin (NTLM) dışarı gider. Ağ yolu sayılanlar:
+`\\sunucu\paylaşım` ya da `//sunucu/paylaşım` (önünde `:` yoksa; `https://...` sayılmaz), `file://sunucu/...` (`localhost`
+dışında) ve `file:////sunucu/...`. Hangi alanda olduğuna bakılmaz (`$schema`, `#include`, `import`, tsconfig `include`,
+`-I//sunucu/...`, yorum içi dahil); JSON kaçışları (`\/`, `\u002f`, `\\`) ve yüzde kodlaması (`%2F`, `%5C`) çözülmüş
+hâli de taranır. Alt satırda "Bu not için LSP kapalı: ağ yolu başvurusu var (\\sunucu ya da //sunucu)" yazar. Bilinen
+yanlış pozitif: protokolsüz URL (`"//cdn.example.com/x.js"`) de ağ yolu sayılır, o not Windows'ta LSP'siz kalır.
+`file:///yol`, `file://localhost/yol`, `C:\a\b` ve `/a/b` yereldir. Linux ve macOS'te `//sunucu/x` yerel bir yoldur, kural
+uygulanmaz. Sunucular durum dizinindeki `lsp/` klasöründe çalışır (notes'u başlattığın klasörde değil) ve ilk yansıtma
+bitmeden başlamaz.
+
+**Ayarı değiştirmek: `[lsp.settings.<dil>]`.** Bu tablo JSON'a çevrilir ve gömülü ayarın üstüne anahtar anahtar biner
+(VS Code'daki ayar adlarıyla aynı noktalı yol). Yalnız yerel `config.toml`'dan okunur; notlar ve senkron verisi ayar
+taşıyamaz. Tarih ve nan/inf değerleri reddedilir.
+
+```toml
+[lsp.settings.rust]
+rust-analyzer.cargo.buildScripts.enable = true   # build.rs'i yeniden aç
+rust-analyzer.procMacro.enable = true
+
+[lsp.settings.yaml]
+yaml.schemaStore.enable = true
+```
+
+> **Uyarı:** bir sertleştirme anahtarını geri açmak (build script, proc-macro, Maven/Gradle içe aktarma, şema indirme)
+> senkronla gelen **her** notun kodunun bu makinede çalışabilmesi ya da ağdan bir şey indirtebilmesi demektir. Yalnız
+> notların tamamı senin kontrolündeyse yap. Ortam değişkenleri (ör. `GOPROXY=off`) ayar tablosuyla değiştirilemez;
+> gerekiyorsa sunucuyu kendi sarmalayıcı betiğinle çalıştır.
+
+Dil notun adından ya da uzantısından gelir (büyük/küçük harf fark etmez): `c`/`h`, `cpp`/`cc`/`hpp`…, `py`, `sh`/`bash`, `md`,
+`lua`, `json`, `jsonc`, `yaml`/`yml`, `toml`, `js`/`mjs`/`cjs` (`javascript`), `jsx` (`javascriptreact`), `ts`/`mts`/`cts`
+(`typescript`), `tsx` (`typescriptreact`), `go`, `rs` (`rust`), `java`, `cs` (`csharp`), `html`/`htm`, `css`, `scss`, `less`,
+`sql`, `Dockerfile`/`Containerfile`/`.dockerfile`, `Makefile`/`GNUmakefile`/`.mk` (`makefile`), `CMakeLists.txt`/`.cmake`,
+`rb` (`ruby`), `php`, `kt`/`kts` (`kotlin`), `swift`, `zig`, `xml`, `ini`. `.env` ve `.properties` notları hiçbir sunucuya
+gitmez. Bozuk girdi açılışta uyarı verir ve atlanır; çöken sunucu o oturumda kapalı kalır, nedeni alt satırda bir kez görünür.
+
+**Gizlilik:** sunucusu tanımlı ve kurulu dillerin notları (2 MiB'a kadar) durum dizinindeki `lsp/workspace/` altına dosya olarak
+yazılır (yalnız sana açık: dizin 0700, dosyalar 0600; Linux'ta `~/.local/state/noteapp/lsp/workspace/`, Windows'ta
+`%LOCALAPPDATA%\noteapp\lsp\workspace\`) ki notlar arası import çözülsün; açtığın not sunucuya gönderilir. Dizin çıkışta
+silinmez, bir sonraki açılışta yeniden eşitlenir; dili listeden çıkarınca dosyaları silinir, tamamen silmek için
+`enabled = false` yap ve dizini sil. Sunucu ağa çıkıyorsa içerik makineden çıkabilir. **Komut çalıştırılan bir programdır:**
+`config.toml`'u dotfile deposuyla başka makinelerden eşitliyorsan oradaki `[lsp.servers]` komutları da bu makinede çalışır;
+komut yalnız yerel `config.toml`'dan okunur, notlardan ya da senkron verisinden asla.
+
+**Uyarı — senkronla gelen notlar sunucunun proje dosyası olur:** sunucusu tanımlı ve kurulu bir dilin **her** notu (yalnız açtığın
+değil; senkronla başka cihazdan gelen ya da `note graph import` ile alınan notlar dahil) çalışma alanına dosya olarak
+yazılır. Proje dosyalarını çalıştıran sunucular bu yüzden senkronla gelen bir notun kodunu çalıştırabilir: örneğin
+rust-analyzer `build.rs`'i ve `cargo`'yu, eslint `eslint.config.js`'i çalıştırır. Notları güvenmediğin bir kaynaktan
+geliyorsa yalnız proje kodu çalıştırmayan sunucuları yapılandır; bir sunucuyu eklemeden önce kendi belgesinden yapılandırma
+dosyalarını, eklentileri ya da derleme betiklerini çalıştırıp çalıştırmadığına bak. Varsayılan listenin seçimi bu belgelere
+dayanır, bir güvence değildir: pyright arama yollarını öğrenmek için PATH'teki `python`'u çalıştırır, clangd derleyiciyi
+yalnız `--query-driver` ile izin verilirse çalıştırır (varsayılanda verilmez), sql-language-server yalnız kendi ayar
+dosyanda tanımlı veritabanına bağlanır. ★ sunucular yalnız yukarıdaki gömülü ayarla güvenlidir; onları kendi
+sarmalayıcınla (`["env", "rust-analyzer"]` gibi) çalıştırırsan program adı tanınmaz ve ayar gitmez. Kalan riskler:
+typescript-language-server bir `tsconfig.json` notundaki `plugins`'i sunucunun kendi kurulumunun yanındaki
+`node_modules`'ta arar (notlardan değil, makinede zaten kurulu paketlerden); jdtls'in veri dizini makine başına tektir,
+aynı anda açılan ikinci `notes` penceresinde jdtls başlamaz. rust-analyzer'a `checkOnSave` nesne biçiminde
+(`checkOnSave.enable=false`) gider: 2023 öncesi sürümler yalnız bunu okur, sonrakiler de okur.
 
 ## Senkron kurulumu (GitHub)
 

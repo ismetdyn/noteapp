@@ -2,15 +2,20 @@ add_library(noteapp_core
     atomic_file.cpp
     i18n.cpp
     log.cpp
+    lsp_protocol.cpp
     config.cpp
     console.cpp
     editor.cpp
     file_icons.cpp
     file_stat.cpp
+    folder_tree.cpp
     migration.cpp
+    note_links.cpp
     note_path.cpp
     note_snapshot.cpp
     note_store.cpp
+    note_tags.cpp
+    note_views.cpp
     note_sync.cpp
     note_write.cpp
     paths.cpp

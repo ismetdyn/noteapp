@@ -46,9 +46,10 @@ struct Fixture {
                         [this](std::optional<std::size_t> line) { state.leave_editor(line); },
                         [](const core::Error&) {}, [] {}}};
 
-    explicit Fixture(std::string_view content, const char* language = "en") {
+    explicit Fixture(std::string_view content, const char* language = "en",
+                     const std::string& path = "a.md") {
         core::init_i18n(language);
-        test::upsert_note(dir.path(), "a.md", content);
+        test::upsert_note(dir.path(), path, content);
         state.set_notes(store.list());
         session.open(state.selected_row()->path);
         REQUIRE(session.is_open());
@@ -157,6 +158,124 @@ TEST_CASE("editor view: control bytes never reach a screen cell and the file sta
     CHECK_FALSE(f.session.dirty());
     f.session.handle(Key::CtrlS);
     CHECK(test::note_body(f.dir.path(), "a.md") == content);
+}
+
+TEST_CASE("editor view: bidi and zero-width characters show as a warning marker, named under the cursor") {
+    const std::string content = "a\xE2\x80\xAE"
+                                "b\xE2\x80\x8B"
+                                "c\n";  // a U+202E b U+200B c
+    Fixture f(content);
+    auto screen = f.frame();
+    const int x = pane_x(kWidth);
+    const std::string kMarker = "\xEF\xBF\xBD";
+    CHECK(screen.PixelAt(x, kPaneY).character == "a");
+    CHECK(screen.PixelAt(x + 1, kPaneY).character == kMarker);
+    CHECK(screen.PixelAt(x + 2, kPaneY).character == "b");
+    CHECK(screen.PixelAt(x + 3, kPaneY).character == kMarker);
+    CHECK(screen.PixelAt(x + 4, kPaneY).character == "c");
+    // Uyarı rengi: satırın arka planından ve düz metinden ayrı.
+    CHECK(screen.PixelAt(x + 1, kPaneY).background_color == ftxui::Color(ftxui::Color::Red));
+    CHECK(screen.PixelAt(x + 2, kPaneY).background_color != ftxui::Color(ftxui::Color::Red));
+    for (int y = 0; y < screen.dimy(); ++y) {
+        CHECK(row_text(screen, y).find("\xE2\x80\xAE") == std::string::npos);
+        CHECK(row_text(screen, y).find("\xE2\x80\x8B") == std::string::npos);
+    }
+    CHECK_FALSE(contains(screen, "U+202E"));
+
+    f.session.handle(Key::Right);
+    screen = f.frame();
+    CHECK(screen.cursor().x == x + 1);
+    CHECK(contains(screen, "U+202E RIGHT-TO-LEFT OVERRIDE"));
+    f.session.handle(Key::Right);
+    f.session.handle(Key::Right);
+    screen = f.frame();
+    CHECK(screen.cursor().x == x + 3);
+    CHECK(contains(screen, "U+200B ZERO WIDTH SPACE"));
+    CHECK(contains(screen, "1:4"));
+    f.session.handle(Key::Right);
+    screen = f.frame();
+    CHECK(screen.cursor().x == x + 4);
+    CHECK_FALSE(contains(screen, "U+200B"));
+
+    // Kaydetmek baytlara dokunmaz; işareti silmek yalnız onun baytlarını siler.
+    f.session.handle(Key::CtrlS);
+    CHECK(test::note_body(f.dir.path(), "a.md") == content);
+    f.session.handle(Key::Home);
+    f.session.handle(Key::Right);
+    f.session.handle(Key::ShiftRight);
+    f.session.handle(Key::Delete);
+    f.session.handle(Key::CtrlS);
+    CHECK(test::note_body(f.dir.path(), "a.md") == "ab\xE2\x80\x8B"
+                                                   "c\n");
+}
+
+TEST_CASE("editor view: an emoji ZWJ sequence and a ZWNJ word draw without hidden-character markers") {
+    const std::string content =
+        "aile \xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7"
+        " \xD9\x85\xDB\x8C\xE2\x80\x8C\xD8\xAE\n";
+    Fixture f(content);
+    auto screen = f.frame();
+    for (int y = 0; y < screen.dimy(); ++y) {
+        CHECK(row_text(screen, y).find("\xEF\xBF\xBD") == std::string::npos);
+        for (int x = 0; x < screen.dimx(); ++x)
+            CHECK(screen.PixelAt(x, y).background_color != ftxui::Color(ftxui::Color::Red));
+    }
+    for (int step = 0; step < 12; ++step) {
+        f.session.handle(Key::Right);
+        CHECK_FALSE(contains(f.frame(), "Hidden character"));
+    }
+    f.session.handle(Key::CtrlS);
+    CHECK(test::note_body(f.dir.path(), "a.md") == content);
+}
+
+// Yol senkrondan gelir: içerik gibi adı da güvenilmez. Sağdan sola geçersiz kılma ve UTF-8 C1 CSI.
+constexpr std::string_view kHostileName = "gpj\xE2\x80\xAE"
+                                          "x\xC2\x9B"
+                                          "31m";
+
+bool screen_has_raw(const ftxui::Screen& screen) {
+    for (int y = 0; y < screen.dimy(); ++y) {
+        const std::string row = row_text(screen, y);
+        if (row.find("\xE2\x80\xAE") != std::string::npos || row.find("\xC2\x9B") != std::string::npos)
+            return true;
+    }
+    return false;
+}
+
+TEST_CASE("editor view: a hostile note path never reaches the info bar, messages or the prompts raw") {
+    const std::string path = std::string(kHostileName) + ".md";
+    Fixture f("x", "en", path);
+    auto screen = f.frame();
+    CHECK(contains(screen, "gpj"));  // bilgi çubuğu yolu gösteriyor
+    CHECK_FALSE(screen_has_raw(screen));
+
+    f.session.handle(Key::Char, "y");
+    f.session.handle(Key::CtrlQ);
+    REQUIRE(f.session.mode() == EditorSession::Mode::LeavePrompt);
+    CHECK_FALSE(screen_has_raw(f.frame()));
+    f.session.handle(Key::Escape);
+
+    test::upsert_note(f.dir.path(), path, "dış");
+    f.session.handle(Key::CtrlS);
+    REQUIRE(f.session.mode() == EditorSession::Mode::ConflictPrompt);
+    CHECK_FALSE(screen_has_raw(f.frame()));
+    f.session.handle(Key::Enter);  // kopya olarak kaydet: ileti yeni yolu söyler
+    screen = f.frame();
+    CHECK(contains(screen, "Saved as copy"));
+    CHECK_FALSE(screen_has_raw(screen));
+}
+
+TEST_CASE("editor view: a hostile folder name never reaches the name prompt label raw") {
+    Fixture f("metin");
+    f.session.handle(Key::CtrlQ);
+    f.state.open_new_note_view();
+    f.session.begin_new_note(std::string(kHostileName));
+    f.session.handle(Key::Char, "a");
+    f.session.handle(Key::CtrlS);
+    REQUIRE(f.session.mode() == EditorSession::Mode::NamePrompt);
+    const auto screen = f.frame();
+    CHECK(contains(screen, "gpj"));
+    CHECK_FALSE(screen_has_raw(screen));
 }
 
 TEST_CASE("editor view: the cursor stays visible through a resize, also at the minimum size") {

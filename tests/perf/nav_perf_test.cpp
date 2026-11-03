@@ -7,7 +7,9 @@
 #include "tui/list_actions.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
+#include "wine.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <doctest/doctest.h>
 #include <mutex>
@@ -133,8 +135,11 @@ TEST_CASE("nav perf: scrolling a 1 MiB note in REVIEW reads it once") {
     CHECK(state.preview_scroll() > 0);
 }
 
-// T71: yapıştırma UI iş parçacığında koşar: süre donma süresidir (SPEC-tui "Çoklu seçim ve yank").
-TEST_CASE("folder copy perf: 2000 notes through ListActions") {
+namespace {
+
+// T71: yapıştırma UI iş parçacığında koşar: süre donma süresidir (SPEC-tui "Çoklu seçim ve yank"). Her
+// yapıştırma kendi deposunda; yalnız `p` ölçülür, kurulum değil.
+double paste_folder_of_2000_notes_ms() {
     const test::TempDir dir;
     const test::TempDir state_home;
     const test::ScopedEnv home{"NOTEAPP_HOME", test::utf8(state_home.path())};
@@ -169,9 +174,28 @@ TEST_CASE("folder copy perf: 2000 notes through ListActions") {
     const auto started = std::chrono::steady_clock::now();
     actions.run(state.handle(tui::Key::Char, "p"), confirm);
     const auto elapsed = std::chrono::steady_clock::now() - started;
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-    MESSAGE("folder_copy_2000_ms=" << ms);
     CHECK(state.summary().empty());
     CHECK(store->list().size() == 4000);
-    CHECK(ms < 200);  // UI iş parçacığında; not başına yazma 28 sn sürüyordu
+    return std::chrono::duration<double, std::milli>(elapsed).count();
+}
+
+}  // namespace
+
+// T93: tek ölçüm başka bir yükün tepesine denk gelince sınırı aşıyordu; eşik, perf paketindeki gibi tek
+// sayıda bağımsız yapıştırmanın medyanına uygulanır.
+// Sınır SPEC kabulü değildir: T71'in yerli ölçümüne (105 ms) göre konmuş gerileme bekçisidir (not başına
+// yazma 28,7 sn). Wine yerli platform değil, Windows ikilisinin test ortamıdır; aynı commit ve boş makinede
+// medyan Linux 128 ms, Wine 222 ms (25'er koşu, T93): Wine çarpanı 2. Yerli sınır değişmez.
+TEST_CASE("folder copy perf: 2000 notes through ListActions") {
+    constexpr int kPastes = 5;
+    constexpr double kPasteBudgetMs = 200.0;  // UI iş parçacığında, yerli (Linux, Windows)
+    const double budget_ms = test::running_under_wine() ? kPasteBudgetMs * test::kWineFactor : kPasteBudgetMs;
+    std::vector<double> samples;
+    for (int run = 0; run < kPastes; ++run)
+        samples.push_back(paste_folder_of_2000_notes_ms());
+    std::ranges::sort(samples);
+    const double median = samples[samples.size() / 2];
+    MESSAGE("folder_copy_2000_ms=" << median << " (median of " << kPastes << ", worst " << samples.back()
+                                   << ", budget " << budget_ms << ")");
+    CHECK(median < budget_ms);
 }

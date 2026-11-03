@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/text.hpp"
+
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -15,8 +17,8 @@ struct Folded {
     std::vector<std::size_t> byte_offsets;  // her kod noktasının özgün UTF-8'deki başlangıç baytı
 };
 
-// Basit küçük harf (ASCII, Latin-1, Latin Extended-A); I ve İ -> i. Türkçe harfleri ASCII'ye indirmez.
-char32_t to_lower(char32_t cp);
+// Kural core'dadır: etiket anahtarı (core::tag_key) aynı küçük harfi kullanır.
+using core::to_lower;
 
 // Büyük/küçük harf duyarsız; ı -> i, ç ğ ö ş ü -> c g o s u. Geçersiz UTF-8 baytı çökertmez:
 // her geçersiz bayt tek bir U+FFFD olur (ofseti o baytın kendisi), ayrıştırma sonraki baytla sürer.

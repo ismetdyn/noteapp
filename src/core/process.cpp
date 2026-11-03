@@ -1,6 +1,7 @@
 #include "core/process.hpp"
 
 #include "core/log.hpp"
+#include "core/process_win.hpp"
 #include "core/unique_handle.hpp"
 
 #include <algorithm>
@@ -198,14 +199,6 @@ std::expected<Command, Error> prepare_command(const std::vector<std::string>& ar
     return command;
 }
 
-// Devredilebilir boş aygıt (NUL) tutamacı; hatada boş.
-UniqueHandle open_null_device() {
-    SECURITY_ATTRIBUTES inheritable{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
-    return own_win_handle<UniqueHandle>(CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
-                                                    FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable,
-                                                    OPEN_EXISTING, 0, nullptr));
-}
-
 // Yalnız çocuğun ağacını toplayan, adsız iş nesnesi; son tutamaç kapanırsa (ör. uygulama çökerse)
 // üyeleri öldürür. Başarısızlıkta boş.
 UniqueHandle create_kill_on_close_job() {
@@ -277,6 +270,84 @@ int exit_status(int status) {
 
 }  // namespace
 
+#ifdef _WIN32
+
+UniqueHandle open_null_device() {
+    SECURITY_ATTRIBUTES inheritable{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    return own_win_handle<UniqueHandle>(CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+                                                    FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable,
+                                                    OPEN_EXISTING, 0, nullptr));
+}
+
+std::expected<SpawnedProcess, Error> spawn_with_stdio(const std::vector<std::string>& argv,
+                                                      const EnvOverrides& env_overrides, HANDLE stdin_handle,
+                                                      HANDLE stdout_handle, HANDLE stderr_handle,
+                                                      DWORD creation_flags,
+                                                      const fs::path& working_directory) {
+    const std::string& program_name = argv.front();
+    const auto command = prepare_command(argv);
+    if (!command)
+        return std::unexpected(command.error());
+    // Çalışma dizini değişince göreli program yolu başka yeri gösterirdi.
+    std::error_code absolute_error;
+    const std::wstring application = working_directory.empty()
+                                         ? command->application
+                                         : fs::absolute(command->application, absolute_error).wstring();
+    std::wstring command_line = command->command_line;
+    std::wstring environment;
+    if (!env_overrides.empty())
+        environment = build_environment_block(env_overrides);
+
+    // Yalnız standart tutamaçlar devredilir (PROC_THREAD_ATTRIBUTE_HANDLE_LIST): bInheritHandles=TRUE tek başına
+    // ebeveynin devredilebilir her tutamacını (ör. stdout'un yönlendirildiği dosya) çocuğa verir. Liste aynı
+    // tutamacı iki kez kabul etmez.
+    std::vector<HANDLE> inherited;  // liste CreateProcessW'e kadar bu belleği okur
+    for (HANDLE handle : {stdin_handle, stdout_handle, stderr_handle})
+        if (std::ranges::find(inherited, handle) == inherited.end())
+            inherited.push_back(handle);
+    SIZE_T list_size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &list_size);
+    std::vector<char> list_buffer(list_size);
+    auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(list_buffer.data());
+    BOOL ok = InitializeProcThreadAttributeList(attributes, 1, 0, &list_size);
+    if (ok)
+        ok = UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited.data(),
+                                       inherited.size() * sizeof(HANDLE), nullptr, nullptr);
+    STARTUPINFOEXW startup{};
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = stdin_handle;
+    startup.StartupInfo.hStdOutput = stdout_handle;
+    startup.StartupInfo.hStdError = stderr_handle;
+    startup.lpAttributeList = attributes;
+    PROCESS_INFORMATION info{};
+    if (ok)
+        ok = CreateProcessW(
+            application.c_str(), command_line.data(), nullptr, nullptr, TRUE,
+            creation_flags | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
+            env_overrides.empty() ? nullptr : environment.data(),
+            working_directory.empty() ? nullptr : working_directory.c_str(), &startup.StartupInfo, &info);
+    const DWORD spawn_error = GetLastError();
+    if (list_size > 0)
+        DeleteProcThreadAttributeList(attributes);
+    if (!ok)
+        return std::unexpected(spawn_failed(program_name, std::to_string(spawn_error)));
+    // Çocuk askıda başlar: işe atanmadan tek komut çalışmasın ki torunlar da işe katılsın. Çağıran zaten
+    // bir işin içindeyse (CI/IDE) iç içe iş Windows 8+'ta çalışır; olmazsa doğrudan çocuğa düşülür.
+    UniqueHandle process(info.hProcess);
+    const UniqueHandle thread(info.hThread);
+    UniqueHandle job = create_kill_on_close_job();
+    if (!job || !AssignProcessToJobObject(job.get(), process.get())) {
+        log_warn("process: job object unavailable (error " + std::to_string(GetLastError()) +
+                 "); terminate will only kill the direct child");
+        job.reset();
+    }
+    ResumeThread(thread.get());
+    return SpawnedProcess{std::move(process), std::move(job), info.dwProcessId};
+}
+
+#endif
+
 EnvOverrides without_secrets(EnvOverrides overrides) {
     for (const char* name : {"NOTEAPP_GIT_TOKEN", "NOTEAPP_GIT_TOKEN_HOST"})
         overrides.emplace_back(name, std::nullopt);
@@ -300,10 +371,15 @@ std::optional<std::string> get_env_utf8(std::string_view name) {
 #endif
 }
 
-std::optional<fs::path> find_program(std::string_view name) {
+namespace {
+
+// `absolute_only`: çalışma dizinine göre çözülecek hiçbir aday denenmez.
+std::optional<fs::path> search_program(std::string_view name, bool absolute_only) {
     if (name.empty())
         return std::nullopt;
     const fs::path requested = path_from_utf8(name);
+    if (absolute_only && requested.has_parent_path() && !requested.is_absolute())
+        return std::nullopt;
     std::error_code ec;
 
 #ifdef _WIN32
@@ -314,7 +390,8 @@ std::optional<fs::path> find_program(std::string_view name) {
         for (auto dir : split_list(get_env_utf8("PATH").value_or(""), ';')) {
             if (dir.size() >= 2 && dir.front() == '"' && dir.back() == '"')
                 dir = dir.substr(1, dir.size() - 2);
-            dirs.push_back(path_from_utf8(dir));
+            if (fs::path entry = path_from_utf8(dir); !absolute_only || entry.is_absolute())
+                dirs.push_back(std::move(entry));
         }
     }
     // PATHEXT'ten yalnız CreateProcess'in başlatabildikleri (.vbs/.js gibileri değil) alınır.
@@ -343,11 +420,24 @@ std::optional<fs::path> find_program(std::string_view name) {
     if (requested.has_parent_path())
         return executable(requested) ? std::optional<fs::path>(requested) : std::nullopt;
     for (const auto& dir : split_list(get_env_utf8("PATH").value_or(""), ':')) {
-        if (fs::path candidate = path_from_utf8(dir) / requested; executable(candidate))
+        const fs::path entry = path_from_utf8(dir);
+        if (absolute_only && !entry.is_absolute())
+            continue;
+        if (fs::path candidate = entry / requested; executable(candidate))
             return candidate;
     }
     return std::nullopt;
 #endif
+}
+
+}  // namespace
+
+std::optional<fs::path> find_program(std::string_view name) {
+    return search_program(name, false);
+}
+
+std::optional<fs::path> find_program_on_absolute_path(std::string_view name) {
+    return search_program(name, true);
 }
 
 fs::path current_executable() {
@@ -444,60 +534,14 @@ std::expected<ProcessHandle, Error> spawn_detached(const std::vector<std::string
 #ifdef _WIN32
     // POSIX dalı hatayı spawn_posix'ten hazır alır; adı yalnız Windows dalı kullanır (-Werror).
     const std::string& program_name = argv.front();
-    const auto command = prepare_command(argv);
-    if (!command)
-        return std::unexpected(command.error());
-    std::wstring command_line = command->command_line;
-    std::wstring environment;
-    if (!env_overrides.empty())
-        environment = build_environment_block(env_overrides);
-
-    UniqueHandle null_device = open_null_device();
+    const UniqueHandle null_device = open_null_device();
     if (!null_device)
         return std::unexpected(spawn_failed(program_name, std::to_string(GetLastError())));
-    // Yalnız NUL tutamacı devredilir (PROC_THREAD_ATTRIBUTE_HANDLE_LIST): bInheritHandles=TRUE tek başına
-    // ebeveynin devredilebilir her tutamacını (ör. stdout'un yönlendirildiği dosya) uzun ömürlü çocuğa verir.
-    SIZE_T list_size = 0;
-    InitializeProcThreadAttributeList(nullptr, 1, 0, &list_size);
-    std::vector<char> list_buffer(list_size);
-    auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(list_buffer.data());
-    BOOL ok = InitializeProcThreadAttributeList(attributes, 1, 0, &list_size);
-    HANDLE inherited = null_device.get();  // liste CreateProcessW'e kadar bu adresi okur
-    if (ok)
-        ok = UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &inherited,
-                                       sizeof(HANDLE), nullptr, nullptr);
-    STARTUPINFOEXW startup{};
-    startup.StartupInfo.cb = sizeof(startup);
-    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    startup.StartupInfo.hStdInput = inherited;
-    startup.StartupInfo.hStdOutput = inherited;
-    startup.StartupInfo.hStdError = inherited;
-    startup.lpAttributeList = attributes;
-    PROCESS_INFORMATION info{};
-    if (ok)
-        ok = CreateProcessW(command->application.c_str(), command_line.data(), nullptr, nullptr, TRUE,
-                            CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | DETACHED_PROCESS |
-                                CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_SUSPENDED,
-                            env_overrides.empty() ? nullptr : environment.data(), nullptr,
-                            &startup.StartupInfo, &info);
-    const DWORD spawn_error = GetLastError();
-    if (list_size > 0)
-        DeleteProcThreadAttributeList(attributes);
-    null_device.reset();
-    if (!ok)
-        return std::unexpected(spawn_failed(program_name, std::to_string(spawn_error)));
-    // Çocuk askıda başlar: işe atanmadan tek komut çalışmasın ki torunlar da işe katılsın. Çağıran zaten
-    // bir işin içindeyse (CI/IDE) iç içe iş Windows 8+'ta çalışır; olmazsa doğrudan çocuğa düşülür.
-    UniqueHandle process(info.hProcess);
-    const UniqueHandle thread(info.hThread);
-    UniqueHandle job = create_kill_on_close_job();
-    if (!job || !AssignProcessToJobObject(job.get(), process.get())) {
-        log_warn("process: job object unavailable (error " + std::to_string(GetLastError()) +
-                 "); terminate will only kill the direct child");
-        job.reset();
-    }
-    ResumeThread(thread.get());
-    return ProcessHandle(info.dwProcessId, process.release(), job.release());
+    auto spawned = spawn_with_stdio(argv, env_overrides, null_device.get(), null_device.get(), null_device.get(),
+                                    DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    if (!spawned)
+        return std::unexpected(spawned.error());
+    return ProcessHandle(spawned->pid, spawned->process.release(), spawned->job.release());
 #else
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);

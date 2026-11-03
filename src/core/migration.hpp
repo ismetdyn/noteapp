@@ -6,8 +6,10 @@
 #include "core/note_store.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -41,8 +43,9 @@ struct MigrationReport {
     // Eski listede de görünmeyen ad, bağ ve 60 MiB üstü dosya: geçişi durdurmaz, dosya yerinde kalır,
     // raporlanır.
     std::vector<SkippedFile> skipped;
-    std::vector<SkippedFile> failed;  // geçişi tamamlatmaz: kapı kapalı kalır
-    std::filesystem::path backup;
+    std::vector<SkippedFile> failed;     // geçişi tamamlatmaz: kapı kapalı kalır
+    std::vector<std::string> new_files;  // yalnız migrate_new_notes: içe alınan dosyalar, notes_dir'e göreli
+    std::filesystem::path backup;        // migrate_new_notes içe alacak dosya bulamazsa boş
     bool complete = false;
 };
 
@@ -52,6 +55,33 @@ struct MigrationReport {
 std::expected<MigrationReport, Error> migrate_legacy_notes(const std::filesystem::path& notes_dir,
                                                            const std::filesystem::path& data_directory,
                                                            MigrationOptions options = {});
+
+struct StrayLimits {
+    std::size_t max_entries = 100'000;
+    std::uintmax_t max_bytes = std::uintmax_t{1024} * 1024U * 1024U;
+    std::stop_token stop = {};  // dosya başına bakılır; istenirse yarım sonuç truncated döner
+};
+
+struct StrayScan {
+    // path notes_dir'e göreli; reason new_file ya da geçiş kataloğundan (içe alınamayacak dosya).
+    std::vector<SkippedFile> files;
+    bool truncated = false;  // sınır doldu: listelenmeyen dosya olabilir, "kalan yok" denemez
+};
+
+// Geçişten sonra notes_dir'e düşen düz dosyalar: grafta yok ve geçişin bayt kaydıyla (migrated_sha)
+// uyuşmuyor. Yalnız okur. Geçişi bitmemiş kökte boş döner (o durumu legacy_notes_pending söyler).
+// migration-skipped'da kayıtlı dosyalar listelenmez: onları read_skipped_files söyler. Bağlar düz dosya
+// değildir.
+std::expected<StrayScan, Error> find_stray_files(const NoteStore& store,
+                                                 const std::filesystem::path& notes_dir,
+                                                 const std::filesystem::path& data_directory,
+                                                 StrayLimits limits = {});
+
+// find_stray_files'ın bulduklarını (sınırsız) içe alır: aynı yedek, sınırlar, raporlama ve kalıcı liste. Boş
+// klasör kurmaz, silinmiş klasörü diriltmez. Tekrar çağrı etkisizdir; yeni dosya yoksa yedek de almaz.
+// Dosyalara dokunmaz; migrate_legacy_notes'la geçişi bitmiş kökte çağrılır. Farklı baytlar kopya not olur.
+std::expected<MigrationReport, Error> migrate_new_notes(const std::filesystem::path& notes_dir,
+                                                        const std::filesystem::path& data_directory);
 
 // Geçişin dışarıda bıraktığı dosyalar (skipped ve failed), path tam yolla. Son geçiş sonucudur: dosya
 // düzeltilip geçiş yinelenince listeden çıkar. Dosya yoksa boş; okunamayan ya da bozuk liste hatadır, "hiçbir

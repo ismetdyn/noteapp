@@ -3,10 +3,14 @@
 #include "core/editor.hpp"
 #include "core/i18n.hpp"
 #include "core/text.hpp"
+#include "tui/display_text.hpp"
 #include "tui/save_dialog.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
+#include <set>
+#include <string_view>
 #include <utility>
 
 namespace noteapp::tui {
@@ -204,6 +208,7 @@ void EditorSession::start_draft(DraftName name) {
     bom_ = false;
     read_only_ = ReadOnly::No;
     buffer_.emplace(std::string{}, host_.cell_width);
+    ++buffer_generation_;
     find_matches_.clear();
     mode_ = Mode::Editing;
     show_info({});
@@ -330,10 +335,12 @@ void EditorSession::apply_content(std::string raw, const core::Revision& revisio
         bom_ = true;
         raw.erase(0, kBom.size());
     }
-    if (buffer_)
+    if (buffer_) {
         buffer_->reload(std::move(raw));
-    else
+    } else {
         buffer_.emplace(std::move(raw), host_.cell_width);
+        ++buffer_generation_;
+    }
     revision_ = revision;
     deleted_on_disk_ = false;
     changed_on_disk_ = false;
@@ -553,8 +560,50 @@ void EditorSession::open_completion() {
     completion_candidates_ = completion_candidates(text, cursor, shown_type_, table.get());
     completion_query_ = std::string(word_prefix_at(text, cursor));
     completion_selected_ = 0;
+    completion_inserts_.clear();
+    ++completion_generation_;
     refresh_completion();
     mode_ = Mode::Complete;
+}
+
+void EditorSession::add_completion_items(std::uint64_t generation,
+                                         std::span<const core::lsp::CompletionItem> items) {
+    if (mode_ != Mode::Complete || generation != completion_generation_)
+        return;
+    std::vector<std::string> labels;
+    for (const core::lsp::CompletionItem& item : items) {
+        std::string label = terminal_safe(item.label);
+        if (label.empty() || completion_inserts_.contains(label))
+            continue;
+        // Çok satırlı ya da denetim karakterli metin nota görünmeden kaçış dizisi veya satır sokardı.
+        const bool plain = !item.insert_text.empty() && terminal_safe(item.insert_text) == item.insert_text;
+        completion_inserts_.emplace(label, plain ? item.insert_text : label);
+        labels.push_back(std::move(label));
+    }
+    // Seçim kaymasın: kullanıcı okları kullanırken gelen cevap seçili adayı değiştirmez.
+    const std::string selected =
+        completion_items_.empty() ? std::string{} : completion_items_[completion_selected_];
+    // Yalnız bu cevabın etiketleriyle aynı olan adaylar düşer: aynı açılışa daha önce eklenmiş sunucu
+    // önerileri de completion_inserts_'tedir, onlar silinmemeli (bir dilin birden çok sunucusu).
+    const std::set<std::string_view> added(labels.begin(), labels.end());
+    std::erase_if(completion_candidates_, [&added](const std::string& word) { return added.contains(word); });
+    labels.insert(labels.end(), std::make_move_iterator(completion_candidates_.begin()),
+                  std::make_move_iterator(completion_candidates_.end()));
+    completion_candidates_ = std::move(labels);
+    refresh_completion();
+    const auto kept = std::ranges::find(completion_items_, selected);
+    completion_selected_ =
+        kept == completion_items_.end() ? 0 : static_cast<std::size_t>(kept - completion_items_.begin());
+}
+
+const DiagnosticMark* EditorSession::diagnostic_at_cursor() const {
+    if (!buffer_)
+        return nullptr;
+    const std::size_t cursor = buffer_->cursor();
+    const auto found = std::ranges::find_if(diagnostics_, [cursor](const DiagnosticMark& mark) {
+        return cursor >= mark.range.begin && cursor <= mark.range.end;
+    });
+    return found == diagnostics_.end() ? nullptr : &*found;
 }
 
 void EditorSession::refresh_completion() {
@@ -570,7 +619,9 @@ void EditorSession::insert_completion() {
     const std::size_t typed = word_prefix_at(open_buffer().text(), cursor).size();
     const std::size_t size_before = open_buffer().text().size();
     open_buffer().select_range({cursor - typed, cursor});
-    open_buffer().paste(completion_items_[completion_selected_]);
+    const std::string& label = completion_items_[completion_selected_];
+    const auto lsp_insert = completion_inserts_.find(label);
+    open_buffer().paste(lsp_insert == completion_inserts_.end() ? label : lsp_insert->second);
     note_draft_edit(size_before);
     find_matches_.clear();
 }
@@ -736,6 +787,7 @@ void EditorSession::close() {
     draft_.reset();
     find_matches_.clear();
     ghost_.clear();
+    diagnostics_.clear();
     mode_ = Mode::Editing;
     leave_pending_ = false;
     after_leave_ = AfterLeave::List;

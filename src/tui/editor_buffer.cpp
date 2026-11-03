@@ -12,7 +12,7 @@ namespace {
 
 constexpr std::string_view kCrlf = "\r\n";
 constexpr std::string_view kLf = "\n";
-constexpr std::string_view kUnprintable = "\xEF\xBF\xBD";   // U+FFFD: kontrol baytının ekrandaki yerine
+constexpr std::string_view kUnprintable = "\xEF\xBF\xBD";  // U+FFFD: kontrol baytı ve gizli karakterin yerine
 constexpr std::string_view kDottedCircle = "\xE2\x97\x8C";  // U+25CC: tabansız birleşen işaretin tabanı
 
 struct Decoded {
@@ -44,6 +44,13 @@ bool is_continuation(char c) {
 // FTXUI'nin IsControl tanımıyla aynı sınıf (C0, DEL, C1): C1 de bazı terminallerde kaçış dizisi başlatır.
 bool is_control(char32_t cp) {
     return cp < 0x20 || (cp >= 0x7F && cp < 0xA0);
+}
+
+// Kendi başına bir grapheme olan ve ekranda işaretle çizilen kod noktası: denetim baytı ya da görünmez
+// bidi/sıfır genişlikli karakter. Terminal ikincileri hücresiz çizer; önceki harfe yapışsalar imleç onları
+// atlar, silme görünmeyen baytı da götürürdü.
+bool stands_alone(char32_t cp) {
+    return is_control(cp) || core::find_hidden_control(cp) != nullptr;
 }
 
 std::size_t code_point_start(std::string_view text, std::size_t at) {
@@ -113,11 +120,11 @@ std::size_t EditorBuffer::next_boundary(std::size_t offset) const {
         return offset + kCrlf.size();
     const Decoded base = decode_at(text_, offset);
     std::size_t at = offset + base.length;
-    if (is_control(base.code_point))
+    if (stands_alone(base.code_point))
         return at;
     while (at < text_.size()) {
         const Decoded next = decode_at(text_, at);
-        if (is_control(next.code_point) || cell_width_(next.code_point) != 0)
+        if (stands_alone(next.code_point) || cell_width_(next.code_point) != 0)
             break;
         at += next.length;
     }
@@ -132,11 +139,11 @@ std::size_t EditorBuffer::previous_boundary(std::size_t offset) const {
     std::size_t at = code_point_start(text_, offset - 1);
     while (at > 0) {
         const char32_t cp = decode_at(text_, at).code_point;
-        if (is_control(cp) || cell_width_(cp) != 0)
+        if (stands_alone(cp) || cell_width_(cp) != 0)
             break;
         const std::size_t before = code_point_start(text_, at - 1);
         // Kontrol baytından hemen sonraki birleşen işaret kendi başına bir grapheme'dir.
-        if (is_control(decode_at(text_, before).code_point))
+        if (stands_alone(decode_at(text_, before).code_point))
             break;
         at = before;
     }
@@ -149,9 +156,9 @@ bool EditorBuffer::is_boundary(std::size_t offset) const {
     if (is_continuation(text_[offset]) || (text_[offset] == '\n' && text_[offset - 1] == '\r'))
         return false;
     const char32_t cp = decode_at(text_, offset).code_point;
-    if (is_control(cp) || cell_width_(cp) != 0)
+    if (stands_alone(cp) || cell_width_(cp) != 0)
         return true;
-    return is_control(decode_at(text_, code_point_start(text_, offset - 1)).code_point);
+    return stands_alone(decode_at(text_, code_point_start(text_, offset - 1)).code_point);
 }
 
 std::size_t EditorBuffer::line_of(std::size_t offset) const {
@@ -171,6 +178,7 @@ std::size_t EditorBuffer::line_end(std::size_t line) const {
 // Satır dizini baştan kurulmaz: 10 MB'ta her tuşta tüm metni taramak gecikme bütçesini yerdi.
 void EditorBuffer::replace_range(std::size_t at, std::size_t length, std::string_view inserted) {
     changed_from_ = std::min(changed_from_, line_of(at));
+    ++edit_count_;
     text_.replace(at, length, inserted);
     row_cache_.reset();
     const auto first = std::upper_bound(line_starts_.begin(), line_starts_.end(), at);
@@ -452,6 +460,8 @@ Glyph EditorBuffer::glyph_at(std::size_t offset, int cell) const {
     }
     if (is_control(base.code_point))
         return {next, 1, std::string(kUnprintable)};
+    if (core::find_hidden_control(base.code_point))
+        return {next, 1, std::string(kUnprintable), base.code_point};
     std::string shown = text_.substr(offset, next - offset);
     const int width = cell_width_(base.code_point);
     if (width == 0)
@@ -564,6 +574,7 @@ std::vector<VisualRow> EditorBuffer::visible_rows(int columns, int rows) const {
 
 void EditorBuffer::reload(std::string text) {
     const TextPosition kept = position();
+    ++edit_count_;
     text_ = std::move(text);
     saved_ = text_;
     eol_ = detect_eol(text_);

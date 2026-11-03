@@ -3,6 +3,7 @@
 #include "cli/args.hpp"
 #include "core/config.hpp"
 #include "core/note_store.hpp"
+#include "graph/query.hpp"
 
 #include <expected>
 #include <optional>
@@ -35,6 +36,11 @@ int run_export(const ParsedArgs& args, const core::Config& config);  // args.res
 int run_graph(const ParsedArgs& args, const core::Config& config);
 int run_export_all(const std::string& directory, bool ignore_skipped, const core::Config& config);
 int run_query(const ParsedArgs& args);  // args.rest: [--write] [--json] [--param K=D]... CYPHER
+// `note query`nin stdout biçimi: tablo ya da `--json` (commands_query.cpp).
+std::string query_output(const graph::QueryResult& result, bool json);
+int run_tags(const ParsedArgs& args, const core::Config& config);  // args.rest: [--json]
+// args.rest: save AD CYPHER [--force] | ls [--json] | run AD [--json] | rm AD | show AD
+int run_view(const ParsedArgs& args, const core::Config& config);
 // Alt komut dağıtıcısı; gerçeklenmemiş olanlar "henüz kullanılamıyor" (çıkış 2) verir.
 int run_reserved(const ParsedArgs& args, const core::Config& config);
 int run_invalid(const ParsedArgs& args);

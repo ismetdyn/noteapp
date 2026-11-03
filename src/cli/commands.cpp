@@ -5,12 +5,15 @@
 #include "core/editor.hpp"
 #include "core/error.hpp"
 #include "core/i18n.hpp"
+#include "core/json_text.hpp"
 #include "core/note_store.hpp"
+#include "core/note_views.hpp"
 #include "core/paths.hpp"
 #include "core/version.hpp"
 #include "detect/detect.hpp"
 #include "search/content_index.hpp"
 #include "search/fuzzy.hpp"
+#include "search/query.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -34,6 +37,8 @@
 #endif
 
 namespace noteapp::cli {
+
+using core::append_json_string;
 
 namespace {
 
@@ -94,6 +99,7 @@ int exit_code_for(const core::Error& error) {
     using Code = core::Error::Code;
     switch (error.code) {
     case Code::InvalidPath:
+    case Code::InvalidQuery:
         return kExitUsage;
     case Code::NotFound:
     case Code::AlreadyExists:
@@ -452,13 +458,29 @@ int run_ls(const ParsedArgs& args, const core::Config& config) {
         prefix = folder->string() + "/";  // "work/" eşleşir, "workshop.md" eşleşmez
     }
 
+    // Sorgu argümanları (`tag:`, `type:`...) TUI ile aynı kuraldır; kalan metin ada göre sıralar.
     core::NoteStore store = core::NoteStore::for_config(config);
-    std::vector<core::NoteInfo> notes = store.list();
-    std::erase_if(notes, [&](const core::NoteInfo& n) { return !n.path.string().starts_with(prefix); });
-    // Boş sorguda rank_notes saf mtime azalan sıradır; ayrı bir yol gerekmez.
-    const std::string query = parsed->positional.empty() ? "" : parsed->positional.front();
-    for (const search::Ranked& r : search::rank_notes(query, notes))
-        std::cout << terminal_or_bytes(notes[r.index].path.string()) << '\n';
+    const auto query =
+        search::parse_query(parsed->positional.empty() ? "" : parsed->positional.front(),
+                            [&store](std::string_view name) { return core::view_notes(store, name); });
+    if (!query) {
+        std::cerr << sanitize_for_terminal(core::format_error(query.error().error)) << '\n';
+        return kExitUsage;
+    }
+    std::vector<core::NoteMeta> metas = store.list_meta();
+    std::erase_if(metas, [&](const core::NoteMeta& n) { return !n.path.string().starts_with(prefix); });
+    const std::vector<std::size_t> allowed = search::apply(query->filters, std::nullopt, metas);
+    std::vector<core::NoteInfo> notes;  // rank_notes NoteInfo okur
+    for (const std::size_t index : allowed)
+        notes.push_back(core::NoteInfo{metas[index].path, metas[index].updated_at, metas[index].size});
+    // Boş metinde rank_notes saf mtime azalan sıradır; ayrı bir yol gerekmez.
+    std::vector<std::size_t> order;
+    for (const search::Ranked& r : search::rank_notes(query->text, notes))
+        order.push_back(allowed[r.index]);
+    if (query->sort)
+        search::sort_notes(order, *query->sort, metas);
+    for (const std::size_t index : order)
+        std::cout << terminal_or_bytes(metas[index].path.string()) << '\n';
     return kExitOk;
 }
 
@@ -579,6 +601,32 @@ int run_find(const ParsedArgs& args, const core::Config& config) {
     return kExitOk;
 }
 
+// Satır: gösterim adı TAB sayı; --json: [{"name","display","count"}]. Sıra Tag.name.
+int run_tags(const ParsedArgs& args, const core::Config& config) {
+    const bool json = args.rest.size() == 1 && args.rest.front() == "--json";
+    if (!args.rest.empty() && !json) {
+        std::cerr << core::tr("cli.tags_usage") << '\n';
+        return kExitUsage;
+    }
+    const core::NoteStore store = core::NoteStore::for_config(config);
+    const std::vector<core::TagCount> tags = store.tags();
+    if (!json) {
+        for (const core::TagCount& tag : tags)
+            std::cout << terminal_or_bytes(tag.display) << '\t' << tag.count << '\n';
+        return kExitOk;
+    }
+    std::string out = "[";
+    for (const core::TagCount& tag : tags) {
+        out += out.size() > 1 ? ",{\"name\":" : "{\"name\":";
+        append_json_string(out, tag.name);
+        out += ",\"display\":";
+        append_json_string(out, tag.display);
+        out += ",\"count\":" + std::to_string(tag.count) + "}";
+    }
+    std::cout << out << "]\n";
+    return kExitOk;
+}
+
 int run_reserved(const ParsedArgs& args, const core::Config& config) {
     if (args.command == "find")
         return run_find(args, config);
@@ -602,6 +650,10 @@ int run_reserved(const ParsedArgs& args, const core::Config& config) {
         return run_query(args);
     if (args.command == "graph")
         return run_graph(args, config);
+    if (args.command == "tags")
+        return run_tags(args, config);
+    if (args.command == "view")
+        return run_view(args, config);
     std::cerr << core::tr("cli.not_implemented", {{"command", args.command}}) << '\n';
     return kExitUsage;
 }

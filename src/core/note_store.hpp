@@ -40,6 +40,7 @@ struct NoteInfo {
     std::optional<std::string> origin = std::nullopt;
     std::uint64_t local_seq = 0;          // bu cihazın nota son yazmasının seq'i; 0: yazmadı
     std::uint64_t created_local_seq = 0;  // not bu cihazda oluştuysa oluşturan seq; 0: uzaktan geldi
+    std::vector<std::string> tags = {};   // TAGGED kenarlarının etiket anahtarları (tag_key), sıralı
 };
 
 // Notun senkron durumu. Değeri sync::fill_sync_status hesaplar; core git bilmez.
@@ -55,7 +56,11 @@ struct NoteMeta {
     SyncState sync_status = SyncState::SyncOff;
     std::uint64_t local_seq = 0;
     std::uint64_t created_local_seq = 0;
+    std::vector<std::string> tags = {};  // NoteInfo::tags
 };
+
+// NoteInfo'nun süzme/sıralama görünümü; sync_status SyncOff kalır (sync::fill_sync_status doldurur).
+NoteMeta meta_of(NoteInfo info);
 
 // Çöpteki not. path, notun çöpe atıldığı yoldur; canlı yollarla ayrı ad uzayındadır.
 struct TrashItem {
@@ -69,6 +74,20 @@ struct TrashItem {
 // İlk 8 KB'ta NUL baytı varsa ikili: önizleme/arama/düzenleme yapılmaz. Notu zaten okuyan yer (önizleme,
 // içerik indeksi, show/export) çağırır; list() gövde yüklemez.
 bool looks_binary(std::string_view bytes);
+
+// Notun `#etiket`leri (SPEC-graph "Etiketler"): yazıldığı haliyle, anahtarı aynı olanların ilki, anahtarın
+// bayt sırasıyla. Yalnız düzyazı notunda (md, markdown, txt, uzantısız); ikili notta boş. Yazma ve ön yüzler
+// aynı kuralı kullansın diye tek yer burasıdır.
+std::vector<std::string> note_tags(std::string_view path, std::string_view body);
+// Eşleştirme anahtarı: küçük harf (Latin-1 ve Latin Extended-A; İ ve I -> i). Tag.name budur.
+std::string tag_key(std::string_view tag);
+
+// `note tags` satırı: canlı notu olan etiket.
+struct TagCount {
+    std::string name;     // tag_key
+    std::string display;  // ilk yazıldığı hali
+    std::size_t count = 0;
+};
 
 struct NewNote {
     std::string folder;  // "" = kök
@@ -99,6 +118,42 @@ struct ImportedNote {
     std::optional<std::chrono::system_clock::time_point> created_at = std::nullopt;
     std::optional<std::chrono::system_clock::time_point> deleted_at = std::nullopt;
 };
+
+// Bir notun grafta komşuları (SPEC-graph "Bağlantılar"); yollar sıralı, çöp ve ulaşılamayan not yok.
+struct NoteLinks {
+    std::vector<NotePath> outgoing;      // LINKS_TO çıkan, ayrıca metinde olup kenarı henüz kurulmamış hedef
+    std::vector<NotePath> incoming;      // LINKS_TO gelen
+    std::vector<NotePath> related;       // RELATED_TO, iki yönde
+    std::vector<std::string> missing;    // canlı nota çözülemeyen [[hedef]]; ham metin, güvenilmez
+    std::vector<std::string> tags = {};  // TAGGED: etiketin ilk yazılışı, anahtar sırası; güvenilmez
+    bool empty() const {
+        return outgoing.empty() && incoming.empty() && related.empty() && missing.empty() && tags.empty();
+    }
+};
+
+// Canlı iki not arasındaki kenar (GUI haritası). RelatedTo yönsüzdür: from, to'dan küçüktür (yol sırası).
+enum class EdgeKind { LinksTo, RelatedTo };
+struct NoteEdge {
+    NotePath from;
+    NotePath to;
+    EdgeKind kind = EdgeKind::LinksTo;
+    auto operator<=>(const NoteEdge&) const = default;
+};
+
+// Panelin düz satırları: TUI ve GUI aynı sırada çizer (gelen, giden, ilişkili, eksik). Boş grubun satırı yok.
+enum class LinkGroup { Incoming, Outgoing, Related, Missing };
+struct LinkLine {
+    LinkGroup group = LinkGroup::Incoming;
+    bool is_header = false;
+    std::size_t index = 0;  // grubun içinde; başlıkta grubun öğe sayısı
+};
+std::vector<LinkLine> link_lines(const NoteLinks& links);
+// Satırın notu; başlık ve eksik hedefte nullptr.
+const NotePath* link_path(const NoteLinks& links, const LinkLine& line);
+// Satırın ham metni (güvenilmez): yol ya da eksik hedef. Başlıkta boş.
+std::string link_text(const NoteLinks& links, const LinkLine& line);
+// Başlığın katalog anahtarı, {count} alır.
+std::string_view link_group_key(LinkGroup group);
 
 // Veride duran ama güvenli yola çıkamayan not: adı geçersiz, klasörü geçersiz ya da çok derin, ad çakışması
 // sınırda.
@@ -132,6 +187,10 @@ public:
     // Depo kullanılamıyorsa nedeni: geçiş gerekli, daha yeni şema, bozuk dosya. list() hata taşımaz; ön yüz
     // bunu açılışta gösterir, yoksa kullanıcı boş listeyi notların kaybı sanar.
     std::optional<Error> health() const;
+    // Başka bağlantının (senkron süreci, CLI) son yazmasında değişen sayaç (graph::Graph::data_version).
+    // Listesi aynı kalan değişikliği (yalnız ilişki) yeniden taramanın görmesi içindir; bu deponun kendi
+    // yazmaları değiştirmez. Depo yoksa ya da okunamıyorsa 0.
+    std::uint64_t data_version() const;
 
     std::expected<NoteContent, Error> read(const NotePath& path) const;
     // Çöpteki notun baytları; item TrashItem::path. Dışa aktarma içindir.
@@ -173,6 +232,24 @@ public:
 
     // list() + üst veri; sync_status SyncOff'tur, sync::fill_sync_status doldurur.
     std::vector<NoteMeta> list_meta() const;
+
+    // Canlı notu olan etiketler, ada göre; çöpteki notun etiketi sayılmaz.
+    std::vector<TagCount> tags() const;
+
+    // Notun komşuları. Tek okuma işlemi: gezinmede değil, önizleme gibi ertelenmiş yüklemede çağrılır.
+    std::expected<NoteLinks, Error> links(const NotePath& path) const;
+    // Tüm canlı notlar arası LINKS_TO ve RELATED_TO kenarları, tek okuma işleminde; sıralı, tekil. Çöp,
+    // ulaşılamayan not, eksik hedef ve kendine kenar yoktur. Metinde olup kenarı henüz kurulmamış hedef de
+    // yoktur (links()'ten farkı): harita kenar başına gövde okumaz. Depo yoksa boş.
+    std::expected<std::vector<NoteEdge>, Error> edges() const;
+    // [[hedef]] metnini yazmanın kuralıyla (yol, uzantısız yol, dosya adı, yalın ad) canlı nota çözer;
+    // "|takma ad" ve "#başlık" atılır. Çözülemezse ya da depo açılamadıysa nullopt.
+    std::optional<NotePath> resolve_link(std::string_view target) const;
+    // Kullanıcının kurduğu RELATED_TO kenarı. Çözülen yönsüzdür: iki yönde de aynı ilişkidir. Kendine ilişki
+    // InvalidPath, var olan AlreadyExists, not yoksa NotFound.
+    std::expected<void, Error> add_relation(const NotePath& from, const NotePath& to);
+    // İki yöndeki kenarları siler; ilişki yoksa NotFound.
+    std::expected<void, Error> remove_relation(const NotePath& first, const NotePath& second);
 
     // Klasör adları NotePath kurallarıyla doğrulanır. Boş klasör bir Folder düğümüdür.
     std::expected<void, Error> create_folder(std::string_view folder);

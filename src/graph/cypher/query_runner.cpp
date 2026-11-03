@@ -100,14 +100,23 @@ Result<QueryResult> run_write(Graph& graph, Store& store, Plan& plan, const Quer
     return result;
 }
 
-Result<QueryResult> run_guarded(Graph& graph, Store& store, std::string_view cypher, const Params& params,
-                                QueryMode mode, const QueryLimits& limits) {
+// Ayrıştırma, planlama ve salt-okunur denetimi: depoya dokunmaz.
+Result<Plan> checked_plan(std::string_view cypher, const Params& params, QueryMode mode,
+                          const QueryLimits& limits) {
     Result<Plan> plan = build_plan(cypher, params, limits);
     if (!plan)
         return std::unexpected(std::move(plan).error());
     if (plan->first_write && mode == QueryMode::ReadOnly)
         return std::unexpected(
             located_error(Error::Code::ReadOnlyViolation, "graph.cypher_read_only", *plan->first_write));
+    return plan;
+}
+
+Result<QueryResult> run_guarded(Graph& graph, Store& store, std::string_view cypher, const Params& params,
+                                QueryMode mode, const QueryLimits& limits) {
+    Result<Plan> plan = checked_plan(cypher, params, mode, limits);
+    if (!plan)
+        return std::unexpected(std::move(plan).error());
     if (store.has_open_txn())
         return std::unexpected(
             Error{Error::Code::InvalidArgument, "graph.invalid_argument", {{"reason", "txn_already_open"}}});
@@ -115,6 +124,16 @@ Result<QueryResult> run_guarded(Graph& graph, Store& store, std::string_view cyp
 }
 
 }  // namespace
+
+Result<void> check_query(std::string_view cypher, const Params& params, QueryMode mode) {
+    try {
+        if (Result<Plan> plan = checked_plan(cypher, params, mode, QueryLimits{}); !plan)
+            return std::unexpected(std::move(plan).error());
+        return {};
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(limit_error("memory"));
+    }
+}
 
 Result<QueryResult> run_query(Graph& graph, Store& store, std::string_view cypher, const Params& params,
                               QueryMode mode, const QueryLimits& limits) {

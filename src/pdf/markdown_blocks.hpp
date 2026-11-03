@@ -17,6 +17,9 @@ struct TextStyle {
 struct Span {
     std::string text;
     TextStyle style;
+    // Yalnız MarkdownOptions::links ile dolar: bağlantının ham hedefi (URL ya da [[wiki]] hedefi, güvenilmez).
+    std::string link = {};
+    bool wiki = false;
 };
 
 struct TableRow {
@@ -35,8 +38,14 @@ struct Block {
     std::vector<TableRow> rows;
 };
 
+struct MarkdownOptions {
+    // GUI önizlemesi: bağlantı hedefleri ve [[wiki]] bağlantıları (md4c MD_FLAG_WIKILINKS) taşınır. PDF
+    // istemez: orada [[...]] düz metin kalır, hedef hiç bulunmaz.
+    bool links = false;
+};
+
 // `text` geçerli UTF-8 olmalıdır (sanitize_text). HTML kapalıdır: ham etiketler düz metin kalır. Görseller
 // alt metnine (yoksa pdf.image_placeholder), bağlantılar metnine iner; hedef URL'ler sonuçta hiç bulunmaz.
-std::vector<Block> parse_markdown(std::string_view text);
+std::vector<Block> parse_markdown(std::string_view text, MarkdownOptions options = {});
 
 }  // namespace noteapp::pdf

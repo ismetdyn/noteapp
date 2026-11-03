@@ -1,4 +1,5 @@
 #include "core/process.hpp"
+#include "support/process_probe.hpp"
 #include "support/test_support.hpp"
 
 #include <chrono>
@@ -60,53 +61,6 @@ std::string captured_output(const std::function<void()>& action) {
     return slurp(file);
 }
 
-#ifdef __linux__
-// Ölmüş ama henüz biçilmemiş (zombi) süreç: ebeveyni ölen torun PID 1'e devredilir; Docker'da PID 1 bir kabuk
-// olduğundan onu hemen biçmeyebilir. Zombi çalışmaz, kill(pid, 0) yine de başarılı döner.
-bool is_zombie(long long pid) {
-    std::FILE* stat = std::fopen(("/proc/" + std::to_string(pid) + "/stat").c_str(), "r");
-    if (stat == nullptr)
-        return false;
-    char buffer[512] = {};
-    const std::size_t read = std::fread(buffer, 1, sizeof(buffer) - 1, stat);
-    std::fclose(stat);
-    // Biçim: "pid (komut) DURUM ..."; komut adı parantez içerebileceğinden son ')' sonrası okunur.
-    const std::string line(buffer, read);
-    const auto close = line.rfind(')');
-    return close != std::string::npos && close + 2 < line.size() && line[close + 2] == 'Z';
-}
-#endif
-
-// PID hâlâ çalışan bir süreç mi? (Windows: çıkış kodu STILL_ACTIVE; POSIX: kill(pid, 0), zombi ölü sayılır.)
-bool process_alive(long long pid) {
-#ifdef _WIN32
-    HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
-    if (handle == nullptr)
-        return false;
-    DWORD code = 0;
-    const bool alive = GetExitCodeProcess(handle, &code) && code == STILL_ACTIVE;
-    CloseHandle(handle);
-    return alive;
-#else
-    const bool exists = kill(static_cast<pid_t>(pid), 0) == 0 || errno != ESRCH;
-#ifdef __linux__
-    return exists && !is_zombie(pid);
-#else
-    return exists;
-#endif
-#endif
-}
-
-bool wait_until(const std::function<bool()>& condition, std::chrono::milliseconds limit) {
-    const auto deadline = std::chrono::steady_clock::now() + limit;
-    while (!condition()) {
-        if (std::chrono::steady_clock::now() >= deadline)
-            return false;
-        std::this_thread::sleep_for(20ms);
-    }
-    return true;
-}
-
 }  // namespace
 
 TEST_CASE("spawn_detached does not wait; wait_with_timeout returns the exit code once it ends") {
@@ -155,17 +109,8 @@ TEST_CASE("terminate kills the whole process tree, grandchild included") {
     CHECK(wait_until([&] { return !process_alive(child->pid()); }, 2s));
     const bool grandchild_gone = wait_until([&] { return !process_alive(grandchild); }, 2s);
     CHECK(grandchild_gone);
-    // Başarısızlıkta torun 10 dakika uyuyup kalmasın.
-    if (!grandchild_gone) {
-#ifdef _WIN32
-        if (HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(grandchild))) {
-            TerminateProcess(h, 1);
-            CloseHandle(h);
-        }
-#else
-        kill(static_cast<pid_t>(grandchild), SIGKILL);
-#endif
-    }
+    if (!grandchild_gone)
+        kill_process(grandchild);
 }
 
 TEST_CASE("spawn_detached reports a missing program as NotFound") {

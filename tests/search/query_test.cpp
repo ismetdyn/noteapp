@@ -294,3 +294,94 @@ TEST_CASE("apply sorts unknown created values last in both directions") {
     CHECK(filtered("sort:created", notes) == Indices{1, 3, 0, 2});
     CHECK(filtered("sort:-created", notes) == Indices{3, 1, 0, 2});
 }
+
+namespace {
+
+core::NoteMeta tagged_meta(std::string_view path, std::vector<std::string> tags) {
+    return core::NoteMeta{.path = *core::NotePath::parse(path), .tags = std::move(tags)};
+}
+
+}  // namespace
+
+TEST_CASE("tag: matches the tag and its nested tags, folded, combinable with text and other arguments") {
+    const std::vector<core::NoteMeta> notes = {
+        tagged_meta("a.md", {"proje"}),
+        tagged_meta("b.md", {"proje/alt"}),
+        tagged_meta("c.txt", {"projeler"}),
+        tagged_meta("d.md", {"proje/alt/derin", "çalışma"}),
+        tagged_meta("e.md", {}),
+    };
+    CHECK(filtered("tag:proje", notes) == Indices{0, 1, 3});
+    CHECK(filtered("tag:proje/", notes) == Indices{0, 1, 3});
+    CHECK(filtered("tag:#Proje", notes) == Indices{0, 1, 3});
+    CHECK(filtered("tag:proje/alt", notes) == Indices{1, 3});
+    CHECK(filtered("tag:calisma", notes) == Indices{3});
+    CHECK(filtered("tag:ÇALIŞMA", notes) == Indices{3});
+    CHECK(filtered("tag:proje type:md", notes) == Indices{0, 1, 3});
+    CHECK(filtered("tag:proje tag:çalışma", notes) == Indices{3});
+    const ParsedQuery q = parsed("plan tag:proje toplantı");
+    CHECK(q.text == "plan toplantı");
+    REQUIRE(q.filters.size() == 1);
+    CHECK(q.filters[0].kind == Filter::Kind::Tag);
+}
+
+TEST_CASE("tag: without a name is an error at its value") {
+    CHECK(located("x tag:#") == "#");
+    CHECK(located("x tag:/") == "/");
+    CHECK(located("tag:") == "tag:");
+}
+
+namespace {
+
+// Depo yerine sabit görünümler: `work` iki not döndürür, `bad` sorgu hatası verir, kalanı yok.
+ViewLookup fake_views(int& calls) {
+    return [&calls](std::string_view name) -> std::expected<std::vector<core::NotePath>, core::Error> {
+        ++calls;
+        if (name == "work" || name == "Work")
+            return std::vector{*core::NotePath::parse("a.md"), *core::NotePath::parse("x/c.md")};
+        if (name == "bad")
+            return std::unexpected(core::Error{core::Error::Code::InvalidQuery, "error.view_writes", {}});
+        return std::unexpected(core::Error{core::Error::Code::NotFound, "error.view_not_found", {}});
+    };
+}
+
+}  // namespace
+
+TEST_CASE("view: keeps the notes the view returns, combinable with text and other arguments") {
+    const std::vector<core::NoteMeta> notes = {tagged_meta("a.md", {}), tagged_meta("b.md", {"proje"}),
+                                               tagged_meta("x/c.md", {"proje"})};
+    int calls = 0;
+    const ViewLookup views = fake_views(calls);
+    const auto query = parse_query("plan view:work tag:proje", views);
+    REQUIRE(query.has_value());
+    CHECK(calls == 1);
+    CHECK(query->text == "plan");
+    REQUIRE(query->filters.size() == 2);
+    CHECK(query->filters[0].kind == Filter::Kind::View);
+    CHECK(apply(query->filters, std::nullopt, notes) == Indices{2});
+    const auto quoted = parse_query("view:\"Work\"", views);
+    REQUIRE(quoted.has_value());
+    CHECK(apply(quoted->filters, std::nullopt, notes) == Indices{0, 2});
+}
+
+TEST_CASE("view: errors from the lookup sit at the value; without a lookup it matches nothing") {
+    int calls = 0;
+    const ViewLookup views = fake_views(calls);
+    const auto unknown = parse_query("x view:nope", views);
+    REQUIRE_FALSE(unknown.has_value());
+    CHECK(unknown.error().error.message_key == "error.view_not_found");
+    CHECK(std::string_view("x view:nope").substr(unknown.error().begin) == "nope");
+    const auto writes = parse_query("view:bad", views);
+    REQUIRE_FALSE(writes.has_value());
+    CHECK(writes.error().error.code == core::Error::Code::InvalidQuery);
+    CHECK(located("view:") == "view:");
+    const auto slashed = parse_query("view:a/b", views);  // ad kuralı depodan önce: sorulmaz
+    REQUIRE_FALSE(slashed.has_value());
+    CHECK(std::string_view("view:a/b").substr(slashed.error().begin) == "a/b");
+    CHECK(calls == 2);
+
+    // Sözdizimi denetimi (girdi boyama) depoya sormaz; süzgeç bağlanmamışsa hiçbir not geçmez.
+    const ParsedQuery plain = parsed("view:anything");
+    REQUIRE(plain.filters.size() == 1);
+    CHECK(apply(plain.filters, std::nullopt, std::vector{tagged_meta("a.md", {})}).empty());
+}

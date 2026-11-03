@@ -3,6 +3,7 @@
 #include "graph/op.hpp"
 #include "graph/oplog.hpp"
 #include "support/test_support.hpp"
+#include "wine.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -16,6 +17,7 @@
 #include <functional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace noteapp::graph;
@@ -35,10 +37,7 @@ double time_ms(const std::function<void()>& work) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 
-double median_ms(int runs, const std::function<void()>& work) {
-    std::vector<double> samples;
-    for (int i = 0; i < runs; ++i)
-        samples.push_back(time_ms(work));
+double median(std::vector<double> samples) {
     std::ranges::sort(samples);
     return samples[samples.size() / 2];
 }
@@ -178,30 +177,54 @@ TEST_CASE("graph_open_and_plain_write_do_not_grow_with_ops") {
     constexpr double kNoiseMs = 2.0;
 
     TempDir dir;
-    const auto measure = [&](const char* name, int frames, double& open_ms, double& write_ms) {
-        const fs::path path = dir.path() / name;
-        {
-            Graph graph = must(Graph::open(path));
-            fill_with_small_frames(graph, frames);
-        }
-        open_ms = median_ms(kRuns, [&] { must(Graph::open(path)); });
+    const fs::path small_path = dir.path() / "small.db";
+    const fs::path large_path = dir.path() / "large.db";
+    for (const auto& [path, frames] :
+         {std::pair{small_path, kSmallFrames}, std::pair{large_path, kLargeFrames}}) {
         Graph graph = must(Graph::open(path));
-        int edit = 0;
-        write_ms = median_ms(kRuns, [&] {
+        fill_with_small_frames(graph, frames);
+    }
+    // T93: örnekler küçük ve büyük günlük arasında dönüşümlü alınır. Wine'da yazma süresi zaman zaman bir
+    // süreliğine katlanır (41 örneklik medyan 2,6 ms'den 11 ms'ye); arka arkaya ölçülen iki medyandan biri bu
+    // döneme denk gelirse oran büyüme sanılıyordu. Dönüşümlü örnekte yavaş dönem iki tarafı birlikte etkiler.
+    std::vector<double> small_opens;
+    std::vector<double> large_opens;
+    for (int run = 0; run < kRuns; ++run) {
+        small_opens.push_back(time_ms([&] { must(Graph::open(small_path)); }));
+        large_opens.push_back(time_ms([&] { must(Graph::open(large_path)); }));
+    }
+    Graph small_graph = must(Graph::open(small_path));
+    Graph large_graph = must(Graph::open(large_path));
+    int edit = 0;
+    const auto edit_once = [&](Graph& graph) {
+        return time_ms([&] {
             WriteTxn txn = must(graph.write());
             must(txn.set_property(note_id(0), "k", std::int64_t{++edit}));
             must(txn.commit());
         });
     };
-    double small_open = 0;
-    double small_write = 0;
-    double large_open = 0;
-    double large_write = 0;
-    measure("small.db", kSmallFrames, small_open, small_write);
-    measure("large.db", kLargeFrames, large_open, large_write);
-    std::printf("graph_sync open_ms frames_%d=%.3f frames_%d=%.3f write_ms frames_%d=%.3f frames_%d=%.3f\n",
-                kSmallFrames, small_open, kLargeFrames, large_open, kSmallFrames, small_write, kLargeFrames,
-                large_write);
+    std::vector<double> small_writes;
+    std::vector<double> large_writes;
+    for (int run = 0; run < kRuns; ++run) {
+        small_writes.push_back(edit_once(small_graph));
+        large_writes.push_back(edit_once(large_graph));
+    }
+    // Yerli: medyan. T93: Wine'da dönüşümlü örnekte de büyük günlüğün medyanı tek başına 2,8 ms'den 11,4
+    // ms'ye çıkabiliyor (yavaşlık yalnız bir dosyaya denk geliyor). Wine'da en hızlı örnek karşılaştırılır:
+    // günlüğe bağlı gerçek bir maliyet her örnekte, en hızlısında da vardır (her yazmada 8 tam günlük
+    // taraması: en hızlılar 1,0'a karşı 5,1 ms, düşer).
+    const bool wine = noteapp::test::running_under_wine();
+    const auto pick = [wine](const std::vector<double>& samples) {
+        return wine ? std::ranges::min(samples) : median(samples);
+    };
+    const double small_open = pick(small_opens);
+    const double large_open = pick(large_opens);
+    const double small_write = pick(small_writes);
+    const double large_write = pick(large_writes);
+    std::printf("graph_sync %s open_ms frames_%d=%.3f frames_%d=%.3f write_ms frames_%d=%.3f frames_%d=%.3f; "
+                "write medians %.3f %.3f\n",
+                wine ? "min" : "median", kSmallFrames, small_open, kLargeFrames, large_open, kSmallFrames,
+                small_write, kLargeFrames, large_write, median(small_writes), median(large_writes));
     CHECK(large_open <= small_open * kAllowedRatio + kNoiseMs);
     CHECK(large_write <= small_write * kAllowedRatio + kNoiseMs);
 }

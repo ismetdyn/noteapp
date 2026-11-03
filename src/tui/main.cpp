@@ -5,7 +5,10 @@
 #include "core/file_icons.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
+#include "core/migration.hpp"
 #include "core/note_store.hpp"
+#include "core/note_views.hpp"
+#include "core/paths.hpp"
 #include "detect/detect.hpp"
 #include "search/content_index.hpp"
 #include "search/global_search.hpp"
@@ -17,6 +20,7 @@
 #include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
 #include "tui/frame_diff.hpp"
+#include "tui/language_servers.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/modals.hpp"
 #include "tui/mouse.hpp"
@@ -32,6 +36,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <exception>
 #include <expected>
 #include <filesystem>
 #include <fstream>
@@ -75,6 +80,40 @@ constexpr std::size_t kContentResultLimit = 1000;
 const ftxui::Event& redraw_event() {
     static const ftxui::Event event = ftxui::Event::Special("\x1B[noteapp-redraw");
     return event;
+}
+
+// Açılış ipucunun bütçesi: bunu aşan köklerde ipucu gecikmez, yalnız `note graph status` söyler. Ölçüm
+// (2026-11-02, Debug, 4 KiB'lik 2000 dosya): tarama ~600 ms. Tuşu bekletmemesi için işçide koşar.
+constexpr std::size_t kStrayNoticeEntries = 2000;
+constexpr std::uintmax_t kStrayNoticeBytes = std::uintmax_t{8} * 1024U * 1024U;
+
+// İşçide koşar, kendi bağlantısıyla (UI deposunun kilidini tarama boyunca paylaşmaz). İstisna jthread'den
+// kaçarsa std::terminate olurdu: loglanır, ipucu vazgeçer. Kapanış (stop) taramayı dosya başında keser.
+void notify_stray_files(ftxui::App& app, noteapp::tui::StatusLine& status,
+                        const std::filesystem::path& notes_dir, const std::filesystem::path& directory,
+                        const std::stop_token& stop) noexcept {
+    try {
+        const noteapp::core::NoteStore store(directory);
+        const auto scan = noteapp::core::find_stray_files(
+            store, notes_dir, directory,
+            {.max_entries = kStrayNoticeEntries, .max_bytes = kStrayNoticeBytes, .stop = stop});
+        if (!scan) {
+            noteapp::core::log_warn("event=stray_scan_failed detail=" +
+                                    noteapp::core::format_error(scan.error()));
+            return;
+        }
+        const std::size_t count = scan->files.size();
+        if (count == 0 || stop.stop_requested())
+            return;
+        app.Post([&status, count] {
+            status.notice = noteapp::core::tr("tui.stray_notice", {{"count", std::to_string(count)}});
+        });
+        app.Post(redraw_event());
+    } catch (const std::exception& error) {
+        noteapp::core::log_warn(std::string("event=stray_scan_failed detail=") + error.what());
+    } catch (...) {
+        noteapp::core::log_warn("event=stray_scan_failed detail=unknown_exception");
+    }
 }
 
 // FTXUI olayını modelin tuşuna çevirir; tanınmayan olay (fare, boyut vb.) nullopt.
@@ -233,526 +272,673 @@ void run_event_loop(ftxui::App& app, const ftxui::Component& component) {
     app.Loop(component);
 }
 
+// FTXUI terminali bıraktıktan sonra yazılır: not yolu (senkrondan gelebilir) kaçış dizisi ya da bidi taşır.
 void print_exit_note(const std::string& note) {
     if (!note.empty())
-        std::cerr << note << '\n';
+        std::cerr << noteapp::tui::terminal_safe(note) << '\n';
+}
+
+namespace core = noteapp::core;
+namespace detect = noteapp::detect;
+namespace tui = noteapp::tui;
+
+// TUI oturumu: üyeler bildirim sırasıyla kurulur, tersiyle yıkılır ve bu sıra yüklüdür. İş parçacıkları
+// (sync_status_, stray_probe_, auto_sync_, word_tables_, spell_, language_servers_, rescan_) dokundukları
+// app_, status_, state_ ve store_'dan sonra bildirilir: onlardan önce durdurulup katılır. Üye eklerken sırayı
+// koru.
+class TuiSession {
+public:
+    explicit TuiSession(const core::LoadedConfig& loaded);
+    TuiSession(const TuiSession&) = delete;
+    TuiSession& operator=(const TuiSession&) = delete;
+    TuiSession(TuiSession&&) = delete;
+    TuiSession& operator=(TuiSession&&) = delete;
+    ~TuiSession() = default;
+
+    int run();
+
+private:
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- kurucu doldurur, yalnız emplace yeniler
+    core::NoteStore& store() { return *store_; }
+    std::vector<core::NoteInfo> list_notes();
+    std::vector<std::string> list_folders();
+    std::size_t trash_count();
+    tui::StoreScan scan();
+    noteapp::search::ContentIndex& ensure_content_index();
+    void show_sync();
+    void notify_changed();
+    void start_auto_sync();
+    const tui::Preview& sync_preview();
+    void refresh_notes();
+    void show_error(const core::Error& error);
+    std::unique_ptr<tui::SpellChecker> make_spell_checker();
+    ftxui::Element render();
+    std::expected<void, core::Error> edit_file(const std::filesystem::path& file);
+    void open_selected();
+    void start_move();
+    void handle_dialog_key(tui::SaveDialogState& dialog, Key key, const std::string& text);
+    void handle_new_row_key(tui::NewRowState& row, Key key, const std::string& text);
+    void apply_settings(const core::Config& next);
+    void handle_settings_key(tui::SettingsState& settings, Key key, const std::string& text);
+    void handle_modal_key(Key key, const std::string& text);
+    void request_sync_now();
+    void run_intent(tui::Intent intent, Key key, const std::string& text);
+    bool on_event(ftxui::Event event);
+    void rescan_loop(const std::stop_token& stop, std::vector<core::NoteInfo> listing,
+                     std::uint64_t listing_version);
+
+    // Ayarlar ekranı kaydedince canlı güncellenir (yalnız UI iş parçacığı yazar).
+    core::Config config_;
+    // notes_dir ayarı değişince yeniden kurulur (list_mutex_ altında).
+    std::optional<core::NoteStore> store_;
+    // Yeniden tarama iş parçacığı listelerken UI iş parçacığı store'u yeniden kurmasın (notes_dir değişimi).
+    std::mutex list_mutex_;
+    tui::TuiState state_;
+    tui::PreviewCache preview_;
+    tui::StatusLine status_;
+    tui::SyncIndicator sync_indicator_;
+    // İçerik indeksi ilk içerik aramasında kurulur: ad modunda kalan kullanıcı tüm notları okumanın bedelini
+    // ödemez. Yalnız UI iş parçacığından dokunulur (ContentIndex tek iş parçacıklıdır).
+    std::optional<noteapp::search::ContentIndex> content_index_;
+    // `view:` görünümü depoda çalıştırır; sonucu deponun görüntüsü değişene dek saklanır (core::view_notes).
+    noteapp::search::ViewLookup view_lookup_;
+    ftxui::App app_ = ftxui::App::Fullscreen();
+    tui::FrameDiff frame_diff_;
+    // Durumlar işçide hesaplanır, tuş beklemez; sonuç UI iş parçacığına Post edilir. app_'ten sonra
+    // bildirildiği için ondan önce yıkılır.
+    tui::SyncStatusWorker sync_status_;
+    // Açılışta bir kez. app_ ve status_'tan sonra bildirildiği için onlardan önce durdurulup katılır.
+    std::jthread stray_probe_;
+    // Arka plan senkronu yalnız sync.enabled iken vardır (kapatınca yıkılır; depo olduğu gibi kalır).
+    // app_'ten sonra bildirildiği için ondan önce yıkılır. Yalnız UI iş parçacığı oluşturur/yıkar.
+    std::optional<noteapp::sync::AutoSync> auto_sync_;
+    // Açık kaydet diyaloğu; diyalog açıkken tüm tuşlar ona gider.
+    std::optional<tui::SaveDialogState> dialog_;
+    // Ctrl-D onayı, F1 yardımı ve Ctrl-R'nin hedef notu (taşıma/silme sırasında seçim değişmesin diye
+    // saklanır).
+    std::optional<tui::ConfirmState> confirm_;
+    std::optional<tui::HelpState> help_;
+    std::optional<tui::SettingsState> settings_;
+    std::optional<tui::NewRowState> new_row_;
+    std::optional<tui::RenameState> rename_;
+    std::optional<core::NotePath> target_;
+    // Diğer notların sözcükleri: ilk editör açılışında, kayıttan bir süre sonra yeniden.
+    tui::WordTableBuilder word_tables_{kWordTableIdle};
+    // Sağ paneldeki gömülü editör. Pano ondan uzun yaşar: bir nottan kopyalanan diğerine yapıştırılır.
+    std::string clipboard_;
+    tui::SystemClipboard system_clipboard_;
+    tui::ListActions list_actions_;
+    tui::EditorSession editor_;
+    // Yanıt UI iş parçacığına çizim isteğiyle gelir; dil değişince sözlük de değişir.
+    std::unique_ptr<tui::SpellChecker> spell_;
+    ftxui::Component view_;
+    // Dil sunucuları ve çalışma alanı yansıtması; ayar kapalıyken boştur (süreç ve dizin yok). İstemci
+    // işçileri ve yansıtma iş parçacığı app_, store_ ve editor_'dan sonra bildirildiği için onlardan önce
+    // durur; bildirimleri kapanışta da app_'e çizim isteği gönderebilir.
+    tui::LanguageServers language_servers_;
+    std::string lsp_status_;  // gösterilmeyi bekleyen dil sunucusu iletisi (yalnız UI iş parçacığı)
+    // Yeniden tarama arka planda yalnız stat yapar; değişiklik varsa model güncellemesi UI iş parçacığına
+    // Post edilir; FTXUI kapanış görevinden sonra kareyi geçersiz saymaz, çizimi ardından gelen özel olay
+    // tetikler (yoksa değişiklik ilk tuşa dek görünmezdi). Değişmediyse hiçbir şey gönderilmez. jthread,
+    // state_/preview_'dan sonra bildirildiği için onlardan önce yıkılır (durdur + birleş).
+    std::jthread rescan_;
+};
+
+TuiSession::TuiSession(const core::LoadedConfig& loaded)
+    : config_(loaded.config), store_(core::NoteStore::for_config(config_)),
+      // Yükleme uyarıları (ör. bozuk config.toml -> varsayılanlar) açılışta alt çubukta görünür.
+      status_{core::tr("tui.sync_off"), tui::config_warnings_message(loaded.warnings)},
+      sync_status_([this](tui::SyncStates states) {
+          app_.Post(
+              [this, states = std::move(states)]() mutable { state_.set_sync_states(std::move(states)); });
+          app_.Post(redraw_event());
+      }),
+      list_actions_(tui::ListHost{store_, list_mutex_, clipboard_, system_clipboard_, state_, preview_,
+                                  status_, [this] { refresh_notes(); }, [this] { notify_changed(); },
+                                  &config_}),
+      editor_(tui::EditorHost{
+          store(), list_mutex_, clipboard_, tui::terminal_cell_width, config_.tuning.max_note_bytes,
+          config_.tuning.slug_max_length,
+          [this](std::string_view content) {
+              return detect::suggest(content,
+                                     detect::Options{config_.default_type, config_.tuning.min_confidence,
+                                                     config_.tuning.max_scan_bytes})
+                  .type;
+          },
+          [this](const core::NotePath& path) {
+              refresh_notes();
+              state_.select_note(path);
+              notify_changed();
+          },
+          [this] {
+              state_.enter_editor();
+              word_tables_.enable();
+          },
+          [this](std::optional<std::size_t> line) { state_.leave_editor(line); },
+          [this](const core::Error& error) { show_error(error); }, [this] { settings_.emplace(config_); },
+          [this](std::string_view text) {
+              return tui::copy_message(system_clipboard_.copy(text), text.size());
+          },
+          [this](const std::string& internal) { return tui::choose_paste(system_clipboard_, internal); },
+          [this] { return word_tables_.latest(); }}),
+      view_(ftxui::Renderer([this] { return render(); })),
+      language_servers_(config_.lsp, tui::lsp_workspace_dir(), store(),
+                        [this] { app_.Post(redraw_event()); }) {
+    state_.set_icon_style(core::terminal_icon_style(config_.icons));
+    auto listing = list_notes();
+    const std::uint64_t listing_version = store().data_version();
+    state_.set_notes(listing);
+    state_.set_folders(list_folders());
+    state_.set_views(tui::view_names(store()));  // sonrakileri yeniden tarama getirir (graph_version)
+    state_.set_trash_count(trash_count());
+    // Geçiş bekleyen ya da açılamayan depoda liste boştur: kullanıcı bunu notların kaybı sanmasın.
+    const auto issue = store().health();
+    if (issue)
+        status_.message = noteapp::tui::terminal_safe(core::format_error(*issue));
+
+    state_.set_content_searcher(
+        [this](std::string_view query) { return ensure_content_index().search(query, kContentResultLimit); });
+    view_lookup_ = [this](std::string_view name) {
+        const std::scoped_lock lock(list_mutex_);
+        return core::view_notes(store(), name);
+    };
+    state_.set_view_lookup(view_lookup_);
+    state_.set_global_searcher([this](std::string_view query, std::span<const core::NoteMeta> notes) {
+        return noteapp::search::search_all(query, notes, ensure_content_index(),
+                                           noteapp::search::kGlobalSearchLimit,
+                                           std::chrono::system_clock::now(), view_lookup_);
+    });
+    tui::load_list_prefs(state_);
+
+    app_.SetFrameWriter([this](const ftxui::Screen& screen, bool repaint, std::string& output) {
+        frame_diff_.write(screen, repaint, output);
+    });
+    if (!issue)
+        stray_probe_ = std::jthread(
+            [this, notes_dir = config_.notes_dir, directory = core::data_dir()](const std::stop_token& stop) {
+                notify_stray_files(app_, status_, notes_dir, directory, stop);
+            });
+
+    if (config_.sync.enabled)
+        start_auto_sync();
+    sync_status_.request(config_, state_.metas());
+
+    sync_preview();
+
+    word_tables_.set_store(store());
+    spell_ = make_spell_checker();
+
+    rescan_ = std::jthread(
+        [this, listing = std::move(listing), listing_version](const std::stop_token& stop) mutable {
+            rescan_loop(stop, std::move(listing), listing_version);
+        });
+}
+
+std::vector<core::NoteInfo> TuiSession::list_notes() {
+    const std::scoped_lock lock(list_mutex_);
+    return store().list();
+}
+
+std::vector<std::string> TuiSession::list_folders() {
+    const std::scoped_lock lock(list_mutex_);
+    return store().folders();
+}
+
+// Okunamayan çöp göstergeyi gizler; `T` hatayı söyler.
+std::size_t TuiSession::trash_count() {
+    const std::scoped_lock lock(list_mutex_);
+    const auto items = store().list_trash();
+    return items ? items->size() : 0;
+}
+
+tui::StoreScan TuiSession::scan() {
+    const std::scoped_lock lock(list_mutex_);
+    return tui::scan_store(store());
+}
+
+noteapp::search::ContentIndex& TuiSession::ensure_content_index() {
+    if (!content_index_) {
+        content_index_.emplace(store(), config_.tuning.max_note_bytes);
+        content_index_->refresh();
+    }
+    return *content_index_;
+}
+
+void TuiSession::show_sync() {
+    status_.sync = sync_indicator_.text();
+    state_.set_sync_enabled(config_.sync.enabled);
+}
+
+void TuiSession::notify_changed() {
+    if (auto_sync_)
+        auto_sync_->notify_changed();
+}
+
+// AutoSync geri çağrısı İŞÇİ iş parçacığından gelir: durum UI iş parçacığına Post edilir. Kapatıldıktan
+// sonra gelen geç bildirim yok sayılır.
+void TuiSession::start_auto_sync() {
+    sync_indicator_.set_status(noteapp::sync::SyncService(config_).status(), false);
+    show_sync();
+    auto_sync_.emplace(config_, noteapp::sync::note_executable_beside_self(),
+                       [this](const noteapp::sync::SyncStatus& result, bool running) {
+                           app_.Post([this, result, running] {
+                               if (!auto_sync_)
+                                   return;
+                               sync_indicator_.set_status(result, running);
+                               sync_status_.request(config_, state_.metas());
+                               show_sync();
+                               if (sync_indicator_.state() == tui::SyncIndicator::State::Failed)
+                                   status_.message = sync_indicator_.error_text();
+                           });
+                           app_.Post(redraw_event());  // kapanış görevi çizimi tetiklemez
+                       });
+    auto_sync_->start();
+}
+
+// Önizleme satır sayısı modele bildirilir ki PgDn son satırı aşmasın.
+const tui::Preview& TuiSession::sync_preview() {
+    const tui::Preview& shown = preview_.throttled(state_, store(), std::chrono::steady_clock::now());
+    // Beklerken eski notun satır sayısı yeni notun kaydırmasını kırpmasın; animasyon tıkı son seçimi
+    // okur.
+    if (preview_.deferred())
+        ftxui::animation::RequestAnimationFrame();
+    else
+        state_.set_preview_lines(&shown.lines, preview_.generation());
+    return shown;
+}
+
+// Editör/kayıt sonrası liste, önizleme ve (kuruluysa) içerik indeksi güncellenir. Taramanın görüntüsüne
+// (`seen`) dokunulmaz: onu yalnız yeniden tarama iş parçacığı yazar; bir sonraki taramada yinelenen
+// (zararsız) güncelleme olur.
+void TuiSession::refresh_notes() {
+    preview_.invalidate();
+    word_tables_.request();
+    language_servers_.notes_changed();
+    if (content_index_)
+        content_index_->refresh();
+    state_.set_notes(list_notes());
+    state_.set_folders(list_folders());
+    state_.set_trash_count(trash_count());
+    sync_status_.request(config_, state_.metas());
+}
+
+void TuiSession::show_error(const core::Error& error) {
+    status_.message = core::format_error(error);
+}
+
+std::unique_ptr<tui::SpellChecker> TuiSession::make_spell_checker() {
+    return std::make_unique<tui::SpellChecker>(tui::dictionary_for_language(config_.language),
+                                               [this] { app_.Post(redraw_event()); });
+}
+
+ftxui::Element TuiSession::render() {
+    const ftxui::Dimensions window = ftxui::Terminal::Size();
+    state_.set_window(window.dimx, window.dimy);
+    const tui::EditorViewport viewport = tui::editor_viewport(window, state_.layout());
+    editor_.layout(viewport.columns, viewport.rows);  // boyut değişince de imleç görünür kalsın
+    // Tanılar ve öneriler çizimden hemen önce alınır. Değişiklik boşta beklerken kare istenir: süre dolunca
+    // gönderilsin (önizlemenin ertelemesiyle aynı yol).
+    const tui::LanguageServers::Update lsp =
+        language_servers_.update(editor_, std::chrono::steady_clock::now());
+    if (lsp.wants_frame)
+        ftxui::animation::RequestAnimationFrame();
+    if (!lsp.status.empty())
+        lsp_status_ = lsp.status;
+    // Editörün kendi iletisi ("Kaydedildi", hata) önce gelir: dil sunucusu iletisi satır boşalınca çıkar.
+    // Taslak ilk kayıtta yol alır ve belge o karede açılır; ileti hemen yazılsaydı kaydın sonucunu örterdi.
+    // Liste açıkken beklemede kalır: ileti editörle ilgilidir, liste çubuğundaki tuş ipuçlarını örtmez.
+    if (!lsp_status_.empty() && editor_.is_open() && editor_.message().empty())
+        editor_.show_notice(std::exchange(lsp_status_, {}));
+    return tui::render(state_, sync_preview(), status_, window, dialog_ ? &*dialog_ : nullptr,
+                       confirm_ ? &*confirm_ : nullptr, help_ ? &*help_ : nullptr,
+                       settings_ ? &*settings_ : nullptr, new_row_ ? &*new_row_ : nullptr, &editor_,
+                       spell_.get(), rename_ ? &*rename_ : nullptr);
+}
+
+// Terminali editöre bırakır; dönünce FTXUI ekranı geri yükler.
+std::expected<void, core::Error> TuiSession::edit_file(const std::filesystem::path& file) {
+    std::expected<void, core::Error> result;
+    app_.WithRestoredIO([&] { result = core::run_editor(config_, file); })();
+    exit_if_terminated(app_);
+    return result;
+}
+
+void TuiSession::open_selected() {
+    const tui::Row* row = state_.selected_row();
+    if (!row)
+        return;
+    // Editör dosya ister: not özel geçici dosyaya çıkar, çakışma denetimiyle geri yazılır, dosya silinir.
+    const core::NotePath path = row->path;
+    const auto changed = [&] {
+        return store().edit_in_temp_file(
+            path, [&](const std::filesystem::path& file) -> std::expected<void, core::Error> {
+                const auto edited = edit_file(file);
+                if (!edited)
+                    return std::unexpected(edited.error());
+                return {};
+            });
+    }();
+    refresh_notes();
+    if (changed && *changed)
+        notify_changed();
+    if (!changed)
+        show_error(changed.error());
+}
+
+// Ctrl-R: aynı diyalog taşıma kipinde; editör ve geçici dosya yok.
+void TuiSession::start_move() {
+    const tui::Row* row = state_.selected_row();
+    if (!row)
+        return;
+    target_ = row->path;
+    dialog_.emplace(
+        tui::move_dialog_init(row->path, store().folders(), config_.types, config_.tuning.slug_max_length));
+}
+
+// Taşıma diyaloğu açıkken tuş işleme; hata satır içi gösterilir, diyalog açık kalır.
+void TuiSession::handle_dialog_key(tui::SaveDialogState& dialog, const Key key, const std::string& text) {
+    switch (dialog.handle(key, text)) {
+    case tui::SaveDialogState::Outcome::Editing:
+        break;
+    case tui::SaveDialogState::Outcome::Discard:
+        dialog_.reset();
+        break;
+    case tui::SaveDialogState::Outcome::Submit: {
+        const auto moved = [&] {
+            const std::scoped_lock lock(list_mutex_);
+            return tui::move_note(store(), *target_, dialog.request());
+        }();
+        if (!moved) {
+            dialog.set_error(core::format_error(moved.error()));
+            break;
+        }
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- start_move diyaloğu target_ ile açar
+        const core::NotePath from = *target_;
+        dialog_.reset();
+        if (*moved == from)
+            break;  // değişiklik yok
+        refresh_notes();
+        state_.reveal(*moved);
+        status_.message = core::tr("tui.moved", {{"from", from.string()}, {"to", moved->string()}});
+        notify_changed();
+        break;
+    }
+    }
+}
+
+// `a`: Enter boş notu oluşturur ve EDIT'te açar (hatada satır açık kalır, metin kaybolmaz); Esc ve boş
+// girdi hiçbir şey yazmaz.
+void TuiSession::handle_new_row_key(tui::NewRowState& row, const Key key, const std::string& text) {
+    switch (row.handle(key, text)) {
+    case tui::NewRowState::Outcome::Editing:
+        break;
+    case tui::NewRowState::Outcome::Cancelled:
+        new_row_.reset();
+        break;
+    case tui::NewRowState::Outcome::Submit:
+        list_actions_.submit_new_row(
+            new_row_,
+            {new_note_folder(state_, config_), config_.default_type, config_.tuning.slug_max_length},
+            [this](const core::NotePath& path) { editor_.open(path, 0); });
+        break;
+    }
+}
+
+// Kaydedilen ayarlar canlı uygulanır: dil anında, notes_dir değişince store yeniden kurulup liste ve
+// içerik indeksi sıfırlanır; diğer anahtarlar sonraki eylemlerde kullanılan `config`'e yansır. `tuning`
+// alanına dokunulmaz: yeniden tarama iş parçacığı onu okur ve ayar ekranından değişmez.
+void TuiSession::apply_settings(const core::Config& next) {
+    const bool dir_changed = next.notes_dir != config_.notes_dir;
+    const bool restart_sync = noteapp::tui::sync_restart_needed(config_, next);
+    config_.language = next.language;
+    config_.notes_dir = next.notes_dir;
+    config_.editor = next.editor;
+    config_.default_type = next.default_type;
+    config_.default_folder = next.default_folder;
+    config_.types = next.types;
+    config_.icons = next.icons;
+    state_.set_icon_style(core::terminal_icon_style(config_.icons));
+    config_.sync = next.sync;
+    core::init_i18n(config_.language);
+    spell_ = make_spell_checker();
+    // AutoSync süreleri ve depo yolu kurulurken okunur: ilgili ayar değiştiyse yeniden kurulur;
+    // kapandıysa yıkılır. Yıkıcı stop(0) çağırıp süren birleştirmeyi öldürürdü: önce düzgün durdurulur.
+    const auto stop_auto_sync = [this] {
+        if (!auto_sync_)
+            return;
+        auto_sync_->stop(std::chrono::seconds(config_.tuning.exit_timeout_seconds));
+        auto_sync_.reset();
+    };
+    if (!config_.sync.enabled) {
+        stop_auto_sync();
+        sync_indicator_.disable();
+        show_sync();
+    } else if (!auto_sync_ || restart_sync) {
+        stop_auto_sync();
+        start_auto_sync();
+    }
+    if (dir_changed) {
+        {
+            const std::scoped_lock lock(list_mutex_);
+            content_index_.reset();  // ContentIndex eski store'a referans tutar
+            store_.emplace(core::NoteStore::for_config(config_));
+        }
+        word_tables_.set_store(store());
+        language_servers_.set_store(store());
+        refresh_notes();
+    }
+}
+
+void TuiSession::handle_settings_key(tui::SettingsState& settings, const Key key, const std::string& text) {
+    const auto outcome = settings.handle(key, text);
+    switch (outcome) {
+    case tui::SettingsState::Outcome::Editing:
+        break;
+    case tui::SettingsState::Outcome::Cancel:
+        settings_.reset();
+        break;
+    case tui::SettingsState::Outcome::Submit:
+    case tui::SettingsState::Outcome::Replace:  // origin değiştirme onaylandı
+        // Hata formda satır içi gösterilir; origin farklıysa form onay penceresini açar.
+        if (const auto saved = settings.submit(config_, outcome == tui::SettingsState::Outcome::Replace)) {
+            apply_settings(*saved);
+            settings_.reset();
+            status_.message = core::tr("tui.settings_saved");
+        }
+        break;
+    }
+}
+
+void TuiSession::handle_modal_key(const Key key, const std::string& text) {
+    // Çıkışta geçici dosya silinmez: yazılan metin state dizininde kalır.
+    if (tui::quits_from_modal(key, state_.focus()))
+        app_.Exit();
+    else if (help_) {
+        if (!help_->handle(key, text))
+            help_.reset();
+    } else if (settings_)
+        handle_settings_key(*settings_, key, text);
+    else if (confirm_) {
+        switch (confirm_->handle(key, text)) {
+        case tui::ConfirmState::Outcome::Pending:
+            break;
+        case tui::ConfirmState::Outcome::Cancelled:
+            confirm_.reset();
+            break;
+        case tui::ConfirmState::Outcome::Confirmed:
+            list_actions_.finish_delete(confirm_);
+            break;
+        }
+    } else if (new_row_)
+        handle_new_row_key(*new_row_, key, text);
+    else if (rename_)
+        list_actions_.handle_rename_key(rename_, key, text);
+    else
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- any_open: kalan tek açık modal diyalogdur
+        handle_dialog_key(*dialog_, key, text);
+}
+
+void TuiSession::request_sync_now() {
+    if (auto_sync_)
+        auto_sync_->request_now();
+    else
+        status_.message = core::tr("tui.sync_disabled_hint");
+}
+
+// Ctrl-C'yi de kendimiz işleriz: FTXUI'ye bırakılırsa döngüden sonra SIGINT'i yeniden yükseltir ve süreç
+// yıkıcılar (kod sayfası geri yüklemesi dahil) çalışmadan biter.
+bool TuiSession::on_event(ftxui::Event event) {
+    if (event == ftxui::Event::CtrlL) {
+        frame_diff_.invalidate();
+        return true;
+    }
+    // Fare olayı FTXUI'ye bırakılmaz: kendi seçim boyamasını başlatırdı. Modal açıkken yok sayılır.
+    if (event.is_mouse()) {
+        if (!any_open(help_, confirm_, dialog_, settings_, new_row_, rename_))
+            list_actions_.on_mouse(to_mouse(event.mouse()), editor_);
+        sync_preview();
+        return true;
+    }
+    std::string text;
+    const auto key = to_key(event, text);
+    if (!key || tui::passes_to_terminal(*key, state_.focus()))
+        return false;
+    if (any_open(help_, confirm_, dialog_, settings_, new_row_, rename_)) {
+        handle_modal_key(*key, text);
+        sync_preview();
+        return true;
+    }
+    status_.message.clear();
+    status_.notice.clear();
+    run_intent(state_.handle(*key, text), *key, text);
+    list_actions_.save_prefs_if_changed();
+    sync_preview();
+    return true;
+}
+
+void TuiSession::run_intent(const tui::Intent intent, const Key key, const std::string& text) {
+    switch (intent) {
+    case tui::Intent::None:
+        break;
+    case tui::Intent::Quit:
+        app_.Exit();
+        break;
+    case tui::Intent::OpenSelected:
+        open_selected();
+        break;
+    case tui::Intent::NewRow:
+        new_row_.emplace(state_.name_input_sources());
+        break;
+    case tui::Intent::NewNote:
+        state_.open_new_note_view();
+        editor_.begin_new_note(new_note_folder(state_, config_));
+        break;
+    case tui::Intent::CreateFromQuery:
+        // nvALT: sorgu yeni notun ilk satırı olur
+        editor_.begin_draft(state_.query() + "\n", new_note_folder(state_, config_));
+        break;
+    case tui::Intent::MoveSelected:
+        start_move();
+        break;
+    case tui::Intent::RenameSelected:
+        list_actions_.begin_rename(rename_);
+        break;
+    case tui::Intent::MoveTo:
+        list_actions_.begin_move_to(rename_);
+        break;
+    case tui::Intent::ShowHelp:
+        help_.emplace(tui::help_lines().size());
+        break;
+    case tui::Intent::ShowSettings:
+        settings_.emplace(config_);
+        break;
+    case tui::Intent::EnterEditor:
+        editor_.open(state_.selected_row()->path, state_.editor_start_line());
+        break;
+    case tui::Intent::EditorKey:
+        editor_.handle(key, text, state_.input_sources());
+        break;
+    case tui::Intent::SyncNow:
+        request_sync_now();
+        break;
+    default:
+        list_actions_.run(intent, confirm_, rename_);
+        break;
+    }
+}
+
+void TuiSession::rescan_loop(const std::stop_token& stop, std::vector<core::NoteInfo> listing,
+                             const std::uint64_t listing_version) {
+    std::mutex mutex;
+    std::condition_variable_any wake;
+    const auto period = std::chrono::seconds(config_.tuning.rescan_seconds);
+    // Yalnız bu iş parçacığı okur/yazar.
+    tui::StoreScan seen{std::move(listing), trash_count(), list_folders(), listing_version};
+    while (true) {
+        std::unique_lock lock(mutex);
+        wake.wait_for(lock, stop, period, [] { return false; });  // durdurma isteğinde erken döner
+        if (stop.stop_requested())
+            return;
+        tui::StoreScan latest = scan();
+        if (tui::same_scan(seen, latest))
+            continue;
+        seen = latest;
+        app_.Post([this, latest = std::move(latest)]() mutable {
+            preview_.invalidate();
+            word_tables_.request();
+            language_servers_.notes_changed();
+            if (content_index_)
+                content_index_->refresh();     // yalnız mtime/boyutu değişenler yeniden okunur
+            editor_.on_listing(latest.notes);  // senkron çekmesi de buradan geçer
+            state_.set_notes(std::move(latest.notes));
+            state_.set_folders(std::move(latest.folders));
+            state_.set_views(std::move(latest.views));
+            state_.set_trash_count(latest.trash);
+            sync_status_.request(config_, state_.metas());
+            list_actions_.refresh_trash_view();
+            sync_preview();
+        });
+        app_.Post(redraw_event());
+    }
+}
+
+int TuiSession::run() {
+    // Ctrl-C ve Ctrl-Z'yi biz işleriz: FTXUI varsayılanı işlensin işlenmesin sinyal yükseltir, editörde
+    // kopyala ve geri al süreci öldürür ya da askıya alırdı.
+    app_.ForceHandleCtrlC(false);
+    app_.ForceHandleCtrlZ(false);
+    // FTXUI eski işleyiciyi saklar, döngüden sonra sinyali ona yeniden yükseltir: işleyicimiz süreci
+    // öldürmeden döngüden çıkışa ve aşağıdaki kayda izin verir.
+    tui::install_termination_handlers();
+    app_.Post([this] { exit_if_terminated(app_); });
+    run_event_loop(
+        app_, ftxui::CatchEvent(view_, [this](ftxui::Event event) { return on_event(std::move(event)); }));
+
+    // Dış sonlandırma dahil her çıkış: kirli metin sessizce düşmez. Senkrondan önce: kayıt da gönderilsin.
+    print_exit_note(editor_.flush_on_exit());
+
+    // Çıkış (Ctrl-C dahil, ikisi de app.Exit): bekleyen değişiklik için son bir senkron, en çok exit_timeout.
+    // Terminal artık normal kipte; kullanıcı bekleyişin nedenini görsün.
+    if (auto_sync_) {
+        std::cerr << core::tr("tui.sync_exiting") << '\n';
+        auto_sync_->stop(std::chrono::seconds(config_.tuning.exit_timeout_seconds));
+    }
+    return tui::termination_exit_code();
 }
 
 }  // namespace
 
 int main() {
-    namespace core = noteapp::core;
-    namespace detect = noteapp::detect;
-    namespace tui = noteapp::tui;
     core::restrict_dll_search_to_system32();
     // FTXUI konsolu UTF-8'e çeker ama geri almaz; eski kod sayfasını biz saklayıp geri yükleriz.
     const core::ConsoleUtf8Scope utf8_console;
     // Dil ve log eşiği config'ten gelir; yükleme uyarıları log'a düşer ve açılışta alt çubukta gösterilir.
     const core::LoadedConfig loaded = core::load_config();
-    // Ayarlar ekranı kaydedince canlı güncellenir (yalnız UI iş parçacığı yazar).
-    core::Config config = loaded.config;
-    core::init_i18n(config.language);
-    core::init_log(config.tuning.log_max_bytes);
+    core::init_i18n(loaded.config.language);
+    core::init_log(loaded.config.tuning.log_max_bytes);
     for (const auto& warning : loaded.warnings)
         core::log_warn(core::format_error(warning));
-
-    // notes_dir ayarı değişince yeniden kurulur (list_mutex altında).
-    std::optional<core::NoteStore> store;
-    store.emplace(core::NoteStore::for_config(config));
-    // Yeniden tarama iş parçacığı listelerken UI iş parçacığı store'u yeniden kurmasın (notes_dir değişimi).
-    std::mutex list_mutex;
-    const auto list_notes = [&] {
-        const std::scoped_lock lock(list_mutex);
-        return store->list();
-    };
-    const auto list_folders = [&] {
-        const std::scoped_lock lock(list_mutex);
-        return store->folders();
-    };
-    // Okunamayan çöp göstergeyi gizler; `T` hatayı söyler.
-    const auto trash_count = [&]() -> std::size_t {
-        const std::scoped_lock lock(list_mutex);
-        const auto items = store->list_trash();
-        return items ? items->size() : 0;
-    };
-    tui::TuiState state;
-    state.set_icon_style(core::terminal_icon_style(config.icons));
-    tui::PreviewCache preview;
-    // Yükleme uyarıları (ör. bozuk config.toml -> varsayılanlar) açılışta alt çubukta görünür.
-    tui::StatusLine status{core::tr("tui.sync_off"), tui::config_warnings_message(loaded.warnings)};
-    tui::SyncIndicator sync_indicator;
-    auto listing = list_notes();
-    state.set_notes(listing);
-    state.set_folders(list_folders());
-    state.set_trash_count(trash_count());
-    // Geçiş bekleyen ya da açılamayan depoda liste boştur: kullanıcı bunu notların kaybı sanmasın.
-    if (const auto issue = store->health())
-        status.message = noteapp::tui::terminal_safe(core::format_error(*issue));
-
-    // İçerik indeksi ilk içerik aramasında kurulur: ad modunda kalan kullanıcı tüm notları okumanın bedelini
-    // ödemez. Yalnız UI iş parçacığından dokunulur (ContentIndex tek iş parçacıklıdır).
-    std::optional<noteapp::search::ContentIndex> content_index;
-    const auto ensure_content_index = [&]() -> noteapp::search::ContentIndex& {
-        if (!content_index) {
-            content_index.emplace(*store, config.tuning.max_note_bytes);
-            content_index->refresh();
-        }
-        return *content_index;
-    };
-    state.set_content_searcher(
-        [&](std::string_view query) { return ensure_content_index().search(query, kContentResultLimit); });
-    state.set_global_searcher([&](std::string_view query, std::span<const core::NoteMeta> notes) {
-        return noteapp::search::search_all(query, notes, ensure_content_index());
-    });
-    tui::load_list_prefs(state);
-
-    auto app = ftxui::App::Fullscreen();
-    tui::FrameDiff frame_diff;
-    app.SetFrameWriter([&frame_diff](const ftxui::Screen& screen, bool repaint, std::string& output) {
-        frame_diff.write(screen, repaint, output);
-    });
-    // Durumlar işçide hesaplanır, tuş beklemez; sonuç UI iş parçacığına Post edilir. app'ten sonra
-    // bildirildiği için ondan önce yıkılır.
-    tui::SyncStatusWorker sync_status([&](tui::SyncStates states) {
-        app.Post(
-            [&state, states = std::move(states)]() mutable { state.set_sync_states(std::move(states)); });
-        app.Post(redraw_event());
-    });
-
-    // Arka plan senkronu yalnız sync.enabled iken vardır (kapatınca yıkılır; depo olduğu gibi kalır). app'ten
-    // sonra bildirildiği için ondan önce yıkılır. Yalnız UI iş parçacığı oluşturur/yıkar.
-    std::optional<noteapp::sync::AutoSync> auto_sync;
-    const auto show_sync = [&] { status.sync = sync_indicator.text(); };
-    const auto notify_changed = [&] {
-        if (auto_sync)
-            auto_sync->notify_changed();
-    };
-    // AutoSync geri çağrısı İŞÇİ iş parçacığından gelir: durum UI iş parçacığına Post edilir. Kapatıldıktan
-    // sonra gelen geç bildirim yok sayılır.
-    const auto start_auto_sync = [&] {
-        sync_indicator.set_status(noteapp::sync::SyncService(config).status(), false);
-        show_sync();
-        auto_sync.emplace(config, noteapp::sync::note_executable_beside_self(),
-                          [&](const noteapp::sync::SyncStatus& result, bool running) {
-                              app.Post([&, result, running] {
-                                  if (!auto_sync)
-                                      return;
-                                  sync_indicator.set_status(result, running);
-                                  sync_status.request(config, state.metas());
-                                  show_sync();
-                                  if (sync_indicator.state() == tui::SyncIndicator::State::Failed)
-                                      status.message = sync_indicator.error_text();
-                              });
-                              app.Post(redraw_event());  // kapanış görevi çizimi tetiklemez
-                          });
-        auto_sync->start();
-    };
-    if (config.sync.enabled)
-        start_auto_sync();
-    sync_status.request(config, state.metas());
-
-    // Önizleme satır sayısı modele bildirilir ki PgDn son satırı aşmasın.
-    const auto sync_preview = [&]() -> const tui::Preview& {
-        const tui::Preview& shown = preview.throttled(state, *store, std::chrono::steady_clock::now());
-        // Beklerken eski notun satır sayısı yeni notun kaydırmasını kırpmasın; animasyon tıkı son seçimi
-        // okur.
-        if (preview.deferred())
-            ftxui::animation::RequestAnimationFrame();
-        else
-            state.set_preview_lines(&shown.lines, preview.generation());
-        return shown;
-    };
-    sync_preview();
-
-    // Açık kaydet diyaloğu; diyalog açıkken tüm tuşlar ona gider.
-    std::optional<tui::SaveDialogState> dialog;
-    // Ctrl-D onayı, F1 yardımı ve Ctrl-R'nin hedef notu (taşıma/silme sırasında seçim değişmesin diye
-    // saklanır).
-    std::optional<tui::ConfirmState> confirm;
-    std::optional<tui::HelpState> help;
-    std::optional<tui::SettingsState> settings;
-    std::optional<tui::NewRowState> new_row;
-    std::optional<tui::RenameState> rename;
-    std::optional<core::NotePath> target;
-
-    // Diğer notların sözcükleri: ilk editör açılışında, kayıttan bir süre sonra yeniden.
-    tui::WordTableBuilder word_tables(kWordTableIdle);
-    word_tables.set_store(*store);
-
-    // Editör/kayıt sonrası liste, önizleme ve (kuruluysa) içerik indeksi güncellenir. `listing`'e dokunulmaz:
-    // onu yalnız yeniden tarama iş parçacığı yazar; bir sonraki taramada yinelenen (zararsız) güncelleme
-    // olur.
-    const auto refresh_notes = [&] {
-        preview.invalidate();
-        word_tables.request();
-        if (content_index)
-            content_index->refresh();
-        state.set_notes(list_notes());
-        state.set_folders(list_folders());
-        state.set_trash_count(trash_count());
-        sync_status.request(config, state.metas());
-    };
-
-    const auto show_error = [&](const core::Error& error) { status.message = core::format_error(error); };
-
-    // Sağ paneldeki gömülü editör. Pano ondan uzun yaşar: bir nottan kopyalanan diğerine yapıştırılır.
-    std::string clipboard;
-    tui::SystemClipboard system_clipboard;
-    tui::ListActions list_actions(tui::ListHost{store, list_mutex, clipboard, system_clipboard, state,
-                                                preview, status, refresh_notes, notify_changed});
-    tui::EditorSession editor(tui::EditorHost{
-        *store, list_mutex, clipboard, tui::terminal_cell_width, config.tuning.max_note_bytes,
-        config.tuning.slug_max_length,
-        [&](std::string_view content) {
-            return detect::suggest(content, detect::Options{config.default_type, config.tuning.min_confidence,
-                                                            config.tuning.max_scan_bytes})
-                .type;
-        },
-        [&](const core::NotePath& path) {
-            refresh_notes();
-            state.select_note(path);
-            notify_changed();
-        },
-        [&] {
-            state.enter_editor();
-            word_tables.enable();
-        },
-        [&](std::optional<std::size_t> line) { state.leave_editor(line); }, show_error,
-        [&] { settings.emplace(config); },
-        [&](std::string_view text) { return tui::copy_message(system_clipboard.copy(text), text.size()); },
-        [&](const std::string& internal) { return tui::choose_paste(system_clipboard, internal); },
-        [&] { return word_tables.latest(); }});
-    const auto make_spell_checker = [&] {
-        return std::make_unique<tui::SpellChecker>(tui::dictionary_for_language(config.language),
-                                                   [&app] { app.Post(redraw_event()); });
-    };
-    // Yanıt UI iş parçacığına çizim isteğiyle gelir; dil değişince sözlük de değişir.
-    auto spell = make_spell_checker();
-
-    const auto view = ftxui::Renderer([&] {
-        const ftxui::Dimensions window = ftxui::Terminal::Size();
-        state.set_window(window.dimx, window.dimy);
-        const tui::EditorViewport viewport = tui::editor_viewport(window, state.layout());
-        editor.layout(viewport.columns, viewport.rows);  // boyut değişince de imleç görünür kalsın
-        return tui::render(state, sync_preview(), status, window, dialog ? &*dialog : nullptr,
-                           confirm ? &*confirm : nullptr, help ? &*help : nullptr,
-                           settings ? &*settings : nullptr, new_row ? &*new_row : nullptr, &editor,
-                           spell.get(), rename ? &*rename : nullptr);
-    });
-
-    // Terminali editöre bırakır; dönünce FTXUI ekranı geri yükler.
-    const auto edit_file = [&](const std::filesystem::path& file) {
-        std::expected<void, core::Error> result;
-        app.WithRestoredIO([&] { result = core::run_editor(config, file); })();
-        exit_if_terminated(app);
-        return result;
-    };
-
-    const auto open_selected = [&] {
-        const tui::Row* row = state.selected_row();
-        if (!row)
-            return;
-        // Editör dosya ister: not özel geçici dosyaya çıkar, çakışma denetimiyle geri yazılır, dosya silinir.
-        const core::NotePath path = row->path;
-        const auto changed = [&] {
-            return store->edit_in_temp_file(
-                path, [&](const std::filesystem::path& file) -> std::expected<void, core::Error> {
-                    const auto edited = edit_file(file);
-                    if (!edited)
-                        return std::unexpected(edited.error());
-                    return {};
-                });
-        }();
-        refresh_notes();
-        if (changed && *changed)
-            notify_changed();
-        if (!changed)
-            show_error(changed.error());
-    };
-
-    // Ctrl-R: aynı diyalog taşıma kipinde; editör ve geçici dosya yok.
-    const auto start_move = [&] {
-        const tui::Row* row = state.selected_row();
-        if (!row)
-            return;
-        target = row->path;
-        dialog.emplace(
-            tui::move_dialog_init(row->path, store->folders(), config.types, config.tuning.slug_max_length));
-    };
-
-    // Taşıma diyaloğu açıkken tuş işleme; hata satır içi gösterilir, diyalog açık kalır.
-    const auto handle_dialog_key = [&](const Key key, const std::string& text) {
-        switch (dialog->handle(key, text)) {
-        case tui::SaveDialogState::Outcome::Editing:
-            break;
-        case tui::SaveDialogState::Outcome::Discard:
-            dialog.reset();
-            break;
-        case tui::SaveDialogState::Outcome::Submit: {
-            const auto moved = [&] {
-                const std::scoped_lock lock(list_mutex);
-                return tui::move_note(*store, *target, dialog->request());
-            }();
-            if (!moved) {
-                dialog->set_error(core::format_error(moved.error()));
-                break;
-            }
-            const core::NotePath from = *target;
-            dialog.reset();
-            if (*moved == from)
-                break;  // değişiklik yok
-            refresh_notes();
-            state.reveal(*moved);
-            status.message = core::tr("tui.moved", {{"from", from.string()}, {"to", moved->string()}});
-            notify_changed();
-            break;
-        }
-        }
-    };
-
-    // `a`: Enter boş notu oluşturur ve EDIT'te açar (hatada satır açık kalır, metin kaybolmaz); Esc ve boş
-    // girdi hiçbir şey yazmaz.
-    const auto handle_new_row_key = [&](const Key key, const std::string& text) {
-        switch (new_row->handle(key, text)) {
-        case tui::NewRowState::Outcome::Editing:
-            break;
-        case tui::NewRowState::Outcome::Cancelled:
-            new_row.reset();
-            break;
-        case tui::NewRowState::Outcome::Submit:
-            list_actions.submit_new_row(
-                new_row, {new_note_folder(state, config), config.default_type, config.tuning.slug_max_length},
-                [&](const core::NotePath& path) { editor.open(path, 0); });
-            break;
-        }
-    };
-
-    // Kaydedilen ayarlar canlı uygulanır: dil anında, notes_dir değişince store yeniden kurulup liste ve
-    // içerik indeksi sıfırlanır; diğer anahtarlar sonraki eylemlerde kullanılan `config`'e yansır. `tuning`
-    // alanına dokunulmaz: yeniden tarama iş parçacığı onu okur ve ayar ekranından değişmez.
-    const auto apply_settings = [&](const core::Config& next) {
-        const bool dir_changed = next.notes_dir != config.notes_dir;
-        const bool restart_sync = noteapp::tui::sync_restart_needed(config, next);
-        config.language = next.language;
-        config.notes_dir = next.notes_dir;
-        config.editor = next.editor;
-        config.default_type = next.default_type;
-        config.default_folder = next.default_folder;
-        config.types = next.types;
-        config.icons = next.icons;
-        state.set_icon_style(core::terminal_icon_style(config.icons));
-        config.sync = next.sync;
-        core::init_i18n(config.language);
-        spell = make_spell_checker();
-        // AutoSync süreleri ve depo yolu kurulurken okunur: ilgili ayar değiştiyse yeniden kurulur;
-        // kapandıysa yıkılır. Yıkıcı stop(0) çağırıp süren birleştirmeyi öldürürdü: önce düzgün durdurulur.
-        const auto stop_auto_sync = [&] {
-            if (!auto_sync)
-                return;
-            auto_sync->stop(std::chrono::seconds(config.tuning.exit_timeout_seconds));
-            auto_sync.reset();
-        };
-        if (!config.sync.enabled) {
-            stop_auto_sync();
-            sync_indicator.disable();
-            show_sync();
-        } else if (!auto_sync || restart_sync) {
-            stop_auto_sync();
-            start_auto_sync();
-        }
-        if (dir_changed) {
-            {
-                const std::scoped_lock lock(list_mutex);
-                content_index.reset();  // ContentIndex eski store'a referans tutar
-                store.emplace(core::NoteStore::for_config(config));
-            }
-            word_tables.set_store(*store);
-            refresh_notes();
-        }
-    };
-
-    // Ctrl-C'yi de kendimiz işleriz: FTXUI'ye bırakılırsa döngüden sonra SIGINT'i yeniden yükseltir ve süreç
-    // yıkıcılar (kod sayfası geri yüklemesi dahil) çalışmadan biter.
-    const auto on_event = [&](ftxui::Event event) {
-        if (event == ftxui::Event::CtrlL) {
-            frame_diff.invalidate();
-            return true;
-        }
-        // Fare olayı FTXUI'ye bırakılmaz: kendi seçim boyamasını başlatırdı. Modal açıkken yok sayılır.
-        if (event.is_mouse()) {
-            if (!any_open(help, confirm, dialog, settings, new_row, rename))
-                list_actions.on_mouse(to_mouse(event.mouse()), editor);
-            sync_preview();
-            return true;
-        }
-        std::string text;
-        const auto key = to_key(event, text);
-        if (!key || tui::passes_to_terminal(*key, state.focus()))
-            return false;
-        if (any_open(help, confirm, dialog, settings, new_row, rename)) {
-            // Çıkışta geçici dosya silinmez: yazılan metin state dizininde kalır.
-            if (tui::quits_from_modal(*key, state.focus()))
-                app.Exit();
-            else if (help) {
-                if (!help->handle(*key, text))
-                    help.reset();
-            } else if (settings) {
-                const auto outcome = settings->handle(*key, text);
-                switch (outcome) {
-                case tui::SettingsState::Outcome::Editing:
-                    break;
-                case tui::SettingsState::Outcome::Cancel:
-                    settings.reset();
-                    break;
-                case tui::SettingsState::Outcome::Submit:
-                case tui::SettingsState::Outcome::Replace:  // origin değiştirme onaylandı
-                    // Hata formda satır içi gösterilir; origin farklıysa form onay penceresini açar.
-                    if (const auto saved =
-                            settings->submit(config, outcome == tui::SettingsState::Outcome::Replace)) {
-                        apply_settings(*saved);
-                        settings.reset();
-                        status.message = core::tr("tui.settings_saved");
-                    }
-                    break;
-                }
-            } else if (confirm) {
-                switch (confirm->handle(*key, text)) {
-                case tui::ConfirmState::Outcome::Pending:
-                    break;
-                case tui::ConfirmState::Outcome::Cancelled:
-                    confirm.reset();
-                    break;
-                case tui::ConfirmState::Outcome::Confirmed:
-                    list_actions.finish_delete(confirm);
-                    break;
-                }
-            } else if (new_row)
-                handle_new_row_key(*key, text);
-            else if (rename)
-                list_actions.handle_rename_key(rename, *key, text);
-            else
-                handle_dialog_key(*key, text);
-            sync_preview();
-            return true;
-        }
-        status.message.clear();
-        const tui::Intent intent = state.handle(*key, text);
-        switch (intent) {
-        case tui::Intent::None:
-            break;
-        case tui::Intent::Quit:
-            app.Exit();
-            break;
-        case tui::Intent::OpenSelected:
-            open_selected();
-            break;
-        case tui::Intent::NewRow:
-            new_row.emplace(state.name_input_sources());
-            break;
-        case tui::Intent::NewNote:
-            state.open_new_note_view();
-            editor.begin_new_note(new_note_folder(state, config));
-            break;
-        case tui::Intent::CreateFromQuery:
-            // nvALT: sorgu yeni notun ilk satırı olur
-            editor.begin_draft(state.query() + "\n", new_note_folder(state, config));
-            break;
-        case tui::Intent::MoveSelected:
-            start_move();
-            break;
-        case tui::Intent::RenameSelected:
-            list_actions.begin_rename(rename);
-            break;
-        case tui::Intent::MoveTo:
-            list_actions.begin_move_to(rename);
-            break;
-        case tui::Intent::ShowHelp:
-            help.emplace(tui::help_lines().size());
-            break;
-        case tui::Intent::ShowSettings:
-            settings.emplace(config);
-            break;
-        case tui::Intent::EnterEditor:
-            editor.open(state.selected_row()->path, state.editor_start_line());
-            break;
-        case tui::Intent::EditorKey:
-            editor.handle(*key, text, state.input_sources());
-            break;
-        case tui::Intent::SyncNow:
-            if (auto_sync)
-                auto_sync->request_now();
-            else
-                status.message = core::tr("tui.sync_disabled_hint");
-            break;
-        default:
-            list_actions.run(intent, confirm);
-            break;
-        }
-        sync_preview();
-        return true;
-    };
-
-    // Yeniden tarama arka planda yalnız stat yapar; değişiklik varsa model güncellemesi UI iş parçacığına
-    // Post edilir; FTXUI kapanış görevinden sonra kareyi geçersiz saymaz, çizimi ardından gelen özel olay
-    // tetikler (yoksa değişiklik ilk tuşa dek görünmezdi). Değişmediyse hiçbir şey gönderilmez. jthread,
-    // state/preview'dan sonra bildirildiği için onlardan önce yıkılır (durdur + birleş).
-    std::jthread rescan([&](const std::stop_token& stop) {
-        std::mutex mutex;
-        std::condition_variable_any wake;
-        const auto period = std::chrono::seconds(config.tuning.rescan_seconds);
-        std::size_t seen_trash = trash_count();
-        std::vector<std::string> seen_folders = list_folders();
-        while (true) {
-            std::unique_lock lock(mutex);
-            wake.wait_for(lock, stop, period, [] { return false; });  // durdurma isteğinde erken döner
-            if (stop.stop_requested())
-                return;
-            auto latest = list_notes();
-            const std::size_t latest_trash = trash_count();  // senkron yalnız çöpü de değiştirebilir
-            auto latest_folders = list_folders();            // boş klasör not listesini değiştirmez
-            if (tui::same_listing(listing, latest) && latest_trash == seen_trash &&
-                latest_folders == seen_folders)
-                continue;
-            listing = latest;  // yalnız bu iş parçacığı okur/yazar
-            seen_trash = latest_trash;
-            seen_folders = latest_folders;
-            app.Post([&state, &preview, &content_index, &sync_preview, &editor, &word_tables, &sync_status,
-                      &config, &list_actions, latest_trash, latest = std::move(latest),
-                      latest_folders = std::move(latest_folders)]() mutable {
-                preview.invalidate();
-                word_tables.request();
-                if (content_index)
-                    content_index->refresh();  // yalnız mtime/boyutu değişenler yeniden okunur
-                editor.on_listing(latest);     // senkron çekmesi de buradan geçer
-                state.set_notes(std::move(latest));
-                state.set_folders(std::move(latest_folders));
-                state.set_trash_count(latest_trash);
-                sync_status.request(config, state.metas());
-                list_actions.refresh_trash_view();
-                sync_preview();
-            });
-            app.Post(redraw_event());
-        }
-    });
-
-    // Ctrl-C ve Ctrl-Z'yi biz işleriz: FTXUI varsayılanı işlensin işlenmesin sinyal yükseltir, editörde
-    // kopyala ve geri al süreci öldürür ya da askıya alırdı.
-    app.ForceHandleCtrlC(false);
-    app.ForceHandleCtrlZ(false);
-    // FTXUI eski işleyiciyi saklar, döngüden sonra sinyali ona yeniden yükseltir: işleyicimiz süreci
-    // öldürmeden döngüden çıkışa ve aşağıdaki kayda izin verir.
-    tui::install_termination_handlers();
-    app.Post([&app] { exit_if_terminated(app); });
-    run_event_loop(app, ftxui::CatchEvent(view, on_event));
-
-    // Dış sonlandırma dahil her çıkış: kirli metin sessizce düşmez. Senkrondan önce: kayıt da gönderilsin.
-    print_exit_note(editor.flush_on_exit());
-
-    // Çıkış (Ctrl-C dahil, ikisi de app.Exit): bekleyen değişiklik için son bir senkron, en çok exit_timeout.
-    // Terminal artık normal kipte; kullanıcı bekleyişin nedenini görsün.
-    if (auto_sync) {
-        std::cerr << core::tr("tui.sync_exiting") << '\n';
-        auto_sync->stop(std::chrono::seconds(config.tuning.exit_timeout_seconds));
-    }
-    return tui::termination_exit_code();
+    // Oturum (FTXUI app_ dahil) utf8_console'dan önce yıkılır: kod sayfası en son geri yüklenir.
+    TuiSession session(loaded);
+    return session.run();
 }

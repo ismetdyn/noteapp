@@ -8,8 +8,13 @@
 #include <ctime>
 #include <format>
 #include <map>
+#include <optional>
 #include <set>
+#include <string>
 #include <tuple>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace noteapp::core {
 
@@ -27,14 +32,6 @@ constexpr std::size_t kMaxExtensionBytes = 32;  // bundan uzunu uzantı sayılma
 
 std::int64_t to_ms(std::chrono::system_clock::time_point when) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(when.time_since_epoch()).count();
-}
-
-std::span<const std::byte> as_bytes(std::string_view text) {
-    return std::as_bytes(std::span(text.data(), text.size()));
-}
-
-std::string id_text(const NodeId& id) {
-    return std::string(reinterpret_cast<const char*>(id.bytes.data()), id.bytes.size());
 }
 
 // UTC: kopyanın adı iki cihazda aynı olmalı, yerel saat kimliği ayrıştırırdı.
@@ -82,6 +79,18 @@ std::string text_value(const std::optional<graph::Value>& value) {
 
 }  // namespace
 
+std::string_view link_target(std::string_view raw) {
+    if (raw.size() > kMaxLinkTargetBytes || raw.find('\n') != std::string_view::npos)
+        return {};
+    std::string_view target = raw.substr(0, raw.find('|'));
+    target = target.substr(0, target.find('#'));
+    while (target.starts_with(' '))
+        target.remove_prefix(1);
+    while (target.ends_with(' '))
+        target.remove_suffix(1);
+    return target;
+}
+
 std::vector<std::string> scan_links(std::string_view body) {
     std::vector<std::string> links;
     std::size_t at = 0;
@@ -92,16 +101,8 @@ std::vector<std::string> scan_links(std::string_view body) {
         const auto close = body.find("]]", open + 2);
         if (close == std::string_view::npos)
             break;
-        std::string_view target = body.substr(open + 2, close - open - 2);
+        const std::string_view target = link_target(body.substr(open + 2, close - open - 2));
         at = close + 2;
-        if (target.size() > kMaxLinkTargetBytes || target.find('\n') != std::string_view::npos)
-            continue;
-        target = target.substr(0, target.find('|'));
-        target = target.substr(0, target.find('#'));
-        while (target.starts_with(' '))
-            target.remove_prefix(1);
-        while (target.ends_with(' '))
-            target.remove_suffix(1);
         if (!target.empty())
             links.emplace_back(target);
     }
@@ -111,64 +112,244 @@ std::vector<std::string> scan_links(std::string_view body) {
     return links;
 }
 
-// Yol, uzantısız yol, dosya adı ve yalın ad: en kesin ilk, her düzeyde yol sırasında ilk gelen kazanır
-// (deterministik).
-const std::unordered_map<std::string, NodeId>& WriteContext::link_index() {
-    if (link_index_)
-        return *link_index_;
-    link_index_.emplace();
-    for (const NoteRow& row : snapshot.live)
-        link_index_->emplace(row.info.path.string(), row.id);
-    for (const NoteRow& row : snapshot.live) {
-        const std::string path = row.info.path.string();
-        const NoteParts parts = split_note_path(path);
-        if (!parts.type.empty())
-            link_index_->emplace(path.substr(0, path.size() - parts.type.size() - 1), row.id);
+std::array<std::string, 4> link_keys(std::string_view path) {
+    const NoteParts parts = split_note_path(path);
+    std::array<std::string, 4> keys{std::string(path), std::string(), parts.name, parts.name};
+    if (!parts.type.empty()) {
+        keys[1] = std::string(path.substr(0, path.size() - parts.type.size() - 1));
+        keys[2] += "." + parts.type;
     }
-    for (const NoteRow& row : snapshot.live) {
-        const NoteParts parts = split_note_path(row.info.path.string());
-        link_index_->emplace(parts.type.empty() ? parts.name : parts.name + "." + parts.type, row.id);
-    }
-    for (const NoteRow& row : snapshot.live)
-        link_index_->emplace(split_note_path(row.info.path.string()).name, row.id);
-    return *link_index_;
+    return keys;
 }
 
-// Hedefler yazma anında çözülür; sonradan oluşan hedef, kaynak bir daha kaydedilene dek bağlanmaz.
-// ponytail: tam yeniden tarama yok, geçiş sonunda ve kaynak kaydında bağlanır.
+// Yol, uzantısız yol, dosya adı ve yalın ad: en kesin ilk, her düzeyde yol sırasında ilk gelen kazanır
+// (deterministik).
+const LinkIndex& link_index_of(const Snapshot& snapshot) {
+    if (snapshot.link_index)
+        return *snapshot.link_index;
+    LinkIndex& index = snapshot.link_index.emplace();
+    std::vector<std::array<std::string, 4>> keys;
+    keys.reserve(snapshot.live.size());
+    for (const NoteRow& row : snapshot.live)
+        keys.push_back(link_keys(row.info.path.string()));
+    for (std::size_t level = 0; level < 4; ++level)
+        for (std::size_t i = 0; i < keys.size(); ++i)
+            if (!keys[i][level].empty())
+                index.emplace(keys[i][level], snapshot.live[i].id);
+    return index;
+}
+
+// Anahtar sayısından bağımsız tek geçiş: yeni cihazın ilk ingest'inde her not yeni yoldadır, anahtar başına
+// tarama karesel olurdu. ponytail: oluşturma başına tüm notların küçük hedef metinleri bölünür (5.000 notta
+// ölçüm SPEC-graph'ta); on binlerce notta yavaşlarsa görüntüde ters dizin kurulur.
+std::set<NodeId> notes_linking(const Snapshot& snapshot, std::span<const std::string> keys) {
+    std::set<NodeId> sources;
+    if (keys.empty())
+        return sources;
+    const std::unordered_set<std::string_view> wanted(keys.begin(), keys.end());
+    for (const std::vector<NoteRow>* rows : {&snapshot.live, &snapshot.trash})
+        for (const NoteRow& row : *rows) {
+            const std::string_view joined = row.link_targets;
+            for (std::size_t at = 0; at < joined.size();) {
+                const std::size_t end = std::min(joined.find('\n', at), joined.size());
+                if (wanted.contains(joined.substr(at, end - at))) {
+                    sources.insert(row.id);
+                    break;
+                }
+                at = end + 1;
+            }
+        }
+    return sources;
+}
+
+// Notların yeni yollarının boş olmayan çözüm anahtarları.
+std::vector<std::string> placed_keys(std::span<const std::string> paths) {
+    std::vector<std::string> keys;
+    for (const std::string& path : paths)
+        for (std::string& key : link_keys(path))
+            if (!key.empty())
+                keys.push_back(std::move(key));
+    return keys;
+}
+
+std::optional<std::string> note_path_in(const Snapshot& snapshot, const NodeId& id) {
+    if (const auto row = snapshot.live_by_id.find(id); row != snapshot.live_by_id.end())
+        return snapshot.live[row->second].info.path.string();
+    const auto trashed = std::ranges::find(snapshot.trash, id, &NoteRow::id);
+    return trashed != snapshot.trash.end() ? std::optional(trashed->info.path.string()) : std::nullopt;
+}
+
+namespace {
+
+std::vector<std::string> body_links(std::string_view body) {
+    if (looks_binary(body) || body.find("[[") == std::string_view::npos)
+        return {};
+    return scan_links(body);
+}
+
+std::set<NodeId> resolved_targets(const std::vector<std::string>& targets, const LinkIndex& index,
+                                  const NodeId& self) {
+    std::set<NodeId> wanted;
+    for (const std::string& target : targets)
+        if (const auto found = index.find(target); found != index.end() && found->second != self)
+            wanted.insert(found->second);
+    return wanted;
+}
+
+}  // namespace
+
+// Kaydın kenarları kaydın görüntüsüyle çözülür. Sonradan oluşan hedefi link_appeared bağlar.
 std::expected<void, Error> WriteContext::update_links(const NodeId& id, std::string_view path,
                                                       std::string_view body) {
-    std::set<NodeId> wanted;
-    if (!looks_binary(body) && body.find("[[") != std::string_view::npos) {
-        const auto& index = link_index();
-        for (const std::string& target : scan_links(body))
-            if (const auto found = index.find(target); found != index.end() && found->second != id)
-                wanted.insert(found->second);
+    const std::vector<std::string> targets = body_links(body);
+    NOTEAPP_TRY(set_link_targets(id, path, targets));
+    std::set<NodeId> wanted =
+        targets.empty() ? std::set<NodeId>{} : resolved_targets(targets, link_index_of(snapshot), id);
+    auto existing = neighbor_edges(id, graph::Direction::Out, kLinksTo, path);
+    if (!existing)
+        return std::unexpected(existing.error());
+    for (const auto& [edge, node] : *existing) {
+        if (wanted.erase(node) > 0)
+            continue;
+        NOTEAPP_TRY_GRAPH(txn.delete_edge(edge), path);
     }
-    auto cursor = txn.neighbors(id, graph::Direction::Out, kLinksTo);
+    for (const NodeId& target : wanted)
+        NOTEAPP_TRY(put_link(id, target, path));
+    return {};
+}
+
+std::expected<void, Error> WriteContext::add_missing_links(const NodeId& id, std::string_view path,
+                                                           std::string_view body, const LinkIndex& index) {
+    const std::vector<std::string> targets = body_links(body);
+    NOTEAPP_TRY(set_link_targets(id, path, targets));
+    if (targets.empty())
+        return {};
+    std::set<NodeId> wanted = resolved_targets(targets, index, id);
+    auto existing = neighbor_edges(id, graph::Direction::Out, kLinksTo, path);
+    if (!existing)
+        return std::unexpected(existing.error());
+    for (const auto& [edge, node] : *existing)
+        wanted.erase(node);
+    for (const NodeId& target : wanted)
+        NOTEAPP_TRY(put_link(id, target, path));
+    return {};
+}
+
+// Kimlik uçlardan türer: iki cihazın aynı kenarı tek kenardır. Var olan kenar yeniden yazılmaz (işlem
+// olurdu).
+std::expected<void, Error> WriteContext::put_link(const NodeId& from, const NodeId& to,
+                                                  std::string_view path) {
+    const EdgeId edge = graph::derive_edge_id(kLinksTo, as_bytes(id_text(from) + id_text(to)));
+    NOTEAPP_TRY_GRAPH(txn.put_edge(edge, from, kLinksTo, to), path);
+    return {};
+}
+
+// Değişmeyen değer yazılmaz: türetilmiş veri günlüğü büyütmesin, alan cihazda işlem üretmesin.
+std::expected<void, Error> WriteContext::set_link_targets(const NodeId& id, std::string_view path,
+                                                          const std::vector<std::string>& targets) {
+    std::string joined;
+    for (const std::string& target : targets) {
+        if (!joined.empty())
+            joined += '\n';
+        joined += target;
+        written_targets_.insert(target);
+    }
+    auto current = txn.property(id, kLinkTargets);
+    if (!current)
+        return std::unexpected(from_graph(current.error(), path));
+    const std::string* stored = std::get_if<std::string>(&*current);
+    if (stored != nullptr ? *stored == joined : joined.empty())
+        return {};
+    NOTEAPP_TRY_GRAPH(
+        txn.set_property(id, kLinkTargets, joined.empty() ? graph::Value{} : graph::Value{joined}), path);
+    return {};
+}
+
+// Önce ucuz eleme: işlem öncesi görüntüde ya da bu işlemin yazdıklarında yeni yolun anahtarını taşıyan hedef
+// yoksa iş biter (olağan oluşturma). Varsa çözüm işlem sonrası görüntüyle yapılır: yeni not daha kesin
+// eşleşmeyse, -2 aldıysa ya da aynı işlemde oluşan kaynak varsa da sonuç kaydın kuralıyla aynı olsun. Bütçeye
+// sığmayan kaynaklar deferred'e girer: kullanıcının işlemi kaynak sayısından bağımsız sığar.
+std::expected<void, Error> WriteContext::link_appeared(const std::array<std::byte, 16>& device) {
+    if (placed_.empty())
+        return {};
+    const std::vector<std::pair<NodeId, std::string>> placed = std::exchange(placed_, {});
+    std::vector<std::string> paths;
+    for (const auto& [id, path] : placed)
+        paths.push_back(path);
+    const std::vector<std::string> keys = placed_keys(paths);
+    const bool candidate =
+        std::ranges::any_of(keys, [&](const std::string& key) { return written_targets_.contains(key); }) ||
+        !notes_linking(snapshot, keys).empty();
+    if (!candidate)
+        return {};
+    auto after = build_snapshot(txn, device);
+    if (!after)
+        return std::unexpected(from_graph(after.error(), paths.front()));
+    paths.clear();
+    for (const auto& [id, path] : placed)
+        if (const auto row = after->live_by_id.find(id); row != after->live_by_id.end())
+            paths.push_back(after->live[row->second].info.path.string());
+    const std::set<NodeId> linking = notes_linking(*after, placed_keys(paths));
+    const LinkIndex& index = link_index_of(*after);
+    for (const NodeId& source : linking) {
+        if (over_budget()) {  // kalan kaynaklar commit'ten sonra ayrı işlemlerde (write_locked)
+            deferred.push_back(source);
+            continue;
+        }
+        const auto path = note_path_in(*after, source);
+        if (!path)
+            continue;
+        auto body = txn.property(source, kBody);
+        if (!body)
+            return std::unexpected(from_graph(body.error(), *path));
+        if (const graph::Bytes* bytes = std::get_if<graph::Bytes>(&*body))
+            NOTEAPP_TRY(add_missing_links(source, *path, bytes->data, index));
+    }
+    derived_incomplete = derived_incomplete || !deferred.empty();
+    return {};
+}
+
+// İki yöndeki kenarlar: iki cihaz aynı ilişkiyi ters yönde kurmuş olabilir, ikisi de aynı ilişkidir.
+std::expected<std::vector<EdgeId>, Error> WriteContext::relation_edges(const NodeId& one, const NodeId& other,
+                                                                       std::string_view path) {
+    auto cursor = txn.neighbors(one, graph::Direction::Both, kRelatedTo);
     if (!cursor)
         return std::unexpected(from_graph(cursor.error(), path));
-    std::vector<std::pair<EdgeId, NodeId>> existing;
+    std::vector<EdgeId> edges;
     while (true) {
         auto next = cursor->next();
         if (!next)
             return std::unexpected(from_graph(next.error(), path));
         if (!*next)
-            break;
-        existing.emplace_back((*next)->edge, (*next)->node);
+            return edges;
+        if ((*next)->node == other)
+            edges.push_back((*next)->edge);
     }
-    for (const auto& [edge, node] : existing) {
-        if (wanted.erase(node) > 0)
-            continue;
-        if (auto gone = txn.delete_edge(edge); !gone)
-            return std::unexpected(from_graph(gone.error(), path));
-    }
-    for (const NodeId& target : wanted) {
-        const std::string canonical = id_text(id) + id_text(target);
-        const EdgeId edge = graph::derive_edge_id(kLinksTo, as_bytes(canonical));
-        if (auto put = txn.put_edge(edge, id, kLinksTo, target); !put)
-            return std::unexpected(from_graph(put.error(), path));
-    }
+}
+
+std::expected<void, Error> WriteContext::add_relation(const NodeId& from, const NodeId& to,
+                                                      std::string_view path) {
+    auto edges = relation_edges(from, to, path);
+    if (!edges)
+        return std::unexpected(edges.error());
+    if (!edges->empty())
+        return std::unexpected(already_exists(path));
+    // Kimlik uçlardan türer: iki cihazın aynı kurulumu tek kenardır.
+    const std::string canonical = id_text(from) + id_text(to);
+    NOTEAPP_TRY_GRAPH(
+        txn.put_edge(graph::derive_edge_id(kRelatedTo, as_bytes(canonical)), from, kRelatedTo, to), path);
+    return {};
+}
+
+std::expected<void, Error> WriteContext::remove_relation(const NodeId& one, const NodeId& other,
+                                                         std::string_view path) {
+    auto edges = relation_edges(one, other, path);
+    if (!edges)
+        return std::unexpected(edges.error());
+    if (edges->empty())
+        return std::unexpected(not_found(path));
+    for (const EdgeId& edge : *edges)
+        NOTEAPP_TRY_GRAPH(txn.delete_edge(edge), path);
     return {};
 }
 
@@ -280,7 +461,9 @@ std::expected<void, Error> WriteContext::place_note(const NodeId& id, const Note
     auto folder = ensure_folder(parts.folder);
     if (!folder)
         return std::unexpected(folder.error());
-    return set_folder(id, *folder, kInFolder, path);
+    NOTEAPP_TRY(set_folder(id, *folder, kInFolder, path));
+    note_placed(id, path);
+    return {};
 }
 
 std::expected<void, Error> WriteContext::init_note(const NodeId& id, const NotePath& path,
@@ -301,7 +484,8 @@ std::expected<void, Error> WriteContext::init_note(const NodeId& id, const NoteP
         step = txn.set_property(id, kNoteOrigin, graph::Value{std::string(origin)});
     if (!ok(step))
         return std::unexpected(from_graph(step.error(), text));
-    return place_note(id, path);
+    NOTEAPP_TRY(place_note(id, path));
+    return update_tags(id, text, bytes);
 }
 
 std::expected<NodeId, Error> WriteContext::create_note(const NotePath& path, std::string_view bytes,
@@ -352,13 +536,92 @@ std::expected<Revision, Error> WriteContext::write_body(const NoteRow& note, std
         return std::unexpected(from_graph(set.error(), path));
     if (auto linked = update_links(note.id, path, content); !linked)
         return std::unexpected(linked.error());
+    NOTEAPP_TRY(update_tags(note.id, path, content));
     return body_revision(note.id, path);
 }
 
+namespace {
+
+struct Incident {
+    EdgeId edge;
+    NodeId node;
+    int order = 0;  // önce silinen önce (delete_order)
+    bool tagged = false;
+};
+
+// Türetilmiş 0, kullanıcının 1, gelen klasör kenarı 2, düğümün kendi klasör kenarı 3. Kendi klasör kenarı
+// (çıkan IN_FOLDER/CHILD_OF) yarım geçişte hiç silinmez: not son geçişe dek klasöründe kalır, köke düşüp
+// ikinci geçişte kaybolmaz. Gelen klasör kenarları (çöpteki notların IN_FOLDER'ı, alt klasörlerin CHILD_OF'u)
+// parça parça silinir.
+int delete_order(std::string_view type, graph::Direction direction) {
+    if (type == kLinksTo || type == kTagged)
+        return 0;
+    if (type != kInFolder && type != kChildOf)
+        return 1;
+    return direction == graph::Direction::In ? 2 : 3;
+}
+
+// Düğümün kenarları silme sırasıyla; öz döngü bir kez.
+graph::Result<std::vector<Incident>> incident_edges(graph::ReadTxn& txn, const NodeId& id) {
+    std::vector<Incident> edges;
+    for (const graph::Direction direction : {graph::Direction::Out, graph::Direction::In}) {
+        auto cursor = txn.neighbors(id, direction, std::nullopt);
+        if (!cursor)
+            return std::unexpected(cursor.error());
+        while (true) {
+            auto next = cursor->next();
+            if (!next)
+                return std::unexpected(next.error());
+            if (!*next)
+                break;
+            const bool tagged =
+                (*next)->type == kTagged && direction == graph::Direction::Out && (*next)->node != id;
+            edges.push_back(
+                Incident{(*next)->edge, (*next)->node, delete_order((*next)->type, direction), tagged});
+        }
+    }
+    std::ranges::sort(edges, {}, [](const Incident& edge) { return std::tie(edge.order, edge.edge); });
+    edges.erase(std::ranges::unique(edges, {}, &Incident::edge).begin(), edges.end());
+    return edges;
+}
+
+}  // namespace
+
+// Kenarları bütçeye sığmayan düğüm parça parça silinir: önce türetilmiş kenarlar, düğümün kendi klasör kenarı
+// en son. Bu işlemde sığan kenarlar silinir ve again kurulur; çağıranın gövdesi yeni işlemde aynı silmeyi
+// yineler. Süreç arada ölürse düğüm yerinde kalır; türetme işaretleri düştüğünden sonraki açılış türetilmiş
+// kenarları geri kurar. Sınır: bütçeden çok kullanıcı kenarı (RELATED_TO, Cypher) olan düğümde ölüm onların
+// bir kısmını siler.
 std::expected<void, Error> WriteContext::delete_node(const NodeId& id, std::string_view path) {
-    if (auto gone = txn.delete_node(id, true); !gone)
-        return std::unexpected(from_graph(gone.error(), path));
+    auto edges = incident_edges(txn, id);
+    if (!edges)
+        return std::unexpected(from_graph(edges.error(), path));
+    const auto tags = static_cast<std::size_t>(std::ranges::count_if(*edges, &Incident::tagged));
+    const auto partial = static_cast<std::size_t>(
+        std::ranges::count_if(*edges, [](const Incident& edge) { return edge.order < 3; }));
+    // Tam silme bütçeye sığınca ya da yalnız düğümün kendi klasör kenarı kaldığında (bir ya da eşzamanlı
+    // kurulmuş birkaç kenar): ikisi de sınırlıdır.
+    const bool whole = partial == 0 || edges->size() + 1 + tags <= budget;
+    const std::size_t room = budget > txn.pending_ops() ? budget - txn.pending_ops() : 1;
+    const std::size_t count = whole ? edges->size() : std::min(room, partial);
+    if (whole)
+        NOTEAPP_TRY_GRAPH(txn.delete_node(id, true), path);
+    for (std::size_t i = 0; i < count; ++i) {
+        const Incident& edge = (*edges)[i];
+        if (!whole)
+            NOTEAPP_TRY_GRAPH(txn.delete_edge(edge.edge), path);
+        if (edge.tagged)
+            NOTEAPP_TRY(remove_orphan_tag(edge.node, path));
+    }
+    if (!whole) {
+        again = true;
+        derived_incomplete = true;
+    }
     return {};
+}
+
+std::optional<std::string> WriteContext::path_of(const NodeId& id) const {
+    return note_path_in(snapshot, id);
 }
 
 std::expected<void, Error> WriteContext::mark_trashed(const NodeId& id, std::string_view path,
@@ -631,6 +894,8 @@ std::expected<bool, Error> WriteContext::apply_merge(const NodeId& id,
     const auto source = std::ranges::find(snapshot.live, id, &NoteRow::id);
     if (source != snapshot.live.end())
         NOTEAPP_TRY(update_links(id, source->info.path.string(), **merged));
+    if (const auto path = path_of(id))
+        NOTEAPP_TRY(update_tags(id, *path, **merged));
     return true;
 }
 
@@ -654,8 +919,10 @@ std::expected<std::optional<NotePath>, Error> WriteContext::copy_losing_head(con
         return std::unexpected(path.error());
     const graph::Bytes* bytes = std::get_if<graph::Bytes>(&version.value);
     const std::string origin = text_value(get_value(txn, id, kNoteOrigin));
-    NOTEAPP_TRY(init_note(copy, *path, bytes == nullptr ? std::string_view() : std::string_view(bytes->data),
-                          *at, *at, origin));
+    const std::string_view body = bytes == nullptr ? std::string_view() : std::string_view(bytes->data);
+    NOTEAPP_TRY(init_note(copy, *path, body, *at, *at, origin));
+    // Kopya da bir nottur: bağlantıları ve link_targets'ı oluşturmadaki gibi (sonradan oluşan hedef bulunur).
+    NOTEAPP_TRY(update_links(copy, path->string(), body));
     return std::optional(std::move(*path));
 }
 
@@ -696,6 +963,13 @@ WriteContext::resolve_conflict_step(const NodeId& id, const TextMerger& merger) 
     if (differ) {
         NOTEAPP_TRY(set_body_parents(id, "body"));
         NOTEAPP_TRY_GRAPH(txn.set_property(id, kBody, winner.value), "body");
+        // Kaybedenin kenarları ve link_targets'ı da gelmişti: bağlantılar ve etiketler kazanan gövdeye göre
+        // (kaybedeninki kopyasında). link_targets eskide kalsa sonradan oluşan hedef bulunmazdı.
+        const graph::Bytes* bytes = std::get_if<graph::Bytes>(&winner.value);
+        if (const auto path = path_of(id); path && bytes != nullptr) {
+            NOTEAPP_TRY(update_links(id, *path, bytes->data));
+            NOTEAPP_TRY(update_tags(id, *path, bytes->data));
+        }
     }
     return ConflictStep{};
 }
@@ -821,11 +1095,11 @@ std::expected<void, Error> WriteContext::import_one(const ImportedNote& note, Im
     return {};
 }
 
-std::expected<ImportOutcome, Error> WriteContext::import_notes(std::span<const ImportedNote> notes) {
+std::expected<ImportOutcome, Error> WriteContext::import_notes(std::span<const ImportedNote> notes,
+                                                               std::size_t& consumed) {
     ImportOutcome outcome;
-    for (const ImportedNote& note : notes)
-        if (auto one = import_one(note, outcome); !one)
-            return std::unexpected(one.error());
+    for (consumed = 0; consumed < notes.size() && (consumed == 0 || !over_budget()); ++consumed)
+        NOTEAPP_TRY(import_one(notes[consumed], outcome));
     return outcome;
 }
 

@@ -1,29 +1,13 @@
-#include "tui/folder_tree.hpp"
-
-#include "search/fold.hpp"
+#include "core/folder_tree.hpp"
 
 #include <algorithm>
 #include <iterator>
 #include <numeric>
 #include <utility>
 
-namespace noteapp::tui {
+namespace noteapp::core {
 
-namespace {
-
-std::u32string name_key(const FolderNode& node) {
-    return search::fold(last_component(node.path)).text;
-}
-
-template <typename Key> void sort_by(std::vector<const FolderNode*>& nodes, bool descending, const Key& key) {
-    std::ranges::stable_sort(nodes, [&](const FolderNode* a, const FolderNode* b) {
-        return descending ? key(*b) < key(*a) : key(*a) < key(*b);
-    });
-}
-
-}  // namespace
-
-std::string folder_of(const core::NotePath& path) {
+std::string folder_of(const NotePath& path) {
     return parent_folder(path.string());
 }
 
@@ -67,8 +51,8 @@ FolderNode& FolderTree::ensure(std::string_view folder) {
     return inserted->second;
 }
 
-void FolderTree::add_note(std::span<const core::NoteMeta> metas, std::size_t index) {
-    const core::NoteMeta& meta = metas[index];
+void FolderTree::add_note(std::span<const NoteMeta> metas, std::size_t index) {
+    const NoteMeta& meta = metas[index];
     const std::string direct = folder_of(meta.path);
     ensure(direct).notes.push_back(index);
     for (std::string walk = direct;; walk = parent_folder(walk)) {
@@ -85,11 +69,11 @@ void FolderTree::add_note(std::span<const core::NoteMeta> metas, std::size_t ind
     }
 }
 
-void FolderTree::rebuild(std::span<const core::NoteMeta> metas, std::span<const std::string> folders) {
+void FolderTree::rebuild(std::span<const NoteMeta> metas, std::span<const std::string> folders) {
     nodes_.clear();
     ensure("");
     for (const std::string& folder : folders)
-        if (!folder.empty() && core::NotePath::parse(folder))
+        if (!folder.empty() && NotePath::parse(folder))
             ensure(folder);
     // En yeni başta geçilir: düğümdeki `recent` böylece ek sıralama istemez.
     std::vector<std::size_t> newest(metas.size());
@@ -130,28 +114,4 @@ std::vector<std::string> FolderTree::folders_under(std::string_view folder) cons
     return folders;
 }
 
-std::vector<const FolderNode*> FolderTree::sorted_subfolders(const FolderNode& node,
-                                                             const search::SortSpec& sort) const {
-    std::vector<const FolderNode*> nodes;
-    nodes.reserve(node.subfolders.size());
-    for (const std::string& path : node.subfolders)
-        nodes.push_back(find(path));
-    // Eşitlikte ad sırası: önce adla, sonra kararlı sıralamayla alan.
-    sort_by(nodes, sort.field == search::SortField::Name && sort.descending, name_key);
-    switch (sort.field) {
-    case search::SortField::Name:
-        break;
-    case search::SortField::Size:
-        sort_by(nodes, sort.descending, [](const FolderNode& n) { return n.size; });
-        break;
-    case search::SortField::Updated:
-        sort_by(nodes, sort.descending, [](const FolderNode& n) { return n.updated_at; });
-        break;
-    case search::SortField::Created:
-        sort_by(nodes, sort.descending, [](const FolderNode& n) { return n.created_at; });
-        break;
-    }
-    return nodes;
-}
-
-}  // namespace noteapp::tui
+}  // namespace noteapp::core

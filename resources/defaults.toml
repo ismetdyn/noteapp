@@ -17,6 +17,37 @@ idle_seconds = 30
 author_name = ""
 author_email = ""
 
+# Dil sunucuları (yalnız TUI). Kullanıcının [lsp.servers] girdileri bunların üstüne biner; `dil = []` o dili,
+# `enabled = false` hepsini kapatır. Bir dile birden çok sunucu `[[...], [...]]` ile verilir. Kurulu olmayan
+# sunucu için süreç başlamaz, notu yansıtılmaz. Varsayılanlar proje dosyası çalıştırmayan ve ağa çıkmayan
+# sunuculardır; ikinci bloktakiler bunu ancak noteapp'in gömülü ayarlarıyla (sertleştirme) sağlar. Ayarlar
+# [lsp.settings.<dil>] ile değiştirilir (README "Dil sunucusu").
+[lsp]
+enabled = true
+
+[lsp.servers]
+python = ["pyright-langserver", "--stdio"]
+c = ["clangd"]                       # --query-driver verilmez: derleyici çalıştırmaz
+cpp = ["clangd"]
+shellscript = ["bash-language-server", "start"]
+markdown = ["marksman", "server"]
+lua = ["lua-language-server"]
+html = [["vscode-html-language-server", "--stdio"], ["htmx-lsp"]]   # Thymeleaf ve htmx şablonları da .html; htmx-lsp ayarsız, ağsız
+css = ["vscode-css-language-server", "--stdio"]
+scss = ["vscode-css-language-server", "--stdio"]
+less = ["vscode-css-language-server", "--stdio"]
+dockerfile = ["docker-langserver", "--stdio"]
+sql = ["sql-language-server", "up", "--method", "stdio"]   # yalnız kendi ayarında bağlantı varsa veritabanına bağlanır
+# Sertleştirilerek açık (T59e; ayar tablosu src/tui/server_settings.cpp):
+java = ["jdtls"]                     # Maven/Gradle içe aktarma ve wrapper indirme kapalı; -data state_dir/lsp/jdtls-data
+go = ["gopls"]                       # GOTOOLCHAIN=local GOPROXY=off GOVCS=*:off CGO_ENABLED=0; komut lensleri kapalı
+rust = ["rust-analyzer"]             # build.rs, proc-macro ve cargo check kapalı; noDeps + CARGO_NET_OFFLINE
+javascript = ["typescript-language-server", "--stdio"]   # tip indirme (ATA) kapalı; yerel tsserver eklentisi yüklenmez
+typescript = ["typescript-language-server", "--stdio"]
+yaml = ["yaml-language-server", "--stdio"]               # SchemaStore/CRD kapalı; http(s) şeması istemciye sorulur, reddedilir
+toml = ["taplo", "lsp", "--no-auto-config", "stdio"]     # şema, katalog ve taplo.toml araması kapalı
+json = ["vscode-json-language-server", "--stdio"]        # $schema yalnız file:// okunur, http(s) indirilmez
+
 # Kullanıcı arayüzünde görünmeyen, davranışı ayarlayan değerler.
 [tuning]
 slug_max_length = 60          # not adı slug'ının en çok karakteri
@@ -29,3 +60,4 @@ exit_timeout_seconds = 10     # çıkışta bekleyen senkron için üst sınır
 log_max_bytes = 1048576       # log.txt bu boyutu aşınca log.1.txt'ye döner (1 MiB)
 sync_stale_lock_minutes = 10  # okunamayan senkron kilidi bundan eskiyse bayat sayılır; sahibi canlı kilit devralınmaz
 sync_timeout_seconds = 120    # AutoSync bir senkron sürecini en çok bu kadar bekler, sonra sonlandırır
+graph_batch_ops = 30000       # bir graf işlemindeki işlem bütçesi; aşan iş sonraki işlemlere bölünür, reddedilmez (1..32768)

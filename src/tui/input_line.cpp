@@ -26,7 +26,7 @@ struct ArgumentKey {
 };
 
 // Değerler parse_query'den geçer ("every offered argument value" testi): kayma testte düşer.
-constexpr std::array<ArgumentKey, 8> kArguments = {{
+constexpr std::array<ArgumentKey, 10> kArguments = {{
     {"sort", {"name", "size", "updated", "created"}},
     {"type", {}},
     {"in", {}},
@@ -35,6 +35,8 @@ constexpr std::array<ArgumentKey, 8> kArguments = {{
     {"created", {"7d", "30d", "365d"}},
     {"origin", {"windows", "linux", "macos", "android", "unknown"}},
     {"sync", {"synced", "modified", "new", "conflict_copy", "sync_off"}},
+    {"tag", {}},
+    {"view", {}},
 }};
 
 const ArgumentKey* argument_key(std::string_view name) {
@@ -121,7 +123,7 @@ void append_all(std::vector<std::string>& out, const std::vector<std::string>& i
     out.insert(out.end(), items.begin(), items.end());
 }
 
-// `in:` `type:` değerleri notlardan, öbürleri tablodan.
+// `in:` `type:` `tag:` değerleri notlardan, `view:` kayıtlı görünümlerden, öbürleri tablodan.
 std::vector<std::string> argument_values(const ArgumentKey& key, const InputSources* sources) {
     std::vector<std::string> values;
     const std::string prefix = std::string(key.name) + ":";
@@ -136,6 +138,12 @@ std::vector<std::string> argument_values(const ArgumentKey& key, const InputSour
     if (key.name == "type")
         for (const std::string& type : sources->types)
             values.push_back(prefix + type.substr(1));
+    if (key.name == "tag")
+        for (const std::string& tag : sources->tags)
+            values.push_back(prefix + tag);
+    if (key.name == "view")
+        for (const std::string& view : sources->views)
+            values.push_back(prefix + view);
     return values;
 }
 
@@ -235,10 +243,12 @@ std::vector<std::string> sorted_unique(const std::set<std::string>& items) {
 
 }  // namespace
 
-SharedInputSources build_input_sources(std::span<const core::NoteMeta> notes) {
+SharedInputSources build_input_sources(std::span<const core::NoteMeta> notes,
+                                       std::span<const std::string> views) {
     std::set<std::string> folders;
     std::set<std::string> base_names;
     std::set<std::string> types;
+    std::set<std::string> tags;
     auto sources = std::make_shared<InputSources>();
     sources->names.reserve(notes.size());
     for (const core::NoteMeta& note : notes) {
@@ -255,11 +265,17 @@ SharedInputSources build_input_sources(std::span<const core::NoteMeta> notes) {
         if (const std::size_t dot = base.rfind('.'); dot != std::string_view::npos && dot + 1 < base.size())
             types.emplace(base.substr(dot));
         sources->names.push_back(path);
+        for (const std::string& tag : note.tags)
+            if (is_clean_text(tag))
+                tags.insert(tag);
     }
     std::ranges::sort(sources->names);
     sources->folders = sorted_unique(folders);
     sources->base_names = sorted_unique(base_names);
     sources->types = sorted_unique(types);
+    sources->tags = sorted_unique(tags);
+    // Görünüm adı senkronla gelebilir: aday kabul edilince sorguya girer, kontrol baytı terminale ulaşmasın.
+    std::ranges::copy_if(views, std::back_inserter(sources->views), is_clean_text);
     return sources;
 }
 

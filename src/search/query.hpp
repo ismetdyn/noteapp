@@ -7,7 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <functional>
+#include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -24,17 +27,23 @@ struct SortSpec {
 
 // Tek filtre; bir sorgudaki filtrelerin hepsi sağlanmalı (AND). Yalnız kind'ın kullandığı alanlar anlamlıdır.
 struct Filter {
-    enum class Kind { Type, Folder, Size, Updated, Created, Origin, Sync };
+    enum class Kind { Type, Folder, Size, Updated, Created, Origin, Sync, Tag, View };
     enum class Compare { Less, Greater, Within };
 
     Kind kind{};
     Compare compare = Compare::Greater;               // Size, Updated, Created
-    std::string text = {};                            // katlanmış: Type (noktasız), Folder ("work/"), Origin
+    std::string text = {};                            // katlanmış: Type, Folder ("work/"), Origin, Tag
     std::uintmax_t bytes = 0;                         // Size
     std::chrono::sys_days day = {};                   // Updated/Created, Less/Greater
     std::chrono::days age = {};                       // Updated/Created, Within
     core::SyncState sync = core::SyncState::SyncOff;  // Sync
+    // View: görünümün döndürdüğü notlar; text ham ad. Arama bağlanmadan ayrıştırıldıysa boş: not geçmez.
+    std::shared_ptr<const std::set<core::NotePath>> notes = nullptr;
 };
+
+// `view:` değerinin notları (ön yüz depoya bağlar: core::view_notes). Hata, değerin yerinde QueryError olur.
+using ViewLookup =
+    std::function<std::expected<std::vector<core::NotePath>, core::Error>(std::string_view name)>;
 
 struct ParsedQuery {
     std::string text;  // kalan sözcükler, tırnaklarıyla: parse_terms ve fuzzy aynı metni görür
@@ -50,10 +59,11 @@ struct QueryError {
     core::Error error;
 };
 
-// Saf ayrıştırıcı (G/Ç yok). Bilinen anahtarlar: sort type in size updated created origin sync. Anahtarlar ve
-// değerler search'ün katlama kurallarıyla karşılaştırılır. Bilinmeyen anahtar (foo:bar, http://x) düz
-// metindir; bilinen anahtarın geçersiz değeri metne düşmez, QueryError döner. Biçimler için SPEC-search.
-std::expected<ParsedQuery, QueryError> parse_query(std::string_view query);
+// Ayrıştırıcı; tek G/Ç views'tur. Bilinen anahtarlar: sort type in size updated created origin sync tag view.
+// Anahtarlar ve değerler search'ün katlama kurallarıyla karşılaştırılır. Bilinmeyen anahtar (foo:bar,
+// http://x) düz metindir; bilinen anahtarın geçersiz değeri metne düşmez, QueryError döner. views verilmezse
+// `view:` yalnız ad kuralından geçer (girdi boyama), süzgeci hiçbir notu geçirmez. Biçimler için SPEC-search.
+std::expected<ParsedQuery, QueryError> parse_query(std::string_view query, const ViewLookup& views = {});
 
 // indices'i verilen alana göre kararlı sıralar (eşitlikte gelen sıra kalır); bilinmeyen created her iki yönde
 // sonda.

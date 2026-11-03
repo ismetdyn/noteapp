@@ -384,6 +384,61 @@ TEST_CASE("Preview never sends control bytes to a screen cell") {
     CHECK(contains(screen, "[31mX"));
 }
 
+TEST_CASE("Preview shows bidi and zero-width characters as a warning marker cell, the line keeps its order") {
+    const auto state = state_in(Focus::Preview);
+    const auto screen = render_screen(state, text_preview({"abc\xE2\x80\xAE"
+                                                           "def\xE2\x81\xA6\xE2\x80\x8B"
+                                                           "g"}));
+    const std::string marker = "\xEF\xBF\xBD";
+    const auto at = find_text(screen, "abc" + marker + "def" + marker + marker + "g");
+    REQUIRE(at.has_value());
+    CHECK(screen.PixelAt(at->first + 3, at->second).background_color == ftxui::Color(ftxui::Color::Red));
+    CHECK(screen.ToString().find("\xE2\x80\xAE") == std::string::npos);
+}
+
+// Kaynaklarını kovalamak yerine çizim noktası arınır: ileti, ipucu, senkron metni ve ad değiştirme hatası
+// yol ya da sunucu metni taşıyabilir.
+TEST_CASE("the status line, notice, sync text and rename error never draw a raw bidi or C1 character") {
+    const std::string hostile = "gpj\xE2\x80\xAE"
+                                "x\xC2\x9B"
+                                "31m";
+    const auto raw_on = [](const ftxui::Screen& screen) {
+        const std::string all = screen.ToString();
+        return all.find("\xE2\x80\xAE") != std::string::npos || all.find("\xC2\x9B") != std::string::npos;
+    };
+    const auto draw = [](const tui::StatusLine& status, const tui::RenameState* rename = nullptr) {
+        auto screen =
+            ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth), ftxui::Dimension::Fixed(kHeight));
+        ftxui::Render(screen, tui::render(sample_state(), {}, status, {kWidth, kHeight}, nullptr, nullptr,
+                                          nullptr, nullptr, nullptr, nullptr, nullptr, rename));
+        return screen;
+    };
+    for (const tui::StatusLine& status :
+         {tui::StatusLine{"sync " + hostile, ""}, tui::StatusLine{"", "moved " + hostile},
+          tui::StatusLine{"", "", "notice " + hostile}}) {
+        CAPTURE(status.sync + status.message + status.notice);
+        const auto screen = draw(status);
+        CHECK(screen.ToString().find("gpj") != std::string::npos);
+        CHECK_FALSE(raw_on(screen));
+    }
+    tui::RenameState rename(core::NotePath::parse("a.md").value());
+    rename.set_error("exists: " + hostile);
+    const auto screen = draw({"", ""}, &rename);
+    CHECK(screen.ToString().find("gpj") != std::string::npos);
+    CHECK_FALSE(raw_on(screen));
+}
+
+TEST_CASE("PreviewCache drops a leading BOM like the editor, a BOM inside the text stays") {
+    test::TempDir dir;
+    test::upsert_note(dir.path(), "a.txt", "\xEF\xBB\xBFilk\nx\xEF\xBB\xBFy");
+    const core::NoteStore store(dir.path());
+    tui::PreviewCache cache;
+    tui::Row row{core::NotePath::parse("a.txt").value(), {}, 0, {}};
+    const auto& preview = cache.get(store, &row);
+    REQUIRE(preview.kind == tui::Preview::Kind::Text);
+    CHECK(preview.lines == std::vector<std::string>{"ilk", "x\xEF\xBB\xBFy"});
+}
+
 TEST_CASE("Preview find: highlights in the pane and 3/12-style counter in the bottom input") {
     const std::vector<std::string> lines = {"Işık ılık", "ışık"};
     auto state = state_in(Focus::Preview);
@@ -489,9 +544,9 @@ TEST_CASE("the shortcut bar shows whole hints at 60 columns in both languages") 
 }
 
 TEST_CASE("the list hint bar starts with the keys users could not find, at any width from 60") {
-    const std::pair<const char*, std::array<const char*, 6>> expected[] = {
-        {"en", {"T trash", "Space details", "o sort", "v column", "f search", "? help"}},
-        {"tr", {"T çöp", "Space detay", "o sırala", "v sütun", "f ara", "? yardım"}},
+    const std::pair<const char*, std::array<const char*, 7>> expected[] = {
+        {"en", {": cmd", "T trash", "Space open", "o sort", "v col", "f search", "? help"}},
+        {"tr", {": komut", "T çöp", "Space aç", "o sırala", "v sütun", "f ara", "? yardım"}},
     };
     for (const auto& [language, hints] : expected) {
         core::init_i18n(language);
@@ -522,7 +577,7 @@ TEST_CASE("a long filter does not push the priority hints off the list bar at 60
     const std::string bar = row_text(render_screen(state, text_preview({}), 60, 15), 14);
     CHECK(bar.starts_with("> "));
     CHECK(bar.find("itmedi") != std::string::npos);  // yazdığının sonu görünür
-    for (const char* hint : {"T çöp", "Space detay", "o sırala", "v sütun", "f ara"}) {
+    for (const char* hint : {": komut", "T çöp", "Space aç", "o sırala", "v sütun"}) {
         CAPTURE(hint);
         CHECK(bar.find(hint) != std::string::npos);
     }

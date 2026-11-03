@@ -1,6 +1,7 @@
 #pragma once
 
 // `note query --json` ve `note graph export` aynı kodlamayı kullanır.
+#include "core/json_parser.hpp"
 #include "core/text.hpp"
 
 #include <array>
@@ -9,7 +10,7 @@
 #include <string>
 #include <string_view>
 
-namespace noteapp::cli {
+namespace noteapp::core {
 
 inline constexpr std::string_view kReplacementCharacter = "\xEF\xBF\xBD";  // U+FFFD
 
@@ -68,7 +69,7 @@ inline void append_json_string(std::string& out, std::string_view text) {
         } else {
             const std::size_t length = sequence_length(lead);
             const std::string_view sequence = text.substr(i, length);
-            if (!core::is_valid_utf8(sequence)) {
+            if (!is_valid_utf8(sequence)) {
                 out += kReplacementCharacter;
                 ++i;
             } else if (lead == 0xC2 && static_cast<unsigned char>(sequence[1]) < 0xA0) {
@@ -84,4 +85,50 @@ inline void append_json_string(std::string& out, std::string_view text) {
     out += '"';
 }
 
-}  // namespace noteapp::cli
+// Ayrıştırılmış ya da kurulmuş değerin JSON metni. Number ham belirtecini olduğu gibi yazar: kuran taraf
+// geçerli bir JSON sayısı koymalıdır.
+inline void append_json(std::string& out, const Json& value) {
+    switch (value.kind) {
+    case Json::Kind::String:
+        append_json_string(out, value.text);
+        return;
+    case Json::Kind::Number:
+    case Json::Kind::Bool:
+        out += value.text;
+        return;
+    case Json::Kind::Null:
+        out += "null";
+        return;
+    case Json::Kind::Array:
+        out += '[';
+        for (std::size_t i = 0; i < value.items.size(); ++i) {
+            if (i != 0)
+                out += ',';
+            append_json(out, value.items[i]);
+        }
+        out += ']';
+        return;
+    case Json::Kind::Object: {
+        out += '{';
+        bool first = true;
+        for (const auto& [key, field] : value.fields) {
+            if (!first)
+                out += ',';
+            first = false;
+            append_json_string(out, key);
+            out += ':';
+            append_json(out, field);
+        }
+        out += '}';
+        return;
+    }
+    }
+}
+
+inline std::string json_text(const Json& value) {
+    std::string out;
+    append_json(out, value);
+    return out;
+}
+
+}  // namespace noteapp::core

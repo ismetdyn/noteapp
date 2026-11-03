@@ -106,6 +106,24 @@ TEST_CASE("sanitize_for_terminal neutralises control sequences but keeps text, t
     CHECK(sanitize_for_terminal("\xC2\xA0ğ€😀") == "\xC2\xA0ğ€😀");
 }
 
+// T91: TUI ve GUI ile aynı liste (core::hidden_controls): metin saklandığından farklı sırayla görünmesin.
+TEST_CASE("sanitize_for_terminal shows bidi and zero-width characters as U+FFFD, ZWJ and ZWNJ stay") {
+    using noteapp::cli::sanitize_for_terminal;
+    const std::string r = "\xEF\xBF\xBD";
+    CHECK(sanitize_for_terminal("gpj\xE2\x80\xAE"
+                                "exe.md") == "gpj" + r + "exe.md");
+    CHECK(sanitize_for_terminal("a\xE2\x81\xA6"
+                                "b\xE2\x80\x8B"
+                                "c\xD8\x9C"
+                                "d\xEF\xBB\xBF"
+                                "e\xE2\x81\xA0"
+                                "f") == "a" + r + "b" + r + "c" + r + "d" + r + "e" + r + "f");
+    const std::string family = "\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7";
+    CHECK(sanitize_for_terminal(family) == family);
+    CHECK(sanitize_for_terminal("\xD9\x85\xDB\x8C\xE2\x80\x8C\xD8\xAE") ==
+          "\xD9\x85\xDB\x8C\xE2\x80\x8C\xD8\xAE");
+}
+
 TEST_CASE("highlight sanitises the text around and inside the ranges") {
     using noteapp::cli::highlight_ranges;
     const std::string r = "\xEF\xBF\xBD";

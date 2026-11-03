@@ -166,9 +166,12 @@ void check_inside_margins(const std::string& bbox) {
 
 }  // namespace
 
-TEST_CASE("format_for treats only the md extension as markdown") {
+TEST_CASE("format_for treats the md and markdown extensions as markdown") {
     CHECK(pdf::format_for("a/b.md") == pdf::NoteFormat::Markdown);
     CHECK(pdf::format_for("B.MD") == pdf::NoteFormat::Markdown);
+    CHECK(pdf::format_for("a/c.markdown") == pdf::NoteFormat::Markdown);
+    CHECK(pdf::format_for("D.Markdown") == pdf::NoteFormat::Markdown);
+    CHECK(pdf::format_for("a.mdx") == pdf::NoteFormat::PlainText);
     CHECK(pdf::format_for("a.txt") == pdf::NoteFormat::PlainText);
     CHECK(pdf::format_for("md") == pdf::NoteFormat::PlainText);
 }

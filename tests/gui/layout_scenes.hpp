@@ -7,6 +7,7 @@
 
 #include <SDL3/SDL.h>
 #include <chrono>
+#include <format>
 #include <functional>
 #include <map>
 #include <memory>
@@ -43,10 +44,19 @@ struct LayoutScene {
 
     LayoutScene(int width, int height, float scale) {
         noteapp::core::init_i18n("tr");
-        fixture.add_note(kLongNotePath, "# Toplantı\n\nGündem maddeleri burada.\n");
         fixture.add_note("kısa.md", "kısa not\n", 5);
+        fixture.add_note(kLongNotePath,
+                         "# Toplantı\n\nGündem maddeleri burada. [[kısa]] [[silinmiş-eski-not]]\n");
+        fixture.add_note("gelen.md", "[[İstanbul-toplantısının-ayrıntılı-notları-ve-yapılacak-işler]]\n", 6);
         for (const char* typed : {"betik.sh", "ayar.toml", "veri.json", "kod.py", "tablo.csv"})
             fixture.add_note(typed, "x\n", 6);  // liste ikonlarının türleri görüntüde seçilsin
+        {  // bağlantı paneli her sahnede açık: çakışma testi onu da denetler
+            noteapp::core::NoteStore store(fixture.store_dir());
+            REQUIRE(store
+                        .add_relation(*noteapp::core::NotePath::parse(kLongNotePath),
+                                      *noteapp::core::NotePath::parse("tablo.csv"))
+                        .has_value());
+        }
         state = fixture.make_state();
         state->layout().width = width;
         state->layout().height = height;
@@ -100,6 +110,53 @@ struct LayoutScene {
         state->select_row(state->model().index_of(*noteapp::core::NotePath::parse("kısa.md")));
         settle(*view);
         state->open_trash();
+        settle(*view);
+    }
+
+    // Ayrıntılar görünümü en uzun yol çubuğuyla: seçili not üç düzey derindeki klasörde, konum oraya gelir.
+    void show_details_view() {
+        state->set_browser_view(noteapp::gui::BrowserView::Details);
+        settle(*view);
+    }
+
+    // Harita görünümü, gösterilen notun çevresi; yerleşim durana dek kare üretilir (sınırlı).
+    void show_map_view() {
+        state->set_browser_view(noteapp::gui::BrowserView::Map);
+        constexpr int kMaxFrames = 600;
+        for (int frame = 0; frame < kMaxFrames && !state->map_layout().settled(); ++frame)
+            view->draw_frame();
+        REQUIRE(state->map_layout().settled());
+        settle(*view);
+    }
+
+    // T85: `count` not ayrı sekmede (uzun Türkçe adlar), sonuncusu etkin; ilki iğneli, biri taslak.
+    void open_tabs(int count) {
+        for (int index = 0; index < count; ++index)
+            fixture.add_note(std::format("sekme-{:02}-toplantı-ayrıntıları.md", index), "x\n", 1);
+        state->rescan();
+        state->set_tab_pinned(state->tabs().front().id, true);
+        state->new_tab();
+        state->edit_text("kaydedilmemiş taslak\n");
+        for (int index = 0; index < count; ++index)
+            state->open_in_new_tab(
+                *noteapp::core::NotePath::parse(std::format("sekme-{:02}-toplantı-ayrıntıları.md", index)));
+        settle_tab_scroll();
+    }
+
+    // ImGui sekme çubuğunun kaydırması gerçek zamanla canlanır (DeltaTime): etkin sekme görünene dek kare
+    // üretilir (sınırlı; görünmezse testin denetimi düşer).
+    void settle_tab_scroll() {
+        settle(*view);
+        constexpr int kMaxFrames = 600;
+        const auto active_visible = [this] {
+            const auto& rects = view->item_rects();
+            const auto tab = rects.find(std::format("note_tab:{}", state->active_tab()));
+            const auto bar = rects.find("note_tabs");
+            return tab != rects.end() && bar != rects.end() && tab->second.min_x >= bar->second.min_x &&
+                   tab->second.max_x <= bar->second.max_x;
+        };
+        for (int frame = 0; frame < kMaxFrames && !active_visible(); ++frame)
+            view->draw_frame();
         settle(*view);
     }
 

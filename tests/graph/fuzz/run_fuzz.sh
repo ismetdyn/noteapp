@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bir fuzz adımı: süre sınırlı, derlem kalıcı; tekrar çağrılınca kaldığı yerden sürer. Toplam girdi sayısı STATE
 # dosyasında birikir. Crash, 10 sn üstü sorgu ve sızıntı çıkış kodu 1 verir, kanıt ARTIFACTS altına düşer.
-#   run_fuzz.sh <query|frame> <derleme dizini> <çalışma dizini> [süre sn] [işçi]
+#   run_fuzz.sh <query|frame|jsonl|lsp> <derleme dizini> <çalışma dizini> [süre sn] [işçi]
 set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 2; }
@@ -12,7 +12,7 @@ work_dir="${3:?work dir}"
 seconds="${4:-300}"
 workers="${5:-8}"
 source_dir="$(cd "$(dirname "$0")" && pwd)"
-[[ "$target" == query || "$target" == frame || "$target" == jsonl ]] || die "unknown target: $target"
+[[ "$target" == query || "$target" == frame || "$target" == jsonl || "$target" == lsp ]] || die "unknown target: $target"
 
 corpus="$work_dir/$target/corpus"
 artifacts="$work_dir/$target/artifacts"
@@ -23,6 +23,14 @@ mkdir -p "$corpus" "$artifacts" "$logs"
 seed_corpus() {
     if [[ "$target" == frame ]]; then
         "$build_dir/tests/graph/fuzz/make_frame_seeds" "$corpus"
+        return
+    fi
+    if [[ "$target" == lsp ]]; then
+        # İlk bayt parça boyudur (fuzz_lsp.cpp).
+        printf '\x07Content-Length: 106\r\n\r\n{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"file:///a","diagnostics":[]}}' > "$corpus/seed-diagnostics"
+        printf '\x00Content-Length: 32\r\n\r\n[{"label":"a","insertText":"b"}]' > "$corpus/seed-completion"
+        # Sonu gelmeyen 4 KiB'lık başlık: 5 dakikalık koşu bu yolu kendiliğinden bulmadı.
+        { printf '\x00Content-Length: 2\r\nX: '; head -c 4100 /dev/zero | tr '\0' a; } > "$corpus/seed-header-too-large"
         return
     fi
     if [[ "$target" == jsonl ]]; then
@@ -47,6 +55,10 @@ dict_args=()
 max_len=4096
 if [[ "$target" == query ]]; then
     dict_args=("-dict=$source_dir/cypher.dict")
+    max_len=8192
+fi
+if [[ "$target" == lsp ]]; then
+    # 4 KiB başlık sınırı (HeaderTooLarge) ancak daha uzun girdide aşılır.
     max_len=8192
 fi
 

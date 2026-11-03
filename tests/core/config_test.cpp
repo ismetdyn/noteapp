@@ -1,5 +1,6 @@
 #include "core/config.hpp"
 #include "core/i18n.hpp"
+#include "core/json_text.hpp"
 #include "core/paths.hpp"
 #include "core/resources.hpp"
 #include "support/test_support.hpp"
@@ -77,6 +78,7 @@ TEST_CASE("parse_config with empty input yields the embedded defaults") {
     CHECK(c.tuning.log_max_bytes == 1048576);
     CHECK(c.tuning.sync_stale_lock_minutes == 10);
     CHECK(c.tuning.sync_timeout_seconds == 120);
+    CHECK(c.tuning.graph_batch_ops == 30000);
 }
 
 TEST_CASE("parse_config applies user overrides") {
@@ -149,6 +151,8 @@ TEST_CASE("parse_config falls back to the default and warns on each invalid valu
         {"[tuning]\nautosave_ms = -1", "tuning.autosave_ms"},
         {"[tuning]\nsync_stale_lock_minutes = 0", "tuning.sync_stale_lock_minutes"},
         {"[tuning]\nsync_timeout_seconds = 0", "tuning.sync_timeout_seconds"},
+        {"[tuning]\ngraph_batch_ops = 0", "tuning.graph_batch_ops"},
+        {"[tuning]\ngraph_batch_ops = 32769", "tuning.graph_batch_ops"},
     };
     for (const Case& tc : cases) {
         CAPTURE(tc.toml);
@@ -504,4 +508,266 @@ TEST_CASE("save_config keeps the icons setting") {
     config.icons = "off";
     REQUIRE(save_config(config).has_value());
     CHECK(load_config().config.icons == "off");
+}
+
+namespace {
+
+using Argv = std::vector<std::string>;
+using ServerMap = std::map<std::string, std::vector<Argv>>;
+
+// Varsayılan sunucular: proje kodu çalıştırmayanlar ve T59e'de sertleştirilenler (README "Dil sunucusu").
+const ServerMap& default_servers() {
+    static const ServerMap servers = {
+        {"c", {Argv{"clangd"}}},
+        {"cpp", {Argv{"clangd"}}},
+        {"css", {Argv{"vscode-css-language-server", "--stdio"}}},
+        {"dockerfile", {Argv{"docker-langserver", "--stdio"}}},
+        {"go", {Argv{"gopls"}}},
+        {"html", {Argv{"vscode-html-language-server", "--stdio"}, Argv{"htmx-lsp"}}},
+        {"java", {Argv{"jdtls"}}},
+        {"javascript", {Argv{"typescript-language-server", "--stdio"}}},
+        {"json", {Argv{"vscode-json-language-server", "--stdio"}}},
+        {"less", {Argv{"vscode-css-language-server", "--stdio"}}},
+        {"lua", {Argv{"lua-language-server"}}},
+        {"markdown", {Argv{"marksman", "server"}}},
+        {"python", {Argv{"pyright-langserver", "--stdio"}}},
+        {"rust", {Argv{"rust-analyzer"}}},
+        {"scss", {Argv{"vscode-css-language-server", "--stdio"}}},
+        {"shellscript", {Argv{"bash-language-server", "start"}}},
+        {"sql", {Argv{"sql-language-server", "up", "--method", "stdio"}}},
+        {"toml", {Argv{"taplo", "lsp", "--no-auto-config", "stdio"}}},
+        {"typescript", {Argv{"typescript-language-server", "--stdio"}}},
+        {"yaml", {Argv{"yaml-language-server", "--stdio"}}},
+    };
+    return servers;
+}
+
+Json parsed_json(std::string_view text) {
+    auto json = JsonParser(text).parse();
+    REQUIRE(json);
+    return *json;
+}
+
+}  // namespace
+
+TEST_CASE("lsp is on by default with safe servers and the T59e servers that are hardened") {
+    const LoadedConfig loaded = parse_config("");
+    CHECK(loaded.warnings.empty());
+    CHECK(loaded.config.lsp.enabled);
+    CHECK(loaded.config.lsp.servers == default_servers());
+    CHECK(loaded.config.lsp.settings.empty());  // sertleştirme gömülü tablodadır, defaults.toml'da değil
+}
+
+TEST_CASE("lsp servers from the user file are merged over the defaults") {
+    const LoadedConfig loaded = parse_config(R"(
+[lsp.servers]
+python = ["pylsp"]
+kotlin = ["kotlin-language-server"]
+)");
+    CHECK(loaded.warnings.empty());
+    ServerMap expected = default_servers();
+    expected["python"] = {Argv{"pylsp"}};
+    expected["kotlin"] = {Argv{"kotlin-language-server"}};
+    CHECK(loaded.config.lsp.servers == expected);
+}
+
+TEST_CASE("an lsp server value may list several argv lists for one language") {
+    const LoadedConfig loaded = parse_config(R"(
+[lsp.servers]
+html = [["vscode-html-language-server", "--stdio"], ["htmx-lsp", "--level", "WARN"]]
+xml = [["lemminx"]]
+)");
+    CHECK(loaded.warnings.empty());
+    CHECK(loaded.config.lsp.servers.at("html") ==
+          std::vector<Argv>{{"vscode-html-language-server", "--stdio"}, {"htmx-lsp", "--level", "WARN"}});
+    CHECK(loaded.config.lsp.servers.at("xml") == std::vector<Argv>{{"lemminx"}});
+}
+
+TEST_CASE("invalid multi-server lists warn and are ignored") {
+    std::string many = "[";
+    for (std::size_t i = 0; i <= LspConfig::kMaxServersPerLanguage; ++i)
+        many += "[\"a\"],";
+    many += "]";
+    const LoadedConfig loaded = parse_config("[lsp.servers]\n"
+                                             "mixed = [[\"a\"], \"b\"]\n"
+                                             "empty_inner = [[\"a\"], []]\n"
+                                             "bad_inner = [[\"a\", 3]]\n"
+                                             "many = " +
+                                             many + "\n");
+    CHECK(loaded.config.lsp.servers == default_servers());
+    for (const char* key :
+         {"lsp.servers.mixed", "lsp.servers.empty_inner", "lsp.servers.bad_inner", "lsp.servers.many"})
+        CHECK_MESSAGE(has_warning_about(loaded, key, "config.invalid_value"), key);
+}
+
+TEST_CASE("lsp settings tables become JSON per language") {
+    const LoadedConfig loaded = parse_config(R"(
+[lsp.settings.rust]
+cargo.buildScripts.enable = true
+check = { command = "clippy" }
+"rust-analyzer".procMacro.enable = true
+[lsp.settings.yaml]
+yaml.schemas = { "https://example.com/s.json" = ["*.k8s.yaml"] }
+yaml.customTags = ["!Ref", "!Sub scalar"]
+yaml.maxItemsComputed = 100
+http.ratio = 0.5
+)");
+    CHECK(loaded.warnings.empty());
+    REQUIRE(loaded.config.lsp.settings.size() == 2);
+    CHECK(loaded.config.lsp.settings.at("rust") ==
+          parsed_json(R"({"cargo":{"buildScripts":{"enable":true}},"check":{"command":"clippy"},)"
+                      R"("rust-analyzer":{"procMacro":{"enable":true}}})"));
+    CHECK(json_text(loaded.config.lsp.settings.at("yaml")) ==
+          R"({"http":{"ratio":0.5},"yaml":{"customTags":["!Ref","!Sub scalar"],"maxItemsComputed":100,)"
+          R"("schemas":{"https://example.com/s.json":["*.k8s.yaml"]}}})");
+}
+
+TEST_CASE("invalid lsp settings warn and are ignored, valid languages stay") {
+    std::string key = "k";
+    for (int i = 0; i <= LspConfig::kMaxSettingsDepth; ++i)
+        key += ".k";
+    const LoadedConfig loaded = parse_config("[lsp.settings]\n"
+                                             "go = { ok = true }\n"
+                                             "flat = 3\n"
+                                             "\"Bad Id\" = { a = 1 }\n"
+                                             "nan = { x = nan }\n"
+                                             "date = { x = 1979-05-27 }\n"
+                                             "[lsp.settings.deep]\n" +
+                                             key + " = 1\n");
+    REQUIRE(loaded.config.lsp.settings.size() == 1);
+    CHECK(loaded.config.lsp.settings.at("go") == parsed_json(R"({"ok":true})"));
+    for (const char* entry : {"lsp.settings.flat", "lsp.settings.Bad Id", "lsp.settings.nan",
+                              "lsp.settings.date", "lsp.settings.deep"})
+        CHECK_MESSAGE(has_warning_about(loaded, entry, "config.invalid_value"), entry);
+}
+
+TEST_CASE("an empty argv turns one default server off; enabled = false turns all off") {
+    const LoadedConfig one = parse_config("[lsp.servers]\nmarkdown = []\n");
+    CHECK(one.warnings.empty());
+    CHECK_FALSE(one.config.lsp.servers.contains("markdown"));
+    CHECK(one.config.lsp.servers.size() == default_servers().size() - 1);
+    CHECK_FALSE(parse_config("[lsp]\nenabled = false\n").config.lsp.enabled);
+}
+
+TEST_CASE("invalid lsp server entries warn and are ignored, valid ones stay") {
+    const std::string too_long(LspConfig::kMaxArgumentBytes + 1, 'x');
+    std::string many = "[";
+    for (std::size_t i = 0; i <= LspConfig::kMaxArguments; ++i)
+        many += "\"a\",";
+    many += "]";
+    const LoadedConfig loaded =
+        parse_config("[lsp]\nenabled = true\n[lsp.servers]\n"
+                     "python = [\"pylsp\"]\n"
+                     "number = [\"clangd\", 3]\n"
+                     "text = \"clangd\"\n"
+                     "blank = [\"\"]\n"
+                     "nul = [\"a\\u0000b\"]\n"
+                     "long = [\"" +
+                     too_long + "\"]\n" + "many = " + many + "\n" + "\"Bad Id\" = [\"x\"]\n");
+    ServerMap expected = default_servers();
+    expected["python"] = {Argv{"pylsp"}};
+    CHECK(loaded.config.lsp.servers == expected);
+    for (const char* key : {"lsp.servers.number", "lsp.servers.text", "lsp.servers.blank", "lsp.servers.nul",
+                            "lsp.servers.long", "lsp.servers.many", "lsp.servers.Bad Id"})
+        CHECK_MESSAGE(has_warning_about(loaded, key, "config.invalid_value"), key);
+    CHECK(loaded.warnings.size() == 7);
+}
+
+TEST_CASE("more lsp servers than the limit are cut with a warning") {
+    std::string text = "[lsp.servers]\n";
+    for (std::size_t i = 0; i <= LspConfig::kMaxServers; ++i)
+        text += "l" + std::to_string(100 + i) + " = [\"x\"]\n";
+    const LoadedConfig loaded = parse_config(text);
+    CHECK(loaded.config.lsp.servers.size() == default_servers().size() + LspConfig::kMaxServers);
+    CHECK(loaded.warnings.size() == 1);
+}
+
+TEST_CASE("lsp section rejects a non-table servers value and unknown keys") {
+    const LoadedConfig loaded = parse_config("[lsp]\nenabled = \"yes\"\nservers = 3\nport = 1\n");
+    CHECK(loaded.config.lsp == parse_config("").config.lsp);  // bozuk değer varsayılana düşer
+    CHECK(has_warning_about(loaded, "lsp.enabled", "config.invalid_value"));
+    CHECK(has_warning_about(loaded, "lsp.servers", "config.invalid_value"));
+    CHECK(has_warning_about(loaded, "lsp.port", "config.unknown_key"));
+}
+
+TEST_CASE("save_config keeps the lsp section of the file so a settings save does not drop the servers") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+    fs::create_directories(config_dir());
+    std::ofstream(config_file(), std::ios::binary)
+        << "[lsp]\nenabled = true\n[lsp.servers]\npython = [\"pyright-langserver\", \"--stdio\"]\n"
+           "c = [\"C:\\\\tools\\\\clangd \\\"x\\\".exe\"]\n";
+    const LoadedConfig loaded = load_config();
+    REQUIRE(loaded.warnings.empty());
+    Config c = loaded.config;
+    c.language = "en";  // ayar ekranından başka bir anahtar değişir
+    REQUIRE(save_config(c).has_value());
+    const LoadedConfig reloaded = load_config();
+    CHECK(reloaded.warnings.empty());
+    CHECK(reloaded.config.lsp == loaded.config.lsp);
+    CHECK(reloaded.config.lsp.servers.at("c") == std::vector<Argv>{{"C:\\tools\\clangd \"x\".exe"}});
+}
+
+TEST_CASE("save_config writes the lsp section as it is in the file now, not the startup snapshot") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+    fs::create_directories(config_dir());
+    std::ofstream(config_file(), std::ios::binary)
+        << "[lsp]\nenabled = true\n[lsp.servers]\npython = [\"pyright-langserver\", \"--stdio\"]\n";
+    Config snapshot = load_config().config;  // TUI açılışta okudu
+    REQUIRE(snapshot.lsp.enabled);
+
+    // Uygulama açıkken kullanıcı LSP'yi dosyadan kapatır ve bir girdiyi bozar.
+    std::ofstream(config_file(), std::ios::binary | std::ios::trunc)
+        << "[lsp]\nenabled = false\n[lsp.servers]\npython = [\"pylsp\"]\nbroken = 3\n";
+    snapshot.language = "en";
+    REQUIRE(save_config(snapshot).has_value());
+
+    const LoadedConfig reloaded = load_config();
+    CHECK_FALSE(reloaded.config.lsp.enabled);
+    CHECK(reloaded.config.lsp.servers.at("python") == std::vector<Argv>{{"pylsp"}});
+    CHECK(has_warning_about(reloaded, "lsp.servers.broken", "config.invalid_value"));  // elle yazılan korunur
+    CHECK(reloaded.config.language == "en");
+}
+
+TEST_CASE("save_config keeps an lsp opt-out written as inline table, dotted key or header") {
+    for (const std::string form :
+         {"lsp = { enabled = false }\n", "lsp.enabled = false\n", "[lsp]\nenabled = false\n"}) {
+        CAPTURE(form);
+        const TempDir tmp(kTurkishUncreated);
+        const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+        fs::create_directories(config_dir());
+        std::ofstream(config_file(), std::ios::binary) << form;
+        const LoadedConfig loaded = load_config();
+        REQUIRE(loaded.warnings.empty());
+        REQUIRE_FALSE(loaded.config.lsp.enabled);
+        REQUIRE(save_config(loaded.config).has_value());
+        const LoadedConfig reloaded = load_config();
+        CHECK(reloaded.warnings.empty());
+        CHECK_FALSE(reloaded.config.lsp.enabled);
+        CHECK(reloaded.config.sync == loaded.config.sync);
+    }
+}
+
+TEST_CASE("save_config drops an lsp value that is not a table") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+    fs::create_directories(config_dir());
+    std::ofstream(config_file(), std::ios::binary) << "lsp = 3\n";
+    REQUIRE(save_config(load_config().config).has_value());
+    const LoadedConfig reloaded = load_config();
+    CHECK(reloaded.warnings.empty());
+    CHECK(reloaded.config.lsp == parse_config("").config.lsp);
+}
+
+TEST_CASE("save_config writes no lsp section when the file has none") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+    Config c = parse_config("").config;
+    c.lsp.enabled = !c.lsp.enabled;  // bellekteki değer dosyaya taşınmaz: uygulama bu bölümü düzenlemez
+    REQUIRE(save_config(c).has_value());
+    std::ifstream in(config_file(), std::ios::binary);
+    const std::string text(std::istreambuf_iterator<char>(in), {});
+    CHECK(text.find("[lsp") == std::string::npos);
+    CHECK(load_config().config.lsp == parse_config("").config.lsp);
 }

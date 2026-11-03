@@ -18,8 +18,8 @@ namespace noteapp::cli {
 
 namespace {
 
-constexpr std::array<std::string_view, 11> kReserved = {"ls",     "find", "show",   "edit",  "rm",   "mv",
-                                                        "export", "sync", "config", "query", "graph"};
+constexpr std::array<std::string_view, 13> kReserved = {
+    "ls", "find", "show", "edit", "rm", "mv", "export", "sync", "config", "query", "graph", "tags", "view"};
 
 ParsedArgs invalid(std::string key, std::vector<std::pair<std::string, std::string>> args) {
     ParsedArgs parsed;

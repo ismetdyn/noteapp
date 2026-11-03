@@ -1,7 +1,11 @@
 add_library(noteapp_gui
+    browser_rows.cpp
+    graph_layout.cpp
     gui_state.cpp
     icon_font.cpp
+    markdown_preview.cpp
     note_list_model.cpp
+    note_map.cpp
     save_dialog.cpp
     settings_page.cpp
     view.cpp)

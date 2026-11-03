@@ -2,7 +2,6 @@
 
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
-#include "search/query.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -15,7 +14,7 @@
 #include <string_view>
 #include <vector>
 
-namespace noteapp::tui {
+namespace noteapp::core {
 
 // Klasörün üst verisi. Sayaçlar alt ağacı kapsar; `subfolders` ve `notes` yalnız doğrudan çocuklardır.
 struct FolderNode {
@@ -39,7 +38,7 @@ public:
 
     FolderTree();
     // `folders` boş klasörleri de taşır; NotePath'ten geçemeyen ad atlanır (satırı kurulamazdı).
-    void rebuild(std::span<const core::NoteMeta> metas, std::span<const std::string> folders);
+    void rebuild(std::span<const NoteMeta> metas, std::span<const std::string> folders);
 
     const FolderNode* find(std::string_view folder) const;
     // Klasör senkronla ya da silmeyle gitmiş olabilir: kendisi ya da duran en yakın atası.
@@ -47,18 +46,15 @@ public:
     // Alt ağaçtaki notlar (derinden yüzeye değil, sırasız) ve klasörün kendisi dahil tüm klasörler.
     std::vector<std::size_t> notes_under(std::string_view folder) const;
     std::vector<std::string> folders_under(std::string_view folder) const;
-    // Klasörler kendi grubunda `sort`a göre; eşitlikte ad sırası.
-    std::vector<const FolderNode*> sorted_subfolders(const FolderNode& node,
-                                                     const search::SortSpec& sort) const;
 
 private:
     FolderNode& ensure(std::string_view folder);
-    void add_note(std::span<const core::NoteMeta> metas, std::size_t index);
+    void add_note(std::span<const NoteMeta> metas, std::size_t index);
 
     std::map<std::string, FolderNode, std::less<>> nodes_;
 };
 
-std::string folder_of(const core::NotePath& path);
+std::string folder_of(const NotePath& path);
 std::string parent_folder(std::string_view folder);
 std::string last_component(std::string_view path);
 // `base` altındaki adı tam yola çevirir; kökte adın kendisidir.
@@ -66,4 +62,4 @@ std::string join_folder(std::string_view base, std::string_view name);
 // `path`, `folder`ın alt ağacında mı (kök her yolu kapsar).
 bool in_folder(std::string_view path, std::string_view folder);
 
-}  // namespace noteapp::tui
+}  // namespace noteapp::core

@@ -29,10 +29,13 @@ struct InputSources {
     std::vector<std::string> names;       // "work/plan.md"
     std::vector<std::string> base_names;  // "plan.md", tekil
     std::vector<std::string> types;       // ".md", tekil
+    std::vector<std::string> tags;        // "proje/alt" (tag_key), tekil
+    std::vector<std::string> views = {};  // kayıtlı görünüm adları, ilk yazılış
 };
 using SharedInputSources = std::shared_ptr<const InputSources>;
 
-SharedInputSources build_input_sources(std::span<const core::NoteMeta> notes);
+SharedInputSources build_input_sources(std::span<const core::NoteMeta> notes,
+                                       std::span<const std::string> views = {});
 // Editörde bul: nottaki sözcükler `names` olur, öbür listeler boştur.
 SharedInputSources word_input_sources(std::vector<std::string> words);
 

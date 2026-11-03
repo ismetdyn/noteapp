@@ -20,7 +20,8 @@ struct Error {
         EditorNotFound,
         EditorFailed,
         MigrationRequired,
-        PartialCopy  // çok işlemli kopya yarıda kaldı: yazılanlar yerinde, yeni adla yinelenmez
+        PartialCopy,  // çok işlemli kopya yarıda kaldı: yazılanlar yerinde, yeni adla yinelenmez
+        InvalidQuery  // görünümün Cypher sorgusu reddedildi (bozuk, yazan, not döndürmeyen)
     };
 
     Code code{};

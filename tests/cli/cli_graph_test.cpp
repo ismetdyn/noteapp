@@ -1,4 +1,5 @@
 // Geçiş ve dışa aktarma uçtan uca (G6): gerçek `note` ikilisi, eski düzen klasörü.
+#include "core/migration.hpp"
 #include "core/note_store.hpp"
 #include "graph/graph.hpp"
 #include "support/cli_sandbox.hpp"
@@ -580,6 +581,22 @@ TEST_CASE("graph import: oversized line, huge array, bad base64, edge without a 
     CHECK(refused.err.find("Line ") != std::string::npos);
 }
 
+TEST_CASE("graph import accepts null in an unknown field and still refuses it in a known one") {
+    const Sandbox box("en");
+    const TempDir out;
+    const fs::path dump = out.path() / "d.jsonl";
+    const std::string header = "{\"k\":\"noteapp-graph\",\"v\":1}\n";
+    write_plain(dump, header + "{\"k\":\"node\",\"id\":\"00000000000000000000000000000001\",\"labels\":[],"
+                               "\"props\":{},\"extra\":null}\n");
+    CHECK(box.run({"graph", "import", utf8(dump)}).exit_code == 0);
+
+    write_plain(dump, header + "{\"k\":\"node\",\"id\":\"00000000000000000000000000000002\",\"labels\":null,"
+                               "\"props\":{}}\n");
+    const auto refused = box.run({"graph", "import", utf8(dump)});
+    CHECK(refused.exit_code == 1);
+    CHECK(refused.err.find("Line 2") != std::string::npos);
+}
+
 TEST_CASE("the status file cannot put escape sequences on the terminal") {
     const Sandbox box("en");
     const fs::path status = box.notes().parent_path() / "state" / "sync-status.toml";
@@ -655,6 +672,39 @@ TEST_CASE("names from sync are sanitized on a terminal and stay byte-exact in a 
         CHECK(terminal.find("\xC2\x9D") == std::string::npos);
     }
     CHECK(box.run({"ls"}).out.find(evil) != std::string::npos);  // boru: bayt bayt
+}
+
+TEST_CASE("bidi and zero-width characters show as U+FFFD on a terminal and stay byte-exact in a pipe") {
+    const Sandbox box("en");
+    const std::string rlo = "\xE2\x80\xAE";
+    const std::string name = "gpj" + rlo + "exe.md";
+    const std::string body = "kelime a" + rlo +
+                             "b\xE2\x80\x8B"
+                             "c \xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\n";
+    box.put(name, body);
+    const std::string marker = "\xEF\xBF\xBD";
+
+    for (const std::vector<std::string>& args :
+         {std::vector<std::string>{"ls"}, std::vector<std::string>{"show", "gpj"},
+          std::vector<std::string>{"find", "kelime"}}) {
+        CAPTURE(args.front());
+        const std::string terminal = run_in_pty(args);
+        CHECK(terminal.find(rlo) == std::string::npos);
+        CHECK(terminal.find("\xE2\x80\x8B") == std::string::npos);
+        CHECK(terminal.find(marker) != std::string::npos);
+    }
+    CHECK(run_in_pty({"ls"}).find("gpj" + marker + "exe.md") != std::string::npos);
+    const std::string shown = run_in_pty({"show", "gpj"});
+    CHECK(shown.find("a" + marker + "b" + marker + "c") != std::string::npos);
+    CHECK(shown.find("\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9") != std::string::npos);  // ZWJ kalır
+
+    // Boru: betikler ham içeriği alır.
+    CHECK(box.run({"ls"}).out.find(name) != std::string::npos);
+    CHECK(box.run({"show", "gpj"}).out == body);
+    const auto found = box.run({"find", "kelime"});
+    CHECK(found.out.find(name) != std::string::npos);
+    CHECK(found.out.find("a" + rlo + "b\xE2\x80\x8B") != std::string::npos);
+    CHECK(found.out.find(marker) == std::string::npos);
 }
 #endif
 
@@ -853,5 +903,247 @@ TEST_CASE("unreadable old trash is reported under its real .trash path") {
     const auto root = run_unprivileged(box, {"graph", "migrate"});
     CHECK_MESSAGE(root.exit_code == 1, root.err);
     CHECK(root.err.find("NOT migrated: .trash (this folder") != std::string::npos);
+}
+#endif
+
+namespace {
+
+std::size_t backup_count(const fs::path& data) {
+    std::size_t count = 0;
+    for (const auto& entry : fs::directory_iterator(data))
+        if (entry.path().filename().string().starts_with("migration-backup-"))
+            ++count;
+    return count;
+}
+
+}  // namespace
+
+TEST_CASE("a file dropped after migration: status lists it, exits 1 and hints; carriers and .git are not") {
+    const Sandbox box("en");
+    seed_old_layout(box);
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    write_plain(box.notes() / "graph" / (std::string(32, 'a') + ".oplog"), "carrier");
+    write_plain(box.notes() / ".git" / "HEAD", "ref\n");
+    const auto clean = box.run({"graph", "status"});
+    CHECK_MESSAGE(clean.exit_code == 0, clean.err);
+
+    write_plain(box.notes() / "denee.txt", "yeni\n");
+    const auto status = box.run({"graph", "status"});
+    CHECK(status.exit_code == 1);
+    CHECK(status.err.find("denee.txt") != std::string::npos);
+    CHECK(status.err.find("note graph migrate --new") != std::string::npos);
+    CHECK(status.err.find("plan.md") == std::string::npos);  // geçmiş dosya listelenmez
+    CHECK(status.err.find(".oplog") == std::string::npos);
+    CHECK(status.err.find("HEAD") == std::string::npos);
+    CHECK(status.out.find("Nothing was left out") == std::string::npos);
+    CHECK_FALSE(box.exists("denee.txt"));  // status yalnız okur
+}
+
+TEST_CASE("status does not list an old file whose migrated note was edited or renamed afterwards") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "plan.md", "plan\n");
+    write_plain(box.notes() / "tasinan.md", "tasi\n");
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    box.put("plan.md", "plan duzenlendi\n");
+    REQUIRE(box.run({"mv", "tasinan.md", "yeni-ad.md"}).exit_code == 0);
+    const auto status = box.run({"graph", "status"});
+    CHECK_MESSAGE(status.exit_code == 0, status.err);
+}
+
+TEST_CASE("migrate --new imports only the new files, keeps them, reports each and is idempotent") {
+    const Sandbox box("en");
+    seed_old_layout(box);
+
+    const auto premature = box.run({"graph", "migrate", "--new"});  // önce tam geçiş
+    CHECK(premature.exit_code == 1);
+    CHECK(premature.err.find("not migrated yet") != std::string::npos);
+    CHECK_FALSE(box.exists("plan.md"));
+
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    box.put("plan.md", "plan duzenlendi\n");
+    write_plain(box.notes() / "denee.txt", "yeni\n");
+    write_plain(box.notes() / "yeni-klasor" / "alt.md", "alt [[denee.txt]]\n");
+    const auto before = tree_of(box.notes());
+
+    const auto imported = box.run({"graph", "migrate", "--new"});
+    REQUIRE_MESSAGE(imported.exit_code == 0, imported.err);
+    CHECK(imported.out.find("denee.txt") != std::string::npos);
+    CHECK(imported.out.find("yeni-klasor/alt.md") != std::string::npos);
+    CHECK(imported.out.find("plan.md") == std::string::npos);
+    CHECK(imported.out.find("NOT deleted") != std::string::npos);
+    CHECK(tree_of(box.notes()) == before);  // dosyalar yerinde
+    CHECK(box.body("denee.txt") == "yeni\n");
+    CHECK(box.body("yeni-klasor/alt.md") == "alt [[denee.txt]]\n");
+    CHECK(box.body("plan.md") == "plan duzenlendi\n");  // düzenleme ezilmez
+    CHECK(box.run({"graph", "status"}).exit_code == 0);
+
+    const auto first = box.run({"graph", "export", "--format", "jsonl"});
+    const std::size_t backups = backup_count(box.data());
+    const auto again = box.run({"graph", "migrate", "--new"});
+    REQUIRE_MESSAGE(again.exit_code == 0, again.err);
+    CHECK(again.out.find("denee.txt") == std::string::npos);
+    CHECK(box.run({"graph", "export", "--format", "jsonl"}).out == first.out);
+    CHECK(backup_count(box.data()) == backups);  // yeni dosya yoksa yedek de yok
+    CHECK(box.run({"graph", "migrate", "--new", "--skip-failed"}).exit_code == 2);
+}
+
+TEST_CASE("an old file changed after migration becomes a conflict copy, the migrated note stays") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "plan.md", "plan\n");
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    write_plain(box.notes() / "plan.md", "degisti\n");
+
+    const auto status = box.run({"graph", "status"});
+    CHECK(status.exit_code == 1);
+    CHECK(status.err.find("plan.md") != std::string::npos);
+
+    const auto imported = box.run({"graph", "migrate", "--new"});
+    REQUIRE_MESSAGE(imported.exit_code == 0, imported.err);
+    CHECK(box.body("plan.md") == "plan\n");
+    const auto notes_of = [&] { return noteapp::core::NoteStore(box.data()).list_meta(); };
+    std::size_t copies = 0;
+    for (const noteapp::core::NoteMeta& meta : notes_of())
+        if (meta.path.string() != "plan.md") {
+            ++copies;
+            CHECK(box.body(meta.path.string()) == "degisti\n");
+            CHECK(imported.out.find(meta.path.string()) != std::string::npos);
+        }
+    CHECK(copies == 1);
+    CHECK(box.run({"graph", "status"}).exit_code == 0);
+    CHECK(box.run({"graph", "migrate", "--new"}).exit_code == 0);
+    CHECK(notes_of().size() == 2);
+}
+
+TEST_CASE("a note made in the app at the same path: same bytes is known, other bytes overwrite nothing") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "plan.md", "plan\n");
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    box.put("ayni.md", "ayni\n");
+    box.put("farkli.md", "uygulamadaki\n");
+    write_plain(box.notes() / "ayni.md", "ayni\n");
+    const auto same = box.run({"graph", "status"});
+    CHECK_MESSAGE(same.exit_code == 0, same.err);
+
+    write_plain(box.notes() / "farkli.md", "dosyadaki\n");
+    CHECK(box.run({"graph", "status"}).exit_code == 1);
+    REQUIRE(box.run({"graph", "migrate", "--new"}).exit_code == 0);
+    std::multiset<std::string> bodies;
+    for (const noteapp::core::NoteMeta& meta : noteapp::core::NoteStore(box.data()).list_meta())
+        bodies.insert(box.body(meta.path.string()));
+    CHECK(bodies.count("uygulamadaki\n") == 1);
+    CHECK(bodies.count("dosyadaki\n") == 1);
+    CHECK(box.run({"graph", "status"}).exit_code == 0);
+}
+
+TEST_CASE("new files over the limits: status names them, --new skips and records them like migrate") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "iyi.md", "iyi\n");
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    write_plain(box.notes() / "dev.bin", std::string(std::size_t{61} * 1024U * 1024U, 'x'));
+    write_plain(box.notes() / "sonra.md", "sonra\n");
+
+    const auto status = box.run({"graph", "status"});
+    CHECK(status.exit_code == 1);
+    CHECK(status.err.find("dev.bin") != std::string::npos);
+    CHECK(status.err.find("sonra.md") != std::string::npos);
+
+    const auto imported = box.run({"graph", "migrate", "--new"});
+    CHECK_MESSAGE(imported.exit_code == 0, imported.err);
+    CHECK(imported.err.find("dev.bin") != std::string::npos);
+    CHECK(box.body("sonra.md") == "sonra\n");
+    CHECK_FALSE(box.exists("dev.bin"));
+    CHECK(fs::file_size(box.notes() / "dev.bin") == std::uintmax_t{61} * 1024U * 1024U);
+
+    const auto recorded = box.run({"graph", "status"});  // kayıtlı: bir kez, eski yoldan
+    CHECK(recorded.exit_code == 1);
+    CHECK(recorded.err.find("NOT in any export") != std::string::npos);
+    CHECK(recorded.err.find("--new") == std::string::npos);
+    CHECK(box.run({"graph", "status", "--ignore-skipped"}).exit_code == 0);
+}
+
+TEST_CASE("the stray scan stops at its limits and says so, and sees the old trash too") {
+    using noteapp::core::find_stray_files;
+    const Sandbox box("en");
+    write_plain(box.notes() / "a.md", "aaaa\n");
+    write_plain(box.notes() / "b.md", "bbbb\n");
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    write_plain(box.notes() / ".trash" / "yeni.md", "cop\n");
+    const noteapp::core::NoteStore store(box.data());
+
+    const auto whole = find_stray_files(store, box.notes(), box.data());
+    REQUIRE(whole.has_value());
+    CHECK_FALSE(whole->truncated);
+    REQUIRE(whole->files.size() == 1);
+    CHECK(whole->files.front().path == ".trash/yeni.md");
+    CHECK(whole->files.front().reason == "new_file");
+
+    const auto by_entries = find_stray_files(store, box.notes(), box.data(), {.max_entries = 1});
+    REQUIRE(by_entries.has_value());
+    CHECK(by_entries->truncated);
+    const auto by_bytes = find_stray_files(store, box.notes(), box.data(), {.max_bytes = 3});
+    REQUIRE(by_bytes.has_value());
+    CHECK(by_bytes->truncated);
+    CHECK(by_bytes->files.empty());
+    std::stop_source quitting;
+    quitting.request_stop();
+    const auto stopped = find_stray_files(store, box.notes(), box.data(), {.stop = quitting.get_token()});
+    REQUIRE(stopped.has_value());
+    CHECK(stopped->truncated);
+    CHECK(stopped->files.empty());
+
+    REQUIRE(box.run({"graph", "migrate", "--new"}).exit_code == 0);
+    CHECK(note_in_trash(box.data(), "yeni.md"));
+    CHECK(box.run({"graph", "status"}).exit_code == 0);
+}
+
+TEST_CASE("a migrated note deleted or purged in the app is not stray and --new does not bring it back") {
+    using noteapp::core::NotePath;
+    const Sandbox box("en");
+    write_plain(box.notes() / "silinen.md", "sir\n");
+    write_plain(box.notes() / "atilan.md", "gizli\n");
+    write_plain(box.notes() / "kalan.md", "kalan\n");
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    write_plain(box.notes() / "sonradan.md", "sonra\n");
+    REQUIRE(box.run({"graph", "migrate", "--new"}).exit_code == 0);
+    {
+        noteapp::core::NoteStore store(box.data());
+        REQUIRE(store.remove(NotePath::parse("silinen.md").value()).has_value());
+        REQUIRE(store.trash(NotePath::parse("atilan.md").value()).has_value());
+        REQUIRE(store.purge(NotePath::parse("atilan.md").value()).has_value());
+        REQUIRE(store.remove(NotePath::parse("sonradan.md").value()).has_value());
+    }
+    const auto status = box.run({"graph", "status"});
+    CHECK_MESSAGE(status.exit_code == 0, status.err);
+
+    const auto again = box.run({"graph", "migrate", "--new"});
+    CHECK_MESSAGE(again.exit_code == 0, again.err);
+    CHECK_FALSE(box.exists("silinen.md"));
+    CHECK_FALSE(box.exists("atilan.md"));
+    CHECK_FALSE(box.exists("sonradan.md"));
+    CHECK(noteapp::core::NoteStore(box.data()).list_meta().size() == 1);
+
+    write_plain(box.notes() / "silinen.md", "sir, sonra degisti\n");  // içe alınandan farklı: yine görünür
+    const auto edited = box.run({"graph", "status"});
+    CHECK(edited.exit_code == 1);
+    CHECK(edited.err.find("silinen.md") != std::string::npos);
+#ifndef _WIN32
+    CHECK((fs::status(box.data() / "migrated-digests").permissions() & fs::perms::mask) ==
+          (fs::perms::owner_read | fs::perms::owner_write));
+#endif
+}
+
+#ifndef _WIN32
+TEST_CASE("migrated-notes-dirs is private, also when an older version left it readable") {
+    const auto mode = [](const fs::path& path) { return fs::status(path).permissions() & fs::perms::mask; };
+    const auto private_file = fs::perms::owner_read | fs::perms::owner_write;
+    const Sandbox box("en");
+    write_plain(box.notes() / "plan.md", "plan\n");
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    const fs::path marker = box.data() / "migrated-notes-dirs";
+    CHECK(mode(marker) == private_file);
+
+    fs::permissions(marker, private_file | fs::perms::group_read | fs::perms::others_read);
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    CHECK(mode(marker) == private_file);
 }
 #endif

@@ -5,6 +5,7 @@
 #include "tui/completion.hpp"
 #include "tui/editor_session.hpp"
 #include "tui/input_line.hpp"
+#include "tui/input_view.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/save_dialog.hpp"
 #include "tui/tui_state.hpp"
@@ -716,6 +717,20 @@ TEST_CASE("the ghost is dim text after the cursor and leaves the typed text plai
     REQUIRE(typed_at.has_value());
     CHECK(screen.PixelAt(*ghost_at, y).dim);
     CHECK_FALSE(screen.PixelAt(*typed_at, y).dim);
+}
+
+TEST_CASE("input width counts unsafe characters as the replacement cell that is drawn") {
+    // Ham metin ölçülüp terminal_safe metin çizilirse fark ipucu sütununu kaydırır: U+202E, ESC ve bozuk
+    // bayt U+FFFD (1 hücre) olarak çizilir.
+    for (const std::string unsafe : {"\xE2\x80\xAE", "\x1B", "\x80"}) {
+        CAPTURE(unsafe);
+        InputLine line(InputKind::Path);
+        line.set_text("a" + unsafe + "b" + unsafe, 1 + unsafe.size());  // imleçten önce ve sonra birer tane
+        const tui::InputCells result = tui::input_text_cells(line, {}, {}, 40);
+        const ftxui::Element drawn = ftxui::hbox(result.cells);
+        drawn->ComputeRequirement();
+        CHECK(result.width == drawn->requirement().min_x - 1);  // imleç `▏` genişliğe dahil değil
+    }
 }
 
 TEST_CASE("open popups are drawn with the filter and items") {

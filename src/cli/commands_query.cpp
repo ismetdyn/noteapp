@@ -1,8 +1,8 @@
 // note query: Cypher sorgusu, tablo veya JSON çıktı (SPEC-cli "Graph sorgusu").
 #include "cli/commands.hpp"
 #include "cli/highlight.hpp"
-#include "cli/json_text.hpp"
 #include "core/i18n.hpp"
+#include "core/json_text.hpp"
 #include "core/paths.hpp"
 #include "core/text.hpp"
 #include "graph/graph.hpp"
@@ -22,6 +22,9 @@
 #include <vector>
 
 namespace noteapp::cli {
+
+using core::append_json_string;
+using core::base64_of;
 
 namespace {
 
@@ -341,6 +344,10 @@ std::expected<graph::Graph, int> open_database(bool write) {
 
 }  // namespace
 
+std::string query_output(const graph::QueryResult& result, bool json) {
+    return json ? to_json(result) : to_table(result);
+}
+
 int run_query(const ParsedArgs& args) {
     auto parsed = parse_query_args(args.rest);
     if (!parsed)
@@ -352,7 +359,7 @@ int run_query(const ParsedArgs& args) {
     const auto result = database->query(parsed->positional.front(), parsed->params, mode);
     if (!result)
         return report(result.error());
-    std::cout << (parsed->json ? to_json(*result) : to_table(*result));
+    std::cout << query_output(*result, parsed->json);
     return kExitOk;
 }
 

@@ -438,15 +438,53 @@
 - [x] T77: G7 bulguları, atlanan dosya kaydı, perf testi, Windows DLL kontrolü, statik analiz. Kanıt: `ctest` 12/12, e2e 258/0, tidy `src` 0 (`db435b9`).
 - [x] T86: Klasör kopyası, `install-local.sh`, atlanan dosya temizleme. Kanıt: `ctest` 12/12 (`03ee16b`).
 - [x] T87: Geçişte okunamayan dizin raporu, `.trash`, README, sanitizer kurulumu. Kanıt: `ctest` 12/12, Wine `note_graph` exit 0, ASan `cli`+`note_graph` exit 0 (`9ac5cc9`).
-- [ ] T78: Bağlantılar paneli: gelen, giden `[[bağlantı]]`, `RELATED_TO`, etiketler; TUI ve GUI. Depends: `main`.
-- [ ] T79: TUI komut paleti (`:`). Depends: T78.
-- [ ] T80: Etiket: `#etiket` metinden, `tag:` arama argümanı. Depends: T79.
-- [ ] T81: Kayıtlı Cypher görünümleri. Depends: T80.
-- [ ] T82: GUI'yi TUI ile eşitle: ağaç liste, sağ bilgi, sıra no, Markdown önizleme. Depends: T81.
-- [ ] T83: TUI `main` fonksiyonunu böl (CCN 79). Depends: T82.
-- [ ] T59: LSP istemcisi, varsayılan kapalı. Depends: graph.
+- [x] T78: Bağlantılar paneli, `L` ilişki, `b` odak; GUI paneli. Kanıt: `ctest` 12/12, e2e 262/0 (`01e334a`).
+- [x] T88: Geçişten sonra `notes_dir`'e bırakılan dosyalar: `status` raporu, `migrate --new`; silinen not geri gelmez (`migrated-digests`). Kanıt: `ctest` 12/12 exit 0, RED `cli` exit 8 (`17e96a5`); review bulgusu kapandı.
+- [x] T79: TUI komut paleti (`:`). Kanıt: `ctest` 12/12 exit 0, e2e 276/0, RED `command_palette` (`b9886b8`); review: bulgu yok. Açık şüphe: `input_view.cpp:81-94` genişliği ham metinle ölçüyor, bidi'li adda ipucu kayabilir (kozmetik, T83'te test).
+- [x] T89: GUI tek gezgin: klasör+not tek ağaç, Ağaç/Ayrıntı görünüm seçici, tüm eylemler üst araç çubuğunda. Kanıt: `check-fedora` 12/12 exit 0, `gui_tests` 246/246, RED `browser_test` SIGABRT (`1dfa805`); review sürüyor.
+- [x] T80: Etiket: `#etiket` metinden, `tag:` arama argümanı; GUI arama argümanları; bağlantı paneli senkron düzeltmesi. Kanıt: birleşik `check-fedora` 12/12 exit 0, e2e 276/0, GUI ASan/UBSan exit 0 (`166c264`); iki review bulguları kapandı.
+- [x] T81: Kayıtlı Cypher görünümleri (salt okunur), `view:` argümanı, TUI paleti. Kanıt: `ctest` 12/12, e2e 276/0, RED 6 test; security review F1 (önbelleksiz hata, donma) `21ac35f` ile kapandı.
+- [x] T82: GUI'yi TUI ile eşitle: Bilgi paneli, sıra no, Markdown önizleme. Kanıt: konteyner `ctest` 12/12, RED 4 test dosyası, ekran görüntüleri (`b34223a`); review bulguları (uzun satır donması, başlık gizlenmesi) `caea804` ile kapandı, birleşik `check-fedora` 12/12 exit 0.
+- [~] T90: emekli → P serisi (kullanıcı 2026-11-03: TUI ve GUI birebir aynı özellikler, ikisi de ortak çekirdeğin ince arayüzü).
+- [ ] P: Arayüz eşitliği — plan [plan-parity.md](plan-parity.md). Envanter: 98 özellik, 53 TUI-ağırlıklı / 34 GUI-ağırlıklı fark, 16 yinelenen mantık.
+  - [ ] A0: `src/app` iskeleti + basit kopyalar.
+  - [ ] A8: FTXUI'siz editör yığını `src/edit`.
+  - [ ] A1–A7: ortak modüller (commands, listing, trash, move/copy/link, document, settings/sync/prefs, preview). Depends: A0.
+  - [ ] R1–R4: TUI ve GUI ortak modülleri kullanır, davranış kararları 1–7. Depends: A1–A7.
+  - [ ] G0: GUI dosyalarını panellere böl. Depends: R3–R4.
+  - [ ] G1–G4: GUI eksik özellikler. Depends: G0.
+  - [ ] G5a–c: GUI editör widget'ı, sözdizimi/yazım/tamamlama, LSP. Depends: A8, G0.
+  - [ ] T1–T4: TUI otomatik kayıt/PDF/bağlantı testi, wiki takibi, sekmeler, harita. Depends: R1–R2.
+- [x] T83: TUI `main` fonksiyonunu böl. Kanıt: lizard CCN 78 → en çok 15, birleşik `check-fedora` 12/12 exit 0, e2e 276/0 (`108facc`); review: davranış farkı yok. Açık (düşük): `input_view.cpp:81` `tail_cells` ham genişlikle keser, ESC'li adda satır taşar.
+- [x] T59: LSP istemcisi (T59a–f bitti; kullanıcı kararıyla varsayılan açık). Plan: [plan-lsp.md](plan-lsp.md) (onaylı: diagnostics+completion, Windows, geçici dizin).
+  - [x] T59a: JSON core'a + RFC 8259, LSP framing/protokol. Kanıt: `ctest` 12/12, Windows derleme exit 0, `fuzz_lsp` 8.1M girdi 0 çökme, RED 22+59 assertion (`b5f6b83`); security review: fuzz kapsamı (yanlış yeşil, 182→6682 sayaç) ve O(n²) tampon `21ee5be` ile kapandı; 5 dk fuzz 17.2M girdi 0 artifact.
+  - [x] T59d: Windows pipe'lı `ChildProcess` (overlapped pipe, job object). Kanıt: Linux `ctest` 12/12, Wine `ctest` 11/11, Wine 10/10 süreç testi, RED Wine 9 hata (`25a6217`); review: bulgu yok, `spawn_detached` bayrakları korunmuş. Elle: gerçek Windows'ta 10 test.
+  - [x] T59b: `LspClient` + sahte LSP sunucusu. Kanıt: birleşik Linux `ctest` 13/13, Wine `ctest` 12/12 (`cc74a75`); security review 2 Sev-2 + 1 Sev-3 `ca63ac4` ile düzeltildi (`lsp_client` 20/20 x3, ASan temiz), yeniden doğrulama: kapandı; 2 Sev-3 (kapanış süresi, UTF-16 O(n·m)) `6642085` ile düzeltildi, `lsp_client` 20/20 tekrar, ASan temiz. Kapanış bulgusu için RED kurulamadı (mikrosaniyelik yarış penceresi).
+  - [x] T59c: config, çalışma alanı yansıtma, TUI tanı + completion. Kanıt: `ctest` 13/13, e2e 276/0, ASan 3/3, Wine 12/12, tuş başına en kötü 7,37 ms (Release, 2 MiB) (`308f1b8`); security review 5 madde + varsayılan açık LSP (python, c/cpp, sh, md, lua, html, css, dockerfile, sql) ve dil tablosu `1927496` ile: `ctest` 13/13, e2e 276/0, ASan 3/3; Wine 11/12 (perf `folder copy` 201 ms / sınır 200 ms, LSP dışı). İkinci security review: Sev-2 inline `lsp = {…}` kayıtta `sync.lsp` oluyor, Sev-3 göreli PATH (yalnız LSP araması için düzeltilecek) → T59e'ye verildi.
+  - [x] T59e: Riskli sunucular sertleştirilerek varsayılan açık (rust-analyzer, gopls, jdtls, ts, yaml, json, taplo, htmx-lsp), dil başına çoklu sunucu, ayar dosyası yansıtma yasağı (rust-analyzer.toml, node_modules/…). Kanıt: `ctest` 13/13, ASan 3/3, e2e 276/0, Wine 11/12 (perf `folder copy` 222 ms → T93) (`74d09b9`); security review: 2 Sev-2 → T59f.
+  - [x] T59f: Unicode katlama + dosya sistemi eşdeğerlik kontrolü, uzak dosya referanslı not sunucuya gitmez, sunucu cwd `state_dir/lsp` + Windows `NoDefaultCurrentDirectoryInExePath`, rust-analyzer `checkOnSave` nesne biçimi, ilk eşitleme kapısı. Kanıt: core/tui/lsp_client/tui_pty 4/4, ASan 3/3, e2e 284/0, Wine lsp_client+gui geçti; Wine perf 10 MiB editör zamanlamaları ~50 ms sınırda (yük altında, T93) (`611abbf`). Security re-review: 1,3,4,5 kapandı; uzak referans tespiti atlatılabiliyor (F1 biçimler, F2 önbellek, F3 kapsam) → T59g.
+  - [x] T59g: yeniden açılan not tampon kuşağıyla yeniden taranıyor; Windows'ta genel ağ yolu kuralı (ham + JSON/yüzde çözülmüş), per-key dedektör kaldırıldı; README düzeltildi. Kanıt: RED 16 atlatma + yeniden açma, `lsp_client` 68/68, `tui` 807/807, Wine 6/6 (`a3b3f01`).
+- [ ] L: Sabit sınır yok — plan [plan-limits.md](plan-limits.md) (kullanıcı isteği 2026-11-03).
+  - [ ] L0: config sözleşmesi `[limits]`, `0 = sınırsız`, tek sahip.
+  - [ ] L1: GUI (sekme, harita, önizleme). Depends: L0.
+  - [ ] L2: TUI (görünüm, renklendirme, tamamlama, geçmiş). Depends: L0.
+  - [ ] L3: core/arama (bağlantı/etiket bölme, sonuçlar). Depends: L0.
+  - [ ] L4: graph/sync/sorgu limitleri config, görünüm/kullanıcı profili. Depends: L0.
+  - [ ] L4b: büyük not için parçalı oplog değeri — kullanıcı onayladı 2026-11-03 (eski sürüm cihaz senkronu durdurup güncelleme ister, veri kaybı yok). Depends: L0, L4.
+  - [ ] L5: LSP limitleri config. Depends: L0, T59f.
+  - [ ] L6: çıplak sayı taraması. Depends: L1–L5.
+- [ ] Kullanıcı kararı: `find_program` göreli PATH girdilerini (`.`, `node_modules/.bin`) editör/git/pano için de atlasın mı? Şimdilik yalnız LSP araması atlıyor.
+- [x] T91: Editör notun kendi bidi karakterlerini (U+202E vb.) terminale ham basıyor (Trojan Source tarzı yanıltma, senkronla gelen notta). T59c sırasında görüldü. Kanıt: `ctest` 13/13, e2e 280/0 (`693cc89`); ek iş: ZWJ/ZWNJ listeden çıkar, CLI tty çıktısını temizle (`bbdee5b`, `ctest` 13/13, e2e 284/0). Security review: F1-F3 TUI sink'lerinde `terminal_safe` eksik (çıkış notu, editör bilgi çubuğu/modal/prompt, durum satırı), liste genişletme (Hangul doldurucular, U+2061-2064, U+180E) → T91b sırada.
+- [x] T91b: T91 review düzeltmeleri: çıkış notu, editör çubukları/modal/prompt, durum satırı sink'lerinde `terminal_safe`; liste 24 öğe, ön filtre listeden derleme zamanında. Kanıt: `ctest` 13/13, e2e 284/0, RED her sink için (`a80764d`).
+- [ ] Bilinen (düşük): Windows mintty/MSYS terminali TTY sayılmıyor, `note show` ham basıyor (`commands.cpp:75`).
+- [ ] Elle (kullanıcı): gerçek dil sunucusuyla (pyright/clangd) LSP denemesi.
 - [~] T56: LadybugDB denemesi iptal: kullanıcı dış bağımlılık yerine kendi küçük graph depomuzu istedi (2026-11-01).
-- [ ] T84: GUI'de grafik not haritası. Depends: T59.
-- [ ] T85: Sekmeler. Depends: T84.
+- [x] T84: GUI'de not haritası (Harita görünümü, komşuluk/tüm çizge/etiketler). Kanıt: Debug `ctest` 13/13, `gui_tests` 298/298, Release 2.000 düğüm/4.999 kenar kare 17–20 ms, RED 10+14 doğrulama (`0dc47c5`); review: bulgu yok; refactor diff'leri (`09a6ab8`, `449aa90`) lead kontrolüyle saf çıkarma.
+- [x] T92: Hedeften önce yazılan `[[bağlantı]]` hedef oluşunca `LINKS_TO` alıyor (oluşturma/kopya/taşıma/geri alma/senkron). Kanıt: `ctest` 13/13, RED 8 test, Release ölçüm (`f9510e4`); review: bulgu yok, 2 düşük hipotez → T92b.
+- [x] T92b: kullanıcı işlemleri op tavanıyla reddedilmiyor (link_appeared, delete_node, remove/purge/empty_trash, klasör silme/kopya, import, view silme, çakışma çözümü partili); `[tuning] graph_batch_ops`; çakışma kazananı/kopyası `update_links`. Kanıt: `ctest` 13/13, RED 9 test, `note_graph_tests` 96/96 (`46070f8`); Release perf yük altında oynak (temiz ölçüm T93'te). Kalan 4 'ikisi de' sınır → plan-limits lead kararları; review: 1 orta bulgu (`delete_node` sınırda klasör kenarını erken siler) → T92c.
+- [x] T92c: kısmi silme klasör kenarlarını son geçişe bırakıyor; remove/purge NodeId ile devam; H2 SPEC'e not. Kanıt: RED 2 test/12 assertion, `note_graph_tests` 98/98, `core_tests` 213/213 (`0913b15`); review: 1 orta (klasör düğümü bütün silmede tavan; çöpteki notlar IN_FOLDER tutuyor) → T92d.
+- [x] T92d: klasöre gelen kenarlar da partili; yalnız düğümün kendi klasör kenarı son geçişe kalır. Kanıt: RED (20 çöp notlu klasör, bütçe 8), `note_graph_tests` 99/99, `core_tests` 213/213 (`275d792`). T92e: klasör döngüsü `again`'de durur (`4068d5c`, RED + 100/100, 213/213).
+- [ ] T93: Test kararlılığı: harita perf testini `tests/perf`'e (RUN_SERIAL) taşı; Wine'da `folder copy perf` 201 ms / sınır 200 ms nedeni.
+- [x] T85: GUI editör sekmeleri. Kanıt: `ctest` 13/13, `gui_tests` 314/314, RED 6/6 (`089e928`); review düzeltmeleri `f5d70b8` (`gui_tests` 320/320, RED 3), yeniden review: bulgu yok. Kullanıcıya bildir: taslaktan başka nota geçince kayıt sorusu yok (taslak sekmesinde kalır), düzenlenen sekme 'korunur'.
 - [ ] Elle (kullanıcı): Fedora KDE'de gerçek pencere, Türkçe giriş, koyu tema, PDF göz kontrolü.
 - [ ] Elle (kullanıcı): Windows 11'de çapraz derlenmiş `.exe`, Türkçe IME, koyu tema, pano.

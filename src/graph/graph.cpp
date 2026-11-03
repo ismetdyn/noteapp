@@ -642,4 +642,8 @@ Graph::query(std::string_view cypher, const Params& params, QueryMode mode,
     return detail::cypher::run_query(*this, *store_, cypher, params, mode, limits);
 }
 
+Result<void> check_query(std::string_view cypher, QueryMode mode, const Params& params) {
+    return detail::cypher::check_query(cypher, params, mode);
+}
+
 }  // namespace noteapp::graph

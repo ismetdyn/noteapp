@@ -59,6 +59,189 @@ void settle_after_undo(LayoutScene& scene) {
 
 }  // namespace
 
+// Gezgin görünümleri tek başına da üretilir (`-tc="renders the browser views*"`): tam set uzun sürer.
+TEST_CASE("renders the browser views to PNG") {
+    const char* directory = std::getenv("NOTEAPP_SHOT_DIR");
+    REQUIRE(directory != nullptr);
+    std::filesystem::create_directories(directory);
+    struct Shot {
+        const char* size_name;
+        int width;
+        int height;
+        float scale;
+        bool dark;
+    };
+    for (const Shot& shot :
+         {Shot{"1000x650", 1000, 650, 1.0F, false}, Shot{"1000x650", 1000, 650, 1.0F, true},
+          Shot{"min", 1, 1, 1.0F, false}, Shot{"min", 1, 1, 2.0F, false}}) {
+        LayoutScene scene(shot.width, shot.height, shot.scale);
+        if (shot.dark)
+            apply_dark_theme();
+        // Eski tarihli notlar: Ayrıntılar'da kısa biçimin en geniş hâli ("2025-...") de görünsün.
+        constexpr int kMinutesPerDay = 24 * 60;
+        for (const auto& [note, age_days] :
+             {std::pair{"projeler/plan.md", 30}, std::pair{"projeler/arşiv/eski.md", 400},
+              std::pair{"günlük/2026-11-02.md", 0}, std::pair{"eski-not.md", 400}})
+            scene.fixture.add_note(note, "x\n", age_days * kMinutesPerDay + 3);
+        scene.state->rescan();
+        gui_test::settle(*scene.view);
+        const auto file = [&](const std::string& what) {
+            return std::filesystem::path(directory) / std::format("{}-{}-s{:.2f}-{}.png", what,
+                                                                  shot.size_name, shot.scale,
+                                                                  shot.dark ? "dark" : "light");
+        };
+        save_png(file("tree"));
+        scene.state->select_folder("projeler");
+        scene.state->set_expanded("projeler", true);
+        gui_test::settle(*scene.view);
+        save_png(file("tree-folder"));
+        scene.state->set_browser_view(noteapp::gui::BrowserView::Details);
+        scene.state->enter_folder("");
+        gui_test::settle(*scene.view);
+        save_png(file("details"));
+        scene.state->enter_folder("projeler");
+        gui_test::settle(*scene.view);
+        save_png(file("details-folder"));
+    }
+}
+
+// T82 görünümleri tek başına (`-tc="renders the info*"`): bilgi paneli açık, sıra no açık (Ağaç, Ayrıntılar),
+// örnek md notunun önizlemesi.
+TEST_CASE("renders the info panel, row numbers and the markdown preview to PNG") {
+    const char* directory = std::getenv("NOTEAPP_SHOT_DIR");
+    REQUIRE(directory != nullptr);
+    std::filesystem::create_directories(directory);
+    constexpr char kSample[] =
+        "# Toplantı notları\n\n"
+        "Gündem *kısa* tutuldu, **kararlar** aşağıda; ayrıntı için [[kısa]] notuna bakın.\n\n"
+        "## Kararlar\n\n"
+        "1. Bütçe onaylandı\n2. Takvim `2026-12` olarak kaldı\n   - alt madde: izinler\n\n"
+        "- [x] tutanak gönderildi\n- [ ] sunum hazırlanacak\n\n"
+        "> Not: bir sonraki toplantıda [[silinmiş-eski-not]] konusu açılacak.\n\n"
+        "```python\ndef toplam(liste):\n    return sum(liste)  # çok uzun bir açıklama satırı yatay kayar\n```\n\n"
+        "| Şehir | Katılımcı |\n|---|---|\n| İzmir | 12 |\n| Ankara | 7 |\n\n"
+        "---\n\n"
+        "Kaynak: [site](https://ornek.example/tutanak) ve ![logo](logo.png).\n";
+    struct Shot {
+        const char* size_name;
+        int width;
+        int height;
+        float scale;
+        bool dark;
+    };
+    for (const Shot& shot :
+         {Shot{"1000x650", 1000, 650, 1.0F, false}, Shot{"1000x650", 1000, 650, 1.0F, true},
+          Shot{"min", 1, 1, 1.0F, false}, Shot{"min", 1, 1, 2.0F, false}}) {
+        LayoutScene scene(shot.width, shot.height, shot.scale);
+        if (shot.dark)
+            apply_dark_theme();
+        scene.fixture.add_note("toplantı/örnek.md", kSample, 1);
+        scene.state->rescan();
+        const auto file = [&](const std::string& what) {
+            return std::filesystem::path(directory) / std::format("{}-{}-s{:.2f}-{}.png", what, shot.size_name,
+                                                                  shot.scale, shot.dark ? "dark" : "light");
+        };
+        scene.state->set_info_open(true);
+        gui_test::settle(*scene.view);
+        save_png(file("info-open"));
+
+        scene.state->set_row_numbers(true);
+        scene.state->set_expanded("toplantı", true);
+        gui_test::settle(*scene.view);
+        save_png(file("row-numbers-tree"));
+        scene.state->set_browser_view(noteapp::gui::BrowserView::Details);
+        scene.state->enter_folder("");
+        gui_test::settle(*scene.view);
+        save_png(file("row-numbers-details"));
+
+        scene.state->set_row_numbers(false);
+        scene.state->set_info_open(false);
+        scene.state->set_browser_view(noteapp::gui::BrowserView::Tree);
+        scene.state->open_note(*noteapp::core::NotePath::parse("toplantı/örnek.md"));
+        scene.state->toggle_preview();
+        gui_test::settle(*scene.view);
+        REQUIRE(scene.state->showing_preview());
+        save_png(file("preview"));
+    }
+}
+
+// T84 haritası tek başına (`-tc="renders the map*"`): çevre (derinlik 2), tüm çizge etiketlerle, aramada
+// vurgu.
+TEST_CASE("renders the map view to PNG") {
+    const char* directory = std::getenv("NOTEAPP_SHOT_DIR");
+    REQUIRE(directory != nullptr);
+    std::filesystem::create_directories(directory);
+    struct Shot {
+        const char* size_name;
+        int width;
+        int height;
+        float scale;
+        bool dark;
+    };
+    for (const Shot& shot :
+         {Shot{"1000x650", 1000, 650, 1.0F, false}, Shot{"1000x650", 1000, 650, 1.0F, true},
+          Shot{"min", 1, 1, 1.0F, false}, Shot{"min", 1, 1, 2.0F, false}}) {
+        LayoutScene scene(shot.width, shot.height, shot.scale);
+        if (shot.dark)
+            apply_dark_theme();
+        // Hedef kaynaktan önce: kenar yazmada kurulur (SPEC-graph "Sonradan oluşan hedef").
+        for (const auto& [note, body] :
+             {std::pair{"proje/takvim.md", "#proje"}, std::pair{"proje/bütçe.md", "[[proje/takvim]] #proje"},
+              std::pair{"proje/plan.md", "[[kısa]] [[proje/bütçe]] [[proje/takvim]] #proje #iş"},
+              std::pair{"günlük/2026-11-02.md", "[[proje/plan]] [[kısa]] #günlük"},
+              std::pair{"fikirler.txt", "[[proje/plan]] [[olmayan-not]]"}, std::pair{"yalnız.md", "bağsız"}})
+            scene.fixture.add_note(note, std::string(body) + "\n", 1);
+        scene.state->rescan();
+        scene.state->open_note(*noteapp::core::NotePath::parse("proje/plan.md"));
+        const auto file = [&](const std::string& what) {
+            return std::filesystem::path(directory) / std::format("{}-{}-s{:.2f}-{}.png", what,
+                                                                  shot.size_name, shot.scale,
+                                                                  shot.dark ? "dark" : "light");
+        };
+        scene.show_map_view();
+        save_png(file("map-neighbourhood"));
+        scene.state->set_map_options(noteapp::gui::MapOptions{.whole_graph = true, .show_tags = true});
+        scene.show_map_view();
+        save_png(file("map-whole-tags"));
+        scene.state->set_query("tag:proje");
+        gui_test::settle(*scene.view);
+        save_png(file("map-search"));
+    }
+}
+
+// T85 sekmeleri tek başına (`-tc="renders the editor tabs*"`): üç sekme, kayan çok sekme; ilki iğneli, biri
+// taslak, yeni sekmede açılanlar korunur (düz yazı), sonradan değişecek olan eğik.
+TEST_CASE("renders the editor tabs to PNG") {
+    const char* directory = std::getenv("NOTEAPP_SHOT_DIR");
+    REQUIRE(directory != nullptr);
+    std::filesystem::create_directories(directory);
+    struct Shot {
+        const char* size_name;
+        int width;
+        int height;
+        float scale;
+        bool dark;
+    };
+    constexpr int kFewTabs = 3;
+    constexpr int kManyTabs = 20;
+    for (const Shot& shot :
+         {Shot{"1000x650", 1000, 650, 1.0F, false}, Shot{"1000x650", 1000, 650, 1.0F, true},
+          Shot{"min", 1, 1, 1.0F, false}, Shot{"min", 1, 1, 2.0F, false}}) {
+        for (const int count : {kFewTabs, kManyTabs}) {
+            LayoutScene scene(shot.width, shot.height, shot.scale);
+            if (shot.dark)
+                apply_dark_theme();
+            scene.open_tabs(count);
+            // Sonuncuyu sekme çubuğundan değil ağaçtan aç: korunmayan sekme eğik görünsün.
+            scene.state->open_note(*noteapp::core::NotePath::parse("kısa.md"));
+            scene.settle_tab_scroll();
+            save_png(std::filesystem::path(directory) / std::format("tabs-{}-{}-s{:.2f}-{}.png", count,
+                                                                    shot.size_name, shot.scale,
+                                                                    shot.dark ? "dark" : "light"));
+        }
+    }
+}
+
 TEST_CASE("renders every layout scene to PNG") {
     const char* directory = std::getenv("NOTEAPP_SHOT_DIR");
     REQUIRE(directory != nullptr);

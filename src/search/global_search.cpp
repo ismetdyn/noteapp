@@ -136,8 +136,8 @@ void sort_explicitly(std::vector<Row>& rows, const SortSpec& sort, std::span<con
 
 std::expected<std::vector<GlobalHit>, QueryError>
 search_all(std::string_view query, std::span<const core::NoteMeta> notes, const ContentIndex& content_index,
-           std::size_t limit, std::chrono::system_clock::time_point now) {
-    const auto parsed = parse_query(query);
+           std::size_t limit, std::chrono::system_clock::time_point now, const ViewLookup& views) {
+    const auto parsed = parse_query(query, views);
     if (!parsed)
         return std::unexpected(parsed.error());
     const std::vector<std::size_t> allowed = apply(parsed->filters, std::nullopt, notes, now);

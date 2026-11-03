@@ -1,5 +1,6 @@
 #include "tui/tui_state.hpp"
 
+#include "core/note_views.hpp"
 #include "search/fuzzy.hpp"
 #include "search/query.hpp"
 
@@ -27,12 +28,6 @@ bool is_printable(std::string_view text) {
 // İçerik modunda önizleme ilk eşleşmeye kayar; üstte birkaç satır bağlam kalır.
 constexpr std::size_t kHitContextLines = 2;
 
-// Listede Ctrl/ok karşılığı olan harfler: aynı yoldan geçip aynı davransınlar.
-constexpr std::pair<std::string_view, Key> kListLetterKeys[] = {
-    {"k", Key::Up},    {"j", Key::Down},  {"l", Key::Right}, {"h", Key::Left}, {"n", Key::CtrlO},
-    {"d", Key::CtrlD}, {"r", Key::CtrlR}, {"s", Key::CtrlS}, {"?", Key::F1},   {"e", Key::Enter},
-};
-
 std::size_t initial_scroll(const Row& row) {
     if (row.hits.empty() || row.hits.front().line == 0)
         return 0;
@@ -41,7 +36,6 @@ std::size_t initial_scroll(const Row& row) {
 }
 
 constexpr int kListColumnCount = 7;
-constexpr int kBigScrollLines = 5;  // REVIEW `J` `K`
 // Bu aralıktan sık gelen aynı yön tuşu tekrardır; daha uzun duraklama hızlanmayı sıfırlar.
 constexpr auto kKeyRepeatGap = std::chrono::milliseconds(120);
 constexpr int kRepeatsPerStep = 8;  // adım her bu kadar tekrarda bir büyür
@@ -49,35 +43,6 @@ constexpr int kMaxStepPageDivisor = 3;
 
 // Bu aralıkta aynı klasör satırına ikinci tıklama içeri girer.
 constexpr auto kDoubleClickGap = std::chrono::milliseconds(400);
-
-// Seçili satır ister (klasör de olur); boş listede etkisiz.
-constexpr std::pair<std::string_view, Intent> kListSelectionLetters[] = {
-    {"c", Intent::CopyNote},
-    {"D", Intent::DeleteSelected},
-    {"m", Intent::MoveTo},
-};
-constexpr std::pair<std::string_view, Intent> kListPlainLetters[] = {
-    {"u", Intent::RestoreLast}, {"T", Intent::ToggleTrash},  {"a", Intent::NewRow},
-    {"q", Intent::Quit},        {",", Intent::ShowSettings},
-};
-constexpr std::pair<std::string_view, Intent> kPreviewSelectionLetters[] = {
-    {"e", Intent::EnterEditor},
-    {"E", Intent::OpenSelected},
-    {"c", Intent::CopyNote},
-};
-constexpr std::pair<std::string_view, Intent> kTrashLetters[] = {
-    {"u", Intent::RestoreSelected},
-    {"D", Intent::DeleteSelected},
-    {"E", Intent::EmptyTrash},
-};
-
-// REVIEW'da satır adımları.
-constexpr std::pair<std::string_view, int> kPreviewScrollLetters[] = {
-    {"j", 1},
-    {"k", -1},
-    {"J", kBigScrollLines},
-    {"K", -kBigScrollLines},
-};
 
 int page_direction(Key key) {
     return key == Key::PageUp ? -1 : 1;
@@ -162,36 +127,21 @@ void TuiState::begin_yank() {
     marks_.clear();
 }
 
-std::optional<Intent> TuiState::handle_mark_letter(std::string_view text) {
-    if (text == "x")
-        toggle_mark();
-    else if (text == "X")
-        clear_marks();
-    else if (text == "y")
-        begin_yank();
-    else if (text == "p")
-        return Intent::Paste;
-    else
-        return std::nullopt;
-    return Intent::None;
+// `g` öneki: süre yok; bilinmeyen tuş iptal eder ve başka iş yapmaz. `gg` `gh` `gt` tablodadır.
+Intent TuiState::handle_prefix(Key key, std::string_view text) {
+    const std::optional<unsigned> context = command_context();
+    if (key != Key::Char || !context)
+        return Intent::None;
+    const Command* command = bound_command(*context, Key::Char, "g" + std::string(text));
+    return command ? run_bound(*command) : Intent::None;
 }
 
-// `g` öneki: süre yok; bilinmeyen tuş iptal eder ve başka iş yapmaz.
-Intent TuiState::handle_prefix(Key key, std::string_view text) {
-    if (key != Key::Char)
-        return Intent::None;
-    if (text == "t")
-        return Intent::ToggleTrash;
-    if (text == "g") {
-        select_index(0);
-    } else if (text == "h") {
-        if (trash_view_)
-            leave_trash();
-        search_line_.clear();
-        mode_ = Mode::Name;
-        go_to_folder({});
-    }
-    return Intent::None;
+void TuiState::go_root() {
+    if (trash_view_)
+        leave_trash();
+    search_line_.clear();
+    mode_ = Mode::Name;
+    go_to_folder({});
 }
 
 bool same_listing(std::span<const core::NoteInfo> a, std::span<const core::NoteInfo> b) {
@@ -200,8 +150,29 @@ bool same_listing(std::span<const core::NoteInfo> a, std::span<const core::NoteI
     });
 }
 
+// Okunamayan görünüm listesi notları gizlemez: liste boş kalır, `view:` hatayı kendisi söyler.
+std::vector<std::string> view_names(const core::NoteStore& store) {
+    std::vector<std::string> names;
+    if (const auto views = core::list_views(store))
+        for (const core::SavedView& view : *views)
+            names.push_back(view.name);
+    return names;
+}
+
+StoreScan scan_store(const core::NoteStore& store) {
+    const auto trash = store.list_trash();
+    return StoreScan{store.list(), trash ? trash->size() : 0, store.folders(), store.data_version(),
+                     view_names(store)};
+}
+
+bool same_scan(const StoreScan& a, const StoreScan& b) {
+    return same_listing(a.notes, b.notes) && a.trash == b.trash && a.folders == b.folders &&
+           a.graph_version == b.graph_version;
+}
+
 bool right_pane_focused(Focus focus) {
-    return focus == Focus::Preview || focus == Focus::PreviewFind || focus == Focus::Editor;
+    return focus == Focus::Preview || focus == Focus::PreviewFind || focus == Focus::Editor ||
+           focus == Focus::Links;
 }
 
 bool passes_to_terminal(Key key, Focus focus) {
@@ -216,6 +187,13 @@ void TuiState::set_notes(std::vector<core::NoteInfo> notes) {
     notes_ = std::move(notes);
     rebuild_metas();
     refilter(false);
+}
+
+void TuiState::set_views(std::vector<std::string> names) {
+    if (names == views_)
+        return;
+    views_ = std::move(names);
+    input_sources_.reset();
 }
 
 void TuiState::set_folders(std::vector<std::string> folders) {
@@ -244,7 +222,8 @@ void TuiState::rebuild_metas() {
                             .created_at = note.created_at,
                             .origin = note.origin,
                             .local_seq = note.local_seq,
-                            .created_local_seq = note.created_local_seq};
+                            .created_local_seq = note.created_local_seq,
+                            .tags = note.tags};
         if (const auto found = sync_states_.find(note.path); found != sync_states_.end())
             meta.sync_status = found->second;
         meta_index_.emplace(note.path, metas_.size());
@@ -261,7 +240,7 @@ void TuiState::set_sync_states(std::map<core::NotePath, core::SyncState> states)
 
 const SharedInputSources& TuiState::input_sources() const {
     if (!input_sources_)
-        input_sources_ = build_input_sources(metas_);
+        input_sources_ = build_input_sources(metas_, views_);
     return input_sources_;
 }
 
@@ -298,7 +277,7 @@ Row TuiState::folder_row(const FolderNode& node) const {
 // değişimde kurulur, gezinme buraya gelmez.
 void TuiState::append_folder_rows(const FolderNode& node, std::size_t depth, std::vector<Row>& rows) const {
     std::size_t number = 0;
-    for (const FolderNode* folder : tree_.sorted_subfolders(node, prefs_.sort)) {
+    for (const FolderNode* folder : search::sorted_subfolders(tree_, node, prefs_.sort)) {
         Row row = folder_row(*folder);
         row.depth = depth;
         row.number = ++number;
@@ -497,13 +476,6 @@ Intent TuiState::handle_trash(Key key, std::string_view text) {
     case Key::CtrlN:
         move_selection(1);
         return Intent::None;
-    case Key::CtrlA:
-        mark_all();
-        return Intent::None;
-    case Key::PageUp:
-    case Key::PageDown:
-        scroll_preview(page_direction(key) * static_cast<int>(kPreviewPageLines));
-        return Intent::None;
     case Key::AltRight:
     case Key::AltLeft:
         set_selected_expanded(key == Key::AltRight);
@@ -511,35 +483,12 @@ Intent TuiState::handle_trash(Key key, std::string_view text) {
     case Key::Escape:
         return Intent::ToggleTrash;
     case Key::Char:
-        return handle_trash_letter(text);
+        if (text == "g")
+            awaiting_prefix_ = true;
+        return Intent::None;
     default:
         return Intent::None;
     }
-}
-
-Intent TuiState::handle_trash_letter(std::string_view text) {
-    for (const auto& [letter, intent] : kTrashLetters)
-        if (text == letter)
-            return intent_if_selected(intent);
-    if (handle_details_letter(text))
-        return Intent::None;
-    if (text == "x" || text == "X")
-        return handle_mark_letter(text).value_or(Intent::None);
-    if (text == "q" || text == "T")
-        return Intent::ToggleTrash;
-    if (text == "?")
-        return Intent::ShowHelp;
-    if (handle_layout_letter(text))
-        return Intent::None;
-    if (text == "k")
-        move_selection(-1);
-    else if (text == "j")
-        move_selection(1);
-    else if (text == "g")
-        awaiting_prefix_ = true;
-    else if (text == "G")
-        select_index(rows_.size());
-    return Intent::None;
 }
 
 Intent TuiState::intent_if_selected(Intent intent) const {
@@ -573,14 +522,39 @@ void TuiState::toggle_all_expanded() {
 }
 
 // `Alt+ok` her terminalde gelmez: Space ve `i` seçili satırı, `I` tümünü açar/kapatır.
-bool TuiState::handle_details_letter(std::string_view text) {
-    if (text == " " || text == "i")
-        toggle_expanded(selected_);
-    else if (text == "I")
-        toggle_all_expanded();
-    else
-        return false;
-    return true;
+void TuiState::toggle_selected_details() {
+    toggle_expanded(selected_);
+}
+
+// Space: klasör yerinde açılır (açık küme `tui-state.toml`da kalır), notta ayrıntı.
+Intent TuiState::toggle_row() {
+    if (!selected_folder_row()) {
+        toggle_selected_details();
+        return Intent::None;
+    }
+    toggle_tree(selected_);
+    return Intent::SavePrefs;
+}
+
+// Tümü açıksa kapatır, değilse hepsini açar (`I` gibi).
+Intent TuiState::toggle_tree_all() {
+    std::set<std::string> all;
+    for (std::string& folder : tree_.folders_under({}))
+        if (!folder.empty())
+            all.insert(std::move(folder));
+    const bool all_open = std::ranges::includes(prefs_.open_folders, all);
+    prefs_.open_folders = all_open ? std::set<std::string>{} : std::move(all);
+    refilter(false);
+    return Intent::SavePrefs;
+}
+
+Intent TuiState::cycle_column() {
+    return set_column(static_cast<ListColumn>((static_cast<int>(prefs_.column) + 1) % kListColumnCount));
+}
+
+Intent TuiState::set_column(ListColumn column) {
+    prefs_.column = column;
+    return Intent::SavePrefs;
 }
 
 Intent TuiState::handle_sort_menu(std::string_view text) {
@@ -686,7 +660,7 @@ bool TuiState::filter_rows(std::vector<Row>& rows) {
         rows = rows_in_folder();
         return true;
     }
-    auto parsed = search::parse_query(query());
+    auto parsed = search::parse_query(query(), view_lookup_);
     if (!parsed) {
         query_error_ = std::move(parsed.error());
         return false;
@@ -846,6 +820,52 @@ void TuiState::set_preview_lines(const std::vector<std::string>* lines, std::siz
         preview_selection_.reset();  // uçlar eski metne ait
         preview_find_.recompute(*lines);
     }
+}
+
+void TuiState::set_links(const core::NoteLinks& links, std::size_t generation,
+                         const std::optional<core::NotePath>& note) {
+    if (generation == links_generation_)
+        return;
+    links_generation_ = generation;
+    const bool same_note = links_note_ == note;
+    links_note_ = note;
+    links_.set(links, same_note);
+    if (links_.empty() && focus_ == Focus::Links)
+        focus_ = Focus::Preview;  // son ilişki kalktı: odak görünmez bölümde kalmasın
+}
+
+int TuiState::links_reserved_rows(int pane_rows) const {
+    return trash_view_ || focus_ == Focus::Editor ? 0 : links_.reserved_rows(pane_rows);
+}
+
+void TuiState::click_link(std::size_t row) {
+    const auto visible = static_cast<std::size_t>(links_.visible_rows(pane_rows()));
+    const std::size_t line = links_.top(visible) + row;
+    if (line >= links_.lines().size())
+        return;
+    focus_ = Focus::Links;
+    if (links_.lines()[line].is_header)
+        return;
+    links_.select(line);
+    if (links_.selected_path())
+        jump_to_selected_link();
+}
+
+void TuiState::scroll_links(int delta) {
+    links_.move(delta);
+}
+
+// Hedef süzgeçte ya da başka klasörde olabilir: select_note gevşetir, boş genel aramada reveal.
+Intent TuiState::jump_to_selected_link() {
+    const core::NotePath* selected = links_.selected_path();
+    if (!selected)
+        return Intent::LinkMissing;
+    const core::NotePath target = *selected;
+    if (!select_note(target) && !reveal(target))
+        return Intent::LinkMissing;
+    focus_ = Focus::Preview;
+    scroll_to_source_line(0);
+    return Intent::None;
 }
 
 void TuiState::begin_preview_selection(PreviewPoint point, int x, int y) {
@@ -1008,8 +1028,12 @@ Intent TuiState::handle(Key key, std::string_view text) {
     if (focus_ == Focus::Editor)
         return key == Key::F1 ? Intent::ShowHelp : Intent::EditorKey;
     const bool prefixed = std::exchange(awaiting_prefix_, false);
-    if (const auto intent = app_intent(key))
+    if (const auto intent = app_intent(key)) {
+        palette_.reset();
         return *intent;
+    }
+    if (palette_)
+        return handle_palette(key, text);
     if (!summary_.empty()) {
         summary_.clear();
         return Intent::None;
@@ -1020,6 +1044,8 @@ Intent TuiState::handle(Key key, std::string_view text) {
 }
 
 Intent TuiState::handle_focused(Key key, std::string_view text) {
+    if (const auto intent = handle_command_key(key, text))
+        return *intent;
     if (trash_view_)
         return handle_trash(key, text);
     if (focus_ == Focus::SortMenu) {
@@ -1028,9 +1054,11 @@ Intent TuiState::handle_focused(Key key, std::string_view text) {
         return key == Key::Char ? handle_sort_menu(text) : Intent::None;
     }
     if (focus_ == Focus::Preview)
-        return handle_preview(key, text);
+        return handle_preview(key);
     if (focus_ == Focus::PreviewFind)
         return handle_preview_find(key, text);
+    if (focus_ == Focus::Links)
+        return handle_links(key, text);
     if (focus_ == Focus::Search)
         if (const auto intent = handle_search_line(key, text))
             return *intent;
@@ -1071,9 +1099,7 @@ std::optional<Intent> TuiState::handle_shared(Key key) {
     case Key::CtrlO:
         return Intent::NewNote;
     case Key::CtrlR:
-        if (selected_folder_row())
-            return Intent::RenameSelected;  // klasörün tipi yok: diyalog değil, yol girdisi
-        return selected_row() ? Intent::MoveSelected : Intent::None;
+        return move_dialog_intent();
     case Key::CtrlD:
         return intent_if_any_row(Intent::TrashSelected);
     case Key::AltRight:
@@ -1090,7 +1116,9 @@ std::optional<Intent> TuiState::handle_shared(Key key) {
 Intent TuiState::handle_list(Key key, std::string_view text) {
     switch (key) {
     case Key::Char:
-        return handle_list_letter(text);
+        if (text == "g")
+            awaiting_prefix_ = true;
+        return Intent::None;
     case Key::Up:
         move_selection(-1);
         return Intent::None;
@@ -1101,24 +1129,87 @@ Intent TuiState::handle_list(Key key, std::string_view text) {
         go_left();
         return Intent::None;
     case Key::Right:
-        if (!open_selected_folder())
-            focus_ = Focus::Preview;
-        return Intent::None;
+        return right_or_open();
     case Key::Enter:
-        if (open_selected_folder())
-            return Intent::None;
-        return selected_row() ? Intent::EnterEditor : Intent::None;
-    case Key::F2:
-        return selected_entry() ? Intent::RenameSelected : Intent::None;
-    case Key::CtrlA:
-        mark_all();
-        return Intent::None;
+        return enter_selected();
     case Key::Escape:
         escape_list();
         return Intent::None;
     default:
         return Intent::None;
     }
+}
+
+Intent TuiState::right_or_open() {
+    if (!open_selected_folder())
+        focus_ = Focus::Preview;
+    return Intent::None;
+}
+
+Intent TuiState::enter_selected() {
+    if (open_selected_folder())
+        return Intent::None;
+    return selected_row() ? Intent::EnterEditor : Intent::None;
+}
+
+// Klasörün tipi yok: diyalog değil, yol girdisi.
+Intent TuiState::move_dialog_intent() const {
+    if (selected_folder_row())
+        return Intent::RenameSelected;
+    return selected_row() ? Intent::MoveSelected : Intent::None;
+}
+
+void TuiState::page_list(int direction) {
+    move_selection(direction * static_cast<int>(page_rows()));
+}
+
+void TuiState::begin_sort_menu() {
+    focus_ = Focus::SortMenu;
+}
+
+void TuiState::select_last() {
+    select_index(rows_.size());  // son satıra kenetlenir
+}
+
+void TuiState::resize_list(int direction) {
+    layout_.resize(direction * PaneLayout::kKeyStep, window_width_);
+}
+
+void TuiState::toggle_zoom() {
+    layout_.toggle_zoom();
+}
+
+void TuiState::focus_links() {
+    focus_ = Focus::Links;
+}
+
+void TuiState::toggle_review_view() {
+    review_rendered_ = !review_rendered_;
+}
+
+void TuiState::scroll_preview_top() {
+    preview_scroll_ = 0;
+}
+
+void TuiState::scroll_preview_bottom() {
+    preview_scroll_ = max_preview_scroll();
+}
+
+void TuiState::scroll_half_page(int direction) {
+    scroll_preview(direction * (static_cast<int>(page_rows()) / 2));
+}
+
+void TuiState::begin_preview_find() {
+    preview_find_.clear();
+    focus_ = Focus::PreviewFind;
+}
+
+void TuiState::find_step(bool forward) {
+    if (forward)
+        preview_find_.next();
+    else
+        preview_find_.previous();
+    scroll_to_find_match();
 }
 
 // Önce bekleyen yank, süzgeç ikinci Esc'te. Kullanıcı kararı: çıkış `q`; boş süzgeçte tekrarlanan Esc
@@ -1136,48 +1227,6 @@ void TuiState::escape_list() {
     refilter(true);
 }
 
-Intent TuiState::handle_list_letter(std::string_view text) {
-    // Tam eşleşme: ı gibi çok baytlı harfler ve büyük harf eylemleri (CapsLock) hiçbir şey tetiklemez.
-    for (const auto& [letter, key] : kListLetterKeys)
-        if (text == letter)
-            return handle(key);
-    if (text == " " && selected_folder_row()) {
-        toggle_tree(selected_);
-        return Intent::SavePrefs;  // açık küme `tui-state.toml`da kalır
-    }
-    if (handle_layout_letter(text) || handle_details_letter(text))
-        return Intent::None;
-    if (const auto intent = handle_mark_letter(text))
-        return *intent;
-    for (const auto& [letter, intent] : kListSelectionLetters)
-        if (text == letter)
-            return intent_if_any_row(intent);
-    if (text == "E")
-        return intent_if_selected(Intent::OpenSelected);
-    for (const auto& [letter, intent] : kListPlainLetters)
-        if (text == letter)
-            return intent;
-    if (text == "v") {
-        prefs_.column = static_cast<ListColumn>((static_cast<int>(prefs_.column) + 1) % kListColumnCount);
-        return Intent::SavePrefs;
-    }
-    handle_list_jump_letter(text);
-    return Intent::None;
-}
-
-void TuiState::handle_list_jump_letter(std::string_view text) {
-    if (text == "g")
-        awaiting_prefix_ = true;
-    else if (text == "G")
-        select_index(rows_.size());  // son satıra kenetlenir
-    else if (text == "/")
-        begin_search(Mode::Name);
-    else if (text == "f")
-        begin_search(Mode::Global);
-    else if (text == "o")
-        focus_ = Focus::SortMenu;
-}
-
 void TuiState::begin_search(Mode mode) {
     focus_ = Focus::Search;
     if (mode == Mode::Global) {
@@ -1188,6 +1237,22 @@ void TuiState::begin_search(Mode mode) {
         mode_ = Mode::Name;
         refilter(true);
     }
+}
+
+// Palet: ad araması `tag:` ile açılır, Tab listesi notların etiketleridir; tek etiket varsa tamamlanır.
+void TuiState::begin_tag_search() {
+    begin_search(Mode::Name);
+    search_line_.set_text(std::string(kTagArgument));
+    refilter(true);
+    handle_search_line(Key::Tab, {});
+}
+
+// Palet "Run view": `tag:` gibi; Tab listesi kayıtlı görünümlerdir, seçilen `view:AD` süzgecini kurar.
+void TuiState::begin_view_search() {
+    begin_search(Mode::Name);
+    search_line_.set_text(std::string(kViewArgument));
+    refilter(true);
+    handle_search_line(Key::Tab, {});
 }
 
 Intent TuiState::search_enter() {
@@ -1232,32 +1297,15 @@ Intent TuiState::handle_search(Key key) {
     }
 }
 
-Intent TuiState::handle_preview(Key key, std::string_view text) {
-    // Liste komutları burada bilerek yok: içerik panelinde çalışmazlar (Ctrl-P/N ve Tab dahil); çıkış `q`
-    // ortaktır.
-    const int half_page = static_cast<int>(page_rows()) / 2;
+// Harfler ve sayfa tuşları tablodadır. Liste komutları burada bilerek yok: içerik panelinde çalışmazlar
+// (Ctrl-P/N ve Tab dahil).
+Intent TuiState::handle_preview(Key key) {
     switch (key) {
-    case Key::Char:
-        return handle_preview_letter(text);
     case Key::Up:
         scroll_accelerated(-1);
         return Intent::None;
     case Key::Down:
         scroll_accelerated(1);
-        return Intent::None;
-    case Key::CtrlU:
-        scroll_preview(-half_page);
-        return Intent::None;
-    case Key::CtrlD:
-        scroll_preview(half_page);
-        return Intent::None;
-    case Key::F2:
-        return intent_if_any_row(Intent::RenameSelected);
-    case Key::PageUp:
-        scroll_preview(-static_cast<int>(kPreviewPageLines));
-        return Intent::None;
-    case Key::PageDown:
-        scroll_preview(static_cast<int>(kPreviewPageLines));
         return Intent::None;
     case Key::Left:
         leave_preview();
@@ -1276,38 +1324,44 @@ Intent TuiState::handle_preview(Key key, std::string_view text) {
     }
 }
 
-Intent TuiState::handle_preview_letter(std::string_view text) {
+Intent TuiState::handle_links(Key key, std::string_view text) {
+    const int page = std::max(links_.visible_rows(pane_rows()), 1);
+    switch (key) {
+    case Key::Char:
+        return handle_links_letter(text);
+    case Key::Up:
+        links_.move(-1);
+        return Intent::None;
+    case Key::Down:
+        links_.move(1);
+        return Intent::None;
+    case Key::PageUp:
+    case Key::PageDown:
+        links_.move(page_direction(key) * page);
+        return Intent::None;
+    case Key::Enter:
+        return jump_to_selected_link();
+    case Key::Escape:
+        focus_ = Focus::Preview;
+        return Intent::None;
+    default:
+        return Intent::None;
+    }
+}
+
+Intent TuiState::handle_links_letter(std::string_view text) {
     if (handle_layout_letter(text))
         return Intent::None;
-    if (text == "q")
-        return Intent::Quit;
-    if (text == ",")
-        return Intent::ShowSettings;
-    for (const auto& [letter, intent] : kPreviewSelectionLetters)
-        if (text == letter)
-            return intent_if_selected(intent);
-    for (const auto& [letter, lines] : kPreviewScrollLetters)
-        if (text == letter) {
-            scroll_preview(lines);
-            return Intent::None;
-        }
-    if (text == "R")
-        review_rendered_ = !review_rendered_;
-    else if (text == "g")
-        preview_scroll_ = 0;
-    else if (text == "G")
-        preview_scroll_ = max_preview_scroll();
-    else if (text == "h")
-        leave_preview();
-    else if (text == "/") {
-        preview_find_.clear();
-        focus_ = Focus::PreviewFind;
-    } else if (text == "n") {
-        preview_find_.next();
-        scroll_to_find_match();
-    } else if (text == "N") {
-        preview_find_.previous();
-        scroll_to_find_match();
+    if (text == "b") {
+        focus_ = Focus::Preview;
+    } else if (text == "j") {
+        links_.move(1);
+    } else if (text == "k") {
+        links_.move(-1);
+    } else if (text == "L") {
+        const core::LinkLine* line = links_.selected_line();
+        return line && line->group == core::LinkGroup::Related ? Intent::UnlinkSelected
+                                                               : intent_if_selected(Intent::LinkNote);
     }
     return Intent::None;
 }

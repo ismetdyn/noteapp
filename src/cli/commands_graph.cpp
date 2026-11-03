@@ -7,10 +7,10 @@
 // Eşzamanlı head'lerden yalnız okunan değer yazılır: taşıma biçimidir, senkronun yerine geçmez.
 #include "cli/commands.hpp"
 #include "cli/highlight.hpp"
-#include "cli/json_parser.hpp"
-#include "cli/json_text.hpp"
 #include "core/atomic_file.hpp"
 #include "core/i18n.hpp"
+#include "core/json_parser.hpp"
+#include "core/json_text.hpp"
 #include "core/migration.hpp"
 #include "core/note_store_impl.hpp"
 #include "core/paths.hpp"
@@ -24,12 +24,18 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
 
 namespace noteapp::cli {
+
+using core::append_json_string;
+using core::base64_of;
+using core::Json;
+using core::JsonParser;
 
 namespace {
 
@@ -735,6 +741,34 @@ int run_graph_clear_skipped() {
     return kExitOk;
 }
 
+constexpr std::size_t kMaxStrayListed = 200;
+
+// Geçişten sonra notes_dir'e düşen dosyalar. Çıktı da sınırlıdır: tek klasör ekranı boğmasın.
+int report_stray_files(const std::filesystem::path& notes_dir) {
+    const core::NoteStore store(core::data_dir());
+    const auto scan = core::find_stray_files(store, notes_dir, core::data_dir());
+    if (!scan) {
+        std::cerr << sanitize_for_terminal(core::format_error(scan.error())) << '\n';
+        return kExitInternal;
+    }
+    if (scan->files.empty() && !scan->truncated)
+        return kExitOk;
+    const std::size_t count = scan->files.size();
+    std::cerr << core::tr("cli.stray_header", {{"count", std::to_string(count)}}) << '\n';
+    const std::span listed = std::span(scan->files).first(std::min(count, kMaxStrayListed));
+    for (const core::SkippedFile& file : listed)
+        std::cerr << sanitize_for_terminal(
+                         core::tr("cli.stray_file",
+                                  {{"path", file.path}, {"reason", core::tr("reason." + file.reason)}}))
+                  << '\n';
+    if (count > listed.size())
+        std::cerr << core::tr("cli.stray_more", {{"count", std::to_string(count - listed.size())}}) << '\n';
+    if (scan->truncated)
+        std::cerr << core::tr("cli.stray_truncated") << '\n';
+    std::cerr << core::tr("cli.stray_hint") << '\n';
+    return kExitUser;
+}
+
 int run_graph_status(const core::Config& config, bool ignore_skipped) {
     const bool pending = core::legacy_notes_pending(config.notes_dir, core::data_dir());
     if (pending)
@@ -742,8 +776,11 @@ int run_graph_status(const core::Config& config, bool ignore_skipped) {
                          core::tr("cli.graph_status_pending", {{"path", to_utf8(config.notes_dir)}}))
                   << '\n';
     const RootSkipped skipped = report_skipped_of_root(config.notes_dir, ignore_skipped);
-    if (skipped.exit_code != kExitOk)
+    if (skipped.exit_code == kExitInternal)
         return skipped.exit_code;
+    const int stray = pending ? kExitOk : report_stray_files(config.notes_dir);
+    if (skipped.exit_code != kExitOk || stray != kExitOk)
+        return std::max(skipped.exit_code, stray);
     if (pending)
         return kExitUser;
     if (skipped.listed > 0)  // kabul edildi, çözülmedi: "kalan yok" denemez
@@ -763,6 +800,47 @@ int run_graph_status_command(const std::vector<std::string>& rest, const core::C
         return run_graph_clear_skipped();
     std::cerr << core::tr("cli.graph_usage") << '\n';
     return kExitUsage;
+}
+
+void print_removal_advice(const std::filesystem::path& notes_dir) {
+    std::error_code ec;
+    const bool in_repo = fs::exists(notes_dir / ".git", ec);
+    std::cout << sanitize_for_terminal(
+                     core::tr(in_repo ? "cli.migrate_remove_repo" : "cli.migrate_remove_plain",
+                              {{"path", to_utf8(notes_dir)}}))
+              << '\n';
+}
+
+int run_graph_migrate_new(const core::Config& config) {
+    if (core::legacy_notes_pending(config.notes_dir, core::data_dir())) {
+        std::cerr << sanitize_for_terminal(
+                         core::tr("cli.graph_status_pending", {{"path", to_utf8(config.notes_dir)}}))
+                  << '\n';
+        return kExitUser;
+    }
+    const auto report = core::migrate_new_notes(config.notes_dir, core::data_dir());
+    if (!report) {
+        std::cerr << sanitize_for_terminal(core::format_error(report.error())) << '\n';
+        return kExitInternal;
+    }
+    for (const std::string& file : report->new_files)
+        std::cout << sanitize_for_terminal(core::tr("cli.migrate_new_file", {{"path", file}})) << '\n';
+    for (const core::NotePath& copy : report->conflict_copies)
+        std::cout << sanitize_for_terminal(core::tr("cli.sync_conflict_copy", {{"path", copy.string()}}))
+                  << '\n';
+    print_skipped("cli.migrate_skipped", report->skipped);
+    print_skipped("cli.migrate_failed", report->failed);
+    std::cout << core::tr("cli.migrate_new_summary", {{"count", std::to_string(report->new_files.size())}})
+              << '\n';
+    if (!report->backup.empty())
+        std::cout << sanitize_for_terminal(
+                         core::tr("cli.migrate_backup_hint", {{"path", to_utf8(report->backup)}}))
+                  << '\n';
+    if (!report->new_files.empty())
+        print_removal_advice(config.notes_dir);
+    if (const std::size_t left = report->skipped.size() + report->failed.size(); left > 0)
+        std::cerr << core::tr("cli.migrate_left_behind", {{"count", std::to_string(left)}}) << '\n';
+    return report->complete ? kExitOk : kExitUser;
 }
 
 int run_graph_migrate(const core::Config& config, bool skip_failed) {
@@ -788,12 +866,7 @@ int run_graph_migrate(const core::Config& config, bool skip_failed) {
         std::cerr << core::tr("cli.migrate_incomplete") << '\n';
         return kExitUser;
     }
-    std::error_code ec;
-    const bool in_repo = fs::exists(config.notes_dir / ".git", ec);
-    std::cout << sanitize_for_terminal(
-                     core::tr(in_repo ? "cli.migrate_remove_repo" : "cli.migrate_remove_plain",
-                              {{"path", to_utf8(config.notes_dir)}}))
-              << '\n';
+    print_removal_advice(config.notes_dir);
     if (const std::size_t left = report->skipped.size() + report->failed.size(); left > 0)
         std::cerr << core::tr("cli.migrate_left_behind", {{"count", std::to_string(left)}}) << '\n';
     return kExitOk;
@@ -807,6 +880,8 @@ int run_graph(const ParsedArgs& args, const core::Config& config) {
         return run_graph_migrate(config, false);
     if (sub == "migrate" && args.rest.size() == 2 && args.rest[1] == "--skip-failed")
         return run_graph_migrate(config, true);
+    if (sub == "migrate" && args.rest.size() == 2 && args.rest[1] == "--new")
+        return run_graph_migrate_new(config);
     if (sub == "status")
         return run_graph_status_command(args.rest, config);
     if (sub == "export")

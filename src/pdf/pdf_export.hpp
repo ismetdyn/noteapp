@@ -10,7 +10,8 @@ namespace noteapp::pdf {
 
 enum class NoteFormat { Markdown, PlainText };
 
-// Dizgi kuralı notun uzantısından gelir: yalnız `.md` (büyük/küçük harf duyarsız) Markdown'dır.
+// Dizgi kuralı notun uzantısından gelir: `.md` ve `.markdown` (büyük/küçük harf duyarsız) Markdown'dır. PDF
+// dışa aktarma (CLI, GUI) ve GUI önizlemesi bu tek kuralı kullanır.
 NoteFormat format_for(const std::filesystem::path& note_path);
 
 // Metni A4, 15 mm kenar boşluklu PDF olarak yazar; çıktı atomiktir (yarım PDF kalmaz). Girdi güvenilmezdir

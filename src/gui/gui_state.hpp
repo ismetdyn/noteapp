@@ -3,15 +3,20 @@
 #include "core/config.hpp"
 #include "core/error.hpp"
 #include "core/file_icons.hpp"
+#include "core/folder_tree.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
+#include "gui/browser_rows.hpp"
+#include "gui/graph_layout.hpp"
 #include "gui/note_list_model.hpp"
+#include "gui/note_map.hpp"
 #include "gui/save_dialog.hpp"
 #include "gui/settings_page.hpp"
 #include "sync/auto_sync.hpp"
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <expected>
 #include <filesystem>
@@ -19,7 +24,9 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace noteapp::gui {
@@ -57,6 +64,7 @@ struct Deciders {
 
 enum class Tab { Notes, Settings };
 enum class FocusRequest { None, Search, Editor, List };
+enum class BrowserView { Tree, Details, Map };
 
 // Editör imlecine programatik seçim (bayt ofseti): [start, end).
 struct TextSelection {
@@ -69,7 +77,32 @@ struct GuiLayout {
     int width = 1000;
     int height = 650;
     float left_pane_width = 320.0F;  // bölmeler ölçek 1 biriminde: ekran değişse de oran korunur
-    float folder_pane_height = 160.0F;
+    float map_pane_width = 600.0F;   // Harita görünümünde sol bölme: harita dar ağaç bölmesine sığmaz
+    BrowserView browser_view = BrowserView::Tree;
+    bool row_numbers = false;  // Ağaç ve Ayrıntılar'da sıra no sütunu (Ayarlar)
+};
+
+// Klasör satırı seçiliyken sağ panelin özeti; sayaçlar alt ağacı kapsar.
+struct FolderSummary {
+    std::string path;
+    std::size_t notes{};
+    std::size_t folders{};
+};
+
+// Sağ panelin not bilgisi satırı: etiket ve biçimlenmiş değer (çevrilmiş).
+struct InfoField {
+    std::string label;
+    std::string value;
+};
+
+// Editör sekmesinin çizim özeti (SPEC-gui "Sekmeler").
+struct TabSummary {
+    std::uint64_t id = 0;
+    std::string title;  // dosya adı; taslakta "Adsız"
+    std::string path;   // ipucu; taslakta boş
+    bool unsaved = false;
+    bool pinned = false;
+    bool kept = false;  // yeni açılan not bu sekmenin yerine geçmez (düzenlendi ya da yeni sekmede açıldı)
 };
 
 // Saf GUI modeli (ImGui/SDL bilmez): not listesi, seçim, tampon, kirli durum, kaydetme, çakışma. View her
@@ -102,6 +135,8 @@ public:
     void select_row(int row);
     void move_selection(int delta);
     const std::string& query() const { return query_; }
+    // Sorgu argümanı geçersizse TUI'nin metni (format_error); liste son geçerli haliyle kalır.
+    const std::optional<std::string>& query_error() const { return model_.query_error(); }
     std::string& query_buffer() { return query_; }  // ImGui doğrudan yazar; ardından query_edited()
     void query_edited();
     void set_query(std::string query);
@@ -116,6 +151,61 @@ public:
     const std::vector<std::string>& folders() const { return folders_; }
     void set_folder(std::string folder);
 
+    // --- Gezgin (ağaç ve ayrıntılar) ---
+    // Arama ve çöp kendi düz listelerini gösterir; gezgin yalnız ikisi de kapalıyken görünür.
+    bool browsing() const { return query_.empty() && !trash_view_; }
+    BrowserView browser_view() const { return layout_.browser_view; }
+    void set_browser_view(BrowserView view);
+    bool row_numbers() const { return layout_.row_numbers; }
+    // Ayarlar'daki onay kutusu: hemen uygulanır ve yerleşimle birlikte hemen yazılır (Kaydet beklemez).
+    void set_row_numbers(bool on);
+    // Satırlar yalnız listeleme, açık klasörler ya da konum değişince yeniden kurulur; kare başına depoya
+    // gidilmez.
+    const std::vector<BrowserRow>& browser_rows();
+    int browser_row();                                                  // seçili satır; görünür değilse -1
+    std::size_t browser_rebuilds() const { return browser_rebuilds_; }  // test kancası
+    // Gezgin satırlarındaki en büyük sıra no (numara sütununun genişliği).
+    std::size_t max_row_number() {
+        ensure_browser();
+        return max_row_number_;
+    }
+    const std::optional<std::string>& selected_folder() const { return selected_folder_; }
+    std::optional<FolderSummary> folder_summary();
+    bool is_expanded(const std::string& folder) const { return expanded_.contains(folder); }
+    void set_expanded(const std::string& folder, bool expanded);
+    void toggle_expanded(const std::string& folder) { set_expanded(folder, !is_expanded(folder)); }
+    // Satır seçimi: not açılır; klasörde bekleyen düzenleme önce kaydedilir, sağ panel özet gösterir.
+    void open_note(const core::NotePath& path);
+    void select_folder(const std::string& folder);
+    void enter_folder(const std::string& folder);  // Ayrıntılar konumu; Yukarı ve yol düğmeleri de buradan
+    void navigate(int delta);                      // Yukarı/Aşağı: gezgin satırları, yoksa düz liste
+    void browse_right();
+    void browse_left();
+    void browse_enter();
+    // Kare dışında çağrılır: gösterilen not değiştiyse atalarını açar ya da Ayrıntılar'da klasörüne gider.
+    void reveal_selection();
+    // Yeni not/klasörün yeri: seçili klasör, yoksa gösterilen notun klasörü, yoksa kapsam klasörü.
+    std::string target_folder() const;
+
+    // --- Not haritası (Harita görünümü, SPEC-gui "Harita") ---
+    const MapOptions& map_options() const { return map_options_; }
+    void set_map_options(const MapOptions& options);
+    // Görünür harita ve yerleşimi; gerekirse kurulur. Depo yalnız taramada değişiklik görülünce okunur
+    // (kenarlar tek okumada); kare başına okunmaz.
+    const NoteMap& note_map();
+    GraphLayout& map_layout();
+    // Düğüm çizgesi her değiştiğinde artar (yalnız konum değişimi saymaz): çizim katmanı görünümü yeniden
+    // sığdırır.
+    std::size_t map_generation() {
+        ensure_map();
+        return map_generation_;
+    }
+    // Düğüm başına arama kutusunun süzgeci (listeyle aynı ayrıştırıcı, `tag:` dahil); sorgu boşken hepsi 1.
+    const std::vector<char>& map_matches();
+    // Düğüme tıklama: bekleyen düzenleme önce kendi notuna yazılır (flush_for), sonra not açılır (open_link).
+    void open_map_note(const core::NotePath& path);
+    std::size_t map_reads() const { return map_reads_; }  // test kancası: NoteStore::edges çağrısı
+
     // --- Editör ---
     const std::string& buffer() const { return buffer_; }
     std::string& buffer_for_edit() { return buffer_; }  // ImGui doğrudan yazar; ardından buffer_edited()
@@ -126,12 +216,69 @@ public:
     bool dirty() const { return dirty_; }
     bool is_new_note() const { return new_note_; }
     std::string header() const;
+    // Tampondaki görünmez bidi/sıfır genişlikli karakter sayısı (core::count_hidden_controls); içerik
+    // değişince güncellenir, kare başına taranmaz. Etiket başlıktaki uyarıdır, sayı 0 iken boş.
+    std::size_t hidden_controls() const { return hidden_controls_; }
+    std::string hidden_controls_label() const;
     std::string current_type() const;
     std::vector<std::string> type_choices() const;
     bool type_enabled() const { return shown_.has_value() && !new_note_; }
     // Editör etkinleşene dek bekleyen seçim (ImGui yalnız etkin alana seçim uygular); içerik değişince düşer.
     const std::optional<TextSelection>& editor_selection() const { return editor_selection_; }
     std::optional<TextSelection> take_editor_selection();
+
+    // --- Bağlantılar (editör altı panel) ---
+    const core::NoteLinks& links() const { return links_; }
+    const std::vector<core::LinkLine>& link_lines() const { return link_lines_; }
+    bool links_open() const { return links_open_; }
+    void set_links_open(bool open) { links_open_ = open; }
+    void toggle_links() { links_open_ = !links_open_; }  // Ctrl+L
+    // Satıra tıklama: tampon kaydedilir, hedefi gizleyen süzgeç gevşer.
+    void open_link(const core::NotePath& path);
+
+    // --- Markdown önizlemesi ---
+    // TUI'deki biçimli görünüm sınırı (SPEC-tui "REVIEW biçimli görünüm"): üstündeki not ham metinle okunur.
+    static constexpr std::size_t kMaxPreviewBytes = std::size_t{256} * 1024;
+    // Gösterilen kayıtlı not md mi (PDF dışa aktarmayla aynı kural); önizleme düğmesi yalnız onda görünür.
+    bool previewable_type() const;
+    bool can_preview() const;  // md, düzenlenebilir metin ve sınırın altında
+    // Oturum boyunca tüm md notlarında (TUI'deki `R`); not önizlenemiyorsa editör görünür.
+    bool showing_preview() const { return preview_ && can_preview(); }
+    void toggle_preview();  // Ctrl+Shift+V; düzenlemeye dönünce odak editöre
+    // Önizlemedeki [[hedef]]: bekleyen düzenleme önce kendi notuna yazılır, hedef sonra çözülür.
+    void open_wiki_link(const std::string& target, bool new_tab = false);
+    // Önizlemedeki [[hedef]] canlı bir nota çözülüyor mu (çözülmeyen soluk, üstü çizili ve tıklanmaz).
+    bool resolves_link(std::string_view target) const;
+
+    // --- Not bilgisi (editör altı panel) ---
+    // TUI'nin ayrıntı alanları (boyut, güncelleme, oluşturma, senkron, kaynak), tip ve etiketler. Gösterilen
+    // kayıtlı not yoksa boş. Bağlantılarla aynı anlarda (gösterim, tarama, kayıt) tazelenir.
+    const std::vector<InfoField>& note_info() const { return note_info_; }
+    bool info_open() const { return info_open_; }
+    void set_info_open(bool open) { info_open_ = open; }
+    void toggle_info() { info_open_ = !info_open_; }  // Ctrl+I
+
+    // --- Editör sekmeleri (SPEC-gui "Sekmeler") ---
+    // Etkin sekmenin içeriği editör üyelerindedir (shown_, buffer_ ...); diğerleri kendi anlık görüntüsünü
+    // tutar. Ağaçtan/aramadan/haritadan açılan not etkin sekmenin yerine geçer; sekme iğnelenmiş, korunuyor
+    // (kept) ya da kaydedilmemiş taslaksa yeni sekmede açılır. Açık not yinelenmez, sekmesi öne gelir.
+    static constexpr std::size_t kMaxTabs = 32;
+    std::vector<TabSummary> tabs() const;
+    std::uint64_t active_tab() const { return active_tab_; }  // 0 = sekme yok
+    // Sekmeden ayrılırken bekleyen düzenleme kendi notuna yazılır, taslak sekmesinde kalır. Kayıt olmazsa
+    // geçiş iptal: false. Sekme çubuğu ve kısayollar: odak editöre.
+    bool activate_tab(std::uint64_t id);
+    void next_tab(int delta);  // Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+PageDown / Ctrl+PageUp
+    void new_tab();            // Ctrl+T: yeni sekmede boş taslak
+    void close_tab(std::uint64_t id);
+    void close_active_tab();  // Ctrl+W
+    void set_tab_pinned(std::uint64_t id, bool pinned);
+    // Sekme çubuğunda sürükleyerek sıralama: verilen kimlik sırası (bilinmeyen atlanır, eksik sona).
+    void reorder_tabs(const std::vector<std::uint64_t>& order);
+    // Orta tık / Ctrl+tık / Ctrl+Enter. Not etkin sekmedeyse sekme korunur (sonraki açılış yeni sekmeye).
+    void open_in_new_tab(const core::NotePath& path);
+    // Editör imleci: sekmeye dönüldüğünde geri konur.
+    void remember_cursor(TextSelection cursor);
 
     // --- Eylemler (kısayollar) ---
     void focus_search();       // Ctrl+K / Ctrl+P
@@ -166,10 +313,13 @@ public:
     void new_folder(const std::string& parent);  // "" = kök; klasör bağlam menüsü
     void rename_folder(const std::string& folder);
     void delete_folder(const std::string& folder);
-    void export_pdf();  // Ctrl+E
-    void sync_now();    // F5
+    void rename_selected();  // araç çubuğu: klasör satırında klasörü, not satırında notu
+    void export_pdf();       // Ctrl+E
+    void sync_now();         // F5
     // Araç çubuğu: eylem şu an bir iş yapar mı (yapmayacak düğme kapalı görünür).
-    bool can_delete() const { return trash_view_ ? trash_row_ >= 0 : current_path().has_value(); }
+    // Klasörde yalnız vurgulu satır: satırlar gerekirse kurulur, bu yüzden const değil.
+    bool can_delete();
+    bool can_rename();
     bool can_move() const { return shown_.has_value() && !new_note_; }
     bool can_export() const;
 
@@ -202,6 +352,29 @@ public:
     std::size_t sync_restarts() const { return sync_restarts_; }
 
 private:
+    // Etkin olmayan sekmenin editör durumu; etkin sekmede boştur (canlı değerler üyelerdedir).
+    struct EditorSnapshot {
+        std::optional<core::NoteInfo> shown;
+        std::string buffer;
+        std::size_t generation = 0;
+        std::string draft_folder;
+        bool editable = false;
+        bool dirty = false;
+        bool new_note = false;
+        bool crlf = false;
+        bool bom = false;
+        bool binary = false;
+        bool preview = false;
+    };
+    struct NoteTab {
+        std::uint64_t id = 0;
+        bool pinned = false;
+        bool kept = false;
+        bool loaded = true;  // false: gui-state'ten geri yüklendi, içerik ilk etkinleşmede okunur
+        std::optional<TextSelection> cursor;
+        EditorSnapshot saved;
+    };
+
     // Süzgeç değişimini (sorgu/klasör/liste) uygular; seçimi yola göre korur, yoksa ilk satıra düşer.
     void apply_filter(const std::function<void()>& change);
     void show_current();
@@ -209,8 +382,10 @@ private:
     bool leave_shown_note(const std::optional<core::NotePath>& target);
     void show_note(core::NoteInfo info);
     void clear_editor();
+    void reload_links();
+    void reload_info();
     void reload_trash();
-    void select_after_removal(bool was_shown, int row);
+    void select_after_removal(bool was_shown, int row, int browser_row);
 
     // Kaydetme akışları. true = akış tamam, mevcut notu bırakmak güvenli; false = tampon korunur.
     bool unsaved() const { return dirty_ || new_note_; }
@@ -237,12 +412,20 @@ private:
     void fail(const core::Error& error);
     SaveDialogRequest move_request(const core::NotePath& note) const;
     bool flush_for(const core::NotePath& note);
+    bool flush_shown();
     // Kayıt yolu yalnız gösterilen not varken girer (save_now, flush, tick). İhlal bug'dır: durur.
     auto& shown_note(this auto& self) {
         if (!self.shown_)
             std::abort();
         return *self.shown_;
     }
+    void ensure_listing();  // metas_ ve tree_ yalnız listeleme değiştiyse depodan
+    void ensure_browser();
+    void ensure_map();
+    bool show_folder(const std::string& folder, bool scope);
+    bool select_nearest_note(int from);
+    void activate_row(int index);
+    bool folder_action_allowed();
     void load_gui_state();
     void save_gui_state() const;
     bool run_posted();
@@ -251,11 +434,63 @@ private:
     void changed();  // diskte not/klasör değişti: senkrona bildirilir
     void apply_settings(const core::Config& before, const core::Config& after);
 
+    // Sekmeler. Kimlikle aranır: kayıt akışı tarar, tarama sekme kapatabilir; sıra numarası kayardı.
+    NoteTab* find_tab(std::uint64_t id);
+    const NoteTab* find_tab(std::uint64_t id) const;
+    std::optional<core::NotePath> tab_note(const NoteTab& tab) const;
+    std::optional<std::uint64_t> tab_of(const core::NotePath& path) const;
+    bool keeps_active_tab() const;
+    void claim_active_tab();  // canlı içerik etkin sekmeye yazılacak: sekme yoksa açılır
+    bool leave_tab();
+    void stash();
+    void restore_tab(std::uint64_t id, bool focus_editor);
+    bool switch_tab(std::uint64_t id, bool focus_editor);
+    bool push_tab();
+    void drop_active_tab();
+    void erase_tab(std::uint64_t id);
+    void park_or_clear();
+    void clear_live();
+    void close_missing_tabs(const std::unordered_set<std::string>& present);
+    bool confirm_close_drafts();
+    struct SavedTab {  // gui-state.toml'daki [[tabs]] girdisi
+        std::string path;
+        bool pinned = false;
+        bool kept = false;
+    };
+    bool restore_tabs(const std::vector<SavedTab>& saved, std::size_t active_index);
+
     core::Config config_;
     core::NoteStore store_;
     NoteListModel model_;
     std::vector<std::string> folders_;
     std::string current_folder_;
+    std::optional<std::string> selected_folder_;  // doluyken gösterilen not ve taslak yoktur
+    std::string draft_folder_;                    // yeni notun kayıt diyaloğunda önerilen klasör
+    core::FolderTree tree_;
+    std::vector<core::NoteMeta> metas_;
+    std::vector<BrowserRow> browser_rows_;
+    std::set<std::string> expanded_;  // yalnız oturum boyunca
+    std::string built_folder_;        // Ayrıntılar satırlarının kurulduğu konum
+    std::string revealed_note_;  // son açığa çıkarılan not: kullanıcının kapattığı klasör yeniden açılmaz
+    // Harita: depodan okunan kenarlar (taramada değişiklik görülünce bayatlar) ve onlardan kurulan görünür
+    // harita (seçenek ya da merkez değişince). Konumlar GraphLayout'ta anahtarla korunur.
+    MapOptions map_options_;
+    std::vector<core::NoteEdge> map_edges_;
+    NoteMap map_;
+    GraphLayout map_layout_;
+    std::optional<core::NotePath> map_center_;
+    std::vector<char> map_matches_;
+    std::size_t map_matches_resets_ = 0;  // eşleşmelerin kurulduğu model_.resets()
+    std::uint64_t data_version_ = 0;
+    bool map_edges_stale_ = true;
+    bool map_stale_ = true;
+    bool map_matches_stale_ = true;
+    std::size_t map_reads_ = 0;
+    std::size_t map_generation_ = 0;
+    bool listing_stale_ = true;
+    bool rows_stale_ = true;
+    std::size_t browser_rebuilds_ = 0;
+    std::size_t max_row_number_ = 0;
     std::string query_;
     std::size_t query_generation_ = 0;
     bool content_mode_ = false;
@@ -271,6 +506,13 @@ private:
         shown_;  // editörde şu an görünen not (yol + mtime): gereksiz yüklemeyi önler
     std::string buffer_;
     std::size_t buffer_generation_ = 0;
+    std::size_t hidden_controls_ = 0;
+    core::NoteLinks links_;
+    std::vector<core::LinkLine> link_lines_;
+    bool links_open_ = true;
+    std::vector<InfoField> note_info_;
+    bool info_open_ = false;  // yalnız oturum boyunca; kapalı başlar, editöre yer kalsın
+    bool preview_ = false;    // yalnız oturum boyunca
     bool editable_ = false;
     bool new_note_ = false;  // editörde henüz diske yazılmamış yeni not var (shown_ boş)
     bool dirty_ = false;     // editör, diskteki sürümden farklı
@@ -278,6 +520,13 @@ private:
     bool crlf_ = false;      // dosya CRLF'liydi: kayıtta korunur
     bool bom_ = false;       // dosya UTF-8 BOM'luydu: tamponda görünmez, kayıtta korunur
     bool binary_ = false;    // gösterilen not ikili: editörde yer tutucu var
+    std::size_t editor_generations_ = 0;  // buffer_generation_ değerleri: sekmeler arasında da benzersiz
+    std::vector<NoteTab> tabs_;
+    std::uint64_t active_tab_ = 0;
+    std::uint64_t next_tab_id_ = 1;
+    // Etkin sekmenin içeriği anlık görüntüsünde, editör boş (klasör seçili ya da süzgeç notu gizledi).
+    bool parked_ = false;
+    bool tabs_closed_ = false;  // kullanıcı son sekmeyi kapattı: süzgeç kendiliğinden ilk notu açmaz
     std::optional<std::chrono::steady_clock::time_point> autosave_at_;
     std::chrono::steady_clock::time_point rescan_at_;
     std::size_t writes_ = 0;

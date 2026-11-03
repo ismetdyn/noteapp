@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <ctime>
+#include <format>
 #include <system_error>
 #include <utility>
 
@@ -207,6 +209,91 @@ bool is_valid_utf8(std::string_view utf8) {
     return decode_utf8(utf8).has_value();
 }
 
+namespace {
+
+// Kod noktasına göre sıralı.
+constexpr std::array<HiddenControl, 24> kHiddenControls = {{
+    {0x061C, "ARABIC LETTER MARK"},
+    {0x115F, "HANGUL CHOSEONG FILLER"},
+    {0x1160, "HANGUL JUNGSEONG FILLER"},
+    {0x180E, "MONGOLIAN VOWEL SEPARATOR"},
+    {0x200B, "ZERO WIDTH SPACE"},
+    {0x200E, "LEFT-TO-RIGHT MARK"},
+    {0x200F, "RIGHT-TO-LEFT MARK"},
+    {0x202A, "LEFT-TO-RIGHT EMBEDDING"},
+    {0x202B, "RIGHT-TO-LEFT EMBEDDING"},
+    {0x202C, "POP DIRECTIONAL FORMATTING"},
+    {0x202D, "LEFT-TO-RIGHT OVERRIDE"},
+    {0x202E, "RIGHT-TO-LEFT OVERRIDE"},
+    {0x2060, "WORD JOINER"},
+    {0x2061, "FUNCTION APPLICATION"},
+    {0x2062, "INVISIBLE TIMES"},
+    {0x2063, "INVISIBLE SEPARATOR"},
+    {0x2064, "INVISIBLE PLUS"},
+    {0x2066, "LEFT-TO-RIGHT ISOLATE"},
+    {0x2067, "RIGHT-TO-LEFT ISOLATE"},
+    {0x2068, "FIRST STRONG ISOLATE"},
+    {0x2069, "POP DIRECTIONAL ISOLATE"},
+    {0x3164, "HANGUL FILLER"},
+    {0xFEFF, "ZERO WIDTH NO-BREAK SPACE"},
+    {0xFFA0, "HALFWIDTH HANGUL FILLER"},
+}};
+
+}  // namespace
+
+std::span<const HiddenControl> hidden_controls() {
+    return kHiddenControls;
+}
+
+const HiddenControl* find_hidden_control(char32_t cp) {
+    // Editör her ASCII dışı kod noktasında sorar: aralık dışı (Türkçe harfler dahil) taramaya girmez.
+    if (cp < kHiddenControls.front().code_point || cp > kHiddenControls.back().code_point)
+        return nullptr;
+    const auto* found = std::ranges::find(kHiddenControls, cp, &HiddenControl::code_point);
+    return found == kHiddenControls.end() ? nullptr : found;
+}
+
+namespace {
+
+constexpr char32_t kTwoByteLimit = 0x800;
+constexpr char32_t kThreeByteLimit = 0x10000;
+static_assert(std::ranges::all_of(kHiddenControls,
+                                  [](const HiddenControl& hidden) {
+                                      return hidden.code_point < kThreeByteLimit;
+                                  }),
+              "count_hidden_controls decodes at most three bytes");
+
+// Listedeki kod noktalarının UTF-8 öncü baytları, listeden derleme anında türetilir: listeye eklenen kod
+// noktası ön süzgeçten kaçamaz.
+constexpr std::array<bool, 256> kHiddenLeadBytes = [] {
+    std::array<bool, 256> leads{};
+    for (const HiddenControl& hidden : kHiddenControls) {
+        const char32_t cp = hidden.code_point;
+        leads[cp < kTwoByteLimit ? (0xC0U | (cp >> 6U)) : (0xE0U | (cp >> 12U))] = true;
+    }
+    return leads;
+}();
+
+}  // namespace
+
+std::size_t count_hidden_controls(std::string_view utf8) {
+    // Yalnız listedeki öncü baytlarda çözülür; öncü bayt devam baytı olamaz, her bayttan başlamak güvenli.
+    constexpr unsigned char kThreeByteLead = 0xE0;
+    std::size_t count = 0;
+    for (std::size_t at = 0; at < utf8.size(); ++at) {
+        const auto lead = static_cast<unsigned char>(utf8[at]);
+        if (!kHiddenLeadBytes[lead])
+            continue;
+        const std::size_t length = lead >= kThreeByteLead ? 3 : 2;
+        const auto decoded = decode_utf8(utf8.substr(at, length));
+        if (decoded && decoded->size() == 1 && find_hidden_control(decoded->front())) {
+            ++count;
+            at += length - 1;
+        }
+    }
+    return count;
+}
+
 std::string transliterate_turkish(std::string_view utf8) {
     auto decoded = decode_utf8(utf8);
     if (!decoded)
@@ -389,6 +476,69 @@ std::string note_name_source(std::string_view content, std::string_view type) {
     if (assignment && is_value_assignment(*assignment))
         return std::string(assignment->key);
     return line;
+}
+
+std::string human_size(std::uintmax_t bytes) {
+    constexpr double kStep = 1024.0;
+    constexpr std::array kUnits = {"KiB", "MiB", "GiB", "TiB"};
+    if (bytes < 1024)
+        return std::to_string(bytes) + " B";
+    auto value = static_cast<double>(bytes) / kStep;
+    std::size_t unit = 0;
+    while (value >= kStep && unit + 1 < kUnits.size()) {
+        value /= kStep;
+        ++unit;
+    }
+    return std::format("{:.1f} {}", value, kUnits[unit]);
+}
+
+namespace {
+
+std::tm local_tm(std::chrono::system_clock::time_point time) {
+    const std::time_t seconds = std::chrono::system_clock::to_time_t(time);
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &seconds);
+#else
+    localtime_r(&seconds, &local);
+#endif
+    return local;
+}
+
+std::string format_tm(const std::tm& local, const char* format) {
+    std::array<char, 32> text{};
+    return std::string(text.data(), std::strftime(text.data(), text.size(), format, &local));
+}
+
+}  // namespace
+
+std::string local_time_text(std::filesystem::file_time_type time) {
+    return format_tm(local_tm(std::chrono::clock_cast<std::chrono::system_clock>(time)), "%Y-%m-%d %H:%M");
+}
+
+std::string short_time_text(std::filesystem::file_time_type time, std::chrono::system_clock::time_point now) {
+    const std::tm local = local_tm(std::chrono::clock_cast<std::chrono::system_clock>(time));
+    const std::tm today = local_tm(now);
+    const bool same_day = local.tm_year == today.tm_year && local.tm_yday == today.tm_yday;
+    return format_tm(local, same_day ? "%H:%M" : "%Y-%m-%d");
+}
+
+char32_t to_lower(char32_t cp) {
+    if (cp < 0x80)
+        return (cp >= U'A' && cp <= U'Z') ? cp + 0x20 : cp;
+    if (cp == 0x130)
+        return U'i';  // İ
+    // Latin-1: À-Þ (× hariç)
+    if (cp >= 0xC0 && cp <= 0xDE)
+        return cp == 0xD7 ? cp : cp + 0x20;
+    // Latin Extended-A: çift/tek çiftler; aralık sınırları Unicode tablosundan.
+    if ((cp >= 0x100 && cp <= 0x12F) || (cp >= 0x132 && cp <= 0x137) || (cp >= 0x14A && cp <= 0x177))
+        return (cp % 2 == 0) ? cp + 1 : cp;
+    if ((cp >= 0x139 && cp <= 0x148) || (cp >= 0x179 && cp <= 0x17E))
+        return (cp % 2 == 1) ? cp + 1 : cp;
+    if (cp == 0x178)
+        return 0xFF;  // Ÿ
+    return cp;
 }
 
 }  // namespace noteapp::core

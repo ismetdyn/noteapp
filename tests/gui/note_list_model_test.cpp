@@ -134,3 +134,23 @@ TEST_CASE("same_listing compares path, mtime and size") {
     b[0].size = 11;
     CHECK_FALSE(noteapp::gui::same_listing(a, b));
 }
+
+// İnceleme bulgusu: bozuk sorgu açıkken kapsam yeniden kurulursa satırlar yeni kapsamın dışını göstermemeli.
+TEST_CASE("an invalid query keeps rows index-safe when the notes or the folder change") {
+    NoteListModel model;
+    model.set_notes({make_note("a/x.md", 1), make_note("a/y.md", 2), make_note("b/z.md", 3)});
+    model.set_query("size:abc");
+    REQUIRE(model.query_error().has_value());
+    CHECK(model.row_count() == 3);  // son geçerli liste kalır
+
+    model.set_notes({make_note("a/x.md", 1)});  // senkron/yeniden tarama: daha az not
+    REQUIRE(model.row_count() == 1);
+    CHECK(model.note_at(0).path.string() == "a/x.md");
+    CHECK(model.display(0) == "a/x.md");
+    CHECK(model.query_error().has_value());
+
+    model.set_notes({make_note("a/x.md", 1), make_note("b/z.md", 3)});
+    model.set_folder("b");
+    REQUIRE(model.row_count() == 1);
+    CHECK(model.display(0) == "b/z.md");
+}

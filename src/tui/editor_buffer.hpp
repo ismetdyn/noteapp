@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <optional>
 #include <string>
@@ -48,6 +49,9 @@ struct Glyph {
     std::size_t next = 0;  // sonraki grapheme'in bayt ofseti
     int cells = 1;
     std::string shown;
+    // Görünmez biçim karakteri (core::find_hidden_control) ise kod noktası, değilse 0: işaret uyarı rengiyle
+    // çizilir, adı imleç üstündeyken ileti satırında söylenir.
+    char32_t hidden = 0;
 };
 
 // FTXUI bilmeyen metin tamponu. İçerik dosyanın baytlarıdır (BOM hariç): satır sonları normalleştirilmez, bu
@@ -83,6 +87,9 @@ public:
     // Son sorudan beri değişen ilk satır (yoksa npos): sözdizimi durumları bu satırdan sonrası için
     // geçersizdir.
     std::size_t take_changed_line() const { return std::exchange(changed_from_, std::string_view::npos); }
+    // Metni değiştiren her işlemde (düzenleme, geri alma, yeniden yükleme) artar; hareket ve seçim artırmaz.
+    // Dil sunucusu eşitlemesi metni kopyalamadan değişikliği buradan anlar.
+    std::uint64_t edit_count() const { return edit_count_; }
 
     // --- Düzenleme ---
     void type_text(std::string_view text);  // tek tuş: ardışık yazım tek geri alma adımında birleşir
@@ -168,6 +175,7 @@ private:
     };
     mutable std::optional<RowCache> row_cache_;
     mutable std::size_t changed_from_ = 0;
+    std::uint64_t edit_count_ = 0;
     std::size_t cursor_ = 0;
     std::optional<std::size_t> anchor_;
     std::optional<int> goal_cell_;

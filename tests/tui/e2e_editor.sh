@@ -224,6 +224,46 @@ wait_screen "Enter edit"
 keys q
 check "q quits from the list with status 0" test "$(wait_exit)" = 0
 
+# 5b. T91: bidi ve sıfır genişlikli karakter gerçek terminalde işaret olur; imleç adını söyler, silme yalnız
+# onun baytlarını siler.
+clear_notes
+printf 'a\xe2\x80\xaeb\xe2\x80\x8bc' | put_note t.md
+start_app
+check "hidden characters show as markers in the preview" screen_has "a�b�c"
+check "no raw bidi character reaches the terminal" screen_lacks "$(printf '\xe2\x80\xae')"
+keys Enter
+wait_screen "Ctrl+S save"
+keys Right
+wait_screen "U+202E RIGHT-TO-LEFT OVERRIDE"
+literal $'\e[1;2C'
+keys DC
+keys C-s
+wait_screen "Saved"
+check_bytes "deleting the marker removes exactly its bytes" "$notes/t.md" 'ab\xe2\x80\x8bc'
+keys C-q
+wait_screen "← list"
+keys Escape
+wait_screen "Enter edit"
+keys q
+check "q quits after the hidden character check" test "$(wait_exit)" = 0
+
+# 5c. ZWJ/ZWNJ gizli karakter değildir: emoji ZWJ dizisi işaretsiz çizilir, editörde ad söylenmez.
+clear_notes
+printf 'aile \xf0\x9f\x91\xa8\xe2\x80\x8d\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x91\xa7 son' | put_note e.md
+start_app
+check "an emoji ZWJ sequence shows no marker in the preview" screen_lacks "�"
+keys Enter
+wait_screen "Ctrl+S save"
+keys End
+check "an emoji ZWJ sequence shows no marker in the editor" screen_lacks "�"
+check "no hidden character notice for ZWJ" screen_lacks "Hidden character"
+keys C-q
+wait_screen "← list"
+keys Escape
+wait_screen "Enter edit"
+keys q
+check "q quits after the emoji check" test "$(wait_exit)" = 0
+
 # 6. n: boş editör tüm terminali alır, ad ilk Ctrl+S'te sorulur; kayıttan önce dosya yok.
 clear_notes
 start_app
@@ -766,7 +806,7 @@ for width in 60 80 110 160; do
     keys Down
     sleep 0.2
     echo "bar@$width: $(bottom_line 30)"
-    check "the list bar at $width columns shows the main keys" bar_has 30 "T çöp" "Space detay" "o sırala" "v sütun" "f ara" "? yardım"
+    check "the list bar at $width columns shows the main keys" bar_has 30 ": komut" "T çöp" "Space aç" "o sırala" "v sütun" "f ara" "? yardım"
 done
 keys g
 keys g
@@ -1495,6 +1535,140 @@ same_as_fresh() {
     fi
 }
 check "the long session equals a fresh process" same_as_fresh
+keys q
+wait_exit >/dev/null
+
+# T78: bağlantı bölümü, gerçek terminalde görünür ve nota gider.
+clear_notes
+printf 'hedef notu\n' | put_note hedef.md
+printf '[[hedef]] [[yok]]\n' | put_note kaynak.md
+start_app
+keys /
+literal kaynak
+keys Enter
+sleep 0.2
+keys Right
+wait_screen "Outgoing (1)"
+check "the links section lists a missing target" screen_has "[[yok]]"
+check "the preview hints name the section key" screen_has "b links"
+keys b
+sleep 0.2
+check "b focuses the section" screen_has "Enter open"
+keys Enter
+wait_screen "Incoming (1)"
+check "Enter jumps to the linked note" screen_has "kaynak.md"
+keys q
+wait_exit >/dev/null
+
+# T79: komut paleti. Tablodaki tuşlar gerçek terminalde palet ve F1'de.
+clear_notes
+printf 'notes_dir = "/data/notes"\nlanguage = "en"\nicons = "off"\n' >"$work/home/config/config.toml"
+printf 'bir\n' | put_note palet.md
+printf 'iki\n' | put_note klasor/alt.md
+start_app "→ open"
+check "the hint bar leads with the palette" bar_has 30 ": cmd"
+literal ':'
+wait_screen "Commands"
+check "the palette names the selection" screen_has "klasor"
+check "a row shows id and label" screen_has " — "
+keys Escape
+sleep 0.2
+check "Esc closes the palette" screen_lacks "Commands"
+literal ':'
+wait_screen "Commands"
+literal 'zzqq'
+check "a hopeless filter says so" screen_has "No match"
+keys BSpace BSpace BSpace BSpace
+literal 'links.focus'
+check "an unavailable command shows why" screen_has "only in REVIEW"
+keys Enter
+sleep 0.2
+check "Enter does not run an unavailable command" screen_has "Commands"
+keys Escape
+sleep 0.2
+keys j
+literal ':'
+wait_screen "Commands"
+literal 'move'
+wait_screen "move — Move"
+keys Enter
+wait_screen "Move to"
+check "the palette runs the same move as m" screen_has "Move to"
+keys Escape
+sleep 0.2
+# Tablodaki tuşlar: palet sayfa sayfa yürünür, sağdaki tuşlar F1'de aranır.
+palette_keys="$work/palette-keys"
+: >"$palette_keys"
+literal ':'
+wait_screen "Commands"
+for page in $(seq 1 12); do
+    # Palet kutusu panellerin üstündedir: önce kutunun satırı, sonra iki boşlukla ayrılan sağdaki tuşlar.
+    screen | grep -oE '│[^│]* — [^│]*│' | sed -nE 's/^│.*[^ ]  +([^ ].*[^ ]|[^ ]) *│$/\1/p' >>"$palette_keys"
+    for step in 1 2 3 4 5 6 7 8; do
+        keys Down
+    done
+    sleep 0.2
+done
+keys Escape
+sleep 0.2
+keys F1
+sleep 0.2
+help_screens="$work/help-screens"
+: >"$help_screens"
+for page in $(seq 1 45); do
+    screen | sed 's/│/ /g; s/[()]/ /g' >>"$help_screens"
+    keys PageDown
+    sleep 0.05
+done
+keys Escape
+sleep 0.2
+every_palette_key_is_in_help() {
+    local token missing=0 count=0
+    while read -r -a tokens; do
+        for token in "${tokens[@]}"; do
+            count=$((count + 1))
+            if ! grep -qE -- "(^| )$(printf '%s' "$token" | sed 's/[][\.*^$?+(){}|/]/\\&/g')( |$)" "$help_screens"; then
+                echo "not in F1: $token"
+                missing=1
+            fi
+        done
+    done <"$palette_keys"
+    [[ "$count" -ge 30 && "$missing" -eq 0 ]]
+}
+check "every key the palette shows is in F1" every_palette_key_is_in_help
+# Tuşsuz komut ve son kullanılan: ikon ayarı config.toml'a yazar, yeniden açılışta başta gelir.
+literal ':'
+wait_screen "Commands"
+literal 'icons.toggle'
+wait_screen "icons.toggle — "
+keys Enter
+sleep 0.3
+# toml++ yazarken tek tırnak seçebilir.
+icons_set_to() { podman unshare cat "$work/home/config/config.toml" | grep -qE -- "^icons = [\"']$1[\"']$"; }
+check "icons.toggle writes config.toml" icons_set_to nerd
+keys q
+wait_exit >/dev/null
+start_app "→ open"
+literal ':'
+wait_screen "Commands"
+check "the recent command comes first after a restart" bash -c "tmux capture-pane -p -t '$session' | grep -m1 -F ' — ' | grep -qF 'icons.toggle'"
+keys Enter
+sleep 0.3
+check "icons.toggle flips back" icons_set_to off
+literal ':'
+wait_screen "Commands"
+keys Escape
+sleep 0.2
+# EDIT: `:` metindir.
+keys j Enter
+wait_screen "Ctrl+S save"
+literal ':x'
+check "colon is text in the editor" screen_lacks "Commands"
+check "colon reached the buffer" screen_has ":x"
+keys C-z C-z
+sleep 0.2
+keys C-q
+sleep 0.3
 keys q
 wait_exit >/dev/null
 

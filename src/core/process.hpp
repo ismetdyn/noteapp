@@ -26,6 +26,9 @@ std::optional<std::string> get_env_utf8(std::string_view name);
 // Programı PATH'te arar (Windows: PATHEXT'teki .com/.exe/.bat/.cmd uzantılarıyla; çalışma dizinine
 // bakılmaz). Ad dizin içeriyorsa yalnız o dizine bakılır. Bulunamazsa nullopt.
 std::optional<std::filesystem::path> find_program(std::string_view name);
+// find_program'ın yalnız mutlak yollara bakan eşi (dil sunucuları): göreli PATH girdisi ("." ya da
+// node_modules/.bin) ve göreli dizinli ad çalışma dizinine göre çözülürdü, atlanır. Dönen yol mutlaktır.
+std::optional<std::filesystem::path> find_program_on_absolute_path(std::string_view name);
 
 // Çalışan ikilinin mutlak yolu (Windows GetModuleFileNameW, Linux /proc/self/exe); bulunamazsa boş.
 // TUI/GUI `note`'u kendi dizininde, CLI arka plan senkronu için kendini bununla bulur.

@@ -2,7 +2,10 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -14,7 +17,23 @@ inline constexpr std::size_t kDefaultSlugMaxLength = 60;
 // Geçersiz UTF-8'de (fazla uzun kodlama, vekil çift, > U+10FFFF, kesik dizi) nullopt döner.
 std::optional<std::u32string> decode_utf8(std::string_view utf8);
 std::string encode_utf8(std::u32string_view codepoints);
+// Basit küçük harf (ASCII, Latin-1, Latin Extended-A); I ve İ -> i. Türkçe harfleri ASCII'ye indirmez.
+char32_t to_lower(char32_t cp);
 bool is_valid_utf8(std::string_view utf8);
+
+// Görünmez biçim karakterleri: bidi denetimleri (U+061C, U+200E/F, U+202A–E, U+2066–9), sahtecilikte
+// kullanılan sıfır genişlikliler (U+200B, U+2060–4, U+FEFF), U+180E ve boş görünen Hangul dolguları (U+115F,
+// U+1160, U+3164, U+FFA0). Metni saklandığından farklı sırayla ya da
+// eksik gösterebilirler (Trojan Source); TUI, GUI ve terminaldeki CLI bunları görünür işaretle çizer, baytlar
+// değişmez. ZWNJ/ZWJ (U+200C/D) bilerek yok: emoji dizilerinde ve Farsça/Arapça/Hint yazılarında meşrudur.
+struct HiddenControl {
+    char32_t code_point;
+    std::string_view name;  // Unicode adı: "RIGHT-TO-LEFT OVERRIDE"
+};
+std::span<const HiddenControl> hidden_controls();
+const HiddenControl* find_hidden_control(char32_t cp);  // değilse nullptr
+// Geçerli dizilerdeki görünmez biçim karakteri sayısı; bozuk bayt atlanır. Doğrusal, ayırma yapmaz.
+std::size_t count_hidden_controls(std::string_view utf8);
 
 // HTML varlığı ("&amp;", "&#351;") -> metin. Yalnız sayısal ve en yaygın adlı varlıklar çözülür; bilinmeyen
 // ad yazıldığı gibi kalır, geçersiz sayı U+FFFD olur. ponytail: tam tablo md4c-html'in entity.c'sinde;
@@ -43,6 +62,13 @@ std::string first_non_empty_line(std::string_view content);
 //    boşluksuz; değer boş değil). `Toplantı: bütçe`, `Not: süt al` ve `https://x` düzyazıdır, satır aynen
 //    döner.
 std::string note_name_source(std::string_view content, std::string_view type);
+
+// "512 B", "1.5 KiB", "2.0 MiB".
+std::string human_size(std::uintmax_t bytes);
+// Yerel saatle "2026-11-01 14:32".
+std::string local_time_text(std::filesystem::file_time_type time);
+// Bugünse "14:32", başka günse "2026-11-01" (yerel saat).
+std::string short_time_text(std::filesystem::file_time_type time, std::chrono::system_clock::time_point now);
 
 // env/properties/ini/toml/yaml: değerleri sır olabilir; adlara ve öneriye yalnız anahtarları girer.
 bool type_has_secret_values(std::string_view type);

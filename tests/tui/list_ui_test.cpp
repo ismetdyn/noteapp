@@ -114,6 +114,28 @@ struct StoreFixture {
 
 }  // namespace
 
+TEST_CASE("a notice is dim in the bottom bar and a message wins over it") {
+    core::init_i18n("en");
+    const tui::TuiState s;
+    const auto bottom_row = [&](const tui::StatusLine& status) {
+        auto screen =
+            ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth), ftxui::Dimension::Fixed(kHeight));
+        ftxui::Render(screen, tui::render(s, {}, status, {kWidth, kHeight}));
+        std::string row;
+        for (int x = 0; x < kWidth; ++x)
+            row += screen.PixelAt(x, kHeight - 1).character;
+        const bool is_dim = screen.PixelAt(0, kHeight - 1).dim;
+        return std::pair(row, is_dim);
+    };
+    const auto [notice, notice_is_dim] = bottom_row({"", "", "stray notice"});
+    CHECK(notice.find("stray notice") != std::string::npos);
+    CHECK(notice_is_dim);
+    const auto [message, message_is_dim] = bottom_row({"", "important", "stray notice"});
+    CHECK(message.find("important") != std::string::npos);
+    CHECK(message.find("stray notice") == std::string::npos);
+    CHECK_FALSE(message_is_dim);
+}
+
 TEST_CASE("slash: query arguments filter and sort, the text still fuzzy matches") {
     tui::TuiState s;
     s.set_notes(sample());
@@ -669,6 +691,19 @@ TEST_CASE("terminal_safe replaces control, C1 and bidi characters and keeps text
                              "exe") == "gpj\xEF\xBF\xBD"
                                        "exe");  // sağdan sola geçersiz kılma
     CHECK(tui::terminal_safe("\xE2\x81\xA6x") == "\xEF\xBF\xBDx");
+    // Sıfır genişlikli karakterler (U+200B, U+200D, U+2060, metin içi U+FEFF) da görünür işaret olur.
+    CHECK(tui::terminal_safe("a\xE2\x80\x8B"
+                             "c\xE2\x81\xA0"
+                             "d\xEF\xBB\xBF"
+                             "e") == "a\xEF\xBF\xBD"
+                                     "c\xEF\xBF\xBD"
+                                     "d\xEF\xBF\xBD"
+                                     "e");
+    // ZWJ/ZWNJ meşru metindir: aile emojisi ve Farsça ZWNJ'li sözcük aynen kalır.
+    const std::string family = "\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7";
+    CHECK(tui::terminal_safe(family) == family);
+    CHECK(tui::terminal_safe("\xD9\x85\xDB\x8C\xE2\x80\x8C\xD8\xAE") ==
+          "\xD9\x85\xDB\x8C\xE2\x80\x8C\xD8\xAE");
     CHECK(tui::terminal_safe("a\xFF") == "a\xEF\xBF\xBD");
     CHECK(tui::human_size(512) == "512 B");
     CHECK(tui::human_size(2048) == "2.0 KiB");
@@ -678,7 +713,7 @@ TEST_CASE("snippets and trash paths are sanitized before rendering, without movi
     core::init_i18n("en");
     tui::TuiState s;
     s.set_notes({info("a.md")});
-    const std::string evil = "x\xE2\x80\xAE\x1B[31mkelime";
+    const std::string evil = "x\xE2\x80\xAE\xE2\x80\x8B\x1B[31mkelime";
     s.set_global_searcher([&](std::string_view, std::span<const core::NoteMeta>) {
         search::GlobalHit hit{0, core::NotePath::parse("a.md").value()};
         hit.content_matched = true;
@@ -693,7 +728,8 @@ TEST_CASE("snippets and trash paths are sanitized before rendering, without movi
     const std::string shown = screen.ToString();
     CHECK(has(shown, "kelime"));
     CHECK_FALSE(has(shown, "\xE2\x80\xAE"));
-    CHECK(has(shown, "\xEF\xBF\xBD"));
+    CHECK_FALSE(has(shown, "\xE2\x80\x8B"));
+    CHECK(has(shown, "x\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD[31m"));  // her kod noktası bir işaret
 
     tui::TuiState trash;
     trash.enter_trash({core::TrashItem{core::NotePath::parse("gpj\xE2\x80\xAE"

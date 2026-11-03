@@ -31,12 +31,13 @@ ftxui::Color span_color(InputSpan::Kind kind) {
 }
 
 // [begin, end) aralığını renk sınırlarından böler. Sınırlar sözcük ve `:` kıyısında ya da kod noktası başında
-// olduğundan çok baytlı karakter bölünmez.
+// olduğundan çok baytlı karakter bölünmez. Metin güvenilmezdir: `F2` hostile adla dolu açılır, yazım bidi
+// karakteri taşıyabilir.
 void append_runs(ftxui::Elements& out, std::string_view text, std::size_t begin, std::size_t end,
                  std::span<const InputSpan> spans) {
     const auto plain = [&](std::size_t from, std::size_t to) {
         if (from < to)
-            out.push_back(ftxui::text(std::string(text.substr(from, to - from))));
+            out.push_back(ftxui::text(terminal_safe(text.substr(from, to - from))));
     };
     std::size_t at = begin;
     for (const InputSpan& span : spans) {
@@ -45,7 +46,7 @@ void append_runs(ftxui::Elements& out, std::string_view text, std::size_t begin,
         if (from >= to)
             continue;
         plain(at, from);
-        out.push_back(ftxui::text(std::string(text.substr(from, to - from))) |
+        out.push_back(ftxui::text(terminal_safe(text.substr(from, to - from))) |
                       ftxui::color(span_color(span.kind)));
         at = to;
     }
@@ -85,10 +86,12 @@ InputCells input_text_cells(const InputLine& line, std::span<const InputSpan> sp
         result.cells.push_back(ftxui::text(std::string(kEllipsis)));
     append_runs(result.cells, value, before.size() - tail, before.size(), spans);
     result.cells.push_back(ftxui::text(std::string(kCursor)));
-    int used = ftxui::string_width(shown_before);
-    if (ftxui::string_width(after) <= room - used) {
+    // Çizilen terminal_safe metin ölçülür: ham ESC ya da bozuk bayt 0 hücre sayılır, U+FFFD olarak 1 hücre
+    // çizilir.
+    int used = ftxui::string_width(terminal_safe(shown_before));
+    if (const int after_cells = ftxui::string_width(terminal_safe(after)); after_cells <= room - used) {
         append_runs(result.cells, value, before.size(), value.size(), spans);
-        used += ftxui::string_width(after);
+        used += after_cells;
     }
     if (const std::string shown_ghost = head_cells(terminal_safe(ghost), room - used); !shown_ghost.empty()) {
         result.cells.push_back(ftxui::text(shown_ghost) | ftxui::dim);
@@ -103,13 +106,15 @@ ftxui::Element input_line_bar(const std::string& label, const InputLine& line,
                               const std::string& hints, int width, const std::string& counter,
                               const std::string& error) {
     using namespace ftxui;
-    const std::string prefix = label + " ";
+    // Etiket klasör adını, hata ve sayaç dosya adını taşıyabilir: girdi metni gibi çizimde arınır.
+    const std::string prefix = terminal_safe(label) + " ";
     const int separator = static_cast<int>(kHintSeparator.size());
     // Uzun hata girdiyi yemesin: kullanıcı neyi düzelteceğini görmeli. Metin satırın yarısına dek
     // önceliklidir.
     const int kept_cells = std::min(string_width(line.text()), width / 2);
     const int note_room = width - string_width(prefix) - kCursorCells - separator - kept_cells;
-    const std::string note = head_cells(!error.empty() ? error : counter, std::max(note_room, 0));
+    const std::string note =
+        head_cells(terminal_safe(!error.empty() ? error : counter), std::max(note_room, 0));
     const int note_cells = note.empty() ? 0 : string_width(note) + separator;
     const int room = std::max(width - string_width(prefix) - kCursorCells - note_cells, 1);
     InputCells content = input_text_cells(line, spans, ghost, room);

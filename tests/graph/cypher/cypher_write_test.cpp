@@ -88,6 +88,25 @@ TEST_CASE("read_only_rejects_every_write_clause_and_file_bytes_unchanged") {
     CHECK(ops_count(f.path()) == ops_before);
 }
 
+// Saklanan görünümün kayıttaki denetimi (T81): depo olmadan aynı kural, aynı hata.
+TEST_CASE("check_query_rejects_every_write_clause_without_a_database") {
+    for (const std::string_view text : kWriteClauses) {
+        INFO(std::string(text));
+        const Result<void> checked = check_query(text, QueryMode::ReadOnly);
+        REQUIRE_FALSE(checked.has_value());
+        CHECK(checked.error().code == Error::Code::ReadOnlyViolation);
+        CHECK_FALSE(arg_of(checked.error(), "line").empty());
+        CHECK(check_query(text, QueryMode::ReadWrite).has_value());
+    }
+    CHECK(check_query("MATCH (n:Note) RETURN n ORDER BY n.name LIMIT 5", QueryMode::ReadOnly).has_value());
+    CHECK(check_query("MATCH (n RETURN n", QueryMode::ReadOnly).error().code == Error::Code::Syntax);
+    const Result<void> param = check_query("MATCH (n) WHERE n.k = $k RETURN n", QueryMode::ReadOnly);
+    REQUIRE_FALSE(param.has_value());
+    CHECK(param.error().message_key == "graph.cypher_missing_param");
+    CHECK(check_query("MATCH (n) WHERE n.k = $k RETURN n", QueryMode::ReadOnly, {{"k", std::int64_t{1}}})
+              .has_value());
+}
+
 TEST_CASE("query_only_is_a_real_second_defense_on_the_connection") {
     GraphFixture f;
     must_write(f.graph, "CREATE (:L {k: 1})");

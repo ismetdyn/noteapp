@@ -1,13 +1,23 @@
 noteapp_add_test(gui
+    browser_test.cpp
     content_search_test.cpp
     folders_test.cpp
+    graph_layout_test.cpp
     icon_font_test.cpp
+    info_test.cpp
     layout_test.cpp
+    links_test.cpp
     main_window_test.cpp
+    map_test.cpp
     note_list_model_test.cpp
     pdf_test.cpp
+    preview_layout_test.cpp
+    preview_test.cpp
+    row_numbers_test.cpp
     save_test.cpp
+    search_args_test.cpp
     settings_test.cpp
+    tabs_test.cpp
     toolbar_test.cpp
     trash_test.cpp)
 target_link_libraries(gui_tests PRIVATE noteapp_detect)

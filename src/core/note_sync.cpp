@@ -1,12 +1,15 @@
 #include "core/note_sync.hpp"
 
 #include "core/i18n.hpp"
+#include "core/log.hpp"
 #include "core/note_store_impl.hpp"
 
 #include <algorithm>
 #include <format>
+#include <iterator>
 #include <map>
 #include <mutex>
+#include <set>
 
 namespace noteapp::core {
 
@@ -42,6 +45,48 @@ int count_changes(const Snapshot* before, const Snapshot& after) {
     return changed;
 }
 
+// Bu ingest'te gövdesi değişen notlar (yeni gelen dahil); çakışan not çözümde etiketlenir, sayılmaz.
+std::vector<graph::NodeId> changed_bodies(const Snapshot* before, const Snapshot& after) {
+    std::map<graph::NodeId, Revision> known;
+    if (before != nullptr)
+        for (const std::vector<NoteRow>* rows : {&before->live, &before->trash})
+            for (const NoteRow& row : *rows)
+                known.emplace(row.id, row.info.revision);
+    std::vector<graph::NodeId> changed;
+    for (const std::vector<NoteRow>* rows : {&after.live, &after.trash})
+        for (const NoteRow& row : *rows) {
+            const auto found = known.find(row.id);
+            if (!row.conflicted && (found == known.end() || found->second != row.info.revision))
+                changed.push_back(row.id);
+        }
+    return changed;
+}
+
+// Bu ingest'te yeni bir yola gelen (yeni, taşınan, çöpten dönen) notları [[metin]]le bağlayan notlar.
+std::set<graph::NodeId> sources_of_placed(const Snapshot* before, const Snapshot& after) {
+    std::vector<std::string> paths;
+    for (const NoteRow& row : after.live) {
+        std::string path = row.info.path.string();
+        if (before != nullptr)
+            if (const auto old = before->live_by_id.find(row.id);
+                old != before->live_by_id.end() && before->live[old->second].info.path.string() == path)
+                continue;
+        paths.push_back(std::move(path));
+    }
+    if (paths.empty())
+        return {};
+    return notes_linking(after, placed_keys(paths));
+}
+
+// Gövdeden türeyen veri alan cihazda tamamlanır. Etiketsiz sürümün (ya da etiketlerden önceki günlüğün)
+// gövdesi TAGGED taşımaz; kaynağı yazan cihazda henüz olmayan hedefin kenarı da yoktur. Yalnız eksik olan
+// yazılır: doğru sürümün yazmasında kenarlar zaten tamdır, işlem yazılmaz, cihazlar arasında gidip gelmez.
+// Türetilmiş veridir: hata senkronu durdurmaz, loglanır; notun sonraki yazması onarır.
+void derive_ingested(NoteStore::Impl& impl, const std::vector<graph::NodeId>& ids) {
+    if (auto done = impl.derive_notes(ids, true); !done)
+        log_warn("note sync: cannot derive ingested notes: " + format_error(done.error()));
+}
+
 }  // namespace
 
 std::expected<LogIngest, Error>
@@ -65,6 +110,10 @@ ingest_note_logs(NoteStore& store, std::span<const std::filesystem::path> logs, 
     if (!merged_view)
         return std::unexpected(impl.last_error.value_or(io_error(path_utf8(impl.database()), "unreadable")));
     result.changed_notes = count_changes(before.get(), *merged_view);
+    std::vector<graph::NodeId> derive = changed_bodies(before.get(), *merged_view);
+    std::ranges::copy(sources_of_placed(before.get(), *merged_view), std::back_inserter(derive));
+    std::ranges::sort(derive);
+    derive.erase(std::ranges::unique(derive).begin(), derive.end());
     // Çakışan her not ayrı, her kopya ayrı işlem: biri çözülemezse (çerçeveye sığmıyor, disk) head'ler
     // yerinde kalır, raporlanır, diğerleri ve senkron sürer. Çerçeve içeriği ingest'i durduramaz (SPEC-graph
     // "Güvenilmez girdi").
@@ -89,6 +138,7 @@ ingest_note_logs(NoteStore& store, std::span<const std::filesystem::path> logs, 
                 more = step->more;
             }
         }
+    derive_ingested(impl, derive);
     impl.snapshot.reset();
     return result;
 }

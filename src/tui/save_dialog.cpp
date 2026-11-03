@@ -4,7 +4,6 @@
 #include "core/text.hpp"
 #include "search/fuzzy.hpp"
 #include "tui/editor_session.hpp"
-#include "tui/folder_tree.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -341,6 +340,11 @@ RenameState::RenameState(core::NotePath from, SharedInputSources sources, std::s
 RenameState::RenameState(std::vector<ListItem> items, std::string folder, SharedInputSources sources)
     : from_(items.front().path), is_folder_(true), items_(std::move(items)), line_(InputKind::Folder) {
     line_.set_text(std::move(folder));
+    line_.set_sources(std::move(sources));
+}
+
+RenameState::RenameState(LinkTarget, core::NotePath from, SharedInputSources sources)
+    : from_(std::move(from)), is_link_(true) {
     line_.set_sources(std::move(sources));
 }
 

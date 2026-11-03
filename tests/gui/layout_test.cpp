@@ -18,17 +18,24 @@ using noteapp::gui::Tab;
 
 const char* const kNotesItems[] = {"search",
                                    "mode",
-                                   "folder_tree",
                                    "toolbar_new_note",
                                    "toolbar_new_folder",
+                                   "toolbar_rename",
                                    "toolbar_delete",
                                    "toolbar_trash",
                                    "toolbar_move",
                                    "toolbar_export",
+                                   "toolbar_view_tree",
+                                   "toolbar_view_details",
+                                   "toolbar_view_map",
                                    "note_list",
                                    "header",
+                                   "preview_toggle",
                                    "type",
                                    "editor",
+                                   "info_header",
+                                   "links_header",
+                                   "links_list",
                                    "count",
                                    "status",
                                    "sync"};
@@ -112,13 +119,13 @@ std::vector<std::string> dialog_item_names(const ItemRects& rects) {
     return names;
 }
 
-// Bölmeden taşan satır kırpılır, altındaki araç çubuğuyla çakışmaz: yalnız görünen kısmı denetlenir. Satırlar
-// ağacın içindedir; ağacın kendisiyle eşleştirilmez.
-std::vector<std::string> clip_folder_rows(ItemRects& rects) {
-    const View::ItemRect tree = rects.at("folder_tree");
+// Listeden taşan satır kırpılır, altındaki durum çubuğuyla çakışmaz: yalnız görünen kısmı denetlenir.
+// Satırlar listenin içindedir; listenin kendisiyle eşleştirilmez.
+std::vector<std::string> clip_browser_rows(ItemRects& rects) {
+    const View::ItemRect tree = rects.at("note_list");
     std::vector<std::string> rows;
     for (auto& [name, rect] : rects) {
-        if (!name.starts_with("folder:"))
+        if (!name.starts_with("folder:") && !name.starts_with("note:"))
             continue;
         rect.min_y = std::max(rect.min_y, tree.min_y);
         rect.max_y = std::min(rect.max_y, tree.max_y);
@@ -137,11 +144,15 @@ void check_notes_tab(const LayoutScene& scene) {
         check_inside_x(rects, name, frame);
         check_inside_y(rects, name, frame);
     }
-    const std::vector<std::string> rows = clip_folder_rows(rects);
-    REQUIRE(rows.size() >= 2);  // kök ve en az bir klasör: boş liste bu denetimi yanlış yeşil yapmasın
+    const std::vector<std::string> rows = clip_browser_rows(rects);
+    // Kök, açılmış klasörler ve seçili not: boş liste bu denetimi yanlış yeşil yapmasın.
+    REQUIRE(std::ranges::count_if(rows, [](const std::string& row) { return row.starts_with("folder:"); }) >=
+            2);
+    REQUIRE(std::ranges::count_if(rows, [](const std::string& row) { return row.starts_with("note:"); }) >=
+            1);
     for (const std::string& row : rows)
-        check_inside_x(rects, row, rects.at("folder_tree"));
-    std::erase(names, "folder_tree");
+        check_inside_x(rects, row, rects.at("note_list"));
+    std::erase(names, "note_list");
     names.insert(names.end(), rows.begin(), rows.end());
     check_no_pair_overlaps(rects, names);
 }
@@ -245,11 +256,6 @@ void drag_left_pane(View& view, float delta_x) {
     drag(view, pane.max_x - 1.0F, (pane.min_y + pane.max_y) / 2.0F, delta_x, 0.0F);
 }
 
-void drag_folder_pane(View& view, float delta_y) {
-    const View::ItemRect pane = view.item_rects().at("folder_tree");
-    drag(view, (pane.min_x + pane.max_x) / 2.0F, pane.max_y - 1.0F, 0.0F, delta_y);
-}
-
 float rect_width(const View::ItemRect& rect) {
     return rect.max_x - rect.min_x;
 }
@@ -320,8 +326,12 @@ TEST_CASE("the trash view and the undo button fit at every scale, also in the sm
             const ItemRects rects = scene.view->item_rects();
             const View::ItemRect frame = window_frame();
             const View::ItemRect& left = rects.at("left_pane");
-            std::vector<std::string> names = {"toolbar_trash", "trash_title", "trash_restore", "trash_purge",
-                                              "trash_empty",   "trash_back",  "note_list"};
+            check_inside_x(rects, "toolbar_trash", frame);
+            check_inside_y(rects, "toolbar_trash", frame);
+            CHECK(rects.at("toolbar_trash").max_y <=
+                  left.min_y + kTolerance);  // araç çubuğu iki bölmenin üstünde
+            std::vector<std::string> names = {"trash_title", "trash_restore", "trash_purge",
+                                              "trash_empty", "trash_back",    "note_list"};
             for (const std::string& name : names) {
                 REQUIRE_MESSAGE(rects.contains(name), name);
                 check_inside_x(rects, name, left);
@@ -336,6 +346,214 @@ TEST_CASE("the trash view and the undo button fit at every scale, also in the sm
             }
             check_no_pair_overlaps(rects, bar);
         }
+    }
+}
+
+// Sıra no satırın içinde, listenin yatay sınırında kalır; numarasız sahne bu denetimi yanlış yeşil yapmasın.
+void check_row_numbers(const ItemRects& rects, const std::string& prefix, const View::ItemRect& frame,
+                       int at_least) {
+    int numbers = 0;
+    for (const auto& [name, rect] : rects) {
+        if (!name.starts_with(prefix))
+            continue;
+        ++numbers;
+        check_inside_x(rects, name, frame);
+    }
+    CHECK(numbers >= at_least);
+}
+
+TEST_CASE("the open info panel, row numbers and the preview fit at every scale, also in the smallest window") {
+    for (const float scale : {1.0F, 1.25F, 1.5F, 2.0F}) {
+        for (const ViewSize size : {ViewSize{1000, 650}, ViewSize{1, 1}}) {
+            CAPTURE(scale);
+            CAPTURE(size.width);
+            LayoutScene scene(size.width, size.height, scale);
+            scene.state->set_row_numbers(true);
+            scene.state->set_info_open(true);
+            gui_test::settle(*scene.view);
+            ItemRects rects = scene.view->item_rects();
+            const View::ItemRect frame = window_frame();
+            std::vector<std::string> names = {"header", "type", "editor", "info_header", "info_list",
+                                              "links_header", "links_list", "count", "status", "sync"};
+            for (const std::string& name : names) {
+                REQUIRE_MESSAGE(rects.contains(name), name);
+                check_inside_x(rects, name, frame);
+                check_inside_y(rects, name, frame);
+            }
+            check_no_pair_overlaps(rects, names);
+            CHECK(rect_height(rects.at("editor")) >= font_pixels());  // paneller editörü yok etmedi
+            check_row_numbers(rects, "row_number:", rects.at("note_list"), 2);
+
+            scene.show_details_view();
+            rects = scene.view->item_rects();
+            REQUIRE(rects.contains("details_header:number"));
+            check_inside_x(rects, "details_header:number", rects.at("note_list"));
+            check_row_numbers(rects, "details_number:", rects.at("details_header:number"), 1);
+
+            // Önizleme editörün yerini alır; başlık satırındaki düğmeler ve paneller yerinde kalır.
+            scene.state->toggle_preview();
+            gui_test::settle(*scene.view);
+            rects = scene.view->item_rects();
+            CHECK_FALSE(rects.contains("editor"));
+            names = {"header", "preview_toggle", "type", "preview", "info_header", "info_list",
+                     "links_header", "links_list", "count", "status", "sync"};
+            for (const std::string& name : names) {
+                REQUIRE_MESSAGE(rects.contains(name), name);
+                check_inside_x(rects, name, frame);
+                check_inside_y(rects, name, frame);
+            }
+            check_no_pair_overlaps(rects, names);
+            CHECK(rect_height(rects.at("preview")) >= font_pixels());
+            REQUIRE(rects.contains("preview_block:0"));
+            check_inside_x(rects, "preview_block:0", rects.at("preview"));
+        }
+    }
+}
+
+TEST_CASE("the details view and the folder summary fit at every scale, also in the smallest window") {
+    for (const float scale : {1.0F, 1.25F, 1.5F, 2.0F}) {
+        for (const ViewSize size : {ViewSize{1000, 650}, ViewSize{1, 1}}) {
+            CAPTURE(scale);
+            CAPTURE(size.width);
+            LayoutScene scene(size.width, size.height, scale);
+            scene.show_details_view();
+            REQUIRE(scene.state->current_folder() ==
+                    noteapp::core::folder_of(*noteapp::core::NotePath::parse(gui_test::kLongNotePath)));
+            const View::ItemRect frame = window_frame();
+            const auto check_fixed = [&](const ItemRects& rects, std::vector<std::string> names) {
+                for (const auto& [name, rect] : rects) {
+                    if (name.starts_with("crumb:") || name.starts_with("toolbar_"))
+                        names.push_back(name);
+                }
+                REQUIRE(names.size() >
+                        12);  // dört yol düğmesi ve araç çubuğu: boş liste yanlış yeşil olmasın
+                for (const std::string& name : names) {
+                    REQUIRE_MESSAGE(rects.contains(name), name);
+                    check_inside_x(rects, name, frame);
+                    check_inside_y(rects, name, frame);
+                }
+                check_no_pair_overlaps(rects, names);
+            };
+            ItemRects rects = scene.view->item_rects();
+            CHECK(rects.contains("note:" + gui_test::kLongNotePath));
+            check_fixed(rects,
+                        {"search", "mode", "details_up", "note_list", "editor", "count", "status", "sync"});
+
+            scene.state->select_folder(scene.state->current_folder());
+            gui_test::settle(*scene.view);
+            rects = scene.view->item_rects();
+            CHECK_FALSE(rects.contains("editor"));
+            check_fixed(rects, {"search", "mode", "details_up", "note_list", "folder_summary", "count",
+                                "status", "sync"});
+        }
+    }
+}
+
+// T84: harita denetimleri sığar, alt satıra iner; sığdırılmış çizgenin düğümleri tuvalin içindedir.
+TEST_CASE("the map view and its controls fit at every scale, also in the smallest window") {
+    for (const float scale : {1.0F, 1.25F, 1.5F, 2.0F}) {
+        for (const ViewSize size : {ViewSize{1000, 650}, ViewSize{1, 1}}) {
+            CAPTURE(scale);
+            CAPTURE(size.width);
+            LayoutScene scene(size.width, size.height, scale);
+            scene.show_map_view();
+            const ItemRects rects = scene.view->item_rects();
+            const View::ItemRect frame = window_frame();
+            std::vector<std::string> fixed = {"search",     "mode",   "map_whole", "map_depth", "map_tags",
+                                              "map_canvas", "editor", "count",     "status",    "sync"};
+            for (const auto& [name, rect] : rects) {
+                if (name.starts_with("toolbar_"))
+                    fixed.push_back(name);
+            }
+            for (const std::string& name : fixed) {
+                REQUIRE_MESSAGE(rects.contains(name), name);
+                check_inside_x(rects, name, frame);
+                check_inside_y(rects, name, frame);
+            }
+            check_no_pair_overlaps(rects, fixed);
+            std::size_t nodes = 0;
+            for (const auto& [name, rect] : rects) {
+                if (!name.starts_with("map:"))
+                    continue;
+                ++nodes;
+                check_inside_x(rects, name, rects.at("map_canvas"));
+                check_inside_y(rects, name, rects.at("map_canvas"));
+            }
+            CHECK(nodes >=
+                  3);  // uzun yollu not, bağlandığı ve ilişkili notlar: boş harita yanlış yeşil olmasın
+        }
+    }
+}
+
+// T85: sekme çubuğu sağ bölmede, başlık satırının üstünde; çok sekmede kayar, etkin sekme görünür kalır.
+TEST_CASE("the editor tab bar fits above the editor at every scale, also with many tabs") {
+    constexpr int kFewTabs = 3;
+    constexpr int kManyTabs = 20;
+    for (const float scale : {1.0F, 1.25F, 1.5F, 2.0F}) {
+        for (const ViewSize size : {ViewSize{1000, 650}, ViewSize{1, 1}}) {
+            for (const int count : {kFewTabs, kManyTabs}) {
+                CAPTURE(scale);
+                CAPTURE(size.width);
+                CAPTURE(count);
+                LayoutScene scene(size.width, size.height, scale);
+                scene.open_tabs(count);
+                const ItemRects rects = scene.view->item_rects();
+                const View::ItemRect frame = window_frame();
+                const std::vector<std::string> names = {"note_tabs", "header", "type", "editor",
+                                                        "count",     "status", "sync"};
+                for (const std::string& name : names) {
+                    REQUIRE_MESSAGE(rects.contains(name), name);
+                    check_inside_x(rects, name, frame);
+                    check_inside_y(rects, name, frame);
+                }
+                check_no_pair_overlaps(rects, names);
+                const View::ItemRect& bar = rects.at("note_tabs");
+                CHECK(bar.max_y <= rects.at("header").min_y + kTolerance);
+                CHECK(bar.min_x >= rects.at("left_pane").max_x - kTolerance);
+                CHECK(rect_height(bar) >= font_pixels());
+                const std::string active = std::format("note_tab:{}", scene.state->active_tab());
+                REQUIRE(rects.contains(active));
+                check_inside_x(rects, active, bar);  // kaydırılan çubukta etkin sekme görünür
+                check_inside_y(rects, active, bar);
+            }
+        }
+    }
+}
+
+TEST_CASE("every Details column and cell is in view at the default pane width") {
+    constexpr int kOldMinutes = 400 * 24 * 60;  // tarih "2025-..." biçiminde, saat değil: en geniş kısa biçim
+    for (const float scale : {1.0F, 1.25F, 1.5F, 2.0F}) {
+        CAPTURE(scale);
+        LayoutScene scene(1000, 650, scale);
+        const std::string folder =
+            noteapp::core::folder_of(*noteapp::core::NotePath::parse(gui_test::kLongNotePath));
+        scene.fixture.add_note(folder + "/geçen-yıldan-kalma-uzun-adlı-bir-not.md", "eski\n", kOldMinutes);
+        scene.state->rescan();
+        scene.show_details_view();
+        REQUIRE(scene.state->layout().left_pane_width ==
+                doctest::Approx(noteapp::gui::GuiLayout{}.left_pane_width));
+        const ItemRects rects = scene.view->item_rects();
+        const View::ItemRect list = rects.at("note_list");
+        std::vector<View::ItemRect> columns;
+        for (int column = 0; column < 4; ++column) {
+            const std::string name = "details_header:" + std::to_string(column);
+            REQUIRE_MESSAGE(rects.contains(name), name);
+            check_inside_x(rects, name, list);
+            columns.push_back(rects.at(name));
+        }
+        CHECK(rect_width(columns[0]) >= font_pixels());  // ad sütunu sıfıra inmedi
+        int cells = 0;
+        for (const auto& [name, rect] : rects) {
+            if (!name.starts_with("details_cell:"))
+                continue;
+            ++cells;
+            const auto column =
+                static_cast<std::size_t>(name[std::string_view("details_cell:").size()] - '0');
+            REQUIRE(column < columns.size());
+            check_inside_x(rects, name, columns[column]);  // hücre metni kendi sütununa sığdı, kesilmedi
+            check_inside_x(rects, name, list);
+        }
+        CHECK(cells >= 6);  // iki satır, üçer sabit hücre: boş tablo yanlış yeşil olmasın
     }
 }
 
@@ -392,7 +610,6 @@ TEST_CASE("an oversized saved left pane cannot push the editor out of the window
     fixture.add_note("a.md", "a\n");
     auto state = fixture.make_state();
     state->layout().left_pane_width = 5000.0F;
-    state->layout().folder_pane_height = 5000.0F;
     auto view = gui_test::make_view(*state);
     gui_test::settle(*view);
     const ItemRects rects = view->item_rects();
@@ -406,62 +623,30 @@ TEST_CASE("shrinking the window keeps the pane sizes the user set, on screen and
     gui_test::WindowFixture fixture;
     fixture.add_note("a.md", "a\n");
     float left_width = 0.0F;
-    float folder_height = 0.0F;
     {
         auto state = fixture.make_state();
         state->layout().width = 1400;
         state->layout().height = 900;
         auto view = gui_test::make_view(*state);
         drag_left_pane(*view, 300.0F);
-        drag_folder_pane(*view, 200.0F);
         left_width = state->layout().left_pane_width;
-        folder_height = state->layout().folder_pane_height;
         REQUIRE(left_width > 600.0F);
-        REQUIRE(folder_height > 340.0F);
 
         resize_window(*view, 640, 420);
         CHECK(rect_width(view->item_rects().at("left_pane")) < left_width);  // kısıt gerçekten kırptı
-        CHECK(rect_height(view->item_rects().at("folder_tree")) < folder_height);
         check_inside_x(view->item_rects(), "editor", window_frame());
         CHECK(state->layout().left_pane_width == left_width);
-        CHECK(state->layout().folder_pane_height == folder_height);
 
         resize_window(*view, 1400, 900);
         CHECK(state->layout().left_pane_width == left_width);
-        CHECK(state->layout().folder_pane_height == folder_height);
         CHECK(rect_width(view->item_rects().at("left_pane")) == doctest::Approx(left_width).epsilon(0.01));
-        CHECK(rect_height(view->item_rects().at("folder_tree")) ==
-              doctest::Approx(folder_height).epsilon(0.01));
         REQUIRE(state->request_close());
     }
     const auto reopened = fixture.make_state();
     CHECK(reopened->layout().left_pane_width == doctest::Approx(left_width));
-    CHECK(reopened->layout().folder_pane_height == doctest::Approx(folder_height));
 }
 
-TEST_CASE("a toolbar that wraps and unwraps keeps the folder pane height") {
-    LayoutScene scene(1400, 420, 1.0F);
-    View& view = *scene.view;
-    drag_left_pane(view, 700.0F);
-    REQUIRE(view.item_rects().at("toolbar_export").min_y == view.item_rects().at("toolbar_new_note").min_y);
-    scene.state->layout().folder_pane_height = 5000.0F;  // tek satırlı araç çubuğundaki üst sınırı ölçer
-    gui_test::settle(view);
-    const float wanted = rect_height(view.item_rects().at("folder_tree")) - 2.0F;
-    scene.state->layout().folder_pane_height = wanted;
-    gui_test::settle(view);
-
-    drag_left_pane(view, -1400.0F);
-    REQUIRE(view.item_rects().at("toolbar_export").min_y > view.item_rects().at("toolbar_new_note").min_y);
-    CHECK(rect_height(view.item_rects().at("folder_tree")) < wanted);  // sarılan satır bölmeyi kırptı
-    CHECK(scene.state->layout().folder_pane_height == wanted);
-
-    drag_left_pane(view, 700.0F);
-    REQUIRE(view.item_rects().at("toolbar_export").min_y == view.item_rects().at("toolbar_new_note").min_y);
-    CHECK(rect_height(view.item_rects().at("folder_tree")) == doctest::Approx(wanted).epsilon(0.01));
-    CHECK(scene.state->layout().folder_pane_height == wanted);
-}
-
-TEST_CASE("a drag at the clamped limit and a double-click auto-fit still store the pane size") {
+TEST_CASE("a drag at the clamped limit still stores the pane size") {
     LayoutScene scene(1400, 900, 1.0F);
     View& view = *scene.view;
     drag_left_pane(view, 300.0F);
@@ -473,25 +658,6 @@ TEST_CASE("a drag at the clamped limit and a double-click auto-fit still store t
     CHECK(scene.state->layout().left_pane_width == doctest::Approx(narrowed));
     resize_window(view, 1400, 900);
     CHECK(rect_width(view.item_rects().at("left_pane")) == doctest::Approx(narrowed));
-
-    const float before = scene.state->layout().folder_pane_height;
-    const View::ItemRect pane = view.item_rects().at("folder_tree");
-    // Çift tıklama penceresi gerçek zamandır: yük altında iki tıklama arası varsayılan süreyi aşar.
-    constexpr float kUnboundedDoubleClickSeconds = 3600.0F;
-    ImGui::GetIO().MouseDoubleClickTime = kUnboundedDoubleClickSeconds;
-    ImGui::GetIO().MouseSingleClickDelay = kUnboundedDoubleClickSeconds + 1.0F;  // ImGui: tek > çift olmalı
-    ImGui::GetIO().AddMousePosEvent((pane.min_x + pane.max_x) / 2.0F, pane.max_y - 1.0F);
-    view.draw_frame();
-    for (int click = 0; click < 2; ++click) {
-        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
-        view.draw_frame();
-        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
-        view.draw_frame();
-    }
-    gui_test::settle(view);
-    CHECK(scene.state->layout().folder_pane_height != before);
-    CHECK(rect_height(view.item_rects().at("folder_tree")) ==
-          doctest::Approx(scene.state->layout().folder_pane_height));
 }
 
 TEST_CASE("a window forced below the minimum keeps every width positive") {

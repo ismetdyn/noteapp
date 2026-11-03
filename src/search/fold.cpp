@@ -70,24 +70,6 @@ char32_t strip_turkish(char32_t cp) {
 
 }  // namespace
 
-char32_t to_lower(char32_t cp) {
-    if (cp < 0x80)
-        return (cp >= U'A' && cp <= U'Z') ? cp + 0x20 : cp;
-    if (cp == 0x130)
-        return U'i';  // İ
-    // Latin-1: À-Þ (× hariç)
-    if (cp >= 0xC0 && cp <= 0xDE)
-        return cp == 0xD7 ? cp : cp + 0x20;
-    // Latin Extended-A: çift/tek çiftler; aralık sınırları Unicode tablosundan.
-    if ((cp >= 0x100 && cp <= 0x12F) || (cp >= 0x132 && cp <= 0x137) || (cp >= 0x14A && cp <= 0x177))
-        return (cp % 2 == 0) ? cp + 1 : cp;
-    if ((cp >= 0x139 && cp <= 0x148) || (cp >= 0x179 && cp <= 0x17E))
-        return (cp % 2 == 1) ? cp + 1 : cp;
-    if (cp == 0x178)
-        return 0xFF;  // Ÿ
-    return cp;
-}
-
 Folded fold(std::string_view utf8) {
     Folded out;
     out.original.reserve(utf8.size());

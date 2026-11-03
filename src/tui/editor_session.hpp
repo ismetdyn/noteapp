@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/error.hpp"
+#include "core/lsp_protocol.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
 #include "tui/clipboard.hpp"
@@ -17,6 +18,7 @@
 #include <expected>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -46,6 +48,14 @@ std::expected<DraftName, core::Error> parse_draft_name(std::string_view input,
 
 // Yalnız gösterim için: geçersiz bayt ve NUL U+FFFD olur. İmleç ve sarma hesabı geçerli UTF-8 ister.
 std::string sanitized_utf8(std::string_view raw);
+
+// Dil sunucusunun tanısı, tampondaki bayt aralığıyla; ileti sunucudan gelir ve ham kalır (çizim temizler).
+// `severity` hiçbir zaman Unspecified değildir.
+struct DiagnosticMark {
+    ByteRange range;
+    core::lsp::DiagnosticSeverity severity = core::lsp::DiagnosticSeverity::Error;
+    std::string message;
+};
 
 // Oturumun dış dünyası; testler sahte geri çağrılarla kurar, main gerçek olanlarla.
 struct EditorHost {
@@ -104,6 +114,9 @@ public:
     ReadOnly read_only() const { return read_only_; }
     bool dirty() const { return buffer_ && buffer_->dirty(); }
     const EditorBuffer* buffer() const { return buffer_ ? &*buffer_ : nullptr; }
+    // Her yeni tamponda artar: yeni tamponun edit_count'u yine 0'dan başlar, (yol, edit_count) tek başına
+    // aynı metni göstermez.
+    std::uint64_t buffer_generation() const { return buffer_generation_; }
     const std::optional<core::NotePath>& path() const { return path_; }
     bool is_draft() const { return draft_.has_value(); }
     // Sorularda gösterilen ad: notun yolu, taslakta verilen ad, adsız taslakta katalog metni.
@@ -137,6 +150,19 @@ public:
     const std::string& completion_query() const { return completion_query_; }
     const std::vector<std::string>& completion_items() const { return completion_items_; }
     std::size_t completion_selected() const { return completion_selected_; }
+    // Her açılışta artar; dil sunucusu cevabı yalnız aynı açılışa eklenir.
+    std::uint64_t completion_generation() const { return completion_generation_; }
+    // Dil sunucusunun önerileri açık listeye, sözcük önerilerinin önüne eklenir. Liste kapandıysa ya da
+    // `generation` eskiyse yok sayılır. Etiket temizlenip gösterilir; ekleme metni yalnız tek satır ve
+    // denetim karaktersizse kullanılır, değilse temiz etiket eklenir.
+    void add_completion_items(std::uint64_t generation, std::span<const core::lsp::CompletionItem> items);
+    // Dil sunucusunun güncel tanıları; aralıklar bu tampona göre kısılmış olmalıdır.
+    void set_diagnostics(std::vector<DiagnosticMark> marks) { diagnostics_ = std::move(marks); }
+    std::span<const DiagnosticMark> diagnostics() const { return diagnostics_; }
+    // İmlecin üstündeki (ya da hemen sonundaki) tanı; yoksa nullptr.
+    const DiagnosticMark* diagnostic_at_cursor() const;
+    // Tek seferlik bilgi iletisi (ör. dil sunucusu durdu); sonraki tuş siler.
+    void show_notice(std::string text) { show_info(std::move(text)); }
     int columns() const { return columns_; }
     int rows() const { return rows_; }
 
@@ -220,6 +246,10 @@ private:
     std::vector<std::string> completion_items_;
     std::string completion_query_;
     std::size_t completion_selected_ = 0;
+    std::uint64_t completion_generation_ = 0;
+    std::uint64_t buffer_generation_ = 0;
+    std::map<std::string, std::string> completion_inserts_;  // dil sunucusu etiketi -> eklenecek metin
+    std::vector<DiagnosticMark> diagnostics_;
     InputLine find_line_{InputKind::Find};
     InputLine name_line_{InputKind::Path};
     std::size_t find_origin_ = 0;

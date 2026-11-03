@@ -304,7 +304,8 @@ TEST_CASE_FIXTURE(SaveFixture, "save dialog is prefilled with the detect suggest
     CHECK(calls.last_request.initial.name == noteapp::core::slugify("public class Greeter {",
                                                                     std::chrono::system_clock::now(),
                                                                     config.tuning.slug_max_length));
-    CHECK(calls.last_request.initial.folder.empty());  // "Tümü" seçili
+    CHECK(calls.last_request.initial.folder ==
+          "work");  // seçili notun klasörü (araç çubuğu Yeni not ile aynı)
     CHECK(calls.last_request.hint.find("java") != std::string::npos);
     CHECK(calls.last_request.hint.find(std::to_string(std::lround(expected.confidence * 100))) !=
           std::string::npos);
@@ -437,23 +438,30 @@ TEST_CASE_FIXTURE(SaveFixture, "switching notes saves the dirty note first") {
     CHECK(state->write_count() == 1);
 }
 
-TEST_CASE_FIXTURE(SaveFixture, "switching away from a new note asks the dialog; cancel stays on the note") {
+// T85: sekmelerle taslak kaydedilmeden kendi sekmesinde kalır; seçilen not yeni sekmede açılır.
+TEST_CASE_FIXTURE(SaveFixture, "switching away from a new note keeps it unsaved in its own tab") {
     add_note("alpha.md", "alpha", 10);
     auto state = make_state();
     wire(*state, std::nullopt, ConflictChoice::Cancel);
     state->new_note();
     state->edit_text("draft text");
+    const auto draft = state->active_tab();
 
     state->move_selection(1);
-    CHECK(calls.dialog == 1);
-    CHECK(state->buffer() == "draft text");  // vazgeçildi: taslak yerinde
+    CHECK(calls.dialog == 0);
+    CHECK(current(*state) == "alpha.md");
+    CHECK(state->buffer() == "alpha");
+    CHECK(state->tabs().size() == 2);
+
+    REQUIRE(state->activate_tab(draft));
+    CHECK(state->buffer() == "draft text");
     CHECK(header_has(*state, "gui.state_unsaved"));
     CHECK_FALSE(state->current_path().has_value());
 
     wire(*state, SaveDetails{"draft", "", "md"}, ConflictChoice::Cancel);
-    state->move_selection(1);
+    state->save_now();
+    CHECK(calls.dialog == 1);
     CHECK(read_note("draft.md") == "draft text");
-    CHECK(state->buffer() == "alpha");
 }
 
 TEST_CASE_FIXTURE(SaveFixture, "a failed save while switching keeps the buffer and the selection") {

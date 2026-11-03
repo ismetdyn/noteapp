@@ -20,7 +20,7 @@ Enter düzenle  → önizle  / ara  n yeni  a ekle  d sil  ? yardım  ...
 ```
 - Sol: geçerli klasörün çocukları (bkz. "Klasör görünümü"); aramada ve çöpte tam yollu düz liste, eşleşen karakterler vurgulu. Sağ: Liste ve Aramada seçili notun önizlemesi; seçim değişince aynı karede güncellenir. Önizlemede uzun satır kırpılmaz, panele sarılır (`cat`). Editör odağında aynı panel gömülü editördür; editörden seçim değişmez.
 - Üst: klasör yolu, mod (`[ad]` / `[içerik]`), süzgeçte eşleşme/toplam, klasör görünümünde ve çöpte yalnız not sayısı (`6 not`; satır klasör de sayar, oran yanıltır), senkron durumu (`kapalı` / `✓ saat` / `⟳` / `⚠`).
-- Alt: odağa göre kısayol çubuğu (i18n; Editörde üstünde durum çubuğu) ya da tek satırlık girdi (arama, not içi arama, ad istemi, yol girdisi). Katalogdaki sıra önem sırasıdır; sığmayan ipucu ve ardındakiler bütün olarak düşer. Listede `T`, `Space`, `o`, `v`, `f`, `?` her genişlikte (60 sütundan) görünür, seyrek olanlar `?`tedir. Listede kalan süzgeç (`> sorgu`) ve Önizlemede eşleşme sayacı (`3/12`) ipuçlarının başındadır; uzun süzgecin sonu kısalır, ilk beş ipucunu düşürmez. En küçük boyut 60×15; altında "pencere çok küçük" mesajı.
+- Alt: odağa göre kısayol çubuğu (i18n; Editörde üstünde durum çubuğu) ya da tek satırlık girdi (arama, not içi arama, ad istemi, yol girdisi). Katalogdaki sıra önem sırasıdır; sığmayan ipucu ve ardındakiler bütün olarak düşer. Liste, REVIEW ve çöpte ilk ipucu `: komut`tur. Listede `:`, `T`, `Space`, `o`, `v`, `f`, `?` her genişlikte (60 sütundan) görünür, seyrek olanlar `?`tedir. Listede kalan süzgeç (`> sorgu`) ve Önizlemede eşleşme sayacı (`3/12`) ipuçlarının başındadır; uzun süzgecin sonu kısalır, ilk beş ipucunu düşürmez. En küçük boyut 60×15; altında "pencere çok küçük" mesajı.
 - **Odak görünümü:** odaklı panel kalın, kipe göre renkli ve etiketli çerçeve alır, diğeri ince: `LIST` camgöbeği, `REVIEW` yeşil (Önizleme ve salt-okunur not), `EDIT` eflatun, kaydedilmemişse `EDIT *`. Renk tek sinyal değildir. Girdide imleç `▏`, Editörde gerçek terminal imleci. Seçim yalnız satır vurgusudur: liste odağında ters renk, sağ panel odaklıyken soluk arka plan. Satır: seçim işareti hücresi (`*`), girinti, sağa yaslı soluk numara (genişlik en büyük numaradan), klasörde `▸` (kapalı) ya da `▾` (açık), not satırında aynı iki hücre boş, ikon, ad, sağ sütun. Notun açık ayrıntısı yalnız girintili bloktur, işareti yoktur. Oka tıklamak klasörü yerinde açar/kapatır; not satırına tıklamak yalnız seçer.
 - **Toplamlar:** kısayol çubuğunun üstünde klasör görünümünde `Klasör: 12 öğe · Toplam 248 not · sayfa 2/7`, süzgeçte `Toplam 248 not · 12 eşleşme · sayfa 2/7` (eşleşme yalnız süzgeçte; sayfa = seçili satır / panel yüksekliği, kaydırma sanaldır). Editörde aynı satırı durum çubuğu kullanır.
 - **Sağ sütun (`v`):** varsayılan boyut + tarih (`2.0 KiB  12:03`, bugün değilse yalnız tarih). Dar panelde önce tarih, sonra boyut düşer, değer yarım kesilmez; yol en az 16 hücre tutar. `created` ve `origin` boşken "bilinmiyor".
@@ -59,12 +59,14 @@ Dört odak vardır: **Liste** (açılış), **Arama**, **Önizleme**, **Editör*
 | `Space` | Klasörü yerinde aç/kapat (bkz. "Ağaç"); notta ayrıntıyı aç/kapat |
 | `i` `I` | Seçili satırın ayrıntısı, klasörde de; `I` tüm satırları. `Alt+→` `Alt+←` aynı işi yapar ama her terminalde gelmez |
 | `m` | Seçimi ya da satırı klasöre taşı: altta tek satırlık girdi, geçerli klasörle dolu (bkz. "Ağaç") |
+| `L` | Seçili notu başka nota ilişkilendir (`RELATED_TO`): altta tek satırlık girdi (bkz. "Bağlantı bölümü"). Önizlemede de çalışır |
 | `Alt+→` `Alt+←` | Satırı aç / kapat: boyut, güncelleme, oluşturma, senkron, kaynak; `created` ve `origin` boşken "bilinmiyor". Birden çok satır açık kalır, gezinme not satırlarını yürür |
 | `v` | Sağ sütun döngüsü: boyut + tarih, boyut, güncelleme, oluşturma, senkron, kaynak, yok. `tui-state.toml`da `version` yoksa eski `column = "none"` yeni varsayılana taşınır |
 | `o` | Sıralama menüsü (alt satır): `n` ad, `u` güncelleme, `c` oluşturma, `s` boyut, `r` ters, `Esc` vazgeç; etkin sıra üst satırda |
 | `r` | Ad/klasör/tip diyaloğu; klasörde `F2` |
 | `s` | Şimdi senkronla |
 | `<` `>` `z` | Panel genişliği, yakınlaştırma |
+| `:` | Komut paleti (bkz. "Komut paleti"); REVIEW ve çöpte de |
 | `?` | Yardım |
 | `q` | Çık |
 | `Tab` | Ad ↔ içerik modu (Aramada `Ctrl-T`) |
@@ -72,7 +74,7 @@ Dört odak vardır: **Liste** (açılış), **Arama**, **Önizleme**, **Editör*
 
 Sıra ve sağ sütun `<state>/tui-state.toml`'da kalır; bozuk değer varsayılana döner (`updated` azalan, sütun yok).
 
-`/` ve `f` her zaman kökten, klasörler arası düz sonuç verir: tam yol, sonuçlar boyunca numara. `/` metin yazılana dek klasör görünümünü bırakır. `/` ve `f` sorgu argümanlarını alır (`SPEC-search`): `sort:-size` `type:md` `in:work/` `size:>1mb` `updated:7d` `sync:modified`. Bozuk değer metin sayılmaz: girdide yeriyle `format_error` görünür, liste son geçerli haliyle kalır, taslak açılmaz. Argümanlı sorguda eşleşme yokken `Enter` taslak açmaz. `sort:` yoksa metinli sorgu fuzzy sırasındadır, boş sorgu `o` sırasındadır.
+`/` ve `f` her zaman kökten, klasörler arası düz sonuç verir: tam yol, sonuçlar boyunca numara. `/` metin yazılana dek klasör görünümünü bırakır. `/` ve `f` sorgu argümanlarını alır (`SPEC-search`): `sort:-size` `type:md` `in:work/` `size:>1mb` `updated:7d` `sync:modified` `tag:proje` `view:iş`. Bozuk değer metin sayılmaz: girdide yeriyle `format_error` görünür, liste son geçerli haliyle kalır, taslak açılmaz. Argümanlı sorguda eşleşme yokken `Enter` taslak açmaz. `sort:` yoksa metinli sorgu fuzzy sırasındadır, boş sorgu `o` sırasındadır.
 
 **Arama (fzf davranışı, girdi altta)**
 
@@ -90,12 +92,12 @@ Sıra ve sağ sütun `<state>/tui-state.toml`'da kalır; bozuk değer varsayıla
 
 **Liste ve Arama ortak:** `Ctrl-O` yeni not · `Ctrl-R` ad/klasör/tip · `Ctrl-D` çöpe at · `Ctrl-S` senkron · `Alt+→` `Alt+←` satır ayrıntısı. Listede `Ctrl-P` `Ctrl-N` gezer, `Tab` ad ↔ içerik modudur.
 
-**Girdi satırı (`InputLine`):** `f`, `/`, `F2`, ad istemi, editörde bul ve `a` satırı aynı saf bileşeni kullanır (`tui/input_line`, FTXUI'siz; çizim `tui/input_view`). REVIEW'daki `/` ve kaydet diyaloğu dışarıdadır.
+**Girdi satırı (`InputLine`):** `f`, `/`, `F2`, ad istemi, editörde bul, `a` satırı ve komut paleti aynı saf bileşeni kullanır (`tui/input_line`, FTXUI'siz; çizim `tui/input_view`). REVIEW'daki `/` ve kaydet diyaloğu dışarıdadır.
 
 | Özellik | Davranış |
 |---|---|
 | Gölge öneri (soluk) | İmleç metnin sonundayken. `f` `/`: önce geçmiş (tüm satır), sonra son sözcükle başlayan not adları. `a` `F2` ad istemi: klasörler, sonra adlar. Editörde bul: nottaki sözcükler. `→` alır |
-| `Tab` | Adaylar: `klasör/`, not adları, `.cpp` gibi tipler (yolda yalnız uzantıyı değiştirir); `f` `/`'de ayrıca `sort:name\|size\|updated\|created`, `type:<tipler>`, `in:<klasörler>`, `size:`, `updated:`, `created:`, `origin:windows\|linux\|macos\|android\|unknown`, `sync:`. Tek aday doğrudan yazılır, çoksa fzf gibi liste: yazı süzer, `↑↓` gezer, `Enter` ekler, `Esc` kapatır. Boşluklu aday `f` `/`'de tırnaklanır |
+| `Tab` | Adaylar: `klasör/`, not adları, `.cpp` gibi tipler (yolda yalnız uzantıyı değiştirir); `f` `/`'de ayrıca `sort:name\|size\|updated\|created`, `type:<tipler>`, `in:<klasörler>`, `size:`, `updated:`, `created:`, `origin:windows\|linux\|macos\|android\|unknown`, `sync:`, `tag:<notların etiketleri>`, `view:<kayıtlı görünümler>`. Tek aday doğrudan yazılır, çoksa fzf gibi liste: yazı süzer, `↑↓` gezer, `Enter` ekler, `Esc` kapatır. Boşluklu aday `f` `/`'de tırnaklanır |
 | Renk (`f` `/`) | Geçerli argümanın anahtarı camgöbeği, değeri yeşil; bozuk değer `parse_query`'nin yerini bildirdiği aralıkta anında kırmızı; düz metin normal. Aralıklar bayt ofsetidir, UTF-8 imleci bölmez |
 | Geçmiş (`f` `/`) | `Enter`le kullanılan arama `<state>/tui-state.toml`da `search_history`e girer: en yeni başta, yinelenmez, en çok 200, kayıt başına en çok 1 KiB, senkrona girmez. Bozuk sorgu ve taslak açan eşleşmesiz sorgu girmez. `KEY=değer`, `anahtar: değer` (argüman anahtarı hariç; `core` sır kuralı) ve 20 bayt üstü harf-rakam jetonu taşıyan ya da sözcüğü bir not adıyla birebir aynı olan sorgu yazılmaz |
 
@@ -115,6 +117,8 @@ Sıra ve sağ sütun `<state>/tui-state.toml`'da kalır; bozuk değer varsayıla
 | `E` | Harici editör |
 | `/` | Not içi arama girdisi: canlı vurgu (`search::fold`: büyük/küçük harf ve Türkçe katlama, `I` = `ı` = `i`), `3/12`; `Enter` vurguyu bırakarak kapatır, `↑` `↓` gezer, `Esc` temizler |
 | `n` `N` | Sonraki / önceki eşleşme |
+| `b` | Bağlantı bölümüne odak (bölüm yoksa etkisiz) |
+| `L` | Nota ilişkilendir (Listedeki gibi) |
 | `←` `h` | Listeye dön |
 | `Esc` | Vurgu varsa temizle, yoksa Listeye dön |
 | `q` | Çık |
@@ -149,6 +153,20 @@ Liste komutları içerik panelinde çalışmaz: `a d r s ?` ve `Ctrl-D` `Ctrl-R`
 
 İçerik modunda liste not başına eşleşme sayısını gösterir; önizleme ilk eşleşmeye kayar ve eşleşmeleri vurgular.
 
+## Komut paleti
+
+`:` Liste, REVIEW ve çöpte küçük bir pencere açar; tuşunu bilmeden her işi adıyla çalıştırır. Odak değişmez: kip etiketi, yakınlaştırma ve komutun çalışacağı görünüm aynı kalır. `:` EDIT'te, girdilerde ve sıralama menüsünde metindir ya da yok sayılır; bağlantı bölümü odağında açılmaz (kendi `↑↓` `L` anlamları vardır, `Esc` REVIEW'a döner).
+
+- **Tek tablo:** `TuiState::commands()` (`src/tui/commands.cpp`). Liste, REVIEW ve çöp tuşları `handle_focused`ın başında buradan çözülür, palet aynı satırın `run`'ını çağırır: tuş ve palet aynı işi yapar. Tabloda kalmayan yalnız takma tuşlardır (`↑` `↓`, `Enter`, `Ctrl-O` gibi `handle_shared` kısayolları, `g` öneki, `Esc`); aynı metotları çağırırlar. Aynı `id` görünüm başına birden çok satır olabilir (`top`: Listede `gg`, REVIEW'da `g`); palet o görünümde bağlı olanı, yoksa ilkini tek satır gösterir.
+- **Satır:** `move — Taşı  m`: İngilizce kararlı `id`, `tui.cmd_*` etiketi, sağda tuş (takma harf yanında: `gt T`, `F1 ?`). Tuşu olmayanlar (`column.*`, `tree.toggle_all`, `icons.toggle`, `search.tag`) yalnız paletten çalışır. Başlıkta hedef: seçili satırın yolu (`terminal_safe`, uzunsa sonu) ya da `seçili: 3`.
+- **Süzme:** `InputLine` + `search::fuzzy_match`, `id` ve çevrilmiş etiket üstünde, iyisi geçerli. Sıra: çalışanlar önce, puan, son kullanılan, tablo sırası. Boş süzgeçte puan yoktur: son kullanılanlar baştadır; süzerken eşit puanda öne geçer. `recent_commands` `tui-state.toml`da kalır, en çok 20; bilinmeyen ad yer tutmaz.
+- **Çalışamayan:** satır soluk, nedeni parantezde; seçiliyken ipucu satırında tamamı. `Enter` çalıştırmaz, pencere açık kalır; karar `Enter` anında yeniden hesaplanır. Nedenler: başka görünümün komutu, not ya da satır seçili değil, bağlantı yok, klasör görünümü değil, yank yok, senkron kapalı. `Yank` ve `Sync` tuşta engel değildir: tuş eski gibi nedeni alt satırda söyler.
+- **Tuşlar:** yazı süzer, `↑↓` gezer, `Enter` çalıştırır, `Esc` kapatır. `F1` `F9` paleti kapatıp açar, `Ctrl-C` çıkar. Fare yok sayılır.
+- **`search.tag`** (Etikete göre süz): Listede `/` ad aramasını `tag:` yazılı açar ve `Tab` listesini gösterir (notların etiketleri; tek etiket doğrudan yazılır). Süzme `tag:` argümanının kuralıdır (SPEC-search).
+- **`search.view`** (Görünüm çalıştır, T81): `search.tag` gibi; `/` ad aramasını `view:` yazılı açar, `Tab` listesi kayıtlı görünümlerdir (fzf gibi süzülür, tek görünüm doğrudan yazılır, boşluklu ad tırnaklanır). Seçilen `view:AD` listeyi görünümün döndürdüğü notlara süzer (SPEC-search `view:`); bilinmeyen ya da yazan görünüm girdide kırmızı hatadır, liste son geçerli haliyle kalır. Görünüm listesi açılışta ve yeniden taramada (`graph_version`) depodan gelir; yeni pane yoktur.
+- **`tree.toggle_all`:** tüm klasörler açıksa kapatır, değilse açar (`open_folders`). **`icons.toggle`:** `icons` `nerd` ↔ `off`, `config.toml`a Ayarlar ekranının kuralıyla yazar (okunamayan dosya ezilmez, hata alt satırda), anında uygulanır.
+- **Eşitlik:** `F1` metni elle yazılır, tablo testle bağlıdır: `command_palette_test.cpp` her satırın tuşunu palet ve F1 çiziminde, her çalışabilir komutun tuşla aynı durumu ürettiğini denetler; e2e aynısını gerçek terminalde yapar.
+
 ## Klasör görünümü
 
 Varsayılan liste klasör tabanlıdır (`src/tui/folder_tree.*`, saf). Ağaç `NoteStore::list` ve `folders`in bellekteki anlık görüntüsünden yalnız liste değişince kurulur (`O(not × derinlik)`); gezinme, klasöre girme ve çıkma depoya gitmez, klasör satırı önizleme okuması tetiklemez.
@@ -162,7 +180,7 @@ Varsayılan liste klasör tabanlıdır (`src/tui/folder_tree.*`, saf). Ağaç `N
 - **Dönüş:** üst klasöre çıkışta çıkılan klasör seçili kalır. Süzgeçten dönüşte klasör ve seçim yerinde (`saved_spot_`); çöpten dönüşte klasör yerinde, seçim ilk satırda. Aramada `Esc` süzgeç kalarak Listeye döner (eski kural), ikinci `Esc` klasör görünümüne.
 - **Silinen klasör:** yeniden taramada geçerli klasör gitmişse en yakın duran ataya düşülür. Kaydedilen ya da seçilen not başka klasördeyse (`select_note`, `reveal`) liste oraya gider.
 - **Fare:** tıklama seçer, aynı satıra 400 ms içinde ikinci tıklama klasöre girer; `▸` `▾` okuna tıklama klasörü yerinde açar/kapatır, ikinci tıklama sayılmaz.
-- **İpuçları:** klasör satırında ve boş klasörde `key_hints_folder`: `→ aç  ← üst  a ekle, ad/ = klasör  F2 ad değiştir  d çöpe at` 60 sütunda görünür.
+- **İpuçları:** klasör satırında ve boş klasörde `key_hints_folder`: `: komut  → aç  ← üst  a ekle, ad/ = klasör  F2 ad değiştir` 60 sütunda görünür; `d çöpe at` 66 sütundan sonra.
 
 **Klasör işlemleri**
 
@@ -218,7 +236,7 @@ Tampon `EditorBuffer` (saf, FTXUI bilmez), tuş ve kayıt kararları `EditorSess
 
 - **Bayt koruma:** tampon dosyanın baytlarıdır, satır sonları normalleştirilmez. CRLF ve karışık satır sonu düzenlenmeyen satırlarda aynen kalır; yeni satır dosyada CRLF varsa CRLF, yoksa LF'dir. BOM tamponda görünmez, kayıtta geri konur. Sona satır sonu eklenmez. İçeriği diskle aynı tampon yazılmaz (yazıp geri silmek dahil).
 - **Görünüm (yalnız Editör; REVIEW `cat` gibi kalır):** satır numarası sütunu (genişlik satır sayısına göre, en az 2 basamak + boşluk; geçerli satır kalın, diğerleri soluk, sarılan satırın devamı boş), geçerli satır arka planı (`GrayDark`), gerçek terminal imleci (arama/soru tuşları alırken gizli), dosya sonunun ötesinde soluk `~`. Numara sütunu metin değildir: `EditorSession::columns()` hariç tutar, sarma ve imleç metin sütunlarıyla hesaplanır. Alt iki satır: durum çubuğu (dosya ya da `[yeni not]`, `*`, tip, `UTF-8`, `LF`/`CRLF`, `BOM`, satır:sütun, toplam satır; uzun adın sonu görünür) ve ileti + kısayollar (arama ve ad girdisi kısayolların yerine geçer). 60×15, `z` ve `n` görünümünde aynıdır.
-- **Karakter:** imleç grapheme sınırındadır; çok baytlı karakter ya da birleşen işaret bölünmez, CRLF tek adımdır. Genişlik FTXUI'nin ölçüsüdür. Kontrol baytları (C0, DEL, C1) ekranda `U+FFFD`, sekme sonraki 4'lü durağa boşluktur; terminale ham bayt gitmez, dosyadaki bayt değişmez.
+- **Karakter:** imleç grapheme sınırındadır; çok baytlı karakter ya da birleşen işaret bölünmez, CRLF tek adımdır. Genişlik FTXUI'nin ölçüsüdür. Kontrol baytları (C0, DEL, C1) ekranda `U+FFFD`, sekme sonraki 4'lü durağa boşluktur; terminale ham bayt gitmez, dosyadaki bayt değişmez. Görünmez bidi ve sıfır genişlikli karakterler (T91, Trojan Source; tek liste `core::hidden_controls`: U+061C, U+200B, U+200E/U+200F, U+202A–U+202E, U+2060–U+2064, U+2066–U+2069, metin içi U+FEFF; T91b: Hangul dolguları U+115F, U+1160, U+3164, U+FFA0 ve U+180E (boş ad sahteciliği); ZWNJ/ZWJ U+200C/U+200D bilerek dışarıda: emoji dizilerinde ve Farsça/Arapça/Hint yazılarında meşrudur, bidi sahteciliği yapmaz) kendi başına bir karakterdir (önceki harfe yapışmaz), kırmızı zeminli tek hücrelik `U+FFFD` olarak çizilir; imleç üstündeyken ileti satırı adını söyler (`Gizli karakter U+202E RIGHT-TO-LEFT OVERRIDE`). Hareket, sarma, seçim, silme ve tanı alt çizgisi onu tek hücre sayar; baytlar değişmez. REVIEW düz önizlemesi aynı yoldan çizer, baştaki BOM editördeki gibi atılır.
 - **Salt okunur:** ikili (`looks_binary`), NUL içeren, geçersiz UTF-8 ve `tuning.max_note_bytes`'tan (10 MiB) büyük not. Neden durum çubuğunda görünür; kaydırma, arama, kopyalama çalışır; hiçbir yol yazmaz. Gösterilen metin arındırılmış kopyadır, büyük notta başı.
 - **Boyut sınırı gerekçesi** (Release, 120×40, tuş + yerleşim + çizim): 10 MiB satırlı notta en kötü 2,8 ms; 10 MiB tek satırda medyan 32-45 ms (makine yüküne göre; yük altında tepe 70 ms'e çıkar); canlı not içi arama 10 MiB'te 34-42 ms; sınır 50 ms (SPEC.md §10/3). Daha büyüğünde tek satır bütçeyi aşacağından mevcut `max_note_bytes` sınırı olarak kaldı.
 - **Kaydetme** yalnız `NoteStore::write` (atomik, mtime denetimli). Başarıda `notify_changed`, liste ve içerik indeksi yenilenir. Hatada tampon kalır, hata durum çubuğundadır, soru ekranından çıkılmaz.
@@ -242,7 +260,7 @@ Tampon `EditorBuffer` (saf, FTXUI bilmez), tuş ve kayıt kararları `EditorSess
 - **CSV:** ayırıcı `detect` kuralıyla (`detect::table_delimiter`: ilk 200 dolu satır); tırnaklı alan, `""`, tırnak içi satır sonu boşluğa iner. İlk satır başlık. Tutarlı tablo değilse ham metin + not.
 - **JSON:** katı RFC 8259 denetiminden geçerse girintilenir, `syntax` JSON renkleriyle; geçersizse ham metin + not. Derinlik sınırı `kMaxJsonDepth` (128).
 - **Geri düşüş:** görünüm olmadıysa (geçersiz, tablo değil, `kMaxRenderedViewBytes` 256 KiB üstü) ham vurgulu metin ve toplamlar satırında soluk neden. Not içerik satırı değildir: kaydırma, fare ve arama eşlemesi bozulmaz. Etiket `ham` der.
-- **Güvenilmez içerik:** çıkan her metin `terminal_safe`ten geçer (C0, C1, DEL, bidi, ESC yok). Süre girdiyle doğrusal; sınırlar görünürdür: `kMaxViewLines` (100.000), `kMaxTableRows` (5.000), `kMaxTableColumns` (128), sığmayan sütun ve kesilen satır soluk satırla söylenir. İç içelik öneki panelin en çok yarısını alır, ek derinlik girinti katmaz.
+- **Güvenilmez içerik:** çıkan her metin `terminal_safe`ten geçer (C0, C1, DEL, bidi ve sıfır genişlikli karakterler, ESC yok; `U+FFFD` olur). Süre girdiyle doğrusal; sınırlar görünürdür: `kMaxViewLines` (100.000), `kMaxTableRows` (5.000), `kMaxTableColumns` (128), sığmayan sütun ve kesilen satır soluk satırla söylenir. İç içelik öneki panelin en çok yarısını alır, ek derinlik girinti katmaz.
 - **`R`:** görünüm / ham, oturum boyunca tüm notlarda; `REVIEW · görünüm`, `REVIEW · ham` etiketi (Türkçe katalogda çerçeve adı `İNCELEME`). EDIT her zaman ham metindir. Kaydırma geçişte aynı kaynak bloğunda kalır.
 - **Arama (`/`, `n`, `N`):** gösterilen metinde çalışır; biçimli görünümde `**` bulunmaz, `kalın` bulunur. Eşleşme görüntü satırı içindedir: sarmanın böldüğü sözcük bulunmaz. İçerik aramasının (`Tab`, `f`) satır vurguları ham satıra aittir, biçimli görünümde boyanmaz; önizleme yine eşleşen bloğa kayar.
 - **Kopya:** fare seçimi gösterilen metni kopyalar (satırlar `\n` ile, tablo kenarları ve liste imleri dahil; geçersiz UTF-8 not da arındırılmış haliyle kopyalanır). `c` her zaman notun özgün baytlarını kopyalar.
@@ -251,13 +269,65 @@ Tampon `EditorBuffer` (saf, FTXUI bilmez), tuş ve kayıt kararları `EditorSess
 
 Ölçüm (T69, Release, 80 sütun, üç koşunun en kötüsü, sınır boyutunda girdi): 2 MiB'te karışık md 155 ms, bağlantı 144, kod 120, JSON 86 ile 50 ms bütçesini aştı; 512 KiB'te hepsi 33 ms altına indi ama `[` yığını 85 ms kaldı. 256 KiB'te en kötü `[` yığını 45 ms, JSON 12, uçtan uca genişlik değişimi (karışık md) 9, diğerleri 10 ms ve altı. Üretimi arka iş parçacığına almak yerine sınır düşürüldü: daha büyük not ham metinle zaten okunur, görünüm iptali ve eski sonuç yarışı eklenmez.
 
+## Bağlantı bölümü
+
+Seçili notun grafı REVIEW'un altındadır (`src/tui/link_panel.*`, saf model). Veri `NoteStore::links`ten gelir (SPEC-graph "Bağlantılar"), önizlemeyle aynı ertelenmiş yüklemede okunur: gezinmede tuş başına depo okuması yoktur, `kCoalesceMs` içinde son seçim tek okuma yapar. Liste ya da not değişince önizlemeyle birlikte tazelenir. Yeniden tarama grafın `data_version`ını da karşılaştırır (`tui::StoreScan`): listeyi değiştirmeyen, yalnız ilişki ya da bağlantı getiren senkron da bölümü tazeler.
+
+```
+│# Plan                               ┃
+│...                                  ┃
+┠4/6 ─────────────────────────────────┨
+┃Gelen (1)                            ┃
+┃  gelen.md                           ┃
+┃Giden (2)                            ┃
+┃  hedef.md                           ┃
+┃  ikinci.md                          ┃
+┃İlişkili (1)                         ┃
+┃  ikinci.md                          ┃
+┃Eksik (1)                            ┃
+┃  [[eski-ad]]                        ┃
+```
+
+- **Etiketler (T80):** notun `#etiket`leri (`NoteLinks::tags`, ilk yazılış) ayırıcı satırında `#iş #proje/alt ───` olarak durur, `terminal_safe`ten geçer. Bağlantısız ama etiketli notta bölüm yalnız bu tek satırdır; ikisi de yoksa bölüm yoktur. Tıklama ve tekerlek ayırıcıda bir şey yapmaz, `b` yalnız bağlantı varken odaklar.
+- **Satırlar:** ayırıcı, `Gelen (2)`, `Giden (3)`, `İlişkili (1)`, `Eksik (1)`; satırda ikon ve yol. Boş grubun satırı yok, hiç bağlantı yoksa bölüm de ayırıcı da yok: önizleme eski yüksekliğindedir. Editör açıkken ve çöp görünümünde bölüm yoktur. Çerçeve, toplamlar ve ipucu çubuğu değişmez; odak etiketi `REVIEW` kalır.
+- **Eksik:** yolu olmayan metin `[[ad]]` soluk çizilir; köşeli ayraç renksiz terminalde de ayırt ettirir. Adı değişen hedef burada görünür: metin yeniden yazılmaz (SPEC-graph).
+- **Yükseklik:** panelin üçte biri, en az `kMinRows` (3), en çok `kMaxRows` (12) satır; 60×15'te önizlemeye 6 satır kalır. Taşan bölümde ayırıcıda `4/6` (başlıklar sayılmaz). Yalnız görünen satırlar çizilir, binlerce bağlantıda kare maliyeti değişmez.
+- **Tuşlar (`b` ile odak):** `↑` `↓` `k` `j` öğe satırlarında gezer, başlığı atlar; `PgUp` `PgDn` görünen satır kadar; `Enter` nota gider, süzgeç ya da klasör hedefi gizliyorsa `select_note` gevşetir, odak REVIEW; eksik satırda gitmez, nedeni alt satırda; `Esc` `b` REVIEW'a döner; `<` `>` `z` çalışır. Son bağlantı kalkarsa odak REVIEW'a döner.
+- **`L`:** Liste, REVIEW ve bölümde boş girdi açar (`İlişkilendir:`, `tui.link_label`); `Tab` not yollarını önerir. `Enter` `NoteStore::add_relation`; olmayan not, kendine ilişki ve var olan ilişki hatası girdide kalır, `Esc` yazmaz. Bölümde **İlişkili** satırındayken `L` kaldırma onayı açar, varsayılan Vazgeç; onay `remove_relation`dır, iki yöndeki kenarı siler. Bölümün diğer satırlarında yeni ilişki girdisi açar. Klasör satırında etkisiz. Başarılı yazma `notify_changed` çağırır. `L` harfi İngilizce "link"ten gelir.
+- **Fare:** satıra tıklamak nota gider; başlık ve eksik satır yalnız odaklar, ayırıcı hiçbir şey yapmaz. Tekerlek işaretçi bölümdeyse seçimi gezer, önizlemeyi kaydırmaz. REVIEW fare seçimi bölüme taşmaz.
+- **Hostile ad:** yol ve eksik metin çizimden önce `terminal_safe`ten geçer; panelden uzunsa baştan kısalır, dosya adı görünür kalır (`tail_cells`). Model ham baytı tutar.
+- **İpuçları ve yardım:** `key_hints_preview`, `key_hints_list`te `b` `L`; bölüm odağında `key_hints_links`; `F1`de "Bağlantılar" başlığı.
+
 ## Tamamlama ve yazım denetimi
 
 - **Gölge öneri:** yalnız satır sonunda, yazılan her harften sonra; önek en az 2 bayt. Önce bu nottan imlece en yakın sözcük, sonra diğer notlardan en sık geçen. Her tuş bir önceki öneriyi düşürür, hareket ve `Esc` yeni üretmez. Soluk çizilir, panele kırpılır, sarmaya ve bayta girmez. Bu not imleç çevresinde ±256 KiB taranır: tuş süresi not boyutundan bağımsızdır, daha uzaktaki sözcük önerilmez.
 - **Diğer notlar:** `WordTableBuilder` notları işçide okur, tablo yalnız bellektedir (en çok 200.000 sözcük; not başına 2 MiB, toplam 64 MiB), indeks dosyası yoktur. İlk editör açılışına dek hiçbir şey okunmaz, kayıttan 1 sn sonra yeniden kurulur. `ContentIndex` kullanılmadı: metni özeldir ve UI iş parçacığına aittir.
 - **Sır koruması:** Yalnız satır anahtarları görünür (ad kuralıyla aynı `core::secret_line_key`; değer ve yorum öneriye, tabloya ve başka nota girmez): `env`, `properties`, `ini`, `toml`, `yaml` ve betik ya da yapılandırma tipleri `sh`, `bash`, `zsh`, `fish`, `ps1`, `bat`, `cmd`, `json`, `jsonc`, `json5`, `conf`, `cfg`, `tf`, `xml`, `dockerfile`. Diğer tiplerde düzyazı önerilir ama `KEY=değer` ve `export KEY=değer` satırı yalnız anahtarını verir. Satırı pencereye sığmayan sözcük önerilmez; bir öneri için en çok 64 aday reddedilir: tuş süresi sınırlı kalır.
 - **Liste (`Ctrl+Space`):** adaylar bu notun penceresi ve tablo, tekil, en çok 5.000; `search::fuzzy_match` ile süzülür, ilk 8'i görünür. Seçim önekin yerine tek geri alma adımıyla girer. Terminal Ctrl+Space'i NUL gönderir; FTXUI 7.0.3'te `Event::Custom` de `Special({0})`dır ve olaylar yalnız baytla karşılaştırılır, bu yüzden arka plan çizimleri kendi olayını (`redraw_event`) gönderir.
-- **Yazım denetimi:** yalnız `md` ve `txt`; sözlük dilden (`tr` -> `tr_TR`, diğerleri `en_US`), config yok. `hunspell -a -i utf-8 -d <sözlük>`, `LC_ALL=C.UTF-8`. Satırlar `^` önekiyle gider (`*sözcük` ispell komutu olup kişisel sözlüğe yazardı). Çizim önbelleğe bakar, bilinmeyen satırı kuyruğa atar: 250 ms boşta kalınca işçi sorar, yanıt çizimi tetikler. Süreç ilk istekte başlar, nesneyle ölür. Program yoksa, başlamazsa, 2 sn yanıt vermezse ya da ölürse oturum boyunca kapalıdır, yeniden denenmez; `F1` bunu söyler. 8 KiB üstü satır denetlenmez. Windows'ta kapalıdır (`ChildProcess` POSIX). İçerik makineden çıkmaz.
+- **Yazım denetimi:** yalnız `md` ve `txt`; sözlük dilden (`tr` -> `tr_TR`, diğerleri `en_US`), config yok. `hunspell -a -i utf-8 -d <sözlük>`, `LC_ALL=C.UTF-8`. Satırlar `^` önekiyle gider (`*sözcük` ispell komutu olup kişisel sözlüğe yazardı). Çizim önbelleğe bakar, bilinmeyen satırı kuyruğa atar: 250 ms boşta kalınca işçi sorar, yanıt çizimi tetikler. Süreç ilk istekte başlar, nesneyle ölür. Program yoksa, başlamazsa, 2 sn yanıt vermezse ya da ölürse oturum boyunca kapalıdır, yeniden denenmez; `F1` bunu söyler. 8 KiB üstü satır denetlenmez. Windows'ta da çalışır (hunspell PATH'teyse; \r\n yanıt kabul edilir). İçerik makineden çıkmaz.
+
+## Dil sunucusu (LSP)
+
+Yalnız EDIT; **varsayılan açık** (kullanıcı kararı 2026-11-02, plan kararını ezer), yalnız kurulu sunucularla. Plan: `tasks/plan-lsp.md`.
+
+- **Ayar:** `[lsp.servers]` LSP `languageId` → kabuksuz argv (`python = ["pyright-langserver", "--stdio"]`) ya da en çok 4 argv'nin listesi (`html = [["vscode-html-language-server", "--stdio"], ["htmx-lsp"]]`); kullanıcının girdileri `defaults.toml`'daki varsayılan sunucuların üstüne tek tek biner, `dil = []` o dili, `enabled = false` hepsini kapatır. Varsayılanlar (python, c, cpp, shellscript, markdown, lua, html + htmx-lsp, css, scss, less, dockerfile, sql) kendi varsayılan ayarında proje kodu çalıştırmayan ve ağa çıkmayanlardır; java (jdtls), go (gopls), rust (rust-analyzer), javascript/typescript (typescript-language-server), yaml, toml (taplo), json bunu gömülü ayarla sağlar ("Sertleştirme", T59e). Komut ve `[lsp.settings.<dil>]` yalnız yerel `config.toml`'dan gelir, not ya da graf verisi ikisini de taşıyamaz. Geçersiz girdi (dizge olmayan argv, NUL, 64 argümandan ya da 4096 bayttan uzun, kimlik `a-z0-9_-` dışı ya da 32 bayttan uzun, 32 dilden ya da dil başına 4 sunucudan fazlası) uyarı olur ve atlanır; diğerleri çalışır. Ayar ekranı bölümü düzenlemez, kayıt korur.
+- **Dil:** tek tablo (`lsp_workspace.cpp`, `lsp_language_for`): önce tam dosya adı (`Dockerfile`, `Containerfile`, `Makefile`, `makefile`, `GNUmakefile`, `CMakeLists.txt`), sonra büyük/küçük harf duyarsız uzantı; sözdizimi vurgusundan bağımsızdır. Kimlikler: c, cpp, python, shellscript, markdown, lua, json, jsonc, yaml, toml, javascript, javascriptreact, typescript, typescriptreact, go, rust, java, csharp, html (Thymeleaf/htmx dahil), css, scss, less, sql, dockerfile, makefile, cmake, ruby, php, kotlin, swift, zig, xml, ini; uzantı listesi README'de. `env` ve `properties` tabloda yoktur (sır): ne yansıtılır ne gönderilir. Taslak, salt-okunur ve 2 MiB üstü not gönderilmez.
+- **Çalışma alanı:** `state_dir/lsp/workspace/` (0700) sunucunun köküdür. Sunucusu tanımlı dillerin notları `<kök>/<NotePath>` olarak 0600 ve atomik yazılır (notlar arası import çözülsün); kayıt, taşıma/ad değiştirme, silme, çöp, kalıcı silme ve yeniden taramadan (senkron, CLI) 500 ms sonra arka planda eşitlenir; listede olmayan dosya ve boş klasör silinir. Yol bağlar çözüldükten sonra kökün içinde kalmalıdır (`weakly_canonical`); dizine konan bir bağ yalnız kendisi silinir. Çıkışta silinmez, açılışta yeniden eşitlenir; içeriği aynı dosya yeniden yazılmaz. Belge URI'si `file_uri(<kök>/<NotePath>)`.
+- **Kurulu olmayan sunucu:** programlar `LanguageServers` kurulurken bir kez `core::find_program_on_absolute_path` ile aranır (yalnız mutlak PATH girdileri: `.` ya da `node_modules/.bin` çalışma dizinine göre çözülürdü; göreli dizinli ad da reddedilir; Windows'ta PATHEXT); bulunan mutlak yol argv[0] olur. Bulunamayan sunucu denenmez; dilin hiç sunucusu yoksa not yansıtılmaz (hiçbiri yoksa dizin oluşmaz) ve o dilde ilk not açılınca bir kez `tui.lsp_not_found` ("pyright-langserver bulunamadı, LSP python için kapalı"); dilin başka sunucusu varsa bir kez `tui.lsp_partly_not_found` ("htmx-lsp bulunamadı, html onsuz çalışıyor"); log yazılmaz.
+- **Süreç:** sunucu başına bir `LspClient` (anahtar: dil + listedeki sıra), o dilde bir not EDIT'te ilk açılınca başlar; belge, değişiklik ve kapanış dilin her sunucusuna gider. Çöken ya da başlamayan sunucu oturum boyunca kapalıdır, nedeni sunucu adıyla bir kez alt satırda görünür (`tui.lsp_stopped`: "pyright-langserver durdu: çöktü ya da kapandı"); dilin öbür sunucuları sürer. Dilde birden çok sunucu varsa tanılar birleşir ve iletinin başına sunucu adı gelir (`htmx-lsp: …`). İşçi bildirimleri tek çizim isteğinde birleşir: sonraki kareye dek en çok bir `redraw_event`.
+- **Sertleştirme (T59e):** `server_settings.cpp`'deki tek tablo, program adıyla (argv[0]'ın küçük harf, uzantısız dosya adı) seçilir; sunucuya `initializationOptions`, `workspace/configuration` cevabı (noktalı bölüm yolu: "http.proxy" → settings.http.proxy, bölümsüz öğe tamamı, olmayan null; Null ayarda her öğe null), `initialized`'dan hemen sonra ve belgelerden önce `workspace/didChangeConfiguration`, parametresiz bildirimler ve ortam değişkenleri verir. rust-analyzer: `cargo.buildScripts.enable=false`, `procMacro.enable=false`, `checkOnSave.enable=false` (2023 öncesi sürümler de okur), `cargo.noDeps=true`, `CARGO_NET_OFFLINE=true`, `RUSTUP_AUTO_INSTALL=0`. gopls: `codelenses` hepsi false, `vulncheck="Off"`, `GOTOOLCHAIN=local`, `GOPROXY=off`, `GOVCS=*:off`, `GOFLAGS=-mod=readonly`, `CGO_ENABLED=0`. jdtls: Maven/Gradle içe aktarma, wrapper, kaynak indirme, anotasyon işleme kapalı, `updateBuildConfiguration="disabled"`; argv'ye `-data state_dir/lsp/jdtls-data` (0700; argv'de `-data` varsa eklenmez; açılamazsa sunucu başlamaz). typescript-language-server: `disableAutomaticTypingAcquisition=true`. yaml-language-server: `schemaStore.enable=false`, `kubernetesCRDStore.enable=false`, `schemas={}`, `yaml/registerContentRequest` (http(s) şeması `vscode/content` ile istemciye sorulur, -32601). vscode-json-language-server: `handledSchemaProtocols=["file"]`, `json.validate.enable=true`. taplo: `schema.enabled=false`, `catalogs=[]`, `taplo.configFile.enabled=false`, bildirimde yalnız `evenBetterToml` bölümü; komutta `--no-auto-config`. htmx-lsp ayarsız. Kullanıcının `[lsp.settings.<dil>]` JSON'u gömülü ayarın üstüne anahtar anahtar biner (nesneler birleşir, diğer değerler değişir); tabloda olmayan sunucuya yalnız kullanıcı ayarı gider. Kaynaklar `server_settings.cpp` yorumlarında; README "Sertleştirme".
+- **Ağ yolu (T59f, T59g):** yalnız Windows'ta (`kBlockNetworkPaths`; SMB/NTLM yalnız orada, Linux'ta `//host/x` yerel yoldur) metninde `references_network_path`'e takılan not yansıtılmaz ve hiçbir sunucuya gitmez; açık nota böyle bir yol eklenirse değişiklik gönderilmez, belge kapanır. Kural anahtar ya da dosya biçimine bakmaz; metin ham ve JSON kaçışları (`\\`, `\/`, ASCII'ye inen `\uXXXX`) ile yüzde kodlaması çözülmüş hâliyle taranır. Ağ yolu: iki ayırıcı (`/` ya da `\`, karışık olabilir), önünde `:` ya da ayırıcı yok, ardından host karakterleri (harf, rakam, `-._`, ASCII dışı bayt), tek ayırıcı ve ayırıcı/boşluk/tırnak olmayan bir karakter; ya da sözcük sonu olmayan `file:` + iki ayırıcı + `localhost` olmayan host, `file:` + dört ve daha çok ayırıcı. Bilinen yanlış pozitif: protokolsüz URL. Not o hâliyle ilk engellendiğinde bir kez `tui.lsp_remote_reference`. Sonuç yol, tampon kuşağı (`EditorSession::buffer_generation`) ve `edit_count` başına bir kez hesaplanır; aynı not için yeni tampon belgeyi kapatıp yeniden açar.
+- **Çalışma dizini ve başlangıç (T59f):** sunucular `state_dir/lsp`'de başlar (POSIX `posix_spawn_file_actions_addchdir_np`, Windows `lpCurrentDirectory`; Windows'ta ayrıca `NoDefaultCurrentDirectoryInExePath=1`). İlk yansıtma eşitlemesi (eski dosyaların silinmesi dahil) tamamlanmadan hiçbir belge açılmaz, sunucu başlamaz; bitince işçi çizim ister.
+- **Yansıtılmayan notlar (T59e):** adı (harf duyarsız) `rust-analyzer.toml`, `rust-toolchain.toml`, `rust-project.json`, `taplo.toml` olan ve yolunda `node_modules` klasörü geçen notlar çalışma alanına yazılmaz: sunucunun ayarını ezer ya da çalıştırdığı kodu sağlarlar. Karşılaştırma Unicode'un ASCII'ye katladığı ſ, ı, İ, K (Kelvin) ve tam genişlik ASCII'yi de katlar (T59f); yazılan dosya ya da açılan klasör dosya sistemine göre (`fs::equivalent`) engellenen adın kendisiyse silinir ve atlanır.
+- **Eşitleme:** tam metin `didChange`, son düzenlemeden 250 ms sonra (yazım denetimiyle aynı tempo), belge başına artan sürümle (`EditorBuffer::edit_count`). Beklerken kare istenir, süre dolunca gönderilir.
+- **Tanılar:** her karede güncel tampona yeniden kısılır (sunucu eski sürümü görmüş olabilir; ters aralık boşa iner, sıfır genişlik bir karaktere açılır). Alt çizgi ve önem rengi: hata kırmızı, uyarı sarı, bilgi açık mavi, ipucu soluk; arama ve seçim önüne geçer. İmlecin üstündeki (ya da hemen sonundaki) tanının iletisi ileti satırında, `terminal_safe` ve tek satır; kayıt ve hata iletileri önce gelir.
+- **Öneri:** `Ctrl+Space` listeyi hemen sözcüklerle açar; bekleyen metin gönderilir ve dilin her sunucusuna istek gider. Her cevap geldikçe sunucu önerileri listenin başına eklenir (aynı etiket bir kez; sonraki cevap öncekinin önerilerini silmez), seçili aday seçili kalır. Liste kapandıysa, yeniden açıldıysa ya da belge ilerlediyse cevap düşer. Etiket `terminal_safe` ile gösterilir; ekleme metni yalnız tek satır ve denetim/bidi karaktersizse kullanılır, değilse temiz etiket eklenir.
+- **Gizlilik:** yapılandırılmış dillerin notları çalışma alanına yazılır ve sunucuya gider; sunucu ağ kullanıyorsa içerik makineden çıkabilir. Sunucu metni güvenilmezdir: boyut sınırları `core/lsp_protocol.hpp`'de.
+- **Kod çalıştırma riski (kullanıcı kararı 2026-11-02: tüm notlar yansıtılmaya devam eder, uyarı verilir):** yapılandırılmış dilin her notu, senkronla ya da `graph import` ile gelenler dahil, sunucunun çalışma alanına girer. Proje dosyalarını çalıştıran sunucu (rust-analyzer `build.rs`/`cargo`, eslint `eslint.config.js`) böylece senkronla gelen bir notun kodunu çalıştırabilir. Varsayılan sunucular bunu kendi ayarıyla ya da gömülü sertleştirmeyle önler; kullanıcı `[lsp.settings]` ile geri açarsa risk onundur (README uyarısı). Program adı tanınmayan sarmalayıcıyla (`["env", "rust-analyzer"]`) başlatılan sunucuya sertleştirme gitmez.
+- **Bağlar:** kök ya da üstündeki `lsp/` sembolik bağ ya da junction ise yansıtma oturum boyunca kapanır (`lsp_mirror_refused`), hedefe dokunulmaz. Yol bileşenleri ve eski dosya taraması `core::stat_file`/`core::scan_files` ile yapılır: Windows'ta ad vekili reparse point bağ sayılır, içine inilmez, bağın kendisi de silinmez. `.` ile başlayan girdiler (sunucu önbelleği, ör. clangd `.cache/`) silinmez; not adı `.` ile başlayamaz.
+- **Kayıt:** `save_config` `[lsp]`'yi dosyada o an nasılsa öyle geri yazar; uygulama açıkken dosyadan kapatılan LSP ayar kaydında geri açılmaz.
+- **Kapsam dışı:** hover, biçimlendirme, tanıma git, yeniden adlandırma, GUI, otomatik indirme.
+- **Ölçüm (2026-11-02, Debug, 200 baytlık 2.000 not):** ilk yansıtma 564 ms, değişmeyen ikinci 63 ms, yeni süreçte 186 ms; hepsi işçide, UI'nin bedeli < 1 ms. Tuş başına (Release, 2 MiB python, her tuşta tam metin gönderimi, tuş + eşitleme + çizim): ortanca 0,72 ms, en kötü 7,4 ms (kabul 22).
 
 ## Sözdizimi vurgusu
 
@@ -331,15 +401,32 @@ görünür; `Enter` ile dış editör `NoteStore::edit_in_temp_file`'dan geçer 
 17. Editör görünümü: numara sütunu, boş devam satırı, gerçek imleç konumu, geçerli satır, `~`, durum çubuğu alanları 80×24 ve 60×15'te, `z` ve `n` görünümünde; REVIEW'da numara, imleç ve `~` yok.
 18. Pano: `tests/tui/clipboard_test.cpp` sahte araçlarla (stdin, ortam, NUL ret, büyük veri, takılan araç, çatallanan araç, EPIPE); OSC 52 sınırı; `Ctrl+V` tek geri alma adımı; REVIEW sürüklemesinde sarma, CRLF, ters yön, kenar kenetleme, tekerlek, Release kaybı.
 19. Tamamlama: `tests/tui/completion_test.cpp`; sır tiplerinde değer önerilmez. Yazım: sahte hunspell (askı, ölüm, yeniden başlamama, çizimde alt çizgi) ve gerçek sözlükler `tests/tui/hunspell_real.sh` (`tr_TR`, `en_US`). Tuş başına ≤ 50 ms, öneri ve yazım önbelleği dahil, 1 ve 10 MiB (`editor latency: completion`).
+21. Komut paleti: `tests/tui/command_palette_test.cpp` ve `e2e_editor.sh`: tablodaki her tuş palet ve F1 çiziminde; her çalışabilir komut tuşuyla aynı `Intent` ve model durumu; çalışamayan soluk, nedenli, çalışmaz; son kullanılan önce ve kalıcı; `:` EDIT ve girdilerde metin; hostile ad ve süzgeç terminale ham gitmez.
 20. Liste: `tests/tui/list_ui_test.cpp`: argümanlar, bozuk argümanın yeri, `f`, `d` `u` `D` `T`, `Alt+ok`, `v`, `o`, kalıcılık, `terminal_safe` (C0, C1, bidi), senkron durumlarının işçiden gelmesi.
+22. Dil sunucusu: `tests/tui/language_servers_test.cpp` ve `lsp_workspace_test.cpp` sahte sunucuyla: sunucusu kurulu olmayan varsayılan ayarda süreç, yansıtma ve dizin yok, dil başına tek ileti; göreli PATH girdisindeki sunucu başlamaz, mutlak olan başlar; kapalı ya da boş ayarda hiçbir şey; dil tablosu (ad, uzantı, `env`/`properties` yok); kök ya da `lsp/` bağsa yansıtma reddedilir, hedefe dokunulmaz; nokta önbellekleri silinmez; sunucu ayar dosyaları ve `node_modules/` yansıtılmaz; alt çizgi ve ileti satırı (render); iletideki ESC/BEL/bidi terminale gitmez; öneri listeye girer, eski cevap düşer, ekleme kuralları; çökme bir kez bildirilir; `env`/`properties` ne yansır ne gider; tanı seli tek çizim ister; aralıklar güncel metne kısılır; yansıtma kayıt, taşıma, silme, çöp, kalıcı silme ve dış yazmayı izler, 0600/0700, bağla dışarı çıkmaz. T59e (`record` kipli sahte sunucu, program adıyla kopyalanır): her sertleştirilmiş sunucunun anahtarları, ortamı ve argv'si sunucuya ulaşır; kullanıcı ayarı anahtar anahtar biner; tanınmayan sunucuya ayar gitmez; varsayılandaki her riskli sunucu tabloda; html'in iki sunucusu belgeyi alır, tanılar etiketli birleşir, öneriler birleşir; biri çökünce öbürü sürer; eksik ikinci sunucu bir kez bildirilir. Ayar: `tests/core/config_test.cpp`. Tuş başına ≤ 50 ms, 2 MiB python, her tuşta gönderim (`editor latency: a language server`).
 
 **Elle:** Windows Terminal + Fedora (GNOME Terminal) — Türkçe karakter girişi/görünümü, `edit`/`micro`/`nano`/`vim`
 ile askıya alma/geri dönme, pencere yeniden boyutlandırma.
 
 ## Kapsam dışı
-LSP, eklenti, çoklu imleç, makro, takas dosyası; fare desteği (FTXUI varsayılanı dışında), PDF dışa aktarma (CLI/GUI'de), tema seçimi.
+LSP'de tanı ve öneri dışındakiler (bkz. "Dil sunucusu"), eklenti, çoklu imleç, makro, takas dosyası; fare desteği (FTXUI varsayılanı dışında), PDF dışa aktarma (CLI/GUI'de), tema seçimi.
+
+## Değişiklik 2026-11-02 (LSP)
+
+Dil sunucusu (T59c); kararlar kullanıcının: tanı ve öneri, Windows, notlar çalışma alanına yansıtılır.
+
+- **ADDED** Bölüm "Dil sunucusu (LSP)", kabul 22; `[lsp]` ayarı (SPEC-core "Config").
+- **REMOVED** "Kapsam dışı"ndan LSP; tanı ve öneri dışındakiler kapsam dışı kalır.
+- **MODIFIED** (kullanıcı kararı) LSP varsayılan açık, güvenli varsayılan sunucularla; kurulu olmayan sunucu için süreç ve yansıtma yok, tek ileti. Dil kimliği sözdizimi katmanından ayrıldı, tek tablo; daha çok tip ve dosya adı. `[lsp.servers]` varsayılanların üstüne biner, `[]` kapatır.
 
 ## Değişiklik 2026-11-02
+
+Komut paleti (T79); kararlar kullanıcının.
+
+- **ADDED** Bölüm "Komut paleti"; `Intent::ToggleIcons`; `recent_commands`.
+- **MODIFIED** Liste, REVIEW ve çöp harfleri tek tablodan çözülür (`commands.cpp`); `kList*Letters`, `kTrashLetters`, `kPreview*Letters` kalktı. Davranış aynıdır, kabul testleri değişmeden geçer.
+- **MODIFIED** İpuçları `: komut` ile başlar; 60 sütuna sığsın diye `Space detay` `Space aç`, `v column` `v col`, `Space details` `Space open`; klasör ipuçlarında `d` 60 sütundan düşer.
+- **MODIFIED** Girdi metni çizimde `terminal_safe`ten geçer: `F2` bidi taşıyan adla dolu açıldığında ham gidiyordu.
 
 Ölçüm (T71, Release, 1 KiB'lik 2.000 not, `folder copy perf`): klasör kopyası not başına yazmayla 28,7 sn (her yazma görüntüyü yeniden kurar, UI iş parçacığında donar); `NoteStore::copy_folder` toplu işlemiyle 105 ms. Aynı not başına maliyet çoklu not kopyası ve `d` klasöründe duruyor.
 
@@ -431,3 +518,28 @@ Sistem panosu, fare seçimi, tamamlama, yazım denetimi, genel arama, çöp, sat
 T55c: `ignored` notlar uzak dal alınmadan da `sync_off`; log satırlarında kontrol baytı `\\xNN`; `committed` ve `pulled` not değişikliğini sayar (`.trash/` hariç; rename algılama seçilmedi, benzerlik eşiğine bağlıdır).
 
 Ölçüm (T60, Release, 120×40, tuş + yerleşim + çizim, öneri, 200.000 sözcüklük tablo, yazım önbelleği): 1 MiB satırlı medyan 0,79 ms, en kötü 1,53 ms; 1 MiB tek satır medyan 3,5 ms, en kötü 3,6 ms; önekin her yerde geçtiği 1 MiB `aa aa` en kötü 5,7 ms; liste süzme en kötü 2,1 ms. 10 MiB satırlı medyan 0,87 ms, en kötü 0,93 ms; tek satır medyan 31,4 ms, en kötü 34,7 ms; `aa aa` en kötü 37,4 ms; liste süzme en kötü 3,0 ms.
+
+## Değişiklik 2026-11-03 (T59e)
+
+Dil sunucusu sertleştirmesi ve dil başına çok sunucu; kullanıcı kararı: riskli sunucular varsayılanda açık, sertleştirilmiş.
+
+- **ADDED** "Sertleştirme" ve "Yansıtılmayan notlar"; `[lsp.settings.<dil>]`; `tui.lsp_partly_not_found`.
+- **MODIFIED** Varsayılana java, go, rust, javascript, typescript, yaml, toml, json ve html'in ikinci sunucusu htmx-lsp eklendi.
+- **MODIFIED** Dil başına birden çok sunucu: belge her birine gider, tanılar etiketli birleşir, öneriler birleşir, durum sunucu başına.
+- **MODIFIED** `workspace/configuration` artık her öğeye null değil, sunucunun ayarından cevap verir (rust-analyzer null cevabı istemci ayarını varsayılana sıfırlardı).
+- **MODIFIED** Sunucu programı yalnız mutlak PATH girdilerinde aranır.
+
+## Değişiklik 2026-11-03 (T59f)
+
+T59e'nin güvenlik incelemesi.
+
+- **ADDED** "Uzak dosya başvurusu", "Çalışma dizini ve başlangıç"; `tui.lsp_remote_reference`.
+- **MODIFIED** Engellenen ad karşılaştırması Unicode katlamasını ve dosya sisteminin kendi eşdeğerliğini de kullanır.
+- **MODIFIED** rust-analyzer'a `checkOnSave` nesne biçiminde gider (`{"enable": false}`), eski sürümler bool'u yok sayıyordu.
+
+## Değişiklik 2026-11-03 (T59g)
+
+T59f'nin yeniden incelemesi.
+
+- **MODIFIED** "Ağ yolu": anahtara bağlı denetim (`$schema`, `#:schema`, `extends`) kaldırıldı, tek kural bütün metne uygulanır; yalnız Windows'ta.
+- **MODIFIED** Tarama önbelleği tampon kuşağını da anahtar alır: yeniden açılan notun yeni tamponu `edit_count`'u 0'dan saydığı için senkronla değişmiş metin eski temiz sonuçla gidiyordu.

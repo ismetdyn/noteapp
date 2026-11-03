@@ -1,5 +1,6 @@
 #include "search/query.hpp"
 
+#include "core/note_views.hpp"
 #include "search/fold.hpp"
 
 #include <algorithm>
@@ -23,7 +24,7 @@ constexpr int kMaxYear = 2200;
 constexpr int kMaxAgeDays = 36500;
 constexpr std::size_t kDateChars = 10;  // YYYY-MM-DD
 
-enum class Key { Sort, Type, In, Size, Updated, Created, Origin, Sync };
+enum class Key { Sort, Type, In, Size, Updated, Created, Origin, Sync, Tag, View };
 
 // Geçersiz değerin gerekçesi: i18n "reason.<ad>".
 using Reason = std::string_view;
@@ -34,6 +35,8 @@ constexpr Reason kMustBeSyncState = "must_be_sync_state";
 constexpr Reason kMustBeFolder = "must_be_folder";
 constexpr Reason kMustBeTypeName = "must_be_type_name";
 constexpr Reason kMustNotBeEmpty = "must_not_be_empty";
+constexpr Reason kMustBeTag = "must_be_tag";
+constexpr Reason kMustBeViewName = "must_be_view_name";
 
 bool is_space(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
@@ -65,14 +68,16 @@ std::vector<Token> tokenize(std::string_view query) {
 }
 
 std::optional<Key> known_key(std::string_view name) {
-    static constexpr std::array<std::pair<std::string_view, Key>, 8> kKeys{{{"sort", Key::Sort},
-                                                                            {"type", Key::Type},
-                                                                            {"in", Key::In},
-                                                                            {"size", Key::Size},
-                                                                            {"updated", Key::Updated},
-                                                                            {"created", Key::Created},
-                                                                            {"origin", Key::Origin},
-                                                                            {"sync", Key::Sync}}};
+    static constexpr std::array<std::pair<std::string_view, Key>, 10> kKeys{{{"sort", Key::Sort},
+                                                                             {"type", Key::Type},
+                                                                             {"in", Key::In},
+                                                                             {"size", Key::Size},
+                                                                             {"updated", Key::Updated},
+                                                                             {"created", Key::Created},
+                                                                             {"origin", Key::Origin},
+                                                                             {"sync", Key::Sync},
+                                                                             {"tag", Key::Tag},
+                                                                             {"view", Key::View}}};
     const std::string folded = fold_to_utf8(name);
     const auto* found =
         std::ranges::find(kKeys, std::string_view(folded), &std::pair<std::string_view, Key>::first);
@@ -210,8 +215,23 @@ std::expected<Filter, Reason> parse_folder(std::string_view raw) {
     return filter;
 }
 
+// `#` yazılabilir, sondaki `/` iç içe ayıracıdır: `tag:proje`, `tag:#proje` ve `tag:proje/` aynıdır.
+std::expected<Filter, Reason> parse_tag(std::string_view folded) {
+    if (folded.starts_with('#'))
+        folded.remove_prefix(1);
+    while (folded.ends_with('/'))
+        folded.remove_suffix(1);
+    if (folded.empty() || folded.starts_with('/'))
+        return std::unexpected(kMustBeTag);
+    Filter filter{Filter::Kind::Tag};
+    filter.text = folded;
+    return filter;
+}
+
 std::expected<Filter, Reason> parse_filter(Key key, std::string_view raw, std::string_view folded) {
     switch (key) {
+    case Key::Tag:
+        return parse_tag(folded);
     case Key::Type:
         return parse_type(folded);
     case Key::In:
@@ -226,6 +246,7 @@ std::expected<Filter, Reason> parse_filter(Key key, std::string_view raw, std::s
         return parse_sync(folded);
     case Key::Origin:
     case Key::Sort:
+    case Key::View:
         break;
     }
     Filter filter{Filter::Kind::Origin};
@@ -305,6 +326,14 @@ bool matches_type(const std::string& path, const std::string& type) {
     return dot != std::string_view::npos && fold_to_utf8(name.substr(dot + 1)) == type;
 }
 
+// Etiket ve altındakiler: `proje` -> `proje`, `proje/alt`; `projeler` değil.
+bool matches_tag(const std::vector<std::string>& tags, const std::string& wanted) {
+    return std::ranges::any_of(tags, [&](const std::string& tag) {
+        const std::string folded = fold_to_utf8(tag);
+        return folded == wanted || (folded.starts_with(wanted) && folded[wanted.size()] == '/');
+    });
+}
+
 bool matches(const Filter& filter, const core::NoteMeta& note, fs::file_time_type bound) {
     switch (filter.kind) {
     case Filter::Kind::Type:
@@ -319,6 +348,10 @@ bool matches(const Filter& filter, const core::NoteMeta& note, fs::file_time_typ
         return matches_time(note.created_at, filter.compare, bound);
     case Filter::Kind::Origin:
         return note.origin && fold_to_utf8(*note.origin) == filter.text;
+    case Filter::Kind::Tag:
+        return matches_tag(note.tags, filter.text);
+    case Filter::Kind::View:
+        return filter.notes && filter.notes->contains(note.path);
     case Filter::Kind::Sync:
         break;
     }
@@ -332,9 +365,25 @@ void stable_sort_by(Iterator first, Iterator last, bool descending, const KeyOf&
     });
 }
 
+// Görünüm adı katlanmaz: anahtarı core katlar. Ad kuralı depoya sormadan önce: bozuk ad aramaya gitmez.
+std::expected<Filter, QueryError> view_filter(std::string_view name, Token range, std::string_view query,
+                                              const ViewLookup& views) {
+    if (!core::validate_view_name(name))
+        return std::unexpected(query_error(range, query, "view", kMustBeViewName));
+    Filter filter{Filter::Kind::View};
+    filter.text = name;
+    if (!views)
+        return filter;
+    auto notes = views(name);
+    if (!notes)
+        return std::unexpected(QueryError{range.begin, range.end, std::move(notes.error())});
+    filter.notes = std::make_shared<const std::set<core::NotePath>>(notes->begin(), notes->end());
+    return filter;
+}
+
 }  // namespace
 
-std::expected<ParsedQuery, QueryError> parse_query(std::string_view query) {
+std::expected<ParsedQuery, QueryError> parse_query(std::string_view query, const ViewLookup& views) {
     ParsedQuery out;
     for (const Token token : tokenize(query)) {
         const std::string_view word = query.substr(token.begin, token.end - token.begin);
@@ -350,6 +399,13 @@ std::expected<ParsedQuery, QueryError> parse_query(std::string_view query) {
         const std::string value = without_quotes(word.substr(colon + 1));
         if (value.empty())
             return std::unexpected(query_error(token, query, key_name, kMustNotBeEmpty));
+        if (*key == Key::View) {
+            auto filter = view_filter(value, {token.begin + colon + 1, token.end}, query, views);
+            if (!filter)
+                return std::unexpected(std::move(filter.error()));
+            out.filters.push_back(std::move(*filter));
+            continue;
+        }
         if (auto added = add_argument(*key, value, out); !added)
             return std::unexpected(
                 query_error({token.begin + colon + 1, token.end}, query, key_name, added.error()));

@@ -13,8 +13,10 @@ namespace noteapp::cli {
 
 // Terminale (TTY) yazılacak not baytları: C0 denetim karakterleri (\t ve \n dışında), DEL, C1 (U+0080–U+009F,
 // UTF-8 kodlu) ve geçersiz UTF-8 baytları görünür U+FFFD olur, \r atılır. Neden: VT işleme açıkken senkronla
-// gelen bir not OSC 52 (panoya yazma) ya da başlık değiştiren kaçış dizisi yollayabilirdi. Boruya/dosyaya
-// giden çıktı buradan geçmez, bayt bayt kalır. Tek geçiş (doğrusal).
+// gelen bir not OSC 52 (panoya yazma) ya da başlık değiştiren kaçış dizisi yollayabilirdi. Görünmez bidi ve
+// sıfır genişlikli karakterler (core::find_hidden_control, TUI/GUI ile aynı liste) de U+FFFD olur: metin
+// saklandığından farklı sırayla görünmesin (Trojan Source). Boruya/dosyaya giden çıktı buradan geçmez, bayt
+// bayt kalır. Tek geçiş (doğrusal).
 inline std::string sanitize_for_terminal(std::string_view text) {
     constexpr std::string_view kPlaceholder = "\xEF\xBF\xBD";  // U+FFFD
     std::string out;
@@ -25,11 +27,13 @@ inline std::string sanitize_for_terminal(std::string_view text) {
         const std::string_view sequence = text.substr(i, length);
         const bool valid_multibyte = length > 1 && core::is_valid_utf8(sequence);
         const bool c1 = valid_multibyte && lead == 0xC2 && static_cast<unsigned char>(sequence[1]) < 0xA0;
+        const bool hidden =
+            valid_multibyte && core::find_hidden_control(core::decode_utf8(sequence)->front());
         if (lead == '\r') {
             // CRLF'li not tek satır sonuyla görünür
         } else if (lead == '\t' || lead == '\n' || (lead >= 0x20 && lead < 0x7F)) {
             out += static_cast<char>(lead);
-        } else if (valid_multibyte && !c1) {
+        } else if (valid_multibyte && !c1 && !hidden) {
             out.append(sequence);
         } else {
             out.append(kPlaceholder);

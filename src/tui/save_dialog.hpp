@@ -155,6 +155,9 @@ public:
                          bool is_folder = false);
     // `m`: yalnız hedef klasör sorulur; `target()` klasördür, öğeler boş olamaz.
     RenameState(std::vector<ListItem> items, std::string folder, SharedInputSources sources);
+    // `L`: `from` notuna ilişkilendirilecek notun yolu; girdi boş başlar.
+    struct LinkTarget {};
+    RenameState(LinkTarget, core::NotePath from, SharedInputSources sources);
 
     Outcome handle(Key key, std::string_view text = {});
 
@@ -164,6 +167,7 @@ public:
     std::string target() const;
     bool is_folder() const { return is_folder_; }
     bool is_move_to() const { return !items_.empty(); }
+    bool is_link() const { return is_link_; }
     const std::vector<ListItem>& items() const { return items_; }
     void set_items(std::vector<ListItem> items) { items_ = std::move(items); }
     std::size_t cursor() const { return line_.cursor(); }  // bayt ofseti, kod noktası başında
@@ -176,6 +180,7 @@ private:
     core::NotePath from_;
     std::string base_;
     bool is_folder_ = false;
+    bool is_link_ = false;
     std::vector<ListItem> items_;
     InputLine line_;
     std::string error_;

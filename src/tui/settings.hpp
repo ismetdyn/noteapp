@@ -22,6 +22,10 @@ struct TokenStore {
 };
 TokenStore system_token_store();
 
+// Kullanıcının config.toml'u okunamıyorsa save_config onu varsayılanlarla ezerdi (note config set ile aynı
+// kural).
+bool user_config_broken();
+
 // "Senkron açıldı" akışı: depoyu kurar (SyncService::enable). `replace_origin` yalnız kullanıcı onayından
 // sonra.
 using SyncEnabler =

@@ -8,6 +8,9 @@
 //   FAKE_EDITOR_ENV_OUT   -> tüm ortam (satır başına AD=değer, UTF-8) bu dosyaya yazılır
 //   FAKE_EDITOR_GRANDCHILD_PID_OUT -> kendini uzun uyuyan bir torun olarak başlatır, torunun PID'i bu
 //                            dosyaya yazılır (süreç ağacı sonlandırma testleri; ssh torununu taklit eder)
+//   FAKE_EDITOR_ECHO_STDIN -> stdin'i EOF'a dek gelen parçalar hâlinde stdout'a yazar (borulu çocuk testleri)
+//   FAKE_EDITOR_FLOOD_BYTES -> stdin'i okumadan stdout'a bu kadar bayt yazar (dolu boru testleri)
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +23,8 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
 #include <stdlib.h>
 #include <windows.h>
 // windows.h'den sonra gelmeli
@@ -103,6 +108,60 @@ void spawn_grandchild(const std::string& pid_out, const std::string& self) {
 #endif
 }
 
+#ifdef _WIN32
+// Metin kipi \n'yi \r\n'ye çevirirdi: baytlar birebir geçmeli. Yalnız borulu kiplerde çağrılır.
+void binary_stdio() {
+    _setmode(0, _O_BINARY);
+    _setmode(1, _O_BINARY);
+}
+int read_fd(int fd, char* data, unsigned size) {
+    return _read(fd, data, size);
+}
+int write_fd(int fd, const char* data, unsigned size) {
+    return _write(fd, data, size);
+}
+#else
+void binary_stdio() {}
+int read_fd(int fd, char* data, unsigned size) {
+    return static_cast<int>(read(fd, data, size));
+}
+int write_fd(int fd, const char* data, unsigned size) {
+    return static_cast<int>(write(fd, data, size));
+}
+#endif
+
+bool write_fully(const char* data, unsigned size) {
+    while (size > 0) {
+        const int written = write_fd(1, data, size);
+        if (written <= 0)
+            return false;
+        data += written;
+        size -= static_cast<unsigned>(written);
+    }
+    return true;
+}
+
+// stdio tamponu yerine doğrudan tanımlayıcı: gelen her parça hemen geri gider, yanıtı bekleyen çağıran takılmaz.
+void echo_stdin() {
+    binary_stdio();
+    char chunk[4096];
+    for (int count = 0; (count = read_fd(0, chunk, sizeof(chunk))) > 0;)
+        if (!write_fully(chunk, static_cast<unsigned>(count)))
+            return;
+}
+
+void flood_stdout(long long bytes) {
+    binary_stdio();
+    char chunk[65536];
+    std::fill(std::begin(chunk), std::end(chunk), 'x');
+    while (bytes > 0) {
+        const auto size = static_cast<unsigned>(std::min<long long>(bytes, sizeof(chunk)));
+        if (!write_fully(chunk, size))
+            return;
+        bytes -= size;
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -143,6 +202,10 @@ int main(int argc, char** argv) {
     }
     if (const auto grandchild_out = env("FAKE_EDITOR_GRANDCHILD_PID_OUT"))
         spawn_grandchild(*grandchild_out, received.front());
+    if (env("FAKE_EDITOR_ECHO_STDIN"))
+        echo_stdin();
+    if (const auto bytes = env("FAKE_EDITOR_FLOOD_BYTES"))
+        flood_stdout(std::atoll(bytes->c_str()));
     if (const auto sleep_ms = env("FAKE_EDITOR_SLEEP_MS"))
         std::this_thread::sleep_for(std::chrono::milliseconds(std::atoll(sleep_ms->c_str())));
     if (const auto code = env("FAKE_EDITOR_EXIT"))

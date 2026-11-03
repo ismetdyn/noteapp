@@ -134,6 +134,14 @@ idle_seconds = 30
 author_name = ""         # boş: git global config → OS kullanıcı adı
 author_email = ""
 
+[lsp]                    # yalnız TUI; davranış ve varsayılan sunucular SPEC-tui "Dil sunucusu (LSP)"
+enabled = true
+[lsp.servers]            # LSP languageId → kabuksuz argv ya da argv listesi; kullanıcının girdileri tek tek üstüne biner
+python = ["pyright-langserver", "--stdio"]   # tam liste: resources/defaults.toml
+html = [["vscode-html-language-server", "--stdio"], ["htmx-lsp"]]   # dil başına en çok 4 sunucu
+[lsp.settings.rust]      # yalnız kullanıcı dosyasında; JSON'a çevrilir, sunucunun gömülü ayarına anahtar anahtar biner
+rust-analyzer.cargo.buildScripts.enable = true
+
 [tuning]                # arayüzde görünmeyen ayarlar; yalnız defaults.toml'da (kullanıcı isterse geçersiz kılar)
 slug_max_length = 60
 min_confidence = 0.5     # 0..1
@@ -145,11 +153,24 @@ exit_timeout_seconds = 10
 log_max_bytes = 1048576   # log.txt bu boyutu aşınca log.1.txt'ye döner
 sync_stale_lock_minutes = 10   # okunamayan sync.lock bundan eskiyse bayat; sahibi canlı kilit devralınmaz (SPEC-sync)
 sync_timeout_seconds = 120     # AutoSync bir `note sync --background` sürecini en çok bu kadar bekler (SPEC-sync karar 3)
+graph_batch_ops = 30000        # bir graf yazma işleminin işlem bütçesi, 1..32768; aşan iş bölünür (SPEC-graph "Sınırlar")
 ```
 - Varsayılanlar `resources/defaults.toml`'dan (gömülü) gelir; dosya yoksa varsayılanlarla çalışılır, ilk
   kayıtta oluşturulur. Bilinmeyen anahtar → uyarı logu, yok sayılır. Geçersiz değer (yanlış tür, language ∉ {auto,tr,en}, boş/noktalı tip, idle_seconds ≤ 0, boş branch, ≤ 0 tuning) → o anahtar için varsayılan + uyarı; TOML sözdizimi hatası → tüm varsayılanlar + satır/sütunlu uyarı. `save_config` `[tuning]`'e yalnız
   gömülü varsayılandan farklı anahtarları yazar: elle verilmiş ince ayar uygulamanın kaydında (ör. `note config
   set`) kaybolmaz, dokunulmamış varsayılan dosyaya gömülmez (T36).
+- `[lsp.servers]` girdisi tek tek doğrulanır: kimlik `a-z0-9_-`, en çok 32 bayt; argv en çok 64 boş olmayan, NUL'suz,
+  en çok 4096 baytlık dizge; değer tek argv ya da en çok 4 boş olmayan argv'nin listesi (`kMaxServersPerLanguage`);
+  dosya başına en çok 32 dil. Girdi varsayılanın üstüne biner; boş dizi (`[]`) o dili kapatır. Bozuk girdi `config.invalid_value` (`must_be_language_id`,
+  `must_be_server_command`, `too_many_servers`) ve atlanır, geçerliler kalır.
+- `[lsp.settings.<dil>]` tablosu `core::Json` nesnesine çevrilir (`LspConfig::settings`); dil başına tablonun tamamı
+  önceki katmanın yerine geçer. Tablo olmayan değer, 16 düzeyden derin iç içelik, 4096'dan çok değer, tarih/saat ve
+  nan/inf `must_be_settings_table` olur ve o dil atlanır. Birleştirme ve gömülü sertleştirme TUI'dedir
+  (SPEC-tui "Dil sunucusu").
+- `save_config` `[lsp]`'yi bellekten değil, dosyada o an nasılsa öyle (bozuk girdiler dahil) geri yazar; kökteki satır içi
+  tablo (`lsp = { enabled = false }`) başlıklı tabloya çevrilir (yoksa `[sync]`'ten sonra `sync.lsp` okunurdu), tablo
+  olmayan `lsp` değeri yazılmaz; dosyada yoksa yazmaz. Ayar kaydı sunucuları silmez, uygulama açıkken
+  dosyadan kapatılan LSP'yi de geri açmaz. `note config list/set` bu bölümü göstermez, dosya elle düzenlenir.
 - `~` ve ortam değişkenleri `notes_dir`'de genişletilir. Kaydetme atomiktir. Yorumlar korunmaz (bilinen sınır).
 - Kimlik doğrulama yöntemi `remote` şemasından türetilir; ayrı anahtar yok.
 - `sync.remote` http(s) URL'sinde kullanıcı bilgisi (`https://kullanıcı:token@host/…`, `://`dan sonraki ilk `/ ? #`'ten
@@ -255,3 +276,10 @@ Bu bölüm yukarıdaki "Yazma", "Listeleme", "Klasörler", "Yol güvenliği" ve 
   zamanından üretilmez. `sync_status`'u `sync::fill_sync_status` doldurur (SPEC-sync).
 - **ADDED** `error.query_invalid`, `reason.must_be_{sort_field,size_bound,age_or_date,sync_state,folder}` katalog anahtarları (SPEC-search).
 - **MODIFIED** Kapsam dışı: "Çöp kutusu" çıkarıldı.
+
+## Değişiklik 2026-11-03 (T59e)
+- **ADDED** `[lsp.settings.<dil>]` → `LspConfig::settings` (`core::Json`), `reason.must_be_settings_table`; `LspConfig::kMaxServersPerLanguage`, `kMaxSettingsDepth`, `kMaxSettingsValues`.
+- **MODIFIED** `[lsp.servers]` değeri argv listesi de olabilir (`LspConfig::servers` dil → argv listesi).
+- **MODIFIED** `save_config` kökteki satır içi `lsp` tablosunu başlıklı yazar, tablo olmayan `lsp` değerini yazmaz (satır içi kapatma kayıtta kayboluyordu).
+- **ADDED** `core::find_program_on_absolute_path`: yalnız mutlak PATH girdileri; dil sunucusu araması bunu kullanır. `find_program` değişmedi.
+- **ADDED** `core::json_text`/`append_json` (Json yazımı), `Json::operator==`.

@@ -12,8 +12,16 @@ namespace {
 
 constexpr char kReplacementCharacter[] = "\xEF\xBF\xBD";
 
+// Öznitelik ham metni: varlıklar çözülmez. Hedef yalnız gösterilir (URL ipucu) ya da wiki hedefi olarak
+// çözülür; md4c wiki hedefini zaten varlıksız kurar.
+std::string attribute_text(const MD_ATTRIBUTE& attribute) {
+    return {attribute.text, attribute.size};
+}
+
 class BlockBuilder {
 public:
+    explicit BlockBuilder(MarkdownOptions options) : options_(options) {}
+
     std::vector<Block> finish() && {
         flush();
         return std::move(blocks_);
@@ -104,8 +112,15 @@ public:
         }
     }
 
-    void enter_span(MD_SPANTYPE type) {
+    void enter_span(MD_SPANTYPE type, const void* detail) {
         switch (type) {
+        case MD_SPAN_A:
+            if (options_.links)
+                links_.push_back({attribute_text(static_cast<const MD_SPAN_A_DETAIL*>(detail)->href), false});
+            break;
+        case MD_SPAN_WIKILINK:
+            links_.push_back({attribute_text(static_cast<const MD_SPAN_WIKILINK_DETAIL*>(detail)->target), true});
+            break;
         case MD_SPAN_STRONG:
             ++bold_depth_;
             break;
@@ -120,13 +135,20 @@ public:
             if (image_depth_++ == 0)
                 has_image_text_ = false;
             break;
-        default:  // bağlantı ve üstü çizili: hedef/süs atılır, metin kalır
+        default:  // üstü çizili (ve PDF'te bağlantı): süs/hedef atılır, metin kalır
             break;
         }
     }
 
     void leave_span(MD_SPANTYPE type) {
         switch (type) {
+        case MD_SPAN_A:
+            if (options_.links)
+                links_.pop_back();
+            break;
+        case MD_SPAN_WIKILINK:  // yalnız options_.links ile ayrıştırılır
+            links_.pop_back();
+            break;
         case MD_SPAN_STRONG:
             --bold_depth_;
             break;
@@ -201,14 +223,23 @@ private:
             has_image_text_ = true;
         const TextStyle style{bold_depth_ > 0, italic_depth_ > 0,
                               mono_depth_ > 0 || current_.kind == Block::Kind::Code};
+        const Link link = links_.empty() ? Link{} : links_.back();
         std::vector<Span>& spans =
             in_table_cell_ && !current_.rows.empty() ? current_.rows.back().cells.back() : current_.spans;
-        if (!spans.empty() && spans.back().style == style)
+        if (!spans.empty() && spans.back().style == style && spans.back().link == link.target &&
+            spans.back().wiki == link.wiki)
             spans.back().text += value;
         else
-            spans.push_back({std::string(value), style});
+            spans.push_back({std::string(value), style, link.target, link.wiki});
     }
 
+    struct Link {
+        std::string target;
+        bool wiki = false;
+    };
+
+    MarkdownOptions options_;
+    std::vector<Link> links_;  // iç içe bağlantıda en içteki geçerli
     std::vector<Block> blocks_;
     Block current_;
     bool is_open_ = false;
@@ -230,13 +261,15 @@ BlockBuilder& builder_of(void* userdata) {
 
 }  // namespace
 
-std::vector<Block> parse_markdown(std::string_view text) {
-    BlockBuilder builder;
+std::vector<Block> parse_markdown(std::string_view text, MarkdownOptions options) {
+    BlockBuilder builder(options);
     MD_PARSER parser{};
     // MD_DIALECT_GITHUB'ın dipnot/uyarı blokları plan kapsamında değil; yalnız gereken bayraklar.
     // MD_FLAG_NOHTML sözleşmedir: not içeriği güvenilmez.
     parser.flags = MD_FLAG_TABLES | MD_FLAG_TASKLISTS | MD_FLAG_STRIKETHROUGH | MD_FLAG_PERMISSIVEAUTOLINKS |
                    MD_FLAG_NOHTML;
+    if (options.links)
+        parser.flags |= MD_FLAG_WIKILINKS;
     parser.enter_block = [](MD_BLOCKTYPE type, void* detail, void* userdata) {
         builder_of(userdata).enter_block(type, detail);
         return 0;
@@ -245,8 +278,8 @@ std::vector<Block> parse_markdown(std::string_view text) {
         builder_of(userdata).leave_block(type);
         return 0;
     };
-    parser.enter_span = [](MD_SPANTYPE type, void*, void* userdata) {
-        builder_of(userdata).enter_span(type);
+    parser.enter_span = [](MD_SPANTYPE type, void* detail, void* userdata) {
+        builder_of(userdata).enter_span(type, detail);
         return 0;
     };
     parser.leave_span = [](MD_SPANTYPE type, void*, void* userdata) {

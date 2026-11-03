@@ -21,9 +21,10 @@ struct RowPaint {
     std::span<const ByteRange> highlights;
     std::span<const SyntaxSpan> syntax = {};  // satır içi ofsetler; `syntax_origin` satırın tampondaki başı
     std::size_t syntax_origin = 0;
-    std::span<const ByteRange> misspelled = {};  // alt çizgi; `highlights` ile aynı ofsetler
-    std::string_view ghost = {};                 // satır sonundaki imlecin ardında soluk öneri
-    int columns = 0;                             // gölgenin kırpılacağı genişlik
+    std::span<const ByteRange> misspelled = {};        // alt çizgi; `highlights` ile aynı ofsetler
+    std::string_view ghost = {};                       // satır sonundaki imlecin ardında soluk öneri
+    int columns = 0;                                   // gölgenin kırpılacağı genişlik
+    std::span<const DiagnosticMark> diagnostics = {};  // dil sunucusu tanısı: önem rengiyle alt çizgi
 };
 ftxui::Element paint_row(const EditorBuffer& buffer, const VisualRow& row, const RowPaint& paint);
 // Sözdizimi türünün renk ve biçimi; REVIEW'un biçimli görünümü de aynı paleti kullanır.

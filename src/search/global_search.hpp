@@ -36,6 +36,7 @@ inline constexpr std::size_t kGlobalSearchLimit = 200;
 std::expected<std::vector<GlobalHit>, QueryError>
 search_all(std::string_view query, std::span<const core::NoteMeta> notes, const ContentIndex& content_index,
            std::size_t limit = kGlobalSearchLimit,
-           std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
+           std::chrono::system_clock::time_point now = std::chrono::system_clock::now(),
+           const ViewLookup& views = {});
 
 }  // namespace noteapp::search

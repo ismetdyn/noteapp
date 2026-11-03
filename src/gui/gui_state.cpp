@@ -3,11 +3,14 @@
 #include "core/atomic_file.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
+#include "core/note_views.hpp"
 #include "core/paths.hpp"
 #include "core/text.hpp"
 #include "detect/detect.hpp"
 #include "pdf/pdf_export.hpp"
 #include "search/fold.hpp"
+#include "search/query.hpp"
+#include "sync/note_status.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -18,9 +21,11 @@
 #include <format>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <sstream>
 #include <string_view>
 #include <toml++/toml.hpp>
+#include <unordered_set>
 #include <utility>
 
 namespace noteapp::gui {
@@ -30,6 +35,9 @@ namespace {
 constexpr std::string_view kBom = "\xEF\xBB\xBF";
 constexpr std::string_view kCrlf = "\r\n";
 const char kStateFileName[] = "gui-state.toml";
+constexpr const char* kViewTree = "tree";
+constexpr const char* kViewDetails = "details";
+constexpr const char* kViewMap = "map";
 constexpr int kPercent = 100;
 // Elle bozulmuş gui-state.toml pencereyi ekrandan taşırmasın ya da görünmez yapmasın.
 constexpr int kMinWindowSide = 200;
@@ -55,6 +63,20 @@ PathParts split(const core::NotePath& path) {
 }
 
 // Tampon yalnız boşluktan ibaret mi: boş taslak sorulmadan atılır, kaybedilecek bir şey yok.
+// UTF-8 devam baytı 10xxxxxx'tir.
+constexpr unsigned char kUtf8ContinuationMask = 0xC0;
+constexpr unsigned char kUtf8ContinuationBits = 0x80;
+
+// Ofset metin sonunu geçmez, kod noktasının ortasındaysa başına çekilir: ImGui imleci bayt ofsetidir, ortaya
+// yazılan karakter UTF-8'i bozardı.
+std::size_t code_point_start(const std::string& text, std::size_t offset) {
+    offset = std::min(offset, text.size());
+    while (offset > 0 && offset < text.size() &&
+           (static_cast<unsigned char>(text[offset]) & kUtf8ContinuationMask) == kUtf8ContinuationBits)
+        --offset;
+    return offset;
+}
+
 bool is_blank(const std::string& text) {
     return core::first_non_empty_line(text).empty();
 }
@@ -92,6 +114,37 @@ std::chrono::seconds rescan_interval(const core::Config& config) {
 
 // Metinde sorgu terimlerinin en erken geçişi, bayt ofsetiyle (plan davranış 3: yalnız ilk eşleşmeye gidilir).
 // Fold kod noktası başına 1:1 olduğundan katlanmış indeks özgün bayta byte_offsets ile döner.
+// Sorgunun argümansız metni: içerik araması ve editör seçimi bunu arar. Bozuk argümanda boş.
+std::string search_text(const std::string& query) {
+    const auto parsed = search::parse_query(query);
+    return parsed ? parsed->text : std::string{};
+}
+
+// Etiketler son kayıttaki haliyle (bağlantılarla aynı okuma): "#a #b". Etiket kuralı kontrol ve yön
+// karakterini almaz: temizlenmeden gösterilebilir.
+std::string hash_tags(const std::vector<std::string>& tags) {
+    std::string text;
+    for (const std::string& tag : tags)
+        text += (text.empty() ? "#" : " #") + tag;
+    return text;
+}
+
+std::string sync_state_text(core::SyncState state) {
+    switch (state) {
+    case core::SyncState::Synced:
+        return core::tr("gui.sync_state_synced");
+    case core::SyncState::Modified:
+        return core::tr("gui.sync_state_modified");
+    case core::SyncState::New:
+        return core::tr("gui.sync_state_new");
+    case core::SyncState::ConflictCopy:
+        return core::tr("gui.sync_state_conflict");
+    case core::SyncState::SyncOff:
+        break;
+    }
+    return core::tr("gui.sync_off");
+}
+
 std::optional<TextSelection> first_match(const std::string& text, const std::string& query) {
     const search::Folded folded = search::fold(text);
     std::optional<TextSelection> best;
@@ -123,6 +176,7 @@ GuiState::GuiState(core::Config config)
                              .post = [this](std::function<void()> work) { post(std::move(work)); }}) {
     // cppcheck-suppress useInitializationList ; tek seferlik kurulum; üye sırasına bağlanmasın
     sync_note_exe = sync::note_executable_beside_self();
+    model_.set_view_lookup([this](std::string_view name) { return core::view_notes(store_, name); });
     rescan();
     load_gui_state();
     start_sync();
@@ -154,8 +208,30 @@ void GuiState::load_gui_state() {
     layout_.width = window_side("width", layout_.width);
     layout_.height = window_side("height", layout_.height);
     layout_.left_pane_width = pane_side("left_pane_width", layout_.left_pane_width);
-    layout_.folder_pane_height = pane_side("folder_pane_height", layout_.folder_pane_height);
+    layout_.map_pane_width = pane_side("map_pane_width", layout_.map_pane_width);
+    // Eski dosyadaki folder_pane_height (ayrı klasör bölmesi) okunmaz; bilinmeyen görünüm varsayılana düşer.
+    const auto view_mode = table["view_mode"].value<std::string>();
+    if (view_mode == kViewDetails)
+        layout_.browser_view = BrowserView::Details;
+    else if (view_mode == kViewMap)
+        layout_.browser_view = BrowserView::Map;
+    layout_.row_numbers = table["row_numbers"].value_or(layout_.row_numbers);
 
+    // Açık sekmeler (SPEC-gui "Sekmeler"); yoksa ya da hiçbiri kalmadıysa son seçili not.
+    if (const toml::array* saved = table["tabs"].as_array()) {
+        std::vector<SavedTab> entries;
+        for (const toml::node& node : *saved) {
+            const toml::table* entry = node.as_table();
+            if (entry == nullptr)
+                continue;
+            if (auto path = (*entry)["path"].value<std::string>())
+                entries.push_back(
+                    {std::move(*path), (*entry)["pinned"].value_or(false), (*entry)["kept"].value_or(false)});
+        }
+        const auto active = table["active_tab"].value_or(std::int64_t{0});
+        if (restore_tabs(entries, active < 0 ? 0 : static_cast<std::size_t>(active)))
+            return;
+    }
     // Son seçili not (SPEC-gui "Diğer"): listede hâlâ varsa seçilir. Değer dosyadan gelir, NotePath doğrular.
     if (const auto last = table["last_note"].value<std::string>()) {
         if (const auto path = core::NotePath::parse(*last)) {
@@ -170,9 +246,36 @@ void GuiState::save_gui_state() const {
     table.insert("width", layout_.width);
     table.insert("height", layout_.height);
     table.insert("left_pane_width", static_cast<double>(layout_.left_pane_width));
-    table.insert("folder_pane_height", static_cast<double>(layout_.folder_pane_height));
+    table.insert("map_pane_width", static_cast<double>(layout_.map_pane_width));
+    const auto view_mode = [](BrowserView view) {
+        switch (view) {
+        case BrowserView::Details:
+            return kViewDetails;
+        case BrowserView::Map:
+            return kViewMap;
+        case BrowserView::Tree:
+            break;
+        }
+        return kViewTree;
+    };
+    table.insert("view_mode", view_mode(layout_.browser_view));
+    table.insert("row_numbers", layout_.row_numbers);
     if (const auto path = current_path())
         table.insert("last_note", path->string());
+    // Taslakların yolu yoktur, yazılmaz.
+    toml::array saved_tabs;
+    std::int64_t active_index = 0;
+    for (const NoteTab& tab : tabs_) {
+        const auto note = tab_note(tab);
+        if (!note)
+            continue;
+        if (tab.id == active_tab_)
+            active_index = static_cast<std::int64_t>(saved_tabs.size());
+        saved_tabs.push_back(
+            toml::table{{"path", note->string()}, {"pinned", tab.pinned}, {"kept", tab.kept}});
+    }
+    table.insert("tabs", std::move(saved_tabs));
+    table.insert("active_tab", active_index);
     std::ostringstream out;
     out << table;
     std::error_code ignored;  // yazma aşağıda aynı nedenle başarısız olur ve loglanır
@@ -233,6 +336,7 @@ std::optional<core::NotePath> GuiState::current_path() const {
 void GuiState::select_row(int row) {
     if (row == current_row_ || row < 0 || row >= model_.row_count())
         return;
+    selected_folder_.reset();
     current_row_ = row;
     show_current();
 }
@@ -252,7 +356,9 @@ void GuiState::move_selection(int delta) {
 }
 
 void GuiState::query_edited() {
-    close_trash();  // süzgeç canlı listeye aittir: yazılanın etkisi görünsün
+    close_trash();        // süzgeç canlı listeye aittir: yazılanın etkisi görünsün
+    if (!query_.empty())  // sonuç seçilsin: Enter seçili klasörde yeni not açmasın, bulunanı açsın
+        selected_folder_.reset();
     apply_filter([this] {
         update_content_results();
         model_.set_query(query_);
@@ -268,7 +374,10 @@ void GuiState::set_content_mode(bool on) {
 
 // İçerik modunda sonuçları ContentIndex verir; ad modunda ya da boş sorguda model fuzzy/tüm liste olur.
 void GuiState::update_content_results() {
-    if (!content_mode_ || query_.empty()) {
+    if (!search::parse_query(query_))
+        return;  // bozuk argüman: model son geçerli sonuçları tutar, hata arama kutusunun altında
+    const std::string text = search_text(query_);
+    if (!content_mode_ || text.empty()) {  // yalnız argüman: süzülmüş liste, içerik araması yok
         model_.set_content_results(std::nullopt);
         return;
     }
@@ -279,7 +388,7 @@ void GuiState::update_content_results() {
             store_, static_cast<std::size_t>(config_.tuning.max_note_bytes));
         content_index_->refresh();
     }
-    model_.set_content_results(content_index_->search(query_, kContentResultLimit));
+    model_.set_content_results(content_index_->search(text, kContentResultLimit));
 }
 
 // Gösterilen notta ilk eşleşmeyi seçtirir. Aynı (not, sorgu) için yeniden çalışmaz: yedek tarama kullanıcının
@@ -296,7 +405,7 @@ void GuiState::update_editor_selection() {
     if (key == selection_key_)
         return;
     selection_key_ = std::move(key);
-    editor_selection_ = first_match(buffer_, query_);
+    editor_selection_ = first_match(buffer_, search_text(query_));
 }
 
 void GuiState::set_query(std::string query) {
@@ -311,15 +420,20 @@ void GuiState::clear_query() {
 }
 
 void GuiState::search_enter() {
-    // nvALT: eşleşme yoksa Enter, sorguyu ilk satır yaparak yeni not açar.
+    // nvALT: eşleşme yoksa Enter, sorguyu ilk satır yaparak yeni not açar. Argümanlı ya da bozuk sorgu not
+    // metni değildir (TUI kuralı).
     if (current_path() || new_note_)
         request_focus(FocusRequest::Editor);
+    else if (const auto parsed = search::parse_query(query_);
+             !parsed || !parsed->filters.empty() || parsed->sort)
+        return;
     else
         new_note(query_);
 }
 
 void GuiState::set_folder(std::string folder) {
     close_trash();
+    selected_folder_.reset();
     apply_filter([&] {
         current_folder_ = std::move(folder);
         model_.set_folder(current_folder_);
@@ -331,17 +445,42 @@ void GuiState::rescan() {
         content_index_->refresh();
     if (auto folders = store_.folders(); folders != folders_) {
         folders_ = std::move(folders);
-        // Seçili klasör silindiyse köke düşer.
-        if (!current_folder_.empty() && std::ranges::find(folders_, current_folder_) == folders_.end())
+        listing_stale_ = true;
+        const auto exists = [this](const std::string& folder) {
+            return folder.empty() || std::ranges::find(folders_, folder) != folders_.end();
+        };
+        // Kapsam klasörü silindiyse köke düşer; seçili klasör satırı duran en yakın atasına.
+        if (!exists(current_folder_))
             current_folder_.clear();
+        while (selected_folder_ && !exists(*selected_folder_))
+            selected_folder_ = core::parent_folder(*selected_folder_);
     }
     reload_trash();
     auto notes = store_.list();
-    apply_filter([&] {
-        model_.set_folder(current_folder_);
-        model_.set_notes(std::move(notes));
-        update_content_results();
-    });
+    std::unordered_set<std::string> present;
+    present.reserve(notes.size());
+    for (const core::NoteInfo& info : notes)
+        present.insert(info.path.string());
+    // Önce model, sonra sekmeler: kapanan sekmenin yerine öne gelen komşu güncel listeyle çözülür (eski
+    // listede örneğin yeniden adlandırılan klasördeki yeni yolu yoktur). Seçim yola göre korunur, satır
+    // sırası kaymış olabilir; süzgeç kuralı (apply_filter) sekmeler kapandıktan sonra uygulanır.
+    const auto selected = current_path();
+    model_.set_folder(current_folder_);
+    if (model_.set_notes(std::move(notes))) {
+        listing_stale_ = true;
+        map_edges_stale_ = true;
+    }
+    update_content_results();
+    current_row_ = selected ? model_.index_of(*selected) : -1;
+    close_missing_tabs(present);
+    apply_filter([] {});
+    // Yalnız ilişki değiştiren başka bağlantı (CLI, senkron) listeyi değiştirmez; harita kenarları yine
+    // tazelenir.
+    if (const std::uint64_t version = store_.data_version(); version != data_version_) {
+        data_version_ = version;
+        map_edges_stale_ = true;
+    }
+    reload_links();  // kayıt ya da senkron başka notun bağlantısını değiştirmiş olabilir
 }
 
 void GuiState::apply_filter(const std::function<void()>& change) {
@@ -349,9 +488,9 @@ void GuiState::apply_filter(const std::function<void()>& change) {
     const auto previous = shown_ ? std::optional<core::NotePath>(shown_->path) : current_path();
     change();
     // TUI ile aynı: önceki not hâlâ listedeyse seçili kalır, yoksa ilk satır. Yeni not yazılırken seçim boş
-    // kalır: ilk satırı seçmek taslağı ezerdi.
+    // kalır: ilk satırı seçmek taslağı ezerdi. Kullanıcı son sekmeyi kapattıysa da boş kalır.
     int target = previous ? model_.index_of(*previous) : -1;
-    if (target < 0 && model_.row_count() > 0 && !new_note_)
+    if (target < 0 && model_.row_count() > 0 && !new_note_ && !selected_folder_ && !tabs_closed_)
         target = 0;
     current_row_ = target;
     show_current();
@@ -387,18 +526,123 @@ void GuiState::show_selected() {
     if (!(shown_ && target && shown_->path == *target)) {
         if (new_note_ && !target)  // yeni not yazılırken boş seçim taslağı silmez
             return;
-        if (!leave_shown_note(target))
+        if (target) {
+            // Başka sekmede açık not yinelenmez, o sekme öne gelir.
+            if (const auto open = tab_of(*target)) {
+                if (!switch_tab(*open, false))
+                    restore_selection();
+                return;
+            }
+        }
+        if (target && keeps_active_tab()) {
+            if (!push_tab()) {
+                restore_selection();
+                return;
+            }
+            current_row_ = model_.index_of(*target);  // ayrılırken kayıt listeyi tazelemiş olabilir
+        } else if (!leave_shown_note(target)) {
             return;
+        }
     }
     if (current_path())
         show_note(model_.note_at(current_row_));
     else
-        clear_editor();
+        park_or_clear();
 }
 
 void GuiState::clear_editor() {
     shown_.reset();
     set_editor({}, false);
+    reload_links();
+}
+
+void GuiState::reload_links() {
+    links_ = {};
+    if (shown_) {
+        if (auto links = store_.links(shown_->path))
+            links_ = std::move(*links);
+        else if (links.error().code != core::Error::Code::NotFound)
+            core::log_warn("note links: " + core::format_error(links.error()));
+    }
+    link_lines_ = core::link_lines(links_);
+    reload_info();  // etiketler bağlantı okumasından gelir
+}
+
+// TUI'nin ayrıntısıyla aynı alanlar ve aynı "bilinmiyor": eski depodan gelen notta created ya da origin
+// olmayabilir.
+void GuiState::reload_info() {
+    note_info_.clear();
+    if (!shown_)
+        return;
+    // Kendi kaydımız shown_'ın boyutunu ve zamanını tazelemez (yalnız revizyon); listedeki kayıt taramadan gelir.
+    const int row = model_.index_of(shown_->path);
+    core::NoteMeta meta = core::meta_of(row >= 0 ? model_.note_at(row) : *shown_);
+    const std::string unknown = core::tr("gui.info_unknown");
+    const std::string none = core::tr("gui.info_none");
+    // ponytail: senkron açıkken tek not için depo yeniden açılır (gösterim ve tarama başına); yavaşlarsa TUI'deki
+    // gibi işçi iş parçacığına alınır.
+    std::string sync = unknown;
+    if (const auto filled = sync::fill_sync_status(config_, std::span(&meta, 1)); filled)
+        sync = sync_state_text(meta.sync_status);
+    else
+        core::log_warn("event=note_sync_status_failed detail=" + core::format_error(filled.error()));
+    const std::string type = current_type();
+    const std::string tags = hash_tags(links_.tags);
+    note_info_ = {
+        {core::tr("gui.info_size"), core::human_size(meta.size)},
+        {core::tr("gui.info_updated"), core::local_time_text(meta.updated_at)},
+        {core::tr("gui.info_created"), meta.created_at ? core::local_time_text(*meta.created_at) : unknown},
+        {core::tr("gui.info_sync"), sync},
+        {core::tr("gui.info_origin"), meta.origin.value_or(unknown)},
+        {core::tr("gui.info_type"), type.empty() ? none : type},
+        {core::tr("gui.info_tags"), tags.empty() ? none : tags},
+    };
+}
+
+bool GuiState::previewable_type() const {
+    return shown_ && pdf::format_for(shown_->path.value()) == pdf::NoteFormat::Markdown;
+}
+
+// Düzenlenemeyen metin (geçersiz UTF-8, NUL) md4c'ye verilmez: ayrıştırıcı geçerli UTF-8 bekler.
+bool GuiState::can_preview() const {
+    return previewable_type() && !binary_ && editable_ && buffer_.size() <= kMaxPreviewBytes;
+}
+
+void GuiState::toggle_preview() {
+    if (!can_preview())
+        return;
+    preview_ = !preview_;
+    if (!preview_)
+        request_focus(FocusRequest::Editor);
+}
+
+bool GuiState::resolves_link(std::string_view target) const {
+    return store_.resolve_link(target).has_value();
+}
+
+void GuiState::open_wiki_link(const std::string& target, bool new_tab) {
+    if (!flush_shown())
+        return;
+    const auto path = store_.resolve_link(target);
+    if (!path) {
+        fail(core::Error{core::Error::Code::NotFound, "error.not_found", {{"path", target}}});
+        return;
+    }
+    if (new_tab)
+        open_in_new_tab(*path);
+    else
+        open_link(*path);
+}
+
+void GuiState::open_link(const core::NotePath& path) {
+    close_trash();
+    ensure_visible(path);
+    const int row = model_.index_of(path);
+    if (row < 0) {  // liste eski: not bu arada gitmiş
+        report(core::Error{core::Error::Code::NotFound, "error.not_found", {{"path", path.string()}}});
+        return;
+    }
+    select_row(row);
 }
 
 // Kopya şart: yükleme shown_'ı yeniden atar, info onu gösterebilir.
@@ -408,10 +652,16 @@ void GuiState::show_note(core::NoteInfo info) {  // cppcheck-suppress passedByVa
     // varken dışarıdaki değişiklik tamponu ezmez; kayıt anında çakışma diyaloğu çıkar.
     if (shown_ && shown_->path == info.path && (shown_->revision == info.revision || dirty_))
         return;
+    claim_active_tab();
+    if (!(shown_ && shown_->path == info.path)) {
+        if (NoteTab* tab = find_tab(active_tab_))
+            tab->cursor.reset();  // başka notun imleci
+    }
     shown_ = info;
     binary_ = false;
     if (const auto loaded = load_text(info); !loaded)
         set_editor(core::tr("gui.read_failed", {{"detail", core::format_error(loaded.error())}}), false);
+    reload_links();
 }
 
 // Editörü doldurur; dirty/autosave durumunu sıfırlar.
@@ -420,7 +670,8 @@ void GuiState::set_editor(std::string content, bool editable) {
     selection_key_.clear();
     editor_selection_.reset();  // eski metnin ofsetleri yeni içerikte anlamsız
     buffer_ = std::move(content);
-    ++buffer_generation_;
+    hidden_controls_ = core::count_hidden_controls(buffer_);
+    buffer_generation_ = ++editor_generations_;
     editable_ = editable;
     dirty_ = false;
 }
@@ -487,7 +738,19 @@ std::string GuiState::header() const {
         return core::tr("gui.untitled") + "  ·  " + core::tr("gui.state_unsaved");
     if (!shown_)
         return {};
-    return shown_->path.string() + "  ·  " + core::tr(dirty_ ? "gui.state_modified" : "gui.state_saved");
+    std::string text =
+        shown_->path.string() + "  ·  " + core::tr(dirty_ ? "gui.state_modified" : "gui.state_saved");
+    if (!links_.tags.empty())
+        text += "  ·  " + hash_tags(links_.tags);
+    return text;
+}
+
+std::string GuiState::hidden_controls_label() const {
+    if (hidden_controls_ == 0)
+        return {};
+    if (hidden_controls_ == 1)
+        return core::tr("gui.hidden_controls_one");
+    return core::tr("gui.hidden_controls", {{"count", std::to_string(hidden_controls_)}});
 }
 
 std::string GuiState::current_type() const {
@@ -510,9 +773,12 @@ FocusRequest GuiState::take_focus_request() {
 }
 
 void GuiState::buffer_edited() {
+    hidden_controls_ = core::count_hidden_controls(buffer_);
     if (!editable_ || !(shown_ || new_note_))
         return;
     dirty_ = true;
+    if (NoteTab* tab = find_tab(active_tab_))
+        tab->kept = true;       // düzenlenen sekme, sonra açılan notla değişmez
     editor_selection_.reset();  // düzenleme ofsetleri kaydırır
     if (new_note_)              // yeni not ilk kayıtta diyalog ister: autosave yok
         return;
@@ -547,11 +813,19 @@ void GuiState::ensure_visible(const core::NotePath& path) {
 }
 
 void GuiState::new_note(const std::string& first_line) {
-    if (!flush())
+    std::string folder = target_folder();  // kayıt seçimi değiştirmeden önce
+    // Korunan sekme kalır (taslak kaydedilmeden, not kaydedilerek); taslak yeni sekmede açılır.
+    if (keeps_active_tab() ? !push_tab() : !flush())
         return;
+    claim_active_tab();
+    if (NoteTab* tab = find_tab(active_tab_))
+        tab->cursor.reset();
     close_trash();
+    selected_folder_.reset();
+    draft_folder_ = std::move(folder);
     new_note_ = true;
     shown_.reset();
+    reload_links();
     current_row_ = -1;
     crlf_ = bom_ = binary_ = false;
     const std::string initial = first_line.empty() ? std::string{} : first_line + '\n';
@@ -606,6 +880,7 @@ bool GuiState::save_existing() {
     case core::Error::Code::NotFound:
         // Not dışarıdan silinmiş: tamponu yeni not olarak sakla, kullanıcı yeniden adlandırıp kaydetsin.
         new_note_ = true;
+        draft_folder_ = current_folder_;
         shown_.reset();
         return save_new();
     default:
@@ -672,7 +947,7 @@ bool GuiState::save_new() {
     SaveDialogRequest request;
     request.initial = {core::slugify(core::note_name_source(content, suggestion.type),
                                      std::chrono::system_clock::now(), config_.tuning.slug_max_length),
-                       current_folder_, suggestion.type};
+                       draft_folder_, suggestion.type};
     request.folders = folders_;
     request.types = config_.types;
     request.hint =
@@ -758,8 +1033,8 @@ bool GuiState::confirm_close_settings() {
 bool GuiState::request_close() {
     // Ayarlar önce: kayıtta notes_dir değişirse açık notu kendisi kaydeder (host flush), not sorusu boşa
     // çıkar.
-    if (!confirm_close_settings() ||
-        !confirm_close())  // vazgeçildi ya da kayıt başarısız: pencere ve tampon yerinde kalır
+    if (!confirm_close_settings() || !confirm_close() ||
+        !confirm_close_drafts())  // vazgeçildi ya da kayıt başarısız: pencere ve tampon yerinde kalır
         return false;
     save_gui_state();
     // Kayıt akışından sonra: bekleyen değişiklik için son senkron, en çok exit_timeout_seconds.
@@ -815,6 +1090,16 @@ bool GuiState::flush_for(const core::NotePath& note) {
     return content.has_value();
 }
 
+// Bekleyen düzenleme önce kendi notuna yazılır (flush_for): kayıt listeyi tazeler, seçim kayıttan sonra
+// değişirse düzenleme yanlış nota giderdi. false = kayıt olmadı ya da vazgeçildi.
+bool GuiState::flush_shown() {
+    if (!unsaved())
+        return true;
+    // Kopya: kayıt akışı shown_'ı sıfırlayabilir.
+    const auto note = shown_ && !new_note_ ? std::optional(shown_->path) : std::nullopt;
+    return note ? flush_for(*note) : flush();
+}
+
 // Tampon önceden kaydedilmiş olmalı (flush). Hedef varsa NoteStore::move AlreadyExists verir, hiçbir şey
 // değişmez.
 bool GuiState::move_saved(const core::NotePath& note, const SaveDetails& target) {
@@ -868,19 +1153,33 @@ void GuiState::delete_note() {
         return;
     // flush mtime'ı değiştirip satırı yukarı taşımış olabilir: komşu satır silmeden önce çözülür.
     const int row = std::max(0, model_.index_of(*path));
+    const int browser_index = browsing() ? browser_row() : -1;
     if (const auto removed = store_.remove(*path); !removed) {
         fail(removed.error());
         return;
     }
     changed();
-    select_after_removal(shown, row);
+    select_after_removal(shown, row, browser_index);
 }
 
-void GuiState::select_after_removal(bool was_shown, int row) {
+void GuiState::select_after_removal(bool was_shown, int row, int browser_row) {
     status_.clear();
-    if (was_shown)
-        clear_editor();
+    if (was_shown) {
+        // Notun sekmesi kapanır; başka sekme varsa komşusu öne gelir, yoksa en yakın not yeni sekmede açılır.
+        drop_active_tab();
+        if (!tabs_.empty()) {
+            rescan();
+            return;
+        }
+    }
     rescan();
+    if (browser_row >= 0 && select_nearest_note(browser_row))
+        return;
+    // Ayrıntılar yalnız doğrudan çocukları listeler: modelin alt ağaçtaki notu görünmeyen bir seçim olurdu.
+    if (browser_row >= 0 && layout_.browser_view == BrowserView::Details) {
+        show_folder(current_folder_, false);
+        return;
+    }
     if (const int count = model_.row_count(); count > 0)
         select_row(std::min(row, count - 1));
 }
@@ -893,13 +1192,14 @@ void GuiState::trash_note() {
     if (shown && !flush())  // çöpe son hâli gitsin
         return;
     const int row = std::max(0, model_.index_of(*path));
+    const int browser_index = browsing() ? browser_row() : -1;
     const auto trashed = store_.trash(*path);
     if (!trashed) {
         fail(trashed.error());
         return;
     }
     changed();
-    select_after_removal(shown, row);
+    select_after_removal(shown, row, browser_index);
     undo_item_ = trashed->path;
     undo_status_ = core::tr("gui.trashed", {{"path", path->string()}});
     status_ = undo_status_;
@@ -924,12 +1224,18 @@ void GuiState::undo_trash() {
 }
 
 void GuiState::delete_selected(bool permanent) {
-    if (trash_view_)
+    if (trash_view_) {
         purge_trashed();
-    else if (permanent)
+    } else if (selected_folder_) {
+        if (!can_delete())  // kök ya da vurgulu satırı olmayan klasör
+            return;
+        const std::string folder = *selected_folder_;  // kopya: silme seçimi atasına taşır
+        delete_folder(folder);
+    } else if (permanent) {
         delete_note();
-    else
+    } else {
         trash_note();
+    }
 }
 
 void GuiState::reload_trash() {
@@ -1030,6 +1336,7 @@ void GuiState::new_folder(const std::string& parent) {
     }
     changed();
     status_.clear();
+    set_expanded(parent, true);  // yeni klasör ağaçta görünsün
     rescan();
 }
 
@@ -1062,8 +1369,23 @@ void GuiState::rename_folder(const std::string& folder) {
                 shown_note().revision = fresh->revision;
         }
     }
-    if (current_folder_ == folder || is_inside(current_folder_, folder))
-        current_folder_ = target + current_folder_.substr(folder.size());
+    const auto renamed_path = [&](const std::string& path) {
+        return path == folder || is_inside(path, folder) ? target + path.substr(folder.size()) : path;
+    };
+    for (NoteTab& tab : tabs_) {  // arka plandaki sekmeler yeni yolu izler; gösterilen not yukarıda
+        if (!tab.saved.shown || !is_inside(tab.saved.shown->path.string(), folder))
+            continue;
+        if (const auto moved = core::NotePath::parse(renamed_path(tab.saved.shown->path.string())))
+            tab.saved.shown->path = *moved;
+    }
+    current_folder_ = renamed_path(current_folder_);
+    if (selected_folder_)
+        selected_folder_ = renamed_path(*selected_folder_);
+    std::set<std::string> expanded;
+    for (const std::string& path : expanded_)
+        expanded.insert(renamed_path(path));
+    expanded_ = std::move(expanded);
+    rows_stale_ = true;
     rescan();
 }
 
@@ -1101,9 +1423,7 @@ void GuiState::delete_folder(const std::string& folder) {
     }
     changed();
     status_.clear();
-    if (shown_in(folder))
-        clear_editor();
-    rescan();
+    rescan();  // klasördeki notların sekmeleri (gösterilen dahil) iletiyle kapanır: close_missing_tabs
 }
 
 void GuiState::export_pdf() {
@@ -1213,8 +1533,15 @@ void GuiState::apply_settings(const core::Config& before, const core::Config& af
         // SettingsPage kaydetmeden önce flush ettirdi: tampon temiz, eski dizinin notu bırakılır.
         store_ = core::NoteStore::for_config(config_);
         content_index_.reset();
+        // Eski dizinin notlarının sekmeleri kapanır; taslaklar dizine bağlı değildir, kalır.
+        std::erase_if(tabs_, [](const NoteTab& tab) { return !tab.saved.new_note; });
+        active_tab_ = tabs_.empty() ? 0 : tabs_.front().id;
+        parked_ = !tabs_.empty();
         shown_.reset();
         current_folder_.clear();
+        selected_folder_.reset();
+        expanded_.clear();
+        listing_stale_ = true;
         folders_.clear();
         set_editor({}, false);
     }
@@ -1251,6 +1578,770 @@ void GuiState::show_config_warnings(const std::vector<core::Error>& warnings) {
     }
     if (!messages.empty())
         status_ = std::move(messages);
+}
+
+void GuiState::set_browser_view(BrowserView view) {
+    if (layout_.browser_view == view)
+        return;
+    layout_.browser_view = view;
+    rows_stale_ = true;
+    revealed_note_.clear();  // Ayrıntılar'a geçince konum gösterilen notun klasörüne gelsin
+}
+
+void GuiState::set_map_options(const MapOptions& options) {
+    MapOptions clamped = options;
+    clamped.depth = std::clamp(options.depth, MapOptions::kMinDepth, MapOptions::kMaxDepth);
+    if (clamped == map_options_)
+        return;
+    map_options_ = clamped;
+    map_stale_ = true;
+}
+
+const NoteMap& GuiState::note_map() {
+    ensure_map();
+    return map_;
+}
+
+GraphLayout& GuiState::map_layout() {
+    ensure_map();
+    return map_layout_;
+}
+
+// Kenarlar yalnız taramada değişiklik görülünce (listeleme ya da başka bağlantının yazması) tek okumayla
+// gelir; görünür harita seçenek ya da çevre merkezi değişince bellekten kurulur.
+void GuiState::ensure_map() {
+    if (map_edges_stale_) {
+        ensure_listing();
+        ++map_reads_;
+        if (auto edges = store_.edges()) {
+            map_edges_ = std::move(*edges);
+        } else {
+            map_edges_.clear();
+            core::log_warn("event=map_edges_failed detail=" + core::format_error(edges.error()));
+        }
+        map_edges_stale_ = false;
+        map_stale_ = true;
+    }
+    auto center = shown_ && !new_note_ ? std::optional(shown_->path) : std::nullopt;
+    if (center != map_center_) {
+        map_center_ = std::move(center);
+        if (!map_options_.whole_graph)  // bütün çizgede merkez yalnız vurgudur
+            map_stale_ = true;
+    }
+    if (!map_stale_)
+        return;
+    map_stale_ = false;
+    map_ = build_note_map(metas_, map_edges_, map_center_, map_options_);
+    std::vector<std::string> keys;
+    keys.reserve(map_.nodes.size());
+    for (const MapNode& node : map_.nodes)  // önek: "#x.md" adlı not, x.md etiketiyle karışmasın
+        keys.push_back((node.kind == MapNodeKind::Tag ? "t:" : "n:") + node.key);
+    std::vector<GraphLayout::Edge> edges;
+    edges.reserve(map_.edges.size());
+    for (const MapEdge& edge : map_.edges)
+        edges.push_back({edge.from, edge.to});
+    if (map_layout_.set_graph(std::move(keys), std::move(edges)))
+        ++map_generation_;
+    map_matches_stale_ = true;
+}
+
+// Süzgeç listeyle aynıdır (model_): eşleşme yalnız süzgeç ya da harita değişince kurulur, kare başına değil.
+const std::vector<char>& GuiState::map_matches() {
+    ensure_map();
+    if (!map_matches_stale_ && map_matches_resets_ == model_.resets())
+        return map_matches_;
+    map_matches_stale_ = false;
+    map_matches_resets_ = model_.resets();
+    map_matches_.assign(map_.nodes.size(), query_.empty() ? 1 : 0);
+    if (query_.empty())
+        return map_matches_;
+    std::unordered_set<std::string> listed;
+    listed.reserve(static_cast<std::size_t>(model_.row_count()));
+    for (int row = 0; row < model_.row_count(); ++row)
+        listed.insert(model_.note_at(row).path.string());
+    for (std::size_t i = 0; i < map_.nodes.size(); ++i)
+        map_matches_[i] =
+            map_.nodes[i].kind == MapNodeKind::Note && listed.contains(map_.nodes[i].key) ? 1 : 0;
+    for (const MapEdge& edge : map_.edges) {  // etiket, eşleşen bir notunda yanar
+        if (edge.kind == MapEdgeKind::Tag && map_matches_[edge.from] != 0)
+            map_matches_[edge.to] = 1;
+    }
+    return map_matches_;
+}
+
+void GuiState::open_map_note(const core::NotePath& path) {
+    if (flush_shown())
+        open_link(path);
+}
+
+void GuiState::set_row_numbers(bool on) {
+    layout_.row_numbers = on;
+    save_gui_state();
+}
+
+void GuiState::ensure_listing() {
+    if (!listing_stale_)
+        return;
+    metas_ = store_.list_meta();
+    tree_.rebuild(metas_, folders_);
+    listing_stale_ = false;
+    rows_stale_ = true;
+}
+
+void GuiState::ensure_browser() {
+    ensure_listing();
+    const bool details = layout_.browser_view == BrowserView::Details;
+    if (details && built_folder_ != current_folder_)
+        rows_stale_ = true;
+    if (!rows_stale_)
+        return;
+    browser_rows_ =
+        details ? folder_rows(tree_, metas_, current_folder_) : tree_rows(tree_, metas_, expanded_);
+    built_folder_ = current_folder_;
+    rows_stale_ = false;
+    ++browser_rebuilds_;
+    max_row_number_ = 0;
+    for (const BrowserRow& row : browser_rows_)
+        max_row_number_ = std::max(max_row_number_, row.number);
+}
+
+const std::vector<BrowserRow>& GuiState::browser_rows() {
+    ensure_browser();
+    return browser_rows_;
+}
+
+int GuiState::browser_row() {
+    BrowserRowKind kind{};
+    std::string path;
+    if (selected_folder_) {
+        kind = BrowserRowKind::Folder;
+        path = *selected_folder_;
+    } else if (shown_ && !new_note_) {
+        kind = BrowserRowKind::Note;
+        path = shown_->path.string();
+    } else {
+        return -1;
+    }
+    const auto& rows = browser_rows();
+    // ponytail: doğrusal arama, satır başına bir karşılaştırma; çok büyük ağaçta seçim indeksi önbelleğe
+    // alınır.
+    const auto found = std::ranges::find_if(
+        rows, [&](const BrowserRow& row) { return row.kind == kind && row.path == path; });
+    return found == rows.end() ? -1 : static_cast<int>(found - rows.begin());
+}
+
+std::optional<FolderSummary> GuiState::folder_summary() {
+    if (!selected_folder_)
+        return std::nullopt;
+    ensure_browser();
+    const core::FolderNode* node = tree_.find(*selected_folder_);
+    if (node == nullptr)
+        return FolderSummary{*selected_folder_, 0, 0};
+    return FolderSummary{node->path, node->note_count, node->folder_count};
+}
+
+void GuiState::set_expanded(const std::string& folder, bool expanded) {
+    if (folder.empty())  // kök hep açık
+        return;
+    const bool changed = expanded ? expanded_.insert(folder).second : expanded_.erase(folder) > 0;
+    if (changed)
+        rows_stale_ = true;
+}
+
+void GuiState::open_note(const core::NotePath& path) {
+    close_trash();
+    ensure_visible(path);
+    if (const int row = model_.index_of(path); row >= 0)
+        select_row(row);
+}
+
+void GuiState::select_folder(const std::string& folder) {
+    show_folder(folder, layout_.browser_view == BrowserView::Tree);
+}
+
+void GuiState::enter_folder(const std::string& folder) {
+    show_folder(folder, true);
+}
+
+// Kayıt olmazsa ya da vazgeçilirse not açık kalır.
+bool GuiState::show_folder(const std::string& folder, bool scope) {
+    if (!flush_shown())
+        return false;
+    close_trash();
+    park_or_clear();  // sekme notunu tutar: sekmeye tıklayınca geri gelir
+    selected_folder_ = folder;
+    current_row_ = -1;
+    if (scope) {
+        apply_filter([&] {
+            current_folder_ = folder;
+            model_.set_folder(current_folder_);
+        });
+    }
+    clear_editor();
+    return true;
+}
+
+void GuiState::activate_row(int index) {
+    const BrowserRow row = browser_rows()[static_cast<std::size_t>(index)];  // kopya: seçim satırları yeniler
+    if (row.kind == BrowserRowKind::Folder)
+        select_folder(row.path);
+    else if (const auto path = core::NotePath::parse(row.path))
+        open_note(*path);
+}
+
+void GuiState::navigate(int delta) {
+    if (!browsing()) {
+        move_selection(delta);
+        return;
+    }
+    const int count = static_cast<int>(browser_rows().size());
+    if (count == 0)
+        return;
+    const int from = browser_row();
+    const int to = from < 0 ? (delta > 0 ? 0 : count - 1) : std::clamp(from + delta, 0, count - 1);
+    if (to != from)
+        activate_row(to);
+}
+
+void GuiState::browse_right() {
+    const int index = browser_row();
+    if (index < 0)
+        return;
+    const BrowserRow row = browser_rows()[static_cast<std::size_t>(index)];
+    if (row.kind != BrowserRowKind::Folder)
+        return;
+    if (layout_.browser_view == BrowserView::Details)
+        enter_folder(row.path);
+    else if (!row.expanded)
+        set_expanded(row.path, true);
+    else if (row.has_children)
+        activate_row(index + 1);  // açık klasörün ilk çocuğu hemen altındadır
+}
+
+void GuiState::browse_left() {
+    if (layout_.browser_view == BrowserView::Details) {
+        if (!current_folder_.empty())
+            enter_folder(core::parent_folder(current_folder_));
+        return;
+    }
+    const int index = browser_row();
+    if (index < 0)
+        return;
+    const BrowserRow row = browser_rows()[static_cast<std::size_t>(index)];
+    const bool folder = row.kind == BrowserRowKind::Folder;
+    if (folder && row.path.empty())
+        return;
+    if (folder && row.expanded)
+        set_expanded(row.path, false);
+    else
+        select_folder(core::parent_folder(row.path));
+}
+
+void GuiState::browse_enter() {
+    const int index = browser_row();
+    if (index < 0)
+        return;
+    const BrowserRow row = browser_rows()[static_cast<std::size_t>(index)];
+    if (row.kind == BrowserRowKind::Note)
+        request_focus(FocusRequest::Editor);
+    else if (layout_.browser_view == BrowserView::Details)
+        enter_folder(row.path);
+    else
+        toggle_expanded(row.path);
+}
+
+void GuiState::reveal_selection() {
+    if (!shown_ || new_note_) {
+        revealed_note_.clear();
+        return;
+    }
+    if (!browsing())
+        return;
+    std::string path = shown_->path.string();
+    if (path == revealed_note_)
+        return;
+    const std::string folder = core::folder_of(shown_->path);
+    if (layout_.browser_view == BrowserView::Details) {
+        if (folder != current_folder_) {
+            apply_filter([&] {
+                current_folder_ = folder;
+                model_.set_folder(current_folder_);
+            });
+        }
+    } else {
+        for (std::string walk = folder; !walk.empty(); walk = core::parent_folder(walk))
+            set_expanded(walk, true);
+    }
+    revealed_note_ = std::move(path);
+}
+
+std::string GuiState::target_folder() const {
+    if (selected_folder_)
+        return *selected_folder_;
+    if (shown_ && !new_note_)
+        return core::folder_of(shown_->path);
+    return current_folder_;
+}
+
+void GuiState::rename_selected() {
+    if (!can_rename())
+        return;
+    if (selected_folder_) {
+        const std::string folder = *selected_folder_;  // kopya: yeniden adlandırma seçimi de günceller
+        rename_folder(folder);
+    } else {
+        save_as();
+    }
+}
+
+// Klasöre yıkıcı ya da yeniden adlandıran eylem yalnız vurgulu satırına uygulanır: Ayrıntılar'da görüntülenen
+// klasörün ve kapalı bir klasörün altındaki seçimin satırı yoktur, kullanıcı neyi sileceğini görmez.
+bool GuiState::folder_action_allowed() {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- çağıranlar selected_folder_'ı denetledi
+    return !selected_folder_->empty() && browsing() && browser_row() >= 0;
+}
+
+bool GuiState::can_delete() {
+    if (trash_view_)
+        return trash_row_ >= 0;
+    return selected_folder_ ? folder_action_allowed() : current_path().has_value();
+}
+
+bool GuiState::can_rename() {
+    if (trash_view_)
+        return false;
+    return selected_folder_ ? folder_action_allowed() : shown_.has_value() && !new_note_;
+}
+
+// Silinen satırın yerine gelen ya da üstündeki ilk görünür not: modelin sırası (mtime) ağacın sırası
+// değildir, seçim kapalı bir klasördeki nota atlamasın. Görünür not yoksa false.
+bool GuiState::select_nearest_note(int from) {
+    const auto& rows = browser_rows();
+    const int count = static_cast<int>(rows.size());
+    const auto is_note = [&](int index) {
+        return rows[static_cast<std::size_t>(index)].kind == BrowserRowKind::Note;
+    };
+    for (int index = std::max(0, std::min(from, count - 1)); index < count; ++index) {
+        if (is_note(index)) {
+            activate_row(index);
+            return true;
+        }
+    }
+    for (int index = std::min(from, count) - 1; index >= 0; --index) {
+        if (is_note(index)) {
+            activate_row(index);
+            return true;
+        }
+    }
+    return false;
+}
+
+// --- Editör sekmeleri ---
+
+GuiState::NoteTab* GuiState::find_tab(std::uint64_t id) {
+    const auto found = std::ranges::find(tabs_, id, &NoteTab::id);
+    return found == tabs_.end() ? nullptr : &*found;
+}
+
+const GuiState::NoteTab* GuiState::find_tab(std::uint64_t id) const {
+    const auto found = std::ranges::find(tabs_, id, &NoteTab::id);
+    return found == tabs_.end() ? nullptr : &*found;
+}
+
+// Etkin sekmenin notu canlı üyelerde, diğerlerininki anlık görüntüde. Taslağın notu yoktur.
+std::optional<core::NotePath> GuiState::tab_note(const NoteTab& tab) const {
+    if (tab.id == active_tab_ && !parked_)
+        return shown_ && !new_note_ ? std::optional(shown_->path) : std::nullopt;
+    return tab.saved.shown && !tab.saved.new_note ? std::optional(tab.saved.shown->path) : std::nullopt;
+}
+
+std::optional<std::uint64_t> GuiState::tab_of(const core::NotePath& path) const {
+    for (const NoteTab& tab : tabs_) {
+        if (tab_note(tab) == path)
+            return tab.id;
+    }
+    return std::nullopt;
+}
+
+std::vector<TabSummary> GuiState::tabs() const {
+    std::vector<TabSummary> out;
+    out.reserve(tabs_.size());
+    for (const NoteTab& tab : tabs_) {
+        const bool live = tab.id == active_tab_ && !parked_;
+        const bool draft = live ? new_note_ : tab.saved.new_note;
+        const std::string& text = live ? buffer_ : tab.saved.buffer;
+        const auto note = tab_note(tab);
+        TabSummary summary;
+        summary.id = tab.id;
+        summary.pinned = tab.pinned;
+        summary.kept = tab.kept;
+        summary.path = note ? note->string() : std::string{};
+        summary.title = note ? core::last_component(summary.path) : core::tr("gui.untitled");
+        summary.unsaved = draft ? !is_blank(text) : (live && dirty_);
+        out.push_back(std::move(summary));
+    }
+    return out;
+}
+
+// Boş sekme (ne not ne yazılmış taslak) korunacak bir şey taşımaz.
+bool GuiState::keeps_active_tab() const {
+    const NoteTab* tab = find_tab(active_tab_);
+    if (tab == nullptr)
+        return false;
+    const bool draft_text = !parked_ && new_note_ && !is_blank(buffer_);
+    if (!parked_ && !shown_ && !draft_text)
+        return false;
+    return tab->pinned || tab->kept || draft_text;
+}
+
+void GuiState::claim_active_tab() {
+    if (tabs_.empty()) {
+        tabs_.emplace_back().id = next_tab_id_++;
+        active_tab_ = tabs_.back().id;
+    } else if (parked_) {
+        if (NoteTab* tab = find_tab(active_tab_))
+            tab->saved = {};  // yerine geçen içerik park edilen notu bırakır
+    }
+    parked_ = false;
+    tabs_closed_ = false;
+}
+
+void GuiState::clear_live() {
+    shown_.reset();
+    new_note_ = false;
+    crlf_ = bom_ = binary_ = false;
+    preview_ = false;
+    draft_folder_.clear();
+    set_editor({}, false);
+    reload_links();
+}
+
+// Kayıtlı notun bekleyen düzenlemesi kendi notuna yazılır (flush_for); taslak sekmesinde kaydedilmeden kalır.
+bool GuiState::leave_tab() {
+    if (parked_ || tabs_.empty())
+        return true;
+    if (dirty_ && shown_ && !new_note_) {
+        const core::NotePath note = shown_->path;  // kopya: kayıt akışı shown_'ı değiştirebilir
+        if (!flush_for(note))
+            return false;
+    }
+    stash();
+    return true;
+}
+
+void GuiState::stash() {
+    NoteTab* tab = find_tab(active_tab_);
+    if (tab == nullptr || parked_)
+        return;
+    tab->saved = EditorSnapshot{.shown = shown_,
+                                .buffer = std::exchange(buffer_, {}),
+                                .generation = buffer_generation_,
+                                .draft_folder = draft_folder_,
+                                .editable = editable_,
+                                .dirty = dirty_,
+                                .new_note = new_note_,
+                                .crlf = crlf_,
+                                .bom = bom_,
+                                .binary = binary_,
+                                .preview = preview_};
+    tab->loaded = true;
+    clear_live();
+}
+
+// Sekmenin anlık görüntüsü canlı üyelere geçer. Not dışarıda değiştiyse gösterilen notun kuralı geçerlidir
+// (show_note): temizse yeniden okunur. Aynı içerikte kuşak korunur, editör kaydırması yerinde kalır.
+void GuiState::restore_tab(std::uint64_t id, bool focus_editor) {
+    NoteTab* tab = find_tab(id);
+    if (tab == nullptr)
+        return;
+    active_tab_ = id;
+    parked_ = false;
+    tabs_closed_ = false;
+    selected_folder_.reset();
+    EditorSnapshot saved = std::exchange(tab->saved, {});
+    const bool loaded = std::exchange(tab->loaded, true);
+    const std::optional<TextSelection> cursor = tab->cursor;
+    const auto note = saved.shown && !saved.new_note ? std::optional(saved.shown->path) : std::nullopt;
+    if (loaded) {
+        shown_ = std::move(saved.shown);
+        buffer_ = std::move(saved.buffer);
+        hidden_controls_ = core::count_hidden_controls(buffer_);  // set_editor'dan geçmiyor
+        buffer_generation_ = saved.generation;
+        draft_folder_ = std::move(saved.draft_folder);
+        editable_ = saved.editable;
+        dirty_ = saved.dirty;
+        new_note_ = saved.new_note;
+        crlf_ = saved.crlf;
+        bom_ = saved.bom;
+        binary_ = saved.binary;
+        autosave_at_.reset();
+        selection_key_.clear();
+        editor_selection_.reset();
+    } else {
+        clear_live();
+        if (note)
+            show_note(*saved.shown);  // gui-state'ten gelen sekme: ilk etkinleşmede okunur
+    }
+    preview_ = saved.preview;
+    current_row_ = -1;
+    if (note) {
+        ensure_visible(*note);
+        // Süzgeç gevşerken not listede yoksa apply_filter ilk satırı açıp başka sekmeye geçmiş olabilir:
+        // düşürülecek olan o sekme değil, bu sekmedir; geçiş olduysa dokunulmaz.
+        if (active_tab_ != id)
+            return;
+        const int row = model_.index_of(*note);
+        if (row < 0) {  // taramalar arasında gitmiş
+            status_ = core::tr("gui.tab_closed_missing", {{"path", note->string()}});
+            drop_active_tab();
+            return;
+        }
+        current_row_ = row;
+        show_note(model_.note_at(row));
+    }
+    reload_links();
+    if (focus_editor) {
+        // Not dışarıda değişip yeniden okunduysa saklı ofset artık kod noktası sınırında olmayabilir.
+        if (cursor)
+            editor_selection_ = TextSelection{code_point_start(buffer_, cursor->start),
+                                              code_point_start(buffer_, cursor->end)};
+        request_focus(FocusRequest::Editor);
+    }
+}
+
+bool GuiState::switch_tab(std::uint64_t id, bool focus_editor) {
+    if (find_tab(id) == nullptr)
+        return false;
+    if (id == active_tab_ && !parked_) {
+        if (focus_editor)
+            request_focus(FocusRequest::Editor);
+        return true;
+    }
+    if (!leave_tab())
+        return false;
+    if (find_tab(id) == nullptr)  // kaydın taraması sekmeyi kapatmış olabilir
+        return false;
+    restore_tab(id, focus_editor);
+    return true;
+}
+
+bool GuiState::activate_tab(std::uint64_t id) {
+    return switch_tab(id, true);
+}
+
+// Yeni boş sekme en sona eklenir (ImGui de yeni sekmeyi sona koyar; sıralar ayrışmaz) ve etkin olur.
+bool GuiState::push_tab() {
+    if (tabs_.size() >= kMaxTabs) {
+        status_ = core::tr("gui.tab_limit", {{"max", std::to_string(kMaxTabs)}});
+        return false;
+    }
+    if (!leave_tab())
+        return false;
+    tabs_.emplace_back().id = next_tab_id_++;
+    active_tab_ = tabs_.back().id;
+    parked_ = false;
+    tabs_closed_ = false;
+    current_row_ = -1;
+    return true;
+}
+
+// Etkin sekmeyi atar (içerik kaydedilmiş ya da bilerek bırakılmış olmalı); sağındaki, yoksa solundaki öne
+// gelir.
+void GuiState::drop_active_tab() {
+    const auto found = std::ranges::find(tabs_, active_tab_, &NoteTab::id);
+    if (found == tabs_.end())
+        return;
+    const auto index = static_cast<std::size_t>(found - tabs_.begin());
+    tabs_.erase(found);
+    if (tabs_.empty()) {
+        active_tab_ = 0;
+        parked_ = false;
+        clear_live();
+        current_row_ = -1;
+        return;
+    }
+    active_tab_ = tabs_[std::min(index, tabs_.size() - 1)].id;
+    if (!parked_)  // park edilmişse editör zaten boş: yeni etkin sekme de park edilmiş kalır
+        restore_tab(active_tab_, false);
+}
+
+void GuiState::erase_tab(std::uint64_t id) {
+    if (id == active_tab_)
+        drop_active_tab();
+    else
+        std::erase_if(tabs_, [id](const NoteTab& tab) { return tab.id == id; });
+}
+
+void GuiState::park_or_clear() {
+    if (!parked_ && shown_ && !new_note_ && find_tab(active_tab_) != nullptr) {
+        stash();
+        parked_ = true;
+        return;
+    }
+    clear_editor();
+}
+
+// Senkron ya da başka süreç notu silmiş/taşımışsa sekmesi iletiyle kapanır. Gösterilen kirli not mevcut
+// akışta kalır: kayıt NotFound'u taslağa çevirir, düzenleme kaybolmaz. Liste okunamadıysa (boş) kapanma
+// yalnız depo NotFound dediğinde olur.
+void GuiState::close_missing_tabs(const std::unordered_set<std::string>& present) {
+    if (tabs_.empty())
+        return;
+    std::vector<std::pair<std::uint64_t, core::NotePath>> gone;
+    for (const NoteTab& tab : tabs_) {
+        const bool live = tab.id == active_tab_ && !parked_;
+        const auto note = tab_note(tab);
+        if (!note || present.contains(note->string()) || (live && dirty_))
+            continue;
+        if (const auto content = store_.read(*note);
+            content || content.error().code != core::Error::Code::NotFound)
+            continue;
+        gone.emplace_back(tab.id, *note);
+    }
+    // Gösterilen sekme en son: kapanınca öne gelen komşu, kapanacaklardan biri olmasın.
+    std::ranges::stable_partition(gone, [this](const auto& item) { return item.first != active_tab_; });
+    for (const auto& [id, note] : gone) {
+        status_ = core::tr("gui.tab_closed_missing", {{"path", note.string()}});
+        erase_tab(id);
+    }
+}
+
+bool GuiState::confirm_close_drafts() {
+    std::vector<std::uint64_t> drafts;
+    for (const NoteTab& tab : tabs_) {
+        if (!(tab.id == active_tab_ && !parked_) && tab.saved.new_note && !is_blank(tab.saved.buffer))
+            drafts.push_back(tab.id);
+    }
+    for (const std::uint64_t id : drafts) {
+        if (!switch_tab(id, true) || !confirm_close())
+            return false;
+    }
+    return true;
+}
+
+bool GuiState::restore_tabs(const std::vector<SavedTab>& saved, std::size_t active_index) {
+    std::vector<NoteTab> restored;
+    std::uint64_t active = 0;
+    for (std::size_t index = 0; index < saved.size() && restored.size() < kMaxTabs; ++index) {
+        const auto path = core::NotePath::parse(saved[index].path);
+        if (!path)
+            continue;
+        const int row = model_.index_of(*path);
+        const bool duplicate =
+            std::ranges::any_of(restored, [&](const NoteTab& tab) { return tab.saved.shown->path == *path; });
+        if (row < 0 || duplicate)  // silinmiş, taşınmış ya da elle bozulmuş girdi
+            continue;
+        NoteTab tab;
+        tab.id = next_tab_id_++;
+        tab.pinned = saved[index].pinned;
+        tab.kept = saved[index].kept;
+        tab.loaded = false;
+        tab.saved.shown = model_.note_at(row);
+        if (index == active_index)
+            active = tab.id;
+        restored.push_back(std::move(tab));
+    }
+    if (restored.empty())
+        return false;
+    // Açılıştaki ilk satır gösterimi bırakılır: henüz düzenlenmedi.
+    clear_live();
+    tabs_ = std::move(restored);
+    active_tab_ = active != 0 ? active : tabs_.front().id;
+    parked_ = true;
+    restore_tab(active_tab_, false);
+    return true;
+}
+
+void GuiState::next_tab(int delta) {
+    if (tabs_.empty())
+        return;
+    const auto count = static_cast<int>(tabs_.size());
+    const auto index = static_cast<int>(std::ranges::find(tabs_, active_tab_, &NoteTab::id) - tabs_.begin());
+    const int target = (((index + delta) % count) + count) % count;
+    activate_tab(tabs_[static_cast<std::size_t>(target)].id);
+}
+
+void GuiState::new_tab() {
+    std::string folder = target_folder();
+    if (!push_tab())
+        return;
+    new_note();
+    draft_folder_ = std::move(folder);
+}
+
+void GuiState::close_tab(std::uint64_t id) {
+    const NoteTab* tab = find_tab(id);
+    if (tab == nullptr)
+        return;
+    if (id != active_tab_ || parked_) {
+        if (!tab->saved.new_note || is_blank(tab->saved.buffer)) {
+            erase_tab(id);
+            return;
+        }
+        if (!switch_tab(id, true))  // yazılmış taslak: soru onun metniyle, onu öne getirerek sorulur
+            return;
+    }
+    if (!confirm_close())  // kirli not kaydedilir; taslak için Kaydet/At/Vazgeç
+        return;
+    drop_active_tab();
+    if (tabs_.empty())
+        tabs_closed_ = true;
+}
+
+void GuiState::close_active_tab() {
+    if (active_tab_ != 0)
+        close_tab(active_tab_);
+}
+
+void GuiState::set_tab_pinned(std::uint64_t id, bool pinned) {
+    if (NoteTab* tab = find_tab(id))
+        tab->pinned = pinned;
+}
+
+void GuiState::reorder_tabs(const std::vector<std::uint64_t>& order) {
+    std::vector<NoteTab> sorted;
+    sorted.reserve(tabs_.size());
+    for (const std::uint64_t id : order) {
+        const auto found = std::ranges::find(tabs_, id, &NoteTab::id);
+        if (found != tabs_.end() && std::ranges::find(sorted, id, &NoteTab::id) == sorted.end())
+            sorted.push_back(std::move(*found));
+    }
+    for (NoteTab& tab : tabs_) {  // taşınmış öğenin kimliği yerinde kalır: ikinci kez alınmaz
+        if (std::ranges::find(sorted, tab.id, &NoteTab::id) == sorted.end())
+            sorted.push_back(std::move(tab));
+    }
+    tabs_ = std::move(sorted);
+}
+
+void GuiState::open_in_new_tab(const core::NotePath& path) {
+    close_trash();
+    ensure_visible(path);  // süzgeç gevşer: seçim sonradan bu satıra kurulur
+    if (model_.index_of(path) < 0) {
+        report(core::Error{core::Error::Code::NotFound, "error.not_found", {{"path", path.string()}}});
+        return;
+    }
+    if (!parked_ && shown_ && !new_note_ && shown_->path == path) {
+        if (NoteTab* tab = find_tab(active_tab_))
+            tab->kept = true;  // zaten burada: sekme korunur, sonraki açılış yeni sekmeye
+        return;
+    }
+    if (const auto open = tab_of(path)) {
+        switch_tab(*open, false);
+        return;
+    }
+    if (!push_tab())
+        return;
+    const std::uint64_t id = active_tab_;
+    select_row(model_.index_of(path));
+    if (NoteTab* tab = find_tab(id))
+        tab->kept = true;
+}
+
+void GuiState::remember_cursor(TextSelection cursor) {
+    if (parked_)
+        return;
+    if (NoteTab* tab = find_tab(active_tab_))
+        tab->cursor = cursor;
 }
 
 }  // namespace noteapp::gui

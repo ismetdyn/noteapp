@@ -14,7 +14,7 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `… \| note [bayraklar]` | stdin TTY değilse ve metin argümanı yoksa içerik stdin'den |
 | `note [bayraklar]` | Metin de stdin de yoksa editör açılır (aşağıda) |
 | `note -e [bayraklar] [METİN…]` | Editörü her durumda açar; METİN varsa ön içerik olur (ör. başlık yazıp devam etmek) |
-| `note ls [SORGU] [-f KLASÖR]` | Notları listeler: sorgu varsa fuzzy sıra, yoksa mtime azalan |
+| `note ls [SORGU] [-f KLASÖR]` | Notları listeler: sorgu varsa fuzzy sıra, yoksa mtime azalan. Sorgu SPEC-search argümanlarını alır (`tag:proje`, `view:iş`, `type:md`, `sort:-size`…); geçersiz argüman değeri, bilinmeyen ya da yazan görünüm çıkış 2 |
 | `note find TERİM…` | İçerik araması; `yol:satır: kesit` (TTY'de vurgulu) |
 | `note show SORGU` | En iyi eşleşmenin içeriğini yazdırır |
 | `note edit SORGU` | En iyi eşleşmeyi editörde açar |
@@ -25,8 +25,10 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `note sync login [HOST]` · `sync logout [HOST]` | Token'ı ekosuz stdin'den okuyup kasaya yazar / siler |
 | `note config path\|list\|get ANAHTAR\|set ANAHTAR DEĞER` | Config yönetimi |
 | `note query [--write] [--json] [--param K=D]… CYPHER` | Graph sorgusu (aşağıda) |
+| `note tags [--json]` | Canlı notların `#etiket`leri ve not sayıları, `Tag.name` sırasıyla: satır `gösterim<TAB>sayı`; `--json` `[{"name","display","count"}]` (SPEC-graph "Etiketler") |
+| `note view save AD CYPHER [--force]` · `view ls [--json]` · `view run AD [--json]` · `view rm AD` · `view show AD` | Kayıtlı Cypher görünümleri (T81, SPEC-graph "Görünümler"). `save` sorguyu çalıştırmadan denetler: yazan, `$parametre`li ya da bozuk sorgu çıkış 2, hiçbir şey kaydedilmez; var olan ad (`Work` = `work`) `--force` olmadan çıkış 1. `ls` satırı `ad<TAB>sorgu` (sorgunun satır sonu `\n`), `--json` `[{"name","query","created_at","updated_at"}]` (zaman unix ms). `run` çıktısı `note query`yle (`--json` dahil) bayt bayt aynıdır, her zaman salt okunur ve sorgu sınırlarıyla çalışır; yazan görünüm (senkronla ya da `query --write` ile gelmiş) çıkış 2 ile reddedilir, graf değişmez. `show` sorguyu yazar. Bilinmeyen ad çıkış 1. Ad ve sorgu senkronla gelebilir: terminal temizliğinden geçer. `save` ve `rm` notlar gibi arka plan senkronunu başlatır |
 | `note graph migrate [--skip-failed]` | Eski düz dosyaları içe aktar ([SPEC-graph.md](SPEC-graph.md)) |
-| `note graph export --format jsonl [-o DOSYA]`, `note graph import [--overwrite] DOSYA` | Tüm graph'ı JSON satırları olarak çıkar ya da yükle |
+| `note graph export --format jsonl [-o DOSYA]`, `note graph import [--overwrite] DOSYA` | Tüm graph'ı JSON satırları olarak çıkar ya da yükle; satırın JSON kuralları ve sınırları SPEC-graph "Sınırlar" (bilinmeyen alanda `null` kabul) |
 | `note export --all DİZİN` | Tüm notları bayt bayt düz dosya olarak çıkar |
 | `note --help` · `note help KOMUT` · `note --version` | Yardım (i18n) |
 
@@ -36,7 +38,9 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 - **Terminal temizliği (T36):** stdout TTY ise `find` (yol + kesit) ve `show` not baytlarını
   `sanitize_for_terminal`'dan geçirir: C0 denetim karakterleri (`\t`, `\n` hariç), DEL, C1 (U+0080–U+009F) ve geçersiz
   UTF-8 → `U+FFFD`, `\r` atılır. Boruya/dosyaya çıktı bayt bayt aynıdır. Neden: VT işleme açıkken senkronla gelen not
-  OSC 52 (pano) ya da başlık dizisi yollayabilirdi.
+  OSC 52 (pano) ya da başlık dizisi yollayabilirdi. T91: görünmez bidi ve sıfır genişlikli karakterler de (TUI/GUI ile
+  aynı liste `core::hidden_controls`, ZWNJ/ZWJ hariç) `U+FFFD` olur; `ls` adları da bu yoldan geçer. `query` tablosu
+  her zaman temizlenir (insan biçimi), ham değer `--json` iledir.
 
 ## Hızlı ekleme kuralları
 
@@ -75,7 +79,7 @@ PDF yalnız bu baytlardan üretilir, dosya yeniden açılmaz. Okuma/yol hatasın
 Binary (ikili) not reddedilir, çıkış 1. `pdf::export_pdf` hatasında çıkış kodu hata türünden gelir (ör. yazılamayan
 çıktı: 3, yarım PDF bırakılmaz). Başarıda `cli.exported` satırı stdout'a yazılır.
 Varsayılan çıktı: geçerli dizinde `<ad>.pdf`; `-o` geçerli dizine göredir. `--pdf` zorunludur, yoksa kullanım hatası (2).
-Kapsam: A4, 15 mm; Markdown (`.md`) için başlık, kalın/italik, liste, kod, alıntı, bağlantı metni, GFM tablo; diğer
+Kapsam: A4, 15 mm; Markdown (`.md`, `.markdown`) için başlık, kalın/italik, liste, kod, alıntı, bağlantı metni, GFM tablo; diğer
 tipler düz metin (eş aralıklı). Yalnız soldan sağa yazı: Arapça/İbranice ve karmaşık shaping yok, Türkçe tam desteklenir.
 Gömülü DejaVu'da olmayan glifler (CJK vb.) için PDF çıktısı doğrulanmadı; BMP dışı kod noktaları (emoji) `U+FFFD` olur. Görseller alt
 metne (yoksa `pdf.image_placeholder`) iner; hiçbir görsel/bağlantı hedefine istek yapılmaz.

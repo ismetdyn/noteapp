@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/config.hpp"
 #include "core/note_store.hpp"
 #include "tui/clipboard.hpp"
 #include "tui/modals.hpp"
@@ -47,6 +48,7 @@ struct ListHost {
     StatusLine& status;
     std::function<void()> refresh_notes;
     std::function<void()> notify_changed;
+    core::Config* config = nullptr;  // palet `icons.toggle` günceller; yalnız UI iş parçacığı yazar
 };
 
 class ListActions {
@@ -54,6 +56,8 @@ public:
     explicit ListActions(ListHost host) : host_(std::move(host)) {}
 
     void run(Intent intent, std::optional<ConfirmState>& confirm);
+    // `L` yol girdisi açar: main'e dal eklemeden aynı yoldan yürür.
+    void run(Intent intent, std::optional<ConfirmState>& confirm, std::optional<RenameState>& rename);
     // Onay evet: not kalıcı silinir (çöp görünümünde çöpten) ya da çöp boşaltılır.
     void finish_delete(std::optional<ConfirmState>& confirm);
     // Fareyi modele uygular; REVIEW'da sürükleme bittiyse seçimi panoya kopyalar.
@@ -63,6 +67,8 @@ public:
     void begin_rename(std::optional<RenameState>& rename);
     // `m`: seçim ya da satır için hedef klasör girdisi, geçerli klasörle dolu; Tab klasörleri önerir.
     void begin_move_to(std::optional<RenameState>& rename);
+    // `L`: boş girdi, Tab not yollarını önerir; Enter NoteStore::add_relation, hata girdide kalır.
+    void begin_link(std::optional<RenameState>& rename);
     // `a` Enter: `/` ile biten ad klasördür, Listede kalır; değilse boş not oluşur ve `open` çağrılır. Ad
     // klasör görünümünde geçerli klasöre göredir. Hata satırda kalır.
     void submit_new_row(std::optional<NewRowState>& row, const NewRowDefaults& defaults,
@@ -70,8 +76,11 @@ public:
     void handle_rename_key(std::optional<RenameState>& rename, Key key, std::string_view text);
     // Yeniden tarama: çöp görünümü açıksa o da yenilenir (senkron çöpü değiştirmiş olabilir).
     void refresh_trash_view();
+    // Palet son kullanılanları değiştirdiyse `tui-state.toml`a yazar.
+    void save_prefs_if_changed();
 
 private:
+    void toggle_icons();
     void copy_selected_note();
     void copy_preview_selection();
     void copy_text(std::string text);
@@ -85,6 +94,9 @@ private:
     void save_prefs();
     void submit_rename(std::optional<RenameState>& rename);
     void submit_move_to(std::optional<RenameState>& rename);
+    void submit_link(std::optional<RenameState>& rename);
+    void begin_unlink(std::optional<ConfirmState>& confirm);
+    void finish_unlink();
     std::optional<core::Error> move_collision(const RenameState& rename, const std::string& dest) const;
     void forget_trashed(const core::NotePath& item);
     void create_folder_from_row(std::optional<NewRowState>& row);
@@ -122,6 +134,8 @@ private:
     std::vector<TrashBatch> trashed_;                // bu oturumda; `u` sondan alır
     BatchAction batch_pending_ = BatchAction::None;  // açık onay çoklu seçim için
     std::optional<core::NotePath> delete_target_;
+    // Açık onay ilişki için (seçili not, satırdaki not). Vazgeçilirse sonraki run() düşürür.
+    std::optional<std::pair<core::NotePath, core::NotePath>> relation_target_;
     std::optional<std::string> folder_target_;  // açık onay klasör için
     bool folder_permanent_ = false;             // `D`: kalıcı; `d`: çöpe
     bool empty_pending_ =

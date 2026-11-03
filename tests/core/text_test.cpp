@@ -46,6 +46,49 @@ TEST_CASE("utf8 rejects malformed input") {
     CHECK_FALSE(decode_utf8("a\xC3").has_value());
 }
 
+TEST_CASE("hidden controls are the bidi and zero-width code points, each with its Unicode name") {
+    for (const char32_t cp :
+         {char32_t{0x061C}, char32_t{0x115F}, char32_t{0x1160}, char32_t{0x180E}, char32_t{0x200B},
+          char32_t{0x200E}, char32_t{0x200F}, char32_t{0x202A}, char32_t{0x202B}, char32_t{0x202C},
+          char32_t{0x202D}, char32_t{0x202E}, char32_t{0x2060}, char32_t{0x2061}, char32_t{0x2062},
+          char32_t{0x2063}, char32_t{0x2064}, char32_t{0x2066}, char32_t{0x2067}, char32_t{0x2068},
+          char32_t{0x2069}, char32_t{0x3164}, char32_t{0xFEFF}, char32_t{0xFFA0}}) {
+        CAPTURE(static_cast<std::uint32_t>(cp));
+        REQUIRE(find_hidden_control(cp) != nullptr);
+        CHECK_FALSE(find_hidden_control(cp)->name.empty());
+    }
+    CHECK(find_hidden_control(char32_t{0x202E})->name == "RIGHT-TO-LEFT OVERRIDE");
+    CHECK(hidden_controls().size() == 24);
+    // ZWNJ ve ZWJ emoji dizilerinde ve Farsça/Arapça/Hint yazılarında meşrudur, bidi sahteciliği yapmaz.
+    for (const char32_t cp :
+         {U'a', U'ş', char32_t{0x0300}, char32_t{0x200C}, char32_t{0x200D}, char32_t{0x2028},
+          char32_t{0x202F}, char32_t{0x2065}, char32_t{0x3163}, char32_t{0xFFFD}, U'\U0001F600'})
+        CHECK(find_hidden_control(cp) == nullptr);
+}
+
+// Ön süzgeç öncü baytlara bakar: listeye eklenen her kod noktası sayılmalı, süzgeç listeyle kaymamalı.
+TEST_CASE("count_hidden_controls counts each listed code point once, ZWJ and ZWNJ never") {
+    for (const HiddenControl& hidden : hidden_controls()) {
+        CAPTURE(static_cast<std::uint32_t>(hidden.code_point));
+        const std::string alone = encode_utf8(std::u32string(1, hidden.code_point));
+        CHECK(count_hidden_controls(alone) == 1);
+        CHECK(count_hidden_controls("a" + alone + "b") == 1);
+    }
+    CHECK(count_hidden_controls(encode_utf8(U"\x200C\x200D")) == 0);
+    CHECK(count_hidden_controls(encode_utf8(U"\x1100\x1161\x3131\xFFA1")) == 0);  // dolgu olmayan Hangul
+}
+
+TEST_CASE("count_hidden_controls counts every hidden code point and skips broken bytes") {
+    CHECK(count_hidden_controls("") == 0);
+    CHECK(count_hidden_controls("düz metin … “tırnak” — €") == 0);
+    CHECK(count_hidden_controls("a\xE2\x80\xAE"
+                                "b\xE2\x81\xA6\xE2\x80\x8B\xD8\x9C\xEF\xBB\xBF") == 5);
+    CHECK(count_hidden_controls("\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7") ==
+          0);                                                       // aile emojisi (ZWJ dizisi)
+    CHECK(count_hidden_controls("\xE2\x80") == 0);                  // kesik dizi
+    CHECK(count_hidden_controls("\xE2\xFF\xAE\xE2\x80\xAE") == 1);  // bozuk bayt sonrakini yutmaz
+}
+
 TEST_CASE("transliterate_turkish maps Turkish letters") {
     CHECK(transliterate_turkish("çğıöşü") == "cgiosu");
     CHECK(transliterate_turkish("ÇĞİÖŞÜ") == "CGiOSU");

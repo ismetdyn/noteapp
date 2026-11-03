@@ -8,8 +8,10 @@ noteapp_add_test(tui
     layout_mouse_test.cpp
     render_test.cpp
     clipboard_test.cpp
+    command_palette_test.cpp
     completion_test.cpp
     input_line_test.cpp
+    link_panel_test.cpp
     list_ui_test.cpp
     list_nav_test.cpp
     list_batch_test.cpp
@@ -20,7 +22,23 @@ noteapp_add_test(tui
     modals_test.cpp
     settings_test.cpp
     settings_sync_test.cpp
-    sync_indicator_test.cpp)
+    sync_indicator_test.cpp
+    tags_test.cpp
+    views_test.cpp
+    child_process_test.cpp)
+
+# ChildProcess testleri borulu çocuk olarak fake_editor'ı (yankı/taşkın/uyuyan/çıkan kipler) başlatır.
+add_dependencies(tui_tests fake_editor)
+target_compile_definitions(tui_tests PRIVATE NOTEAPP_FAKE_EDITOR="$<TARGET_FILE:fake_editor>")
+
+# LSP istemcisi gerçek süreçle sınanır: sahte sunucu kabuksuz, her platformda derlenen ayrı bir ikilidir.
+add_executable(fake_lsp_server fake_lsp_server.cpp)
+target_link_libraries(fake_lsp_server PRIVATE noteapp_core)
+noteapp_target_defaults(fake_lsp_server)
+noteapp_add_test(lsp_client lsp_client_test.cpp lsp_workspace_test.cpp language_servers_test.cpp)
+target_link_libraries(lsp_client_tests PRIVATE noteapp_tui)
+add_dependencies(lsp_client_tests fake_lsp_server)
+target_compile_definitions(lsp_client_tests PRIVATE NOTEAPP_FAKE_LSP_SERVER="$<TARGET_FILE:fake_lsp_server>")
 
 # Gerçek terminal olmadan gerçek `notes`: forkpty yalnız Linux'ta sınanır (bkz. e2e_editor.sh).
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

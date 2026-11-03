@@ -89,6 +89,8 @@ Kalıcı indeks, regex araması, fzf genişletilmiş sözdizimi (`^`, `$`, `!`, 
   | `updated:` `created:` | `7d` son 7 gün (1–36500); `>YYYY-MM-DD` o günden sonra, `<YYYY-MM-DD` o günden önce (gün yerel saattir, 1970–2200) |
   | `origin:` | tam eşleşme, katlanmış |
   | `sync:` | `synced modified new conflict_copy sync_off` |
+  | `view:` | kayıtlı görünümün döndürdüğü notlar (T81, SPEC-graph "Görünümler"): `view:iş`, boşluklu ad `view:"ev notları"`. Ad katlanmadan core'a gider, eşleşme `tag_key` katlamalıdır (`view:İŞ` = `iş`). Önce ad kuralı (bozuk ad depoya sorulmaz), sonra görünüm salt okunur çalışır. Bilinmeyen görünüm, yazan görünüm, not döndürmeyen sonuç ve sorgu hatası diğer bozuk değerler gibi değerin yerinde `QueryError`dır (ileti core'un). `parse_query` görünüm araması (`ViewLookup`) verilmeden çağrılırsa (girdi boyama) yalnız ad kuralı denetlenir, süzgeç hiçbir notu geçirmez |
+  | `tag:` | etiket ve altındakiler (T80): `tag:proje` `proje`, `proje/alt` eşleşir, `projeler` eşleşmez; `tag:proje/alt` yalnız o dal. `#` öneki ve sondaki `/` yok sayılır (`tag:#proje/` = `tag:proje`); katlanmış (`tag:calisma` `#çalışma`yı bulur). Kaynak `NoteMeta::tags` (SPEC-graph "Etiketler"); çöpteki not girmez |
 
   - Kalan sözcükler `text`'tir, tırnaklarıyla: `parse_terms` aynı metni görür. Değer tırnaklanabilir (`in:"iş notları/"`); tamamı tırnaklı
     sözcük anahtar değildir. Anahtar ve değerler katlama kurallarıyla karşılaştırılır (`SORT:-SİZE`).
