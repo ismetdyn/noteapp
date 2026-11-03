@@ -1,6 +1,6 @@
 #include "tui/mouse.hpp"
 
-#include "tui/editor_buffer.hpp"
+#include "edit/editor_buffer.hpp"
 #include "tui/editor_view.hpp"
 #include "tui/view.hpp"
 
@@ -88,6 +88,18 @@ MouseResult click_list(const MouseInput& input, TuiState& state, EditorSession& 
     return MouseResult::None;
 }
 
+// Sağ tık: satır seçilir, GUI'nin satır menüsündeki eylemler palette açılır. Satırsız yerde bir şey olmaz.
+void open_list_menu(const MouseInput& input, TuiState& state, EditorSession& editor) {
+    if (!leave_editor(state, editor))
+        return;
+    const auto visible = static_cast<std::size_t>(state.window_height() - kFirstPaneRow - kBottomChromeRows);
+    const std::size_t row = state.row_at(visible, static_cast<std::size_t>(input.y - kFirstPaneRow));
+    if (row >= state.rows().size())
+        return;
+    state.click_row(row);
+    state.open_row_menu();
+}
+
 MouseResult click_top_line(const MouseInput& input, TuiState& state, EditorSession& editor) {
     if (state.new_note_view())
         return MouseResult::None;
@@ -165,7 +177,11 @@ MouseResult continue_selection(const MouseInput& input, TuiState& state, const P
         extend_selection(input, state, geometry);
         return MouseResult::None;
     }
-    return state.finish_preview_selection() ? MouseResult::SelectionFinished : MouseResult::None;
+    const std::optional<PreviewPoint> click = state.preview_click_point();
+    if (state.finish_preview_selection())
+        return MouseResult::SelectionFinished;
+    return click && state.select_wiki_link_at(click->line, click->begin) ? MouseResult::FollowLink
+                                                                         : MouseResult::None;
 }
 
 void click_right(const MouseInput& input, TuiState& state, EditorSession& editor,
@@ -233,6 +249,10 @@ MouseResult route_mouse(const MouseInput& input, TuiState& state, EditorSession&
     case MouseButton::Left:
         state.clear_preview_selection();
         return handle_left_press(input, state, editor, geometry);
+    case MouseButton::Right:
+        if (in_pane_rows(state, input.y) && !right && !state.trash_view())
+            open_list_menu(input, state, editor);
+        break;
     case MouseButton::Other:
         break;
     }

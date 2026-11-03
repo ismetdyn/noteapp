@@ -135,7 +135,7 @@ TEST_CASE("decode_frame_rejects_trailing_bytes_and_every_single_byte_corruption_
 TEST_CASE("frame_op_count_is_capped_on_decode") {
     Frame frame;
     frame.seq = 1;
-    frame.ops.assign(kMaxFrameOps, NodePut{node_named("a")});
+    frame.ops.assign(kDefaultFrameOps, NodePut{node_named("a")});
     CHECK(decode_frame(as_bytes(encode_frame(frame))).has_value());
 
     frame.ops.emplace_back(NodePut{node_named("a")});
@@ -144,21 +144,20 @@ TEST_CASE("frame_op_count_is_capped_on_decode") {
     CHECK(over.error().code == Error::Code::BadFrame);
 }
 
-// Yerel sınır uzak sınırla aynıdır: yoksa bu cihazın çerçevesi uzakta reddedilip zinciri durdururdu.
-TEST_CASE("local_commit_over_the_op_cap_fails_and_leaves_nothing") {
+// L4b: çerçeve başına işlem sınırı yerel commit'i sınırlamaz; export çerçeveyi kayıtlara böler, okuyan kayıt
+// başına aynı sınırı uygular (multipart_test).
+TEST_CASE("local_commit_over_the_op_cap_commits") {
     noteapp::test::TempDir dir;
     Graph graph = test::open_graph(dir.path() / "graph.db");
     const NodeId a = node_named("a");
     {
         WriteTxn txn = test::begin_write(graph);
-        for (std::size_t i = 0; i <= kMaxFrameOps; ++i)
+        for (std::size_t i = 0; i <= kDefaultFrameOps; ++i)
             GRAPH_OK(txn.put_node(a));
-        const Result<void> committed = txn.commit();
-        REQUIRE_FALSE(committed.has_value());
-        CHECK(committed.error().code == Error::Code::LimitExceeded);
+        GRAPH_OK(txn.commit());
     }
     ReadTxn read = test::begin_read(graph);
-    CHECK_FALSE(*read.has_node(a));
+    CHECK(*read.has_node(a));
 }
 
 // Bellek biterse çözücü istisna sızdırmaz: API istisnasızdır ve girdi uzaktan gelir.
@@ -179,7 +178,9 @@ TEST_CASE("decoding_survives_allocation_failure_at_every_point") {
         REQUIRE_FALSE(decoded.has_value());
         CHECK(decoded.error().code == Error::Code::LimitExceeded);
     }
-    CHECK(failures > 5);  // yoksa sayaç hiçbir ayırmaya denk gelmemiştir
+    // deps ve ops ayırmaları; ops sayısı doğrulandıktan sonra tek seferde ayrılır (L4b2). Yoksa sayaç hiçbir
+    // ayırmaya denk gelmemiştir.
+    CHECK(failures >= 2);
 }
 
 // Bulgu 5: ayırma her noktada düşebilir; API sınırı istisna sızdırmaz, süreç ölmez, sonraki ingest tamamlar.
@@ -241,7 +242,7 @@ TEST_CASE("decode_frame_refuses_hostile_counts_and_names") {
     }
     SUBCASE("too_many_deps") {
         Frame many = frame;
-        many.deps.assign(kMaxDeps + 1, Dot{});
+        many.deps.assign(kDefaultDeps + 1, Dot{});
         CHECK_FALSE(decode_frame(as_bytes(encode_frame(many))).has_value());
     }
     SUBCASE("invalid_utf8_label") {

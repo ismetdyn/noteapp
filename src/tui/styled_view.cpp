@@ -1,7 +1,7 @@
 #include "tui/styled_view.hpp"
 
 #include "core/i18n.hpp"
-#include "tui/display_text.hpp"
+#include "edit/display_text.hpp"
 
 #include <algorithm>
 #include <ranges>
@@ -219,6 +219,18 @@ void add_header_rule(ViewBuilder& view, const std::vector<int>& widths, const In
 
 }  // namespace
 
+ViewLimits view_limits_of(const core::TuiLimits& limits) {
+    return {.source_bytes = limits.view_bytes.cap(),
+            .lines = limits.view_lines.cap(),
+            .table_rows = limits.table_rows.cap(),
+            .table_columns = limits.table_columns.cap(),
+            .highlight_line_bytes = limits.highlight_line_bytes.cap()};
+}
+
+SyntaxLimits syntax_limits_of(const core::TuiLimits& limits) {
+    return {.note_bytes = limits.highlight_bytes.cap(), .line_bytes = limits.highlight_line_bytes.cap()};
+}
+
 void InlineText::append(std::string_view safe, TextLook look) {
     if (safe.empty())
         return;
@@ -254,14 +266,14 @@ std::string_view SourceLines::line_text(std::size_t line) const {
 }
 
 InlineText highlighted_line(SyntaxLanguage language, std::string_view line, SyntaxState& state,
-                            TextLook fallback) {
+                            TextLook fallback, std::size_t max_line_bytes) {
     InlineText out;
     if (language == SyntaxLanguage::Plain) {
         out.append(line, fallback);
         return out;
     }
     std::vector<SyntaxSpan> tokens;
-    state = highlight_line(language, line, state, &tokens);
+    state = highlight_line(language, line, state, &tokens, max_line_bytes);
     std::size_t at = 0;
     const auto boundary = [&](std::size_t offset) {
         while (offset < line.size() && is_continuation(line[offset]))
@@ -282,8 +294,8 @@ InlineText highlighted_line(SyntaxLanguage language, std::string_view line, Synt
     return out;
 }
 
-ViewBuilder::ViewBuilder(int width, CellWidthFn cell_width)
-    : width_(std::max(width, 1)), cell_width_(cell_width) {}
+ViewBuilder::ViewBuilder(int width, CellWidthFn cell_width, std::size_t max_lines)
+    : width_(std::max(width, 1)), cell_width_(cell_width), max_lines_(max_lines) {}
 
 int ViewBuilder::cells(std::string_view text) const {
     int total = 0;
@@ -301,7 +313,7 @@ std::size_t ViewBuilder::last_source_line() const {
 
 void ViewBuilder::push(const InlineText& prefix, const InlineText& content, std::size_t begin,
                        std::size_t end, std::size_t& span_cursor, std::size_t source_line) {
-    if (view_.lines.size() >= kMaxViewLines) {
+    if (view_.lines.size() >= max_lines_) {
         truncated_ = true;
         return;
     }

@@ -79,6 +79,28 @@ TEST_CASE("the status bar offers undo after Delete and undo brings the note back
     CHECK_FALSE(scene.has_item(kUndo));
 }
 
+// plan-parity karar 2: geri alma iki arayüzde de yığındır.
+TEST_CASE("undo is a stack: trash two notes, undo twice brings both back") {
+    TrashScene scene;
+    scene.select("a.md");
+    click_button(*scene.view, kDelete);
+    scene.select("b.md");
+    click_button(*scene.view, kDelete);
+    REQUIRE(scene.fixture.note_exists(".trash/a.md"));
+    REQUIRE(scene.fixture.note_exists(".trash/b.md"));
+    settle(*scene.view);
+    REQUIRE(scene.has_item(kUndo));
+    click_button(*scene.view, kUndo);
+    CHECK(scene.fixture.note_exists("b.md"));
+    settle(*scene.view);
+    REQUIRE(scene.has_item(kUndo));
+    click_button(*scene.view, kUndo);
+    CHECK(scene.fixture.note_exists("a.md"));
+    CHECK_FALSE(scene.fixture.note_exists(".trash/a.md"));
+    settle(*scene.view);
+    CHECK_FALSE(scene.has_item(kUndo));
+}
+
 TEST_CASE("a later message takes the undo offer away with it") {
     TrashScene scene;
     click_button(*scene.view, kDelete);

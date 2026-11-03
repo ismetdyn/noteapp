@@ -49,7 +49,8 @@ konumları orijinal metnin bayt ofsetlerine geri eşlenir.
 ### İçerik araması
 - Sorgu boşlukla terimlere bölünür; **tüm terimler aynı notta** geçmeli (AND, satır şartı yok).
   `"tırnaklı ifade"` tam ifade olarak aranır.
-- Sonuç: not başına eşleşen satır sayısı + ilk 3 eşleşme (satır no, ~120 karakterlik kesit, vurgu aralıkları).
+- Sonuç: not başına eşleşen satır sayısı + ilk `limits.search.content_hits` eşleşme (varsayılan 3, `0` hepsi; satır no,
+  ~120 karakterlik kesit, vurgu aralıkları). `ContentIndex(store, max_note_bytes, max_hits)`.
 - Sıralama: eşleşme sayısı azalan → mtime azalan. `limit` uygulanır.
 - `binary` notlar ve `max_note_bytes` (defaults.toml, 10 MB) üstü notlar atlanır.
 
@@ -99,6 +100,10 @@ Kalıcı indeks, regex araması, fzf genişletilmiş sözdizimi (`^`, `$`, `!`, 
   - Filtreler AND'dir, aynı anahtar da (`size:>1kb size:<2kb` aralıktır, `type:md type:txt` boş döner). Bilinmeyen `created`/`origin` filtreye takılır;
     `sort:created`'da bilinmeyenler iki yönde de sondadır.
   - `apply` argümanlarına göre saftır; tek ortam girdisi saat dilimidir (`mktime`, gün sınırı kullanıcının günü olsun diye).
+- **MODIFIED (L3)** Sonuç sayısı ve ad eşleşmesinin aday tavanı config'tedir: `search_all(query, notes, content_index,
+  core::SearchLimits, now, views)` `limits.search.global_results` (200, `0` hepsi) ve `fuzzy_candidate_chars` (1024,
+  `0` sınırsız) okur. Sınırsız sonuçta her içerik eşleşmesi için en iyi satır üretilir (sonuç başına bir kesit).
+  `fuzzy_match`/`rank_notes` aday tavanını parametre alır; uzun aday eşleşir, konumsuz ve düşük puanlı döner.
 - **ADDED** Genel arama (T55a), `search/global_search.hpp`: `search_all(query, notes, content_index, limit = 200, now) ->
   expected<vector<GlobalHit{index, path, name_matched, content_matched, name_positions, content_hits, best_line}>, QueryError>`.
   - Not başına tek sonuç. Argümanlar önce süzer; metnin her terimi yolda fuzzy (puanlar toplanır, konumlar birleşir) **ya da** tümü notta tam

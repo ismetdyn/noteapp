@@ -125,9 +125,10 @@ Result<QueryResult> run_guarded(Graph& graph, Store& store, std::string_view cyp
 
 }  // namespace
 
-Result<void> check_query(std::string_view cypher, const Params& params, QueryMode mode) {
+Result<void> check_query(std::string_view cypher, const Params& params, QueryMode mode,
+                         const QueryLimits& limits) {
     try {
-        if (Result<Plan> plan = checked_plan(cypher, params, mode, QueryLimits{}); !plan)
+        if (Result<Plan> plan = checked_plan(cypher, params, mode, limits); !plan)
             return std::unexpected(std::move(plan).error());
         return {};
     } catch (const std::bad_alloc&) {

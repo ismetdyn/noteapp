@@ -11,6 +11,8 @@ using namespace noteapp::core::lsp;
 
 namespace {
 
+const ProtocolLimits kDefaults{};
+
 Json parsed(std::string_view body) {
     auto json = parse_message(body);
     REQUIRE(json);
@@ -60,27 +62,28 @@ TEST_CASE("lsp framing: several messages in one buffer come out in order; extra 
 TEST_CASE(
     "lsp framing: a body of exactly the limit is accepted, one byte more is refused before it arrives") {
     FrameReader at_limit;
-    at_limit.append("Content-Length: " + std::to_string(kMaxBodyBytes) + "\r\n\r\n");
+    at_limit.append("Content-Length: " + std::to_string(kDefaults.body_bytes) + "\r\n\r\n");
     CHECK_FALSE(next_body(at_limit));
 
     FrameReader over;
-    over.append("Content-Length: " + std::to_string(kMaxBodyBytes + 1) + "\r\n\r\n");
+    over.append("Content-Length: " + std::to_string(kDefaults.body_bytes + 1) + "\r\n\r\n");
     CHECK(next_error(over) == FrameError::BodyTooLarge);
 }
 
 TEST_CASE("lsp framing: a header block over 4 KiB is refused, with or without its end") {
     FrameReader unterminated;
-    unterminated.append("Content-Length: 2\r\nX-Pad: " + std::string(kMaxHeaderBytes, 'a'));
+    unterminated.append("Content-Length: 2\r\nX-Pad: " + std::string(kDefaults.header_bytes, 'a'));
     CHECK(next_error(unterminated) == FrameError::HeaderTooLarge);
 
     const std::string fits = "Content-Length: 2\r\nX: ";
     const std::string end = "\r\n\r\n";
     FrameReader exact;
-    exact.append(fits + std::string(kMaxHeaderBytes - fits.size() - end.size(), 'a') + end + "{}");
+    exact.append(fits + std::string(kDefaults.header_bytes - fits.size() - end.size(), 'a') + end + "{}");
     CHECK(next_body(exact) == "{}");
 
     FrameReader one_more;
-    one_more.append(fits + std::string(kMaxHeaderBytes - fits.size() - end.size() + 1, 'a') + end + "{}");
+    one_more.append(fits + std::string(kDefaults.header_bytes - fits.size() - end.size() + 1, 'a') + end +
+                    "{}");
     CHECK(next_error(one_more) == FrameError::HeaderTooLarge);
 }
 
@@ -109,7 +112,7 @@ TEST_CASE(
 
 TEST_CASE("lsp framing: one 16 MiB read of tiny frames drains in linear time") {
     const std::string tiny = frame("");
-    const std::size_t count = kMaxBodyBytes / tiny.size();
+    const std::size_t count = kDefaults.body_bytes / tiny.size();
     std::string bytes;
     bytes.reserve(count * tiny.size());
     for (std::size_t i = 0; i < count; ++i)
@@ -316,21 +319,21 @@ TEST_CASE("lsp diagnostics: at most 1000, message at most 512 bytes without spli
     const std::string one =
         R"({"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"message":"m"})";
     std::string list = R"({"uri":"file:///a","diagnostics":[)";
-    for (std::size_t i = 0; i < kMaxDiagnostics + 5; ++i)
+    for (std::size_t i = 0; i < kDefaults.diagnostics + 5; ++i)
         list += (i == 0 ? "" : ",") + one;
     list += "]}";
     const auto capped = parse_publish_diagnostics(parsed(list));
     REQUIRE(capped);
-    CHECK(capped->diagnostics.size() == kMaxDiagnostics);
+    CHECK(capped->diagnostics.size() == kDefaults.diagnostics);
 
     // 511 bayt "a" ve 2 baytlık "ç": kesim karakteri bölmez, 511'de durur.
-    const std::string body = std::string(kMaxDiagnosticMessageBytes - 1, 'a') + "\xC3\xA7" + "tail";
+    const std::string body = std::string(kDefaults.diagnostic_message_bytes - 1, 'a') + "\xC3\xA7" + "tail";
     const auto published = parse_publish_diagnostics(parsed(
         R"({"uri":"file:///a","diagnostics":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"message":")" +
         body + R"("}]})"));
     REQUIRE(published);
     REQUIRE(published->diagnostics.size() == 1);
-    CHECK(published->diagnostics[0].message == std::string(kMaxDiagnosticMessageBytes - 1, 'a'));
+    CHECK(published->diagnostics[0].message == std::string(kDefaults.diagnostic_message_bytes - 1, 'a'));
 }
 
 TEST_CASE("lsp completion results: item array, CompletionList, null; textEdit wins over insertText") {
@@ -359,10 +362,58 @@ TEST_CASE("lsp completion results: item array, CompletionList, null; textEdit wi
 
 TEST_CASE("lsp completion results are capped") {
     std::string many = "[";
-    for (std::size_t i = 0; i < kMaxCompletionItems + 10; ++i)
+    for (std::size_t i = 0; i < kDefaults.completion_items + 10; ++i)
         many += std::string(i == 0 ? "" : ",") + R"({"label":"x"})";
     many += "]";
-    CHECK(parse_completion_result(parsed(many)).size() == kMaxCompletionItems);
+    CHECK(parse_completion_result(parsed(many)).size() == kDefaults.completion_items);
+}
+
+// L5: limits.lsp.* sınırsız (SIZE_MAX) ise eski tavanların üstü kabul edilir.
+TEST_CASE(
+    "lsp limits above the old caps: frames, diagnostics, messages and completions pass when unlimited") {
+    const ProtocolLimits unlimited{.header_bytes = SIZE_MAX,
+                                   .body_bytes = SIZE_MAX,
+                                   .message_depth = 64,
+                                   .message_values = SIZE_MAX,
+                                   .diagnostics = SIZE_MAX,
+                                   .diagnostic_message_bytes = SIZE_MAX,
+                                   .completion_items = SIZE_MAX};
+
+    FrameReader big_body(unlimited);
+    const std::string body = "\"" + std::string(kDefaults.body_bytes, 'a') + "\"";
+    big_body.append(frame(body));
+    CHECK(next_body(big_body) == body);
+
+    FrameReader long_header(unlimited);
+    long_header.append("Content-Length: 2\r\nX-Pad: " + std::string(kDefaults.header_bytes, 'a') +
+                       "\r\n\r\n{}");
+    CHECK(next_body(long_header) == "{}");
+
+    const std::string one =
+        R"({"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"message":")" +
+        std::string(kDefaults.diagnostic_message_bytes + 10, 'm') + R"("})";
+    std::string list = R"({"uri":"file:///a","diagnostics":[)";
+    for (std::size_t i = 0; i < kDefaults.diagnostics + 5; ++i)
+        list += (i == 0 ? "" : ",") + one;
+    list += "]}";
+    const auto all = parse_publish_diagnostics(*parse_message(list, unlimited), unlimited);
+    REQUIRE(all);
+    CHECK(all->diagnostics.size() == kDefaults.diagnostics + 5);
+    CHECK(all->diagnostics[0].message.size() == kDefaults.diagnostic_message_bytes + 10);
+
+    std::string many = "[";
+    for (std::size_t i = 0; i < kDefaults.completion_items + 10; ++i)
+        many += std::string(i == 0 ? "" : ",") + R"({"label":"x"})";
+    many += "]";
+    CHECK(parse_completion_result(parsed(many), unlimited).size() == kDefaults.completion_items + 10);
+
+    // message_values: 250.000 değerden büyük gövde varsayılanda reddedilir, sınırsızda ayrışır.
+    std::string values = "[";
+    for (std::size_t i = 0; i < kDefaults.message_values + 1; ++i)
+        values += i == 0 ? "1" : ",1";
+    values += "]";
+    CHECK_FALSE(parse_message(values));
+    CHECK(parse_message(values, unlimited));
 }
 
 TEST_CASE("lsp utf-16 columns: astral characters count two units and are never split") {

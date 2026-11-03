@@ -35,7 +35,8 @@ int run_export(const ParsedArgs& args, const core::Config& config);  // args.res
 // args.rest: migrate | export --format jsonl [-o DOSYA] | import DOSYA
 int run_graph(const ParsedArgs& args, const core::Config& config);
 int run_export_all(const std::string& directory, bool ignore_skipped, const core::Config& config);
-int run_query(const ParsedArgs& args);  // args.rest: [--write] [--json] [--param K=D]... CYPHER
+// args.rest: [--write] [--json] [--param K=D]... CYPHER. Sınırlar kullanıcının profilidir: limits.query.*.
+int run_query(const ParsedArgs& args, const core::Config& config);
 // `note query`nin stdout biçimi: tablo ya da `--json` (commands_query.cpp).
 std::string query_output(const graph::QueryResult& result, bool json);
 int run_tags(const ParsedArgs& args, const core::Config& config);  // args.rest: [--json]
@@ -52,7 +53,9 @@ int fail(const core::Error& error);
 
 // show/edit/export'un ortak "en iyi eşleşme" kuralı (commands.cpp); eşleşme yoksa mesajı yazıp çıkış kodunu
 // döner.
-std::expected<core::NoteInfo, int> pick_best_note(const core::NoteStore& store, const std::string& query);
+// max_candidate: limits.search.fuzzy_candidate_chars (sınırsız SIZE_MAX).
+std::expected<core::NoteInfo, int> pick_best_note(const core::NoteStore& store, const std::string& query,
+                                                  std::size_t max_candidate);
 
 // stdin gerçek bir terminal mi (Windows'ta NUL aygıtı TTY sayılmaz).
 bool stdin_is_tty();

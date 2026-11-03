@@ -1,5 +1,7 @@
 #pragma once
 
+#include "app/document.hpp"
+
 #include <cstddef>
 #include <string>
 #include <utility>
@@ -36,7 +38,7 @@ struct SaveForm {
     bool try_accept();  // geçersizse error dolar ve false döner
 };
 
-enum class ConflictChoice { Reload, Overwrite, SaveCopy, Cancel };
+using ConflictChoice = app::ConflictChoice;  // çakışma seçenekleri iki arayüzde ortak
 enum class CloseChoice { Save, Discard, Cancel };
 
 // Düğmeli soru: varsayılan (Enter) ve Esc düğmesi veri olarak tutulur, böylece çizimsiz test edilir.

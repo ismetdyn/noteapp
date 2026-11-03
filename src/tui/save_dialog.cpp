@@ -2,8 +2,8 @@
 
 #include "core/i18n.hpp"
 #include "core/text.hpp"
+#include "edit/editor_session.hpp"
 #include "search/fuzzy.hpp"
-#include "tui/editor_session.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -105,11 +105,11 @@ std::string& SaveDialogState::field_text() {
 void SaveDialogState::refresh_suggestions() {
     std::vector<std::pair<double, const std::string*>> scored;
     for (const std::string& candidate : init_.folders)
-        if (const auto match = search::fuzzy_match(folder_, candidate))
+        if (const auto match = search::fuzzy_match(folder_, candidate, init_.fuzzy_candidate_chars))
             scored.emplace_back(match->score, &candidate);
     std::ranges::stable_sort(scored, [](const auto& a, const auto& b) { return a.first > b.first; });
     suggestions_.clear();
-    for (std::size_t i = 0; i < scored.size() && i < kMaxSuggestions; ++i)
+    for (std::size_t i = 0; i < scored.size() && i < init_.max_suggestions; ++i)
         suggestions_.push_back(*scored[i].second);
     selected_suggestion_ = -1;
 }
@@ -348,15 +348,17 @@ RenameState::RenameState(LinkTarget, core::NotePath from, SharedInputSources sou
     line_.set_sources(std::move(sources));
 }
 
+RenameState::RenameState(ExportTarget, core::NotePath from, std::string file_name)
+    : from_(std::move(from)), is_export_(true) {
+    const std::size_t cursor = stem_end(file_name);
+    line_.set_text(std::move(file_name), cursor);
+}
+
 std::string RenameState::target() const {
     std::string_view typed = line_.text();
     if (is_folder_ && typed.ends_with('/'))
         typed.remove_suffix(1);
     return join_folder(base_, typed);
-}
-
-bool names_folder(std::string_view text) {
-    return text.size() > 1 && text.ends_with('/');
 }
 
 RenameState::Outcome RenameState::handle(Key key, std::string_view text) {
@@ -379,23 +381,6 @@ NewRowState::Outcome NewRowState::handle(Key key, std::string_view text) {
     if (key == Key::Enter)
         return is_blank(line_.text()) ? Outcome::Cancelled : Outcome::Submit;
     return key == Key::Escape ? Outcome::Cancelled : Outcome::Editing;
-}
-
-std::expected<core::CreatedNote, core::Error> create_named_note(core::NoteStore& store, std::string_view name,
-                                                                std::string_view default_folder,
-                                                                std::string_view default_type,
-                                                                std::size_t slug_max_length) {
-    const auto now = std::chrono::system_clock::now();
-    auto parsed = parse_draft_name(name, default_folder, now, slug_max_length);
-    if (!parsed)
-        return std::unexpected(parsed.error());
-    std::string type = parsed->type.empty() ? std::string(default_type) : std::move(parsed->type);
-    return store.create_exact(core::NewNote{.folder = std::move(parsed->folder),
-                                            .name = std::move(parsed->stem),
-                                            .type = std::move(type),
-                                            .content = {},
-                                            .exact_name = true},
-                              now);
 }
 
 }  // namespace noteapp::tui

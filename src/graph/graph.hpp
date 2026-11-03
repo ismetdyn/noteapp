@@ -6,6 +6,7 @@
 #include "graph/value.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -136,7 +137,8 @@ public:
     // geçer, görmeyen de sıralamada önde kalır. İlk yazmadan önce çağrılır. Toplu içe aktarma içindir: eski
     // veri, cihazın saati ne olursa olsun, kimsenin yeni yazmasını geçemez.
     Result<void> set_lowest_priority();
-    // Bu işlemin biriken işlem sayısı: çerçeve sınırına (65.536) varmadan çağıran commit edebilsin.
+    // Bu işlemin biriken işlem sayısı: çağıran işi kendi bütçesiyle işlemlere bölebilsin. Çerçeve sınırı
+    // işlemi sınırlamaz (L4b: export işlemi kayıtlara böler).
     std::size_t pending_ops() const;
     Result<void> commit();
 
@@ -197,11 +199,40 @@ struct ExportReport {
     std::uint64_t last_seq = 0;  // dosyaya giren son işlem
 };
 
+// Motorun kapasite sınırları (SPEC-graph "Sınırlar"). Uygulama değerleri config'ten alır (limits.graph.*);
+// varsayılanlar oradakilerle aynıdır. Sınırsız: SIZE_MAX (hlc_skew için milliseconds::max()).
+// Çerçeve sınırları ve peers senkronda her cihazda aynı olmalıdır: büyük değerli cihazın kaydını küçük
+// değerli cihaz bad_frame/peer_limit ile bekletir (veri kaybı yok; değer yükselince sonraki ingest sürer).
+// Çerçeve sınırları yalnız günlükteki tek kaydı sınırlar; yerel işlem ve değer onlara takılmaz (L4b).
+struct GraphLimits {
+    std::size_t frame_bytes = 64U * 1024U * 1024U;  // tek kaydın baytı; depolamanın tek değer sınırına kırpılır
+    std::size_t frame_ops = 65536;                  // kayıt başına işlem (parçalı çerçevede parça başına)
+    // Bir uzak işlemin (parçalı çerçeve grubunun) bellekte birleştirilen baytı; depolamanın tek değer sınırı
+    // ayrıca geçerlidir. Bellekte en çok bir yarım grup tutulur.
+    std::size_t group_bytes = std::size_t{1} << 30U;
+    // Bir uzak işlemin çözülen işlem sayısı. Çözülmüş işlem 104 bayttır (sizeof(Op), x86-64): 4Mi işlem
+    // ~436 MB; değer ve ad baytları ayrıca en çok group_bytes kadar. Kayıt sayısını gönderen seçtiğinden
+    // parça x frame_ops tek başına belleği sınırlamaz.
+    std::size_t group_ops = std::size_t{1} << 22U;
+    // Tanınan uzak cihaz. Çerçevenin bağımlılık (deps) sınırı bunun 4 katıdır (1024 = 4 × 256): başka
+    // cihazın tanıdığı ama bu cihazın henüz tanımadığı cihazlar için pay.
+    std::size_t peers = 256;
+    // now + bu süreden ileri HLC kendi saatine alınmaz (sıralama için yine kabul edilir).
+    std::chrono::milliseconds hlc_skew = std::chrono::hours{24};
+    std::uint64_t ingest_bytes = std::uint64_t{8} * 1024U * 1024U * 1024U;  // bir ingest'in okuduğu yeni bayt
+    std::size_t merge_owners = std::size_t{1} << 23U;        // birleşimin durum tuttuğu düğüm + kenar
+    std::size_t report_entries = 4096;                       // MergeReport'taki bad_frames ve conflicts kaydı
+    std::size_t touched_properties = std::size_t{1} << 20U;  // çakışma raporu için izlenen özellik
+    std::size_t set_aside_logs = 3;                          // tutulan kenara alınmış yerel günlük kopyası
+
+    bool operator==(const GraphLimits&) const = default;
+};
+
 // Thread-safe değildir: her thread kendi Graph'ını açar. Süreçler aynı dosyayı birlikte kullanabilir.
 class Graph {
 public:
     // Dosya yoksa kurar. Daha yeni şema TooNew, yabancı dosya Corrupt döner; reddedilen dosyaya yazılmaz.
-    static Result<Graph> open(const std::filesystem::path& path);
+    static Result<Graph> open(const std::filesystem::path& path, const GraphLimits& limits = {});
 
     Graph(Graph&&) noexcept;
     Graph& operator=(Graph&&) noexcept;
@@ -229,6 +260,12 @@ public:
     Result<std::uint64_t> data_version();
     // Bu cihazın son işlem numarası; 0: hiç yazmadı.
     Result<std::uint64_t> last_seq();
+    // Etkin kayıt sınırı: limits.frame_bytes ile depolamanın tek değer sınırının küçüğü. Toplu yazanların
+    // işlem başına bayt payı bundan türer (SPEC-graph "Toplu yazanlar").
+    std::size_t max_frame_bytes() const;
+    // Depolamanın tek değer sınırı: bir değer ve bir işlemin kodlu toplamı buna sığmalıdır; aşan yazma
+    // LimitExceeded döner. Çerçeve sınırından bağımsızdır.
+    std::size_t max_stored_bytes() const;
 
 private:
     explicit Graph(std::unique_ptr<detail::Store> store);
@@ -236,7 +273,9 @@ private:
 };
 
 // Sorguyu çalıştırmadan ayrıştırır ve planlar: sözdizimi, eksik parametre ve salt-okunur ihlali query()'yle
-// aynı hatayı verir. Depo gerekmez; saklanıp sonra çalıştırılacak sorgunun kayıttaki denetimidir.
-Result<void> check_query(std::string_view cypher, QueryMode mode, const Params& params = {});
+// aynı hatayı verir. Depo gerekmez; saklanıp sonra çalıştırılacak sorgunun kayıttaki denetimidir. `limits`
+// çalıştırılacağı profilinkidir (görünümde limits.view.*).
+Result<void> check_query(std::string_view cypher, QueryMode mode, const Params& params = {},
+                         const QueryLimits& limits = {});
 
 }  // namespace noteapp::graph

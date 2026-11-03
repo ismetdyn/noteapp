@@ -9,13 +9,12 @@
 
 namespace noteapp::sync {
 
-// git_merge_file yazma kilidi altında koşar ve uygulama sınırı yoktur. Üstü çakışma kopyasına düşer. Temiz
-// birleşimin çıktısı girdileri aşmaz, çerçeve sınırına (64 MiB) sığar: aynı birleşme her senkronda yeniden
-// denenmez.
-constexpr std::size_t kMaxMergeInputBytes = std::size_t{4} * 1024U * 1024U;
-
-std::optional<std::string> merge_text(std::string_view base, std::string_view ours, std::string_view theirs) {
-    if (std::max({base.size(), ours.size(), theirs.size()}) > kMaxMergeInputBytes)
+// git_merge_file yazma kilidi altında koşar ve kendi sınırı yoktur; süresi girdi boyu ve fark sayısıyla
+// büyür. Sınır config'tedir (limits.sync.merge_input_bytes): üstü çakışma kopyasına düşer, içerik kaybolmaz.
+// Temiz birleşimin çıktısı yazılır, aynı birleşme her senkronda yeniden denenmez.
+std::optional<std::string> merge_text(std::string_view base, std::string_view ours, std::string_view theirs,
+                                      std::size_t max_input_bytes) {
+    if (std::max({base.size(), ours.size(), theirs.size()}) > max_input_bytes)
         return std::nullopt;
     git_merge_file_input inputs[3];
     const std::string_view texts[3] = {base, ours, theirs};

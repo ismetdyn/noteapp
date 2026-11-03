@@ -2,6 +2,7 @@
 #include "support/note_seed.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <fstream>
@@ -38,7 +39,7 @@ struct TempDir {
 struct Fixture {
     TempDir dir;
     core::NoteStore store{dir.path};
-    ContentIndex index{store, 1024 * 1024};
+    ContentIndex index{store, 1024 * 1024, 3};
 };
 
 std::vector<ContentResult> find(Fixture& f, std::string_view q, std::size_t limit = 50) {
@@ -160,6 +161,19 @@ TEST_CASE("content: only the first three hit lines are returned but all are coun
     CHECK(r[0].first_hits.size() == 3);
 }
 
+// L3: satır sayısı limits.search.content_hits'tir; sınırsızda (0 -> SIZE_MAX) her eşleşen satır gelir.
+TEST_CASE("content: an unlimited hit count returns every hit line") {
+    TempDir dir;
+    core::NoteStore store{dir.path};
+    dir.write("a.md", "x\nx\nx\nx\nx\n");
+    ContentIndex index{store, 1024 * 1024, SIZE_MAX};
+    index.refresh();
+    const auto r = index.search("x", 10);
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].first_hits.size() == 5);
+    CHECK(r[0].first_hits.back().line == 5);
+}
+
 TEST_CASE("content: results ordered by hit count, then mtime, then path; limit applied") {
     Fixture f;
     const auto base = std::chrono::system_clock::now();
@@ -182,7 +196,7 @@ TEST_CASE("content: binary and oversize notes are skipped") {
     dir.write("text.md", "hedef\n");
     dir.write("bin.md", std::string("hedef\0hedef", 11));
     dir.write("big.md", "hedef " + std::string(100, 'a'));
-    ContentIndex index{store, 50};
+    ContentIndex index{store, 50, 3};
     index.refresh();
     auto r = index.search("hedef", 10);
     REQUIRE(r.size() == 1);

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "tui/editor_session.hpp"
-#include "tui/spellcheck.hpp"
+#include "edit/editor_session.hpp"
+#include "edit/spellcheck.hpp"
 
 #include <cstddef>
 #include <ftxui/dom/elements.hpp>
@@ -25,6 +25,7 @@ struct RowPaint {
     std::string_view ghost = {};                       // satır sonundaki imlecin ardında soluk öneri
     int columns = 0;                                   // gölgenin kırpılacağı genişlik
     std::span<const DiagnosticMark> diagnostics = {};  // dil sunucusu tanısı: önem rengiyle alt çizgi
+    std::span<const ByteRange> dimmed = {};            // soluk (REVIEW: hedefi olmayan [[bağlantı]])
 };
 ftxui::Element paint_row(const EditorBuffer& buffer, const VisualRow& row, const RowPaint& paint);
 // Sözdizimi türünün renk ve biçimi; REVIEW'un biçimli görünümü de aynı paleti kullanır.

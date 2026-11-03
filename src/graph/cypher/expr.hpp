@@ -17,8 +17,6 @@
 
 namespace noteapp::graph::detail::cypher {
 
-inline constexpr int kMaxValueDepth = 64;
-
 Result<QueryValue> eval(const Expr& expr, const Row& row, ExecContext& context);
 // WHERE kuralı: yalnız `true` geçer; null ve tip uyuşmazlığı geçmez.
 Result<bool> eval_predicate(const Expr& expr, const Row& row, ExecContext& context);

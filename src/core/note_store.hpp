@@ -69,6 +69,9 @@ struct TrashItem {
     std::uintmax_t size{};
     std::optional<std::filesystem::file_time_type> created_at = std::nullopt;
     std::optional<std::string> origin = std::nullopt;
+    // Notun düğüm kimliği (hex): aynı çöp yoluna sonradan gelen başka nottan ayırır. trashed_at ms
+    // çözünürlüğündedir, aynı milisaniyede atılan iki not onunla ayrılamaz.
+    std::string id = {};
 };
 
 // İlk 8 KB'ta NUL baytı varsa ikili: önizleme/arama/düzenleme yapılmaz. Notu zaten okuyan yer (önizleme,
@@ -140,6 +143,11 @@ struct NoteEdge {
     auto operator<=>(const NoteEdge&) const = default;
 };
 
+// `[[` ile `]]` arasındaki ham metnin çözüm anahtarı: "|takma ad" ve "#başlık" atılır, kenar boşlukları
+// kırpılır. Satır sonlu hedef bağlantı değildir: boş döner. Uzunluk sınırı yok (L3). NoteLinks::missing bu
+// anahtarları taşır.
+std::string_view link_target(std::string_view raw);
+
 // Panelin düz satırları: TUI ve GUI aynı sırada çizer (gelen, giden, ilişkili, eksik). Boş grubun satırı yok.
 enum class LinkGroup { Incoming, Outgoing, Related, Missing };
 struct LinkLine {
@@ -155,8 +163,8 @@ std::string link_text(const NoteLinks& links, const LinkLine& line);
 // Başlığın katalog anahtarı, {count} alır.
 std::string_view link_group_key(LinkGroup group);
 
-// Veride duran ama güvenli yola çıkamayan not: adı geçersiz, klasörü geçersiz ya da çok derin, ad çakışması
-// sınırda.
+// Veride duran ama güvenli yola çıkamayan not: adı geçersiz, klasörü geçersiz ya da yolu sınırdan uzun, ekli
+// adı dosya adı sınırını aşıyor.
 struct UnreachableNote {
     std::string id;      // 32 küçük hex
     std::string name;    // ham ad; terminale temizlenmeden yazılmaz

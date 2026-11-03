@@ -23,6 +23,8 @@ namespace noteapp::graph::detail {
 enum class StatementId : std::size_t {
     MetaGet,
     MetaPut,
+    MetaKeysInRange,
+    MetaDelete,
     NodeGet,
     NodePut,
     NodeDelete,
@@ -90,10 +92,12 @@ private:
     friend class Store;
     Statement(Store& store, StatementId id, sqlite3_stmt* handle);
     void release() noexcept;
+    void note_bind(int code);
 
     Store* store_;
     StatementId id_;
     sqlite3_stmt* handle_;
+    int bind_error_ = 0;  // SQLITE_OK; ilk bağlama hatası
 };
 
 // Bir çerçevenin uygulanma bağlamı: kim yazdı, hangi HLC'yle, neleri görmüştü.
@@ -116,7 +120,8 @@ struct ApplyContext {
 
 class Store {
 public:
-    static Result<std::unique_ptr<Store>> open(const std::filesystem::path& path);
+    static Result<std::unique_ptr<Store>> open(const std::filesystem::path& path,
+                                               const GraphLimits& limits = {});
     ~Store();
     Store(const Store&) = delete;
     Store& operator=(const Store&) = delete;
@@ -146,8 +151,8 @@ public:
     // Yeniden kurma batch'ler arasında ertelenir; çökmede sonraki ingest onu tamamlar.
     Result<bool> rebuild_pending();
     Result<void> set_rebuild_pending(bool pending);
-    // Uzak HLC'yi yerel saate katar: görülen yazmanın üstüne yazan, onu HLC'de de geçsin. now+24h ötesi
-    // alınmaz.
+    // Uzak HLC'yi yerel saate katar: görülen yazmanın üstüne yazan, onu HLC'de de geçsin. now +
+    // limits().hlc_skew ötesi alınmaz.
     Result<void> observe_hlc(std::uint64_t hlc);
     // Toplu ingest için NORMAL, sonra FULL. İşlem dışında çağrılır: SQLite işlem içinde reddeder.
     Result<void> set_bulk_sync(bool enabled);
@@ -171,6 +176,13 @@ public:
     Result<void> set_lowest_priority();
     std::size_t pending_ops() const { return frame_.ops.size(); }
     const DeviceId& device() const { return device_; }
+    // Açılışta verilen sınırlar (config limits.graph.*).
+    const GraphLimits& limits() const { return limits_; }
+    // Tek değerin depolama sınırı (SQLITE_LIMIT_LENGTH, çalışırken sorulur): ops satırı, büyük değer ve
+    // birleştirilen uzak grup buna sığmalıdır.
+    std::size_t max_blob_bytes() const;
+    // Bu cihazın kayıt sınırı: config'teki çerçeve sınırları, bayt sınırı max_blob_bytes'a kırpılır.
+    FrameLimits frame_limits() const;
     std::int64_t last_insert_id() const;
     // Yalnız bağlantı ayarlarını sınayan test içindir.
     sqlite3* connection_for_test() const { return db_; }
@@ -179,7 +191,7 @@ private:
     friend class Statement;
     enum class TxnKind { None, Read, Write };
 
-    explicit Store(sqlite3* db);
+    Store(sqlite3* db, const GraphLimits& limits);
     Result<sqlite3_stmt*> prepare(StatementId id);
     void give_back(StatementId id, sqlite3_stmt* handle) noexcept;
     Result<void> configure();
@@ -196,6 +208,7 @@ private:
     std::vector<std::vector<sqlite3_stmt*>> pool_;
     std::vector<std::size_t> created_;
     DeviceId device_{};
+    GraphLimits limits_;
     TxnKind txn_ = TxnKind::None;
     bool poisoned_ = false;
     bool low_priority_ = false;

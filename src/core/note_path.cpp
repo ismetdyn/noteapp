@@ -10,7 +10,6 @@ namespace noteapp::core {
 
 namespace {
 
-constexpr std::size_t kMaxComponentBytes = 255;  // NTFS/ext4 ortak bileşen sınırı
 constexpr std::string_view kReservedChars = "<>:\"|?*";
 constexpr std::array<std::string_view, 4> kReservedDevices = {"CON", "PRN", "AUX", "NUL"};
 constexpr std::array<std::string_view, 3> kSuperscriptDigits = {"\xC2\xB9", "\xC2\xB2", "\xC2\xB3"};  // ¹ ² ³
@@ -73,7 +72,7 @@ std::string_view component_violation(std::string_view component) {
         return "trailing_space";
     if (component.back() == '.')
         return "trailing_dot";
-    if (component.size() > kMaxComponentBytes)
+    if (component.size() > kMaxFileNameBytes)
         return "too_long";
     return {};
 }

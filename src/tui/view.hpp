@@ -2,12 +2,12 @@
 
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
+#include "edit/spellcheck.hpp"
+#include "edit/syntax.hpp"
 #include "tui/markdown_view.hpp"
 #include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
 #include "tui/settings.hpp"
-#include "tui/spellcheck.hpp"
-#include "tui/syntax.hpp"
 #include "tui/tui_state.hpp"
 
 #include <chrono>
@@ -44,7 +44,8 @@ struct Preview {
     bool spell_checked = false;            // md/txt: yazım denetimi altı çizer
     std::string error;                     // Kind::Error: çevrilmiş hata metni
     SyntaxLanguage language = SyntaxLanguage::Plain;
-    mutable SyntaxStateCache syntax;      // yalnız görünen satıra dek tembel dolar; metin değişmez
+    mutable SyntaxStateCache syntax;  // yalnız görünen satıra dek tembel dolar; metin değişmez
+    std::size_t highlight_line_bytes = kDefaultHighlightLineBytes;  // limits.tui.highlight_line_bytes
     ViewKind view_kind = ViewKind::None;  // md/csv/json: `R` ham ve biçimli görünüm arasında geçer
     // Biçimli görünümde `lines`/`text` görüntülenen metindir (seçim onu kopyalar, arama onda çalışır);
     // satırlar zaten panele sığar. `styled` ve `source_lines` `lines` ile paraleldir.
@@ -58,6 +59,10 @@ struct Preview {
 // invalidate() çağrılır.
 class PreviewCache {
 public:
+    // `view`: biçimli görünümün sınırları; `syntax`: ham önizlemenin renklendirmesi (limits.tui.*).
+    explicit PreviewCache(ViewLimits view = {}, SyntaxLimits syntax = {})
+        : view_limits_(view), syntax_limits_(syntax) {}
+
     const Preview& get(const core::NoteStore& store, const Row* row);
     // Çöpteki notun içeriği; önbellekte canlı ağaçtaki aynı adlı notla karışmaz.
     const Preview& get_trashed(const core::NoteStore& store, const Row* row);
@@ -93,6 +98,8 @@ private:
     bool update_rendered(bool wanted, int width, std::chrono::steady_clock::time_point now);
     void build_rendered(int width);
 
+    ViewLimits view_limits_;
+    SyntaxLimits syntax_limits_;
     std::optional<core::NotePath> path_;
     bool from_trash_ = false;
     std::optional<core::NotePath> requested_;

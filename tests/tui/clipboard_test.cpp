@@ -1,9 +1,9 @@
 #include "core/i18n.hpp"
 #include "core/note_store.hpp"
+#include "edit/clipboard.hpp"
+#include "edit/editor_session.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
-#include "tui/clipboard.hpp"
-#include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/mouse.hpp"
@@ -207,6 +207,17 @@ TEST_CASE("clipboard: binary, invalid UTF-8 and oversized paste are refused with
     CHECK(clipboard.paste().status == Paste::Binary);
     env.fake("wl-paste", "/usr/bin/head -c 40000000 /dev/zero");
     CHECK(clipboard.paste().status == Paste::TooLarge);
+    CHECK(tui::choose_paste(clipboard, "ic").message.find("limits.tui.paste_bytes") != std::string::npos);
+}
+
+TEST_CASE("clipboard: a paste over the old 32 MiB limit goes through when limits.tui.paste_bytes is 0") {
+    ToolEnv env;
+    env.wayland.set("wayland-1");
+    env.fake("wl-paste", "/usr/bin/head -c 40000000 /dev/zero | /usr/bin/tr '\\000' a");
+    tui::SystemClipboard clipboard(env.terminal.writer(), tui::SystemClipboard::kToolTimeout, SIZE_MAX);
+    const auto pasted = clipboard.paste();
+    CHECK(pasted.status == Paste::Text);
+    CHECK(pasted.text.size() == 40000000U);
 }
 
 TEST_CASE("clipboard: a failing or hung paste tool falls back to the internal clipboard") {

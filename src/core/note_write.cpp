@@ -23,11 +23,7 @@ using graph::NodeId;
 
 namespace {
 
-constexpr std::size_t kMaxLinksPerNote =
-    1024;  // işlem başına op sınırına düşmesin; fazlası bağlantısız kalır
-constexpr std::size_t kMaxLinkTargetBytes = 512;
-constexpr unsigned kHlcCounterBits = 16;  // hlc = ms << 16 | sayaç (SPEC-graph, tasarım)
-constexpr std::size_t kMaxFileNameBytes = 255;
+constexpr unsigned kHlcCounterBits = 16;        // hlc = ms << 16 | sayaç (SPEC-graph, tasarım)
 constexpr std::size_t kMaxExtensionBytes = 32;  // bundan uzunu uzantı sayılmaz: damgayı sığdırmak gerekir
 
 std::int64_t to_ms(std::chrono::system_clock::time_point when) {
@@ -80,7 +76,7 @@ std::string text_value(const std::optional<graph::Value>& value) {
 }  // namespace
 
 std::string_view link_target(std::string_view raw) {
-    if (raw.size() > kMaxLinkTargetBytes || raw.find('\n') != std::string_view::npos)
+    if (raw.find('\n') != std::string_view::npos)
         return {};
     std::string_view target = raw.substr(0, raw.find('|'));
     target = target.substr(0, target.find('#'));
@@ -94,7 +90,7 @@ std::string_view link_target(std::string_view raw) {
 std::vector<std::string> scan_links(std::string_view body) {
     std::vector<std::string> links;
     std::size_t at = 0;
-    while (links.size() < kMaxLinksPerNote) {
+    while (true) {
         const auto open = body.find("[[", at);
         if (open == std::string_view::npos)
             break;
@@ -198,7 +194,9 @@ std::set<NodeId> resolved_targets(const std::vector<std::string>& targets, const
 
 }  // namespace
 
-// Kaydın kenarları kaydın görüntüsüyle çözülür. Sonradan oluşan hedefi link_appeared bağlar.
+// Kaydın kenarları kaydın görüntüsüyle çözülür. Sonradan oluşan hedefi link_appeared bağlar. Not başına
+// tavan yok: bütçeye sığmayan kenarlar unfinished ile sonraki işlemlere kalır, yinelenen çağrı yapılmışı
+// atlar.
 std::expected<void, Error> WriteContext::update_links(const NodeId& id, std::string_view path,
                                                       std::string_view body) {
     const std::vector<std::string> targets = body_links(body);
@@ -211,10 +209,15 @@ std::expected<void, Error> WriteContext::update_links(const NodeId& id, std::str
     for (const auto& [edge, node] : *existing) {
         if (wanted.erase(node) > 0)
             continue;
+        if (over_budget())
+            return leave_unfinished(id);
         NOTEAPP_TRY_GRAPH(txn.delete_edge(edge), path);
     }
-    for (const NodeId& target : wanted)
+    for (const NodeId& target : wanted) {
+        if (over_budget())
+            return leave_unfinished(id);
         NOTEAPP_TRY(put_link(id, target, path));
+    }
     return {};
 }
 
@@ -230,9 +233,27 @@ std::expected<void, Error> WriteContext::add_missing_links(const NodeId& id, std
         return std::unexpected(existing.error());
     for (const auto& [edge, node] : *existing)
         wanted.erase(node);
-    for (const NodeId& target : wanted)
+    for (const NodeId& target : wanted) {
+        if (over_budget()) {
+            defer(id);
+            return {};
+        }
         NOTEAPP_TRY(put_link(id, target, path));
+    }
     return {};
+}
+
+std::expected<void, Error> WriteContext::leave_unfinished(const NodeId& id) {
+    if (std::ranges::find(unfinished, id) == unfinished.end())
+        unfinished.push_back(id);
+    derived_incomplete = true;
+    return {};
+}
+
+void WriteContext::defer(const NodeId& id) {
+    if (std::ranges::find(deferred, id) == deferred.end())
+        deferred.push_back(id);
+    derived_incomplete = true;
 }
 
 // Kimlik uçlardan türer: iki cihazın aynı kenarı tek kenardır. Var olan kenar yeniden yazılmaz (işlem
@@ -282,7 +303,7 @@ std::expected<void, Error> WriteContext::link_appeared(const std::array<std::byt
         !notes_linking(snapshot, keys).empty();
     if (!candidate)
         return {};
-    auto after = build_snapshot(txn, device);
+    auto after = build_snapshot(txn, device, snapshot.folder_path_bytes);
     if (!after)
         return std::unexpected(from_graph(after.error(), paths.front()));
     paths.clear();
@@ -293,7 +314,7 @@ std::expected<void, Error> WriteContext::link_appeared(const std::array<std::byt
     const LinkIndex& index = link_index_of(*after);
     for (const NodeId& source : linking) {
         if (over_budget()) {  // kalan kaynaklar commit'ten sonra ayrı işlemlerde (write_locked)
-            deferred.push_back(source);
+            defer(source);
             continue;
         }
         const auto path = note_path_in(*after, source);
@@ -305,7 +326,6 @@ std::expected<void, Error> WriteContext::link_appeared(const std::array<std::byt
         if (const graph::Bytes* bytes = std::get_if<graph::Bytes>(&*body))
             NOTEAPP_TRY(add_missing_links(source, *path, bytes->data, index));
     }
-    derived_incomplete = derived_incomplete || !deferred.empty();
     return {};
 }
 
@@ -357,7 +377,7 @@ std::expected<std::optional<NodeId>, Error> WriteContext::ensure_folder(std::str
     std::optional<NodeId> parent;
     if (path.empty())
         return parent;
-    if (!folder_path_within_limits(path))
+    if (!folder_path_within_limits(path, snapshot.folder_path_bytes))
         return std::unexpected(invalid_path("invalid_folder", path));
     std::size_t at = 0;
     while (at <= path.size()) {
@@ -718,7 +738,8 @@ std::expected<std::int64_t, Error> WriteContext::version_time(const NodeId& id,
 
 namespace {
 
-// Taban aramasının bütçesi (deterministik: her cihaz aynı yerde durur, aşımda kopya).
+// Taban aramasının bütçesi (deterministik: her cihaz aynı yerde durur, aşımda kopya). Protokol sabitidir,
+// config değildir (L4): cihaz başına farklı olsa bir cihaz birleştirir, öteki kopya kurardı.
 constexpr std::size_t kMaxBaseWalkWrites = 4096;
 constexpr std::uint64_t kMaxBaseWalkBytes = std::uint64_t{256} * 1024U * 1024U;
 constexpr std::size_t kDotBytes = 24;

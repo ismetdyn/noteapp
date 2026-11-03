@@ -174,7 +174,7 @@ TEST_CASE("gui links: hostile names draw as text, thousands of rows draw only th
         body += "[[kayıp-" + std::to_string(i) + "]] ";
     scene.fixture.add_note("a.md", body);
     scene.open();
-    CHECK(scene.state->links().missing.size() == 1024);  // yazma kuralının sınırı
+    CHECK(scene.state->links().missing.size() == 3001);  // not başına tavan yok (L3): hepsi tutulur
     int drawn = 0;
     for (const auto& [name, rect] : scene.view->item_rects())
         drawn += name.starts_with("link_missing:") ? 1 : 0;

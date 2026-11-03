@@ -1,14 +1,14 @@
 // T52: tuş başına gecikme (SPEC.md §10/3: 50 ms) ve boyut sınırının ölçüm gerekçesi.
 // `perf_tests -tc="editor latency*" -s` ölçümü yazdırır.
 #include "core/i18n.hpp"
+#include "edit/completion.hpp"
+#include "edit/editor_session.hpp"
+#include "edit/language_servers.hpp"
+#include "edit/spellcheck.hpp"
+#include "edit/syntax.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
-#include "tui/completion.hpp"
-#include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
-#include "tui/language_servers.hpp"
-#include "tui/spellcheck.hpp"
-#include "tui/syntax.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
 
@@ -236,7 +236,7 @@ double tokenize_ms(tui::SyntaxLanguage language, const std::string& line) {
 
 TEST_CASE("editor latency: pathological lines tokenize in linear time") {
     // Girdi 8 katına çıkınca doğrusal süre 8, karesel 64 kat olur; eşik önbellek etkisine pay bırakır.
-    constexpr std::size_t kSmall = tui::kMaxHighlightLineBytes / 8;
+    constexpr std::size_t kSmall = tui::kDefaultHighlightLineBytes / 8;
     constexpr double kLinearLimit = 24.0;
     constexpr double kNoiseFloorMs = 0.02;  // bunun altındaki süreler ölçüm gürültüsüdür
     const std::string_view units[] = {"\"", "'",  "`",  "*a ", "_a ", "**a ", "`a", "<",  "<a ",  "<!--",
@@ -247,7 +247,7 @@ TEST_CASE("editor latency: pathological lines tokenize in linear time") {
         const auto language = static_cast<tui::SyntaxLanguage>(index);
         for (const std::string_view unit : units) {
             const double small = std::max(tokenize_ms(language, repeated(unit, kSmall)), kNoiseFloorMs);
-            const double large = tokenize_ms(language, repeated(unit, tui::kMaxHighlightLineBytes));
+            const double large = tokenize_ms(language, repeated(unit, tui::kDefaultHighlightLineBytes));
             worst_ratio = std::max(worst_ratio, large / small);
             worst_large = std::max(worst_large, large);
             CHECK_MESSAGE(large <= small * kLinearLimit, "language=" << index << " unit=" << unit << " small="
@@ -265,7 +265,7 @@ TEST_CASE("editor latency: a language server stays within 50 ms per key") {
     // Sınırın hemen altında: daha büyük not sunucuya gitmez. Boşta süresi 0: her tuş tam metni gönderir (en
     // kötü durum); tanılar her karede güncel tampona yeniden kısılır.
     std::string content;
-    while (content.size() + 64 < tui::kMaxLspNoteBytes)
+    while (content.size() + 64 < tui::kDefaultLspNoteBytes)
         content += "def handler(event, context):\n    return {'status': 200, 'body': 'ok'}\n";
     const test::TempDir dir;
     test::upsert_note(dir.path(), "big.py", content);

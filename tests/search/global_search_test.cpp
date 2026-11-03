@@ -1,10 +1,13 @@
 // Genel arama (T55a): ad + içerik birlikte, sorgu argümanlarıyla.
+#include "core/config.hpp"
 #include "search/global_search.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 
+#include <cstdint>
 #include <doctest/doctest.h>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,11 +20,18 @@ namespace {
 
 using Paths = std::vector<std::string>;
 
+core::SearchLimits limits_with(std::optional<std::uint64_t> results) {
+    core::SearchLimits limits = core::parse_config("").config.limits.search;
+    if (results)
+        limits.global_results = core::Limit{*results, std::to_string(*results)};
+    return limits;
+}
+
 // Geçici not klasörü + güncel indeks + üst veri.
 struct World {
     TempDir dir;
     core::NoteStore store{dir.path()};
-    ContentIndex index{store, 1024 * 1024};
+    ContentIndex index{store, 1024 * 1024, 3};
     std::vector<core::NoteMeta> notes;
 
     void note(std::string_view path, std::string_view content) {
@@ -33,14 +43,15 @@ struct World {
         notes = store.list_meta();
     }
 
-    std::vector<GlobalHit> search(std::string_view query, std::size_t limit = kGlobalSearchLimit) {
+    // limit verilmezse limits.search.global_results'ın varsayılanı (defaults.toml).
+    std::vector<GlobalHit> search(std::string_view query, std::optional<std::uint64_t> limit = std::nullopt) {
         refresh();
-        auto hits = search_all(query, notes, index, limit);
+        auto hits = search_all(query, notes, index, limits_with(limit));
         REQUIRE(hits.has_value());
         return *hits;
     }
 
-    Paths paths(std::string_view query, std::size_t limit = kGlobalSearchLimit) {
+    Paths paths(std::string_view query, std::optional<std::uint64_t> limit = std::nullopt) {
         Paths result;
         for (const GlobalHit& hit : search(query, limit))
             result.push_back(hit.path.string());
@@ -54,6 +65,17 @@ const GlobalHit& only(const std::vector<GlobalHit>& hits) {
 }
 
 }  // namespace
+
+// L3: sonuç sayısı limits.search.global_results'tır; 0 hepsini verir (eski 200 tavanı yok).
+TEST_CASE("global results follow limits.search.global_results and 0 returns every match") {
+    World w;
+    constexpr std::size_t kNotes = 250;
+    for (std::size_t i = 0; i < kNotes; ++i)
+        w.note("plan" + std::to_string(i) + ".md", "x");
+    CHECK(w.search("plan").size() == 200);
+    CHECK(w.search("plan", 7).size() == 7);
+    CHECK(w.search("plan", 0).size() == kNotes);
+}
 
 TEST_CASE("a name match carries its positions in the path and no content") {
     World w;
@@ -145,7 +167,7 @@ TEST_CASE("content hits still appear when strong name matches exceed the limit")
     // Az içerik sonucu varsa ayrılan yer boşa gitmez; hiç yoksa limit adlarla dolar.
     CHECK(w.search("plan", 100).size() == 31);
     CHECK(w.search("plan-", 8).size() == 8);
-    CHECK(w.search("plan", 0).empty());
+    CHECK(w.search("plan", 0).size() == 31);  // limits.search.global_results = 0: sınırsız (L3)
     CHECK(w.search("plan", 1).size() == 1);
 }
 
@@ -220,7 +242,7 @@ TEST_CASE("an invalid argument comes back as a located error") {
     World w;
     w.note("a.md", "x");
     w.refresh();
-    const auto result = search_all("plan size:abc", w.notes, w.index);
+    const auto result = search_all("plan size:abc", w.notes, w.index, limits_with(std::nullopt));
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().begin == 10);
     CHECK(result.error().end == 13);
@@ -245,7 +267,7 @@ TEST_CASE("binary notes, trashed notes and notes outside the given list are not 
     // İndeksten daha eski bir notes listesi: listede olmayan not dönmez.
     w.note("yeni.md", "plan\n");
     w.index.refresh();
-    const auto result = search_all("plan", w.notes, w.index);
+    const auto result = search_all("plan", w.notes, w.index, limits_with(std::nullopt));
     REQUIRE(result.has_value());
     CHECK(only(*result).path.string() == "canli.md");
 }

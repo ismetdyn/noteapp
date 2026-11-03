@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -41,6 +42,8 @@ struct StatementEntry {
 constexpr StatementEntry kStatements[] = {
     {StatementId::MetaGet, "SELECT v FROM meta WHERE k=?1"},
     {StatementId::MetaPut, "INSERT OR REPLACE INTO meta(k, v) VALUES (?1, ?2)"},
+    {StatementId::MetaKeysInRange, "SELECT k FROM meta WHERE k>=?1 AND k<?2 ORDER BY k"},
+    {StatementId::MetaDelete, "DELETE FROM meta WHERE k=?1"},
     {StatementId::NodeGet, "SELECT dots FROM nodes WHERE id=?1"},
     {StatementId::NodePut, "INSERT OR REPLACE INTO nodes(id, dots) VALUES (?1, ?2)"},
     {StatementId::NodeDelete, "DELETE FROM nodes WHERE id=?1"},
@@ -136,8 +139,6 @@ constexpr std::string_view kMetaHlc = "hlc";
 constexpr std::string_view kMetaRebuildPending = "rebuild_pending";
 constexpr unsigned kHlcCounterBits = 16;
 constexpr std::uint64_t kLowestHlc = 1;  // 0 "head yok" karşılaştırmasıyla karışmasın
-// Tasarım: now+24h ötesi HLC kendi saatine alınmaz. Sıralama için yine kabul edilir.
-constexpr std::uint64_t kMaxHlcSkew = std::uint64_t{24 * 60 * 60 * 1000} << kHlcCounterBits;
 
 Error corrupt(std::string reason) {
     return Error{Error::Code::Corrupt, "graph.corrupt", {{"reason", std::move(reason)}}};
@@ -631,6 +632,15 @@ std::uint64_t now_hlc() {
     return static_cast<std::uint64_t>(std::max<std::int64_t>(unix_ms, 0)) << kHlcCounterBits;
 }
 
+// Tasarım: now + sapma ötesi HLC kendi saatine alınmaz, sıralama için yine kabul edilir. Sapma config'tedir
+// (limits.graph.hlc_skew); taşacak kadar büyük ya da sınırsız sapmada her HLC alınır.
+bool beyond_skew(std::uint64_t hlc, std::uint64_t now, std::chrono::milliseconds skew) {
+    const auto skew_ms = static_cast<std::uint64_t>(std::max<std::int64_t>(skew.count(), 0));
+    if (skew_ms > (UINT64_MAX - now) >> kHlcCounterBits)
+        return false;
+    return hlc > now + (skew_ms << kHlcCounterBits);
+}
+
 }  // namespace
 
 std::vector<std::string_view> statement_texts() {
@@ -647,6 +657,8 @@ Error storage_error(int code, std::string_view where) {
         mapped = Error::Code::Busy;
     else if (primary == SQLITE_CORRUPT || primary == SQLITE_NOTADB)
         mapped = Error::Code::Corrupt;
+    else if (primary == SQLITE_TOOBIG)  // değer ya da işlem depolamanın tek değer sınırını aşıyor
+        mapped = Error::Code::LimitExceeded;
     return Error{
         mapped, "graph.storage_error", {{"where", std::string(where)}, {"code", sqlite3_errstr(code)}}};
 }
@@ -655,7 +667,8 @@ Statement::Statement(Store& store, StatementId id, sqlite3_stmt* handle)
     : store_(&store), id_(id), handle_(handle) {}
 
 Statement::Statement(Statement&& other) noexcept
-    : store_(other.store_), id_(other.id_), handle_(std::exchange(other.handle_, nullptr)) {}
+    : store_(other.store_), id_(other.id_), handle_(std::exchange(other.handle_, nullptr)),
+      bind_error_(other.bind_error_) {}
 
 Statement& Statement::operator=(Statement&& other) noexcept {
     if (this != &other) {
@@ -663,6 +676,7 @@ Statement& Statement::operator=(Statement&& other) noexcept {
         store_ = other.store_;
         id_ = other.id_;
         handle_ = std::exchange(other.handle_, nullptr);
+        bind_error_ = other.bind_error_;
     }
     return *this;
 }
@@ -676,27 +690,46 @@ void Statement::release() noexcept {
         store_->give_back(id_, std::exchange(handle_, nullptr));
 }
 
+// Bağlama hatası (SQLITE_TOOBIG: değer SQLITE_LIMIT_LENGTH'i aşar) yutulursa parametre NULL kalır ve
+// sessizce yanlış yazılırdı: ilk hata saklanır, step onu döner. int'e sığmayan boy bağlanmadan reddedilir.
+static_assert(SQLITE_OK == 0, "Statement::bind_error_ başlangıcı SQLITE_OK'tur");
+
+void Statement::note_bind(int code) {
+    if (bind_error_ == SQLITE_OK)
+        bind_error_ = code;
+}
+
 // Boş span'ın data()'sı null olabilir; null işaretçi SQL NULL bağlar, boş BLOB değil.
 Statement& Statement::bind_blob(int index, std::span<const std::byte> blob) {
     static constexpr char kEmpty = 0;
+    if (blob.size() > static_cast<std::size_t>(INT_MAX)) {
+        note_bind(SQLITE_TOOBIG);
+        return *this;
+    }
     const void* data = blob.empty() ? static_cast<const void*>(&kEmpty) : blob.data();
-    sqlite3_bind_blob(handle_, index, data, static_cast<int>(blob.size()), SQLITE_STATIC);
+    note_bind(sqlite3_bind_blob(handle_, index, data, static_cast<int>(blob.size()), SQLITE_STATIC));
     return *this;
 }
 
 Statement& Statement::bind_text(int index, std::string_view text) {
     static constexpr char kEmpty = 0;
+    if (text.size() > static_cast<std::size_t>(INT_MAX)) {
+        note_bind(SQLITE_TOOBIG);
+        return *this;
+    }
     const char* data = text.empty() ? &kEmpty : text.data();
-    sqlite3_bind_text(handle_, index, data, static_cast<int>(text.size()), SQLITE_STATIC);
+    note_bind(sqlite3_bind_text(handle_, index, data, static_cast<int>(text.size()), SQLITE_STATIC));
     return *this;
 }
 
 Statement& Statement::bind_int(int index, std::int64_t value) {
-    sqlite3_bind_int64(handle_, index, value);
+    note_bind(sqlite3_bind_int64(handle_, index, value));
     return *this;
 }
 
 Result<bool> Statement::step() {
+    if (bind_error_ != SQLITE_OK)
+        return std::unexpected(storage_error(bind_error_, "bind"));
     const int code = sqlite3_step(handle_);
     if (code == SQLITE_ROW)
         return true;
@@ -736,9 +769,19 @@ bool CausalContext::covers(const Dot& dot) const {
         seen_, [&](const Dot& known) { return known.dev == dot.dev && dot.seq <= known.seq; });
 }
 
-Store::Store(sqlite3* db)
+std::size_t Store::max_blob_bytes() const {
+    return static_cast<std::size_t>(std::max(sqlite3_limit(db_, SQLITE_LIMIT_LENGTH, -1), 0));
+}
+
+FrameLimits Store::frame_limits() const {
+    FrameLimits limits = frame_limits_of(limits_);
+    limits.bytes = std::min(limits.bytes, max_blob_bytes());
+    return limits;
+}
+
+Store::Store(sqlite3* db, const GraphLimits& limits)
     : db_(db), pool_(static_cast<std::size_t>(StatementId::Count)),
-      created_(static_cast<std::size_t>(StatementId::Count)) {}
+      created_(static_cast<std::size_t>(StatementId::Count)), limits_(limits) {}
 
 Store::~Store() {
     end_txn();
@@ -785,7 +828,7 @@ Result<void> make_database_private([[maybe_unused]] const std::filesystem::path&
 
 }  // namespace
 
-Result<std::unique_ptr<Store>> Store::open(const std::filesystem::path& path) {
+Result<std::unique_ptr<Store>> Store::open(const std::filesystem::path& path, const GraphLimits& limits) {
     if (const Result<void> made = make_database_private(path); !made)
         return std::unexpected(made.error());
     std::unique_ptr<sqlite3, CloseDatabase> db;
@@ -794,7 +837,7 @@ Result<std::unique_ptr<Store>> Store::open(const std::filesystem::path& path) {
                                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
     // Başarısız açılış da kapatılması gereken tanıtıcı döndürür; kurucu ayırma hatası verirse db kapatır,
     // kurulunca sahiplik Store'a geçer.
-    std::unique_ptr<Store> store(new Store(db.get()));
+    std::unique_ptr<Store> store(new Store(db.get(), limits));
     (void)db.release();
     if (code != SQLITE_OK)
         return std::unexpected(storage_error(code, "open"));
@@ -1041,17 +1084,13 @@ Result<void> Store::start_frame() {
     return {};
 }
 
+// Çerçeve (kayıt) sınırı burada uygulanmaz: export işlemi kayıtlara böler (L4b). İşlemin tamamı ops satırına,
+// yani depolamanın tek değer sınırına sığmalıdır; aşarsa OpPut LimitExceeded döner.
 Result<void> Store::store_frame() {
-    if (frame_.deps.size() > kMaxDeps)
+    if (frame_.deps.size() > frame_limits().deps)
         return std::unexpected(
             Error{Error::Code::LimitExceeded, "graph.limit_exceeded", {{"limit", "deps"}}});
-    if (frame_.ops.size() > kMaxFrameOps)
-        return std::unexpected(
-            Error{Error::Code::LimitExceeded, "graph.limit_exceeded", {{"limit", "frame_ops"}}});
     const std::string encoded = encode_frame(frame_);
-    if (encoded.size() > kMaxFrameBytes)
-        return std::unexpected(
-            Error{Error::Code::LimitExceeded, "graph.limit_exceeded", {{"limit", "frame_bytes"}}});
     const Result<void> stored = run_statement(*this, StatementId::OpPut, [&](Statement& s) {
         s.bind_blob(1, device_)
             .bind_int(2, static_cast<std::int64_t>(frame_.seq))
@@ -1172,7 +1211,7 @@ Result<void> Store::set_rebuild_pending(bool pending) {
 }
 
 Result<void> Store::observe_hlc(std::uint64_t hlc) {
-    if (hlc > now_hlc() + kMaxHlcSkew)
+    if (beyond_skew(hlc, now_hlc(), limits_.hlc_skew))
         return {};
     const Result<std::optional<std::int64_t>> known = read_meta_int(*this, kMetaHlc);
     if (!known)

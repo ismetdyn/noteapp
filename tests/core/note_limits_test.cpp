@@ -1,4 +1,5 @@
 // G4b: düşmanca ya da sadece büyük veride depo durmaz; sınır aşımı raporlanır, kilitlenme ya da kayıp olmaz.
+#include "core/config.hpp"
 #include "core/file_stat.hpp"
 #include "core/migration.hpp"
 #include "core/note_store.hpp"
@@ -140,7 +141,8 @@ void check_deep_folder_chain(int depth) {
 }  // namespace
 
 // Özyineleme 60.000 derinlikte yığını taşırırdı: açılışta çöker, graph.db silinse de günlükten geri gelir.
-TEST_CASE("a very deep folder chain neither crashes nor hides shallow notes; notes too deep are reported") {
+TEST_CASE("a very deep folder chain neither crashes nor hides shallow notes; notes past the path limit are "
+          "reported") {
     check_deep_folder_chain(60000);
 }
 
@@ -149,7 +151,8 @@ TEST_CASE("a 200k CHILD_OF chain neither crashes nor hides shallow notes" * doct
     check_deep_folder_chain(200000);
 }
 
-TEST_CASE("many notes on one name take linear suffixes up to the limit; the rest are reported, not hidden") {
+// L3: kopya sayacının tavanı (1000) yok. Sayaç ad başına sürer, alınmış ad sonlu olduğundan arama biter.
+TEST_CASE("many notes on one name all take linear suffixes; none is hidden") {
     const TempDir dir;
     constexpr int kCount = 3000;
     {
@@ -158,13 +161,18 @@ TEST_CASE("many notes on one name take linear suffixes up to the limit; the rest
         REQUIRE(txn.has_value());
         for (int i = 0; i < kCount; ++i)
             raw_note(*txn, "ayni", "md", std::to_string(i));
+        raw_note(*txn, "ayni-5", "md", "önceden var");  // sayaç alınmış adı atlar
         REQUIRE(txn->commit().has_value());
     }
     NoteStore store(dir.path());
-    const auto notes = store.list();
-    CHECK(notes.size() == 1001);
-    CHECK(store.unreachable().size() == kCount - 1001);
-    CHECK(store.read(np("ayni-1001.md")).has_value());
+    CHECK(store.list().size() == kCount + 1);
+    CHECK(store.unreachable().empty());
+    CHECK(store.read(np("ayni-" + std::to_string(kCount + 1) + ".md")).has_value());
+    CHECK(store.read(np("ayni-5.md"))->text == "önceden var");
+    // Yeni not da sayaçla aynı kuralla yer bulur.
+    const auto created = store.create(NewNote{"", "ayni", "md", "yeni"});
+    REQUIRE(created.has_value());
+    CHECK(created->string() == "ayni-" + std::to_string(kCount + 2) + ".md");
 }
 
 namespace {
@@ -272,20 +280,23 @@ void check_nothing_invisible(const NoteStore& store) {
 
 }  // namespace
 
-// Görüntü bu klasörleri çözemez: başarı dönen kayıt görünmez, sonraki kayıt NotFound alıp yeni görünmez düğüm
-// üretirdi.
-TEST_CASE("a note in a folder deeper than the limit is refused and nothing invisible is created") {
+// L3: klasör derinliğinin tavanı (128) yok; yalnız yolun baytı (limits.core.folder_path_bytes) korunur.
+TEST_CASE("a note in a folder deeper than 128 levels is saved, moved and renamed like any other") {
     const TempDir dir;
     NoteStore store(dir.path());
-    check_refused(store.create(NewNote{deep_folder(129), "n", "md", "metin"}));
-    check_nothing_invisible(store);
-
-    const auto at_limit = store.create(NewNote{deep_folder(128), "n", "md", "metin"});
-    REQUIRE(at_limit.has_value());
-    CHECK(store.read(*at_limit)->text == "metin");
+    const auto deep = store.create(NewNote{deep_folder(1000), "n", "md", "metin"});
+    REQUIRE(deep.has_value());
+    CHECK(store.read(*deep)->text == "metin");
+    REQUIRE(seed_note(store, "m.md", "taşınan"));
+    REQUIRE(store.move(np("m.md"), np(deep_folder(1500) + "/m.md")).has_value());
+    REQUIRE(store.rename_folder("d", "x/d").has_value());
+    CHECK(store.read(np("x/" + deep_folder(1000) + "/n.md"))->text == "metin");
+    CHECK(store.read(np("x/" + deep_folder(1500) + "/m.md"))->text == "taşınan");
     CHECK(store.unreachable().empty());
 }
 
+// Görüntü bu klasörleri çözemez: başarı dönen kayıt görünmez, sonraki kayıt NotFound alıp yeni görünmez düğüm
+// üretirdi.
 TEST_CASE("a note under a folder path over the byte limit is refused and nothing invisible is created") {
     const TempDir dir;
     NoteStore store(dir.path());
@@ -302,60 +313,59 @@ TEST_CASE("a note under a folder path over the byte limit is refused and nothing
 TEST_CASE("create_folder and move refuse an over-limit folder; the moved note stays where it was") {
     const TempDir dir;
     NoteStore store(dir.path());
-    const auto folder = store.create_folder(deep_folder(129));
+    const auto folder = store.create_folder(long_folder(4097));
     REQUIRE_FALSE(folder.has_value());
     CHECK(has_reason(folder.error(), "invalid_folder"));
     check_nothing_invisible(store);
 
     REQUIRE(seed_note(store, "n.md", "metin"));
-    check_refused(store.move(np("n.md"), np(deep_folder(129) + "/n.md")));
     check_refused(store.move(np("n.md"), np(long_folder(4097) + "/n.md")));
     CHECK(store.read(np("n.md"))->text == "metin");
     CHECK(store.folders().empty());
     CHECK(store.unreachable().empty());
 }
 
-TEST_CASE("a folder rename that pushes a descendant over a limit is refused and changes nothing") {
+TEST_CASE("a folder rename that pushes a descendant over the byte limit is refused and changes nothing") {
     const TempDir dir;
     NoteStore store(dir.path());
-    const std::string deep_note = "top/" + deep_folder(127) + "/n.md";
-    REQUIRE(seed_note(store, deep_note, "derin"));
     const std::string long_note = "t/" + long_folder(4094) + "/m.md";
     REQUIRE(seed_note(store, long_note, "uzun"));
     REQUIRE(store.unreachable().empty());
 
-    for (const auto& [from, to] : {std::pair{"top", "x/top"}, std::pair{"t", "tt"}}) {
-        const auto renamed = store.rename_folder(from, to);
-        REQUIRE_FALSE(renamed.has_value());
-        CHECK(has_reason(renamed.error(), "invalid_folder"));
-    }
-    CHECK(store.read(np(deep_note))->text == "derin");
+    const auto renamed = store.rename_folder("t", "tt");
+    REQUIRE_FALSE(renamed.has_value());
+    CHECK(has_reason(renamed.error(), "invalid_folder"));
     CHECK(store.read(np(long_note))->text == "uzun");
     CHECK(store.unreachable().empty());
-    CHECK_FALSE(std::ranges::contains(store.folders(), std::string("x")));
+    CHECK_FALSE(std::ranges::contains(store.folders(), std::string("tt")));
 
-    // Aynı derinlikte ad değişikliği sınırı aşmaz.
-    REQUIRE(store.rename_folder("top", "pot").has_value());
-    CHECK(store.read(np("pot/" + deep_folder(127) + "/n.md"))->text == "derin");
+    // Aynı uzunlukta ad değişikliği sınırı aşmaz.
+    REQUIRE(store.rename_folder("t", "u").has_value());
+    CHECK(store.read(np("u/" + long_folder(4094) + "/m.md"))->text == "uzun");
 }
 
-TEST_CASE(
-    "migration reports an over-limit file as failed, leaves it in place and creates nothing invisible") {
+// L3: derinlik tavanı yok; geçişte klasörü sınırlayan yalnız OS'un yol sınırıdır.
+TEST_CASE("migration imports a folder deeper than 128 levels where the OS can hold its path") {
     const TempDir notes;
     const TempDir data;
     write_plain(notes.path() / "iyi.md", "iyi");
     const std::string deep = deep_folder(129) + "/derin.md";
     const fs::path deep_file = notes.path() / deep;
     write_plain(deep_file, "derin");
-    const auto covers_deep = [&](const SkippedFile& file) {
-#ifdef _WIN32
-        // MinGW _wopendir MAX_PATH'te durur (kaç düzey olduğu köke bağlı): dosya görülemez, atası raporlanır.
-        return deep.starts_with(file.path + "/") && file.reason == "unreadable_folder";
+#ifndef _WIN32
+    const auto report = migrate_legacy_notes(notes.path(), data.path());
+    REQUIRE(report.has_value());
+    CHECK(report->complete);
+    CHECK(report->imported == 2);
+    CHECK(report->failed.empty());
+    const NoteStore store(data.path());
+    CHECK(store.read(np(deep))->text == "derin");
+    CHECK(store.unreachable().empty());
 #else
-        return file.path == deep && file.reason == "invalid_folder";
-#endif
+    // MinGW _wopendir MAX_PATH'te durur (kaç düzey olduğu köke bağlı): dosya görülemez, atası raporlanır.
+    const auto covers_deep = [&](const SkippedFile& file) {
+        return deep.starts_with(file.path + "/") && file.reason == "unreadable_folder";
     };
-
     const auto stopped = migrate_legacy_notes(notes.path(), data.path());
     REQUIRE(stopped.has_value());
     CHECK_FALSE(stopped->complete);
@@ -374,6 +384,36 @@ TEST_CASE(
     CHECK(std::ranges::any_of(skipped->failed, covers_deep));
     CHECK(fs::exists(deep_file));
     CHECK(NoteStore(data.path()).unreachable().empty());
+#endif
+}
+
+// L3: klasör yolunun bayt sınırı config'tedir (limits.core.folder_path_bytes); 0 sınırsızdır.
+TEST_CASE("limits.core.folder_path_bytes sets the folder path limit and 0 lifts it") {
+    const TempDir home;
+    const noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
+    SUBCASE("smaller") {
+        const LoadedConfig loaded = parse_config("[limits.core]\nfolder_path_bytes = 100\n");
+        REQUIRE(loaded.warnings.empty());
+        NoteStore store = NoteStore::for_config(loaded.config);
+        check_refused(store.create(NewNote{long_folder(101), "n", "md", "metin"}));
+        check_nothing_invisible(store);
+        REQUIRE(store.create(NewNote{long_folder(100), "n", "md", "metin"}).has_value());
+    }
+    SUBCASE("unlimited") {
+        const LoadedConfig loaded = parse_config("[limits.core]\nfolder_path_bytes = 0\n");
+        REQUIRE(loaded.warnings.empty());
+        NoteStore store = NoteStore::for_config(loaded.config);
+        const auto created = store.create(NewNote{long_folder(20000), "n", "md", "metin"});
+        REQUIRE(created.has_value());
+        CHECK(store.read(*created)->text == "metin");
+        REQUIRE(store.rename_folder(created->string().substr(0, 200), "yeni").has_value());
+        CHECK(store.unreachable().empty());
+    }
+}
+
+// Yapılandırmasız depo (geçiş, test) defaults.toml ile aynı sınırı kullanır: tek olgu.
+TEST_CASE("an unconfigured store uses the folder path limit from defaults.toml") {
+    CHECK(parse_config("").config.limits.core.folder_path_bytes.value == kDefaultFolderPathBytes);
 }
 
 // Bayt doğrulaması düğüme bakar, yola değil: düğüm güvenli yola çıkamıyorsa dosya geçmiş sayılmaz.
@@ -456,8 +496,9 @@ TEST_CASE("two large losers of one conflict each get their own transaction: 40 M
     CHECK(std::ranges::count(sizes, std::size_t{40U << 20U}) == 3);
 }
 
-TEST_CASE("a conflict whose copy cannot fit a frame is reported and other notes still resolve") {
-    // Gövde çerçeveye ancak sığar; kopyanın ek işlemleri sınırı aşar.
+// L4b: çerçeve kopyanın sınırı değildir. Eskiden gövdesi çerçeveye ancak sığan çakışmanın kopyası sığmıyor,
+// head'ler yerinde kalıyordu; artık kopya kurulur, ikinci ingest yeni iş üretmez.
+TEST_CASE("a conflict whose copy is larger than one frame is resolved with a copy") {
     const std::size_t near_limit = (std::size_t{64} << 20U) - 300;
     const std::vector<std::string> bodies{std::string(near_limit, 'a'), std::string(near_limit, 'b')};
     ThreeHeads h(bodies);
@@ -465,13 +506,13 @@ TEST_CASE("a conflict whose copy cannot fit a frame is reported and other notes 
     NoteStore store(target.path());
     const auto ingested = ingest_note_logs(store, h.all_logs);
     REQUIRE_MESSAGE(ingested.has_value(), (ingested ? "" : ingested.error().message_key));
-    CHECK(ingested->unresolved.size() == 1);
-    CHECK(ingested->conflict_copies.empty());
-    CHECK(store.list().size() == 1);
-    // Kaybeden head yerinde durur: ikinci ingest yine dener, yine bildirir, durmaz.
+    CHECK(ingested->unresolved.empty());
+    CHECK(ingested->conflict_copies.size() == 1);
+    CHECK(store.list().size() == 2);
     const auto again = ingest_note_logs(store, h.all_logs);
     REQUIRE(again.has_value());
-    CHECK(again->unresolved.size() == 1);
+    CHECK(again->unresolved.empty());
+    CHECK(again->conflict_copies.empty());
 }
 
 #ifndef _WIN32

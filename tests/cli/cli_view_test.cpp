@@ -3,6 +3,7 @@
 #include "support/cli_sandbox.hpp"
 
 #include <doctest/doctest.h>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -168,4 +169,26 @@ TEST_CASE("view word is reserved, has help and a usage error") {
     CHECK(box.run({"view", "run"}).exit_code == 2);
     CHECK(box.run({"view", "ls", "--bogus"}).exit_code == 2);
     CHECK_FALSE(box.has_any_note());  // `view` metin olarak not eklemez
+}
+
+// L4: görünüm başka cihazdan gelmiş olabilir; kökeni izlenmediğinden her görünüm limits.view.* ile çalışır.
+// limits.query.* yalnız `note query`'nindir: sınırsız kullanıcı profili görünümü gevşetmez.
+TEST_CASE("views run under limits.view; the user's limits.query does not loosen them") {
+    const Sandbox box("en");
+    seed(box);
+    save_ok(box, {"all", "MATCH (n:Note) RETURN n"});
+    {
+        std::ofstream config(box.config_file(), std::ios::binary | std::ios::app);
+        config << "[limits.query]\nrows = 0\n[limits.view]\nrows = 2\n";
+    }
+    const auto ran = box.run({"view", "run", "all"});
+    CHECK(ran.exit_code != 0);
+    CHECK(contains(ran.err, "rows"));
+    const auto listed = box.run({"ls", "view:all"});
+    CHECK(listed.exit_code != 0);
+    CHECK(contains(listed.err, "rows"));
+    const auto queried = box.run({"query", "MATCH (n:Note) RETURN n.name"});
+    INFO(queried.err);
+    CHECK(queried.exit_code == 0);
+    CHECK(lines_of(queried.out).size() == 4);  // başlık + 3 not
 }

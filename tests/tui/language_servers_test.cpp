@@ -1,11 +1,11 @@
 #include "core/config.hpp"
 #include "core/i18n.hpp"
+#include "edit/language_servers.hpp"
+#include "edit/server_settings.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 #include "tui/editor_view.hpp"
-#include "tui/language_servers.hpp"
 #include "tui/pane_layout.hpp"
-#include "tui/server_settings.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
 

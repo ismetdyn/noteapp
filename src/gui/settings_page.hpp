@@ -1,13 +1,12 @@
 #pragma once
 
+#include "app/settings.hpp"
 #include "core/config.hpp"
-#include "core/error.hpp"
 
 #include <expected>
 #include <functional>
 #include <map>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -27,13 +26,6 @@ struct SettingsHost {
     std::function<void(std::function<void()>)> post;
 };
 
-// OS kasası dikişi: testler gerçek anahtarlığa yazmaz.
-struct TokenStore {
-    std::function<bool(std::string_view host)> has;
-    std::function<std::expected<void, core::Error>(std::string_view host, std::string_view token)> store;
-    std::function<std::expected<void, core::Error>(std::string_view host)> clear;
-};
-
 // Ayarlar formunun modeli (ImGui bilmez): config_entries'teki 12 anahtar + token satırı + bağlantı testi.
 // Doğrulama set_config_value'dadır (CLI/yükleyiciyle aynı kurallar); burada kopyalanmaz. Deciders
 // GuiState'indir, onunla yaşar.
@@ -44,7 +36,7 @@ public:
     SettingsPage(const SettingsPage&) = delete;
     SettingsPage& operator=(const SettingsPage&) = delete;
 
-    TokenStore tokens;  // üretimde sync/auth kasası; testler değiştirir
+    app::TokenStore tokens = app::system_token_store();  // testler değiştirir
     std::string token;  // maskeli alanın tamponu; kasaya yazılınca silinir, config'e ve loga girmez
 
     const std::vector<std::string>& keys() const { return keys_; }                // form sırası

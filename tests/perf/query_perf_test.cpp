@@ -1,4 +1,5 @@
 // SPEC-search genel arama ve sorgu argümanı bütçeleri, SPEC-sync not durumu ölçümü (T55a). Yalnız Release.
+#include "core/config.hpp"
 #include "core/note_store.hpp"
 #include "core/note_sync.hpp"
 #include "search/content_index.hpp"
@@ -97,7 +98,8 @@ TEST_CASE("global search: 5000 notes of ~5 KB, warm search and refresh within 10
     const test::TempDir dir;
     write_corpus(dir.path());
     const core::NoteStore store{dir.path()};
-    search::ContentIndex index{store, 10 * 1024 * 1024};
+    const core::SearchLimits limits = core::parse_config("").config.limits.search;
+    search::ContentIndex index{store, 10 * 1024 * 1024, limits.content_hits.cap()};
     index.refresh();
     std::vector<core::NoteMeta> notes = store.list_meta();
     REQUIRE(notes.size() == kNotes);
@@ -107,7 +109,7 @@ TEST_CASE("global search: 5000 notes of ~5 KB, warm search and refresh within 10
         std::size_t found = 0;
         for (int run = 0; run < kRuns; ++run) {
             samples.push_back(time_ms([&] {
-                const auto hits = search::search_all(query, notes, index);
+                const auto hits = search::search_all(query, notes, index, limits);
                 REQUIRE(hits.has_value());
                 found = hits->size();
             }));

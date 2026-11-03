@@ -80,8 +80,8 @@ TEST_CASE("gui preview: a .markdown note previews like .md") {
 
 TEST_CASE("gui preview: a note over the size bound is not previewed") {
     WindowFixture fixture;
-    fixture.add_note("büyük.md", std::string(GuiState::kMaxPreviewBytes + 1, 'x'), 10);
-    fixture.add_note("sınır.md", std::string(GuiState::kMaxPreviewBytes, 'x'), 20);
+    fixture.add_note("büyük.md", std::string(fixture.config.limits.tui.view_bytes.cap() + 1, 'x'), 10);
+    fixture.add_note("sınır.md", std::string(fixture.config.limits.tui.view_bytes.cap(), 'x'), 20);
     const auto state = fixture.make_state();
     select(*state, "büyük.md");
     CHECK_FALSE(state->can_preview());
@@ -192,4 +192,105 @@ TEST_CASE("gui preview: a missing [[target]] cannot be clicked until the note ex
     state->rescan();
     settle(*view);
     CHECK(view->item_rects().contains("preview_link:yok"));
+}
+
+// G4 (matris 55–57): CSV ve JSON önizlemesi TUI REVIEW'un ayrıştırmasını kullanır (app::parse_csv,
+// app::pretty_json); sınırlar aynı anahtarlardır (limits.tui.view_bytes, table_rows, table_columns,
+// view_lines).
+TEST_CASE("gui preview: a csv note previews as a table with the detected delimiter") {
+    WindowFixture fixture;
+    fixture.add_note("veri.csv", "ad;yaş;şehir\nÇağrı;30;\"İstanbul; merkez\"\nAli;4;Van\n", 10);
+    const auto state = fixture.make_state();
+    const auto view = make_view(*state);
+    select(*state, "veri.csv");
+    CHECK(state->previewable_type());
+    REQUIRE(state->can_preview());
+    state->toggle_preview();
+    settle(*view);
+    REQUIRE(state->showing_preview());
+    const RenderedText text;
+    settle(*view);
+    CHECK(view->item_rects().contains("preview_table"));
+    CHECK_FALSE(view->item_rects().contains("editor"));
+    for (const char* shown : {"ad", "yaş", "şehir", "Çağrı", "İstanbul; merkez", "Ali", "Van"})
+        CHECK_MESSAGE(text.contains(shown), shown);
+    CHECK_FALSE(text.contains("\"İstanbul"));      // tırnak açıldı
+    CHECK(state->buffer().starts_with("ad;yaş"));  // salt okunur
+}
+
+TEST_CASE("gui preview: table rows and columns follow limits.tui and say what they cut") {
+    WindowFixture fixture;
+    fixture.config.limits.tui.table_rows = {2, "2"};
+    fixture.config.limits.tui.table_columns = {2, "2"};
+    fixture.add_note("büyük.csv", "kol_a,kol_b,kol_c\nv11,v12,v13\nv21,v22,v23\nv31,v32,v33\n", 10);
+    const auto state = fixture.make_state();
+    const auto view = make_view(*state);
+    select(*state, "büyük.csv");
+    state->toggle_preview();
+    settle(*view);
+    const RenderedText text;
+    settle(*view);
+    CHECK(text.contains("v12"));
+    CHECK_FALSE(text.contains("v21"));
+    CHECK_FALSE(text.contains("kol_c"));
+    CHECK(text.contains(noteapp::core::tr("gui.preview_rows_cut", {{"count", "2"}})));
+    CHECK(text.contains(noteapp::core::tr("gui.preview_columns_cut", {{"count", "1"}})));
+}
+
+TEST_CASE("gui preview: a csv that is no table shows its raw text and why") {
+    WindowFixture fixture;
+    fixture.add_note("liste.csv", "tek sütun\nbaşka satır\n", 10);
+    const auto state = fixture.make_state();
+    const auto view = make_view(*state);
+    select(*state, "liste.csv");
+    state->toggle_preview();
+    settle(*view);
+    const RenderedText text;
+    settle(*view);
+    CHECK(text.contains(noteapp::core::tr("gui.preview_not_table")));
+    CHECK(text.contains("başka satır"));
+}
+
+TEST_CASE("gui preview: a json note is pretty printed by depth; invalid json shows raw text and why") {
+    WindowFixture fixture;
+    fixture.add_note("veri.json", "{\"ad\":\"Çağrı\",\"liste\":[1,{}]}", 10);
+    fixture.add_note("bozuk.json", "{\"a\":}", 20);
+    const auto state = fixture.make_state();
+    const auto view = make_view(*state);
+    select(*state, "veri.json");
+    REQUIRE(state->can_preview());
+    state->toggle_preview();
+    settle(*view);
+    {
+        const RenderedText text;
+        settle(*view);
+        for (const char* shown : {"\"ad\"", "\"Çağrı\"", "\"liste\""})
+            CHECK_MESSAGE(text.contains(shown), shown);
+    }
+    const auto& rects = view->item_rects();
+    REQUIRE(rects.contains("preview_json:1"));  // "ad": derinlik 1
+    REQUIRE(rects.contains("preview_json:3"));  // 1, : derinlik 2
+    CHECK(rects.at("preview_json:3").min_x > rects.at("preview_json:1").min_x);
+    CHECK(rects.at("preview_json:1").min_x > rects.at("preview_json:0").min_x);
+
+    select(*state, "bozuk.json");
+    settle(*view);
+    REQUIRE(state->showing_preview());
+    const RenderedText text;
+    settle(*view);
+    CHECK(text.contains(noteapp::core::tr("gui.preview_invalid_json")));
+    CHECK(text.contains("{\"a\":}"));
+}
+
+TEST_CASE("gui preview: limits.tui.view_bytes bounds every previewed type") {
+    WindowFixture fixture;
+    fixture.config.limits.tui.view_bytes = {16, "16"};
+    fixture.add_note("sınır.json", std::string("[") + std::string(14, '1') + "]", 10);
+    fixture.add_note("büyük.json", std::string("[") + std::string(15, '1') + "]", 20);
+    const auto state = fixture.make_state();
+    select(*state, "büyük.json");
+    CHECK(state->previewable_type());
+    CHECK_FALSE(state->can_preview());
+    select(*state, "sınır.json");
+    CHECK(state->can_preview());
 }

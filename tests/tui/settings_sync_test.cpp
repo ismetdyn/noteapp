@@ -9,6 +9,7 @@
 #include "tui/view.hpp"
 
 #include <doctest/doctest.h>
+#include <expected>
 #include <filesystem>
 #include <fstream>
 #include <ftxui/dom/node.hpp>
@@ -16,6 +17,7 @@
 #include <git2.h>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -169,14 +171,14 @@ TEST_CASE("the token row exists only for an https remote and lives outside the 1
         }());
         CHECK_FALSE(s.token_visible());
         CHECK(s.rows().size() == 13);
-        CHECK(s.slot_count() == 14);  // yalnız Kaydet düğmesi eklenir
+        CHECK(s.slot_count() == 15);  // yalnız bağlantı testi ve Kaydet düğmeleri eklenir
     }
     auto c = w.config();
     c.sync.remote = "https://GitHub.com/me/notes.git";
     const auto s = w.form(c);
     CHECK(s.token_visible());
     CHECK(s.rows().size() == 13);
-    CHECK(s.slot_count() == 15);
+    CHECK(s.slot_count() == 16);
     CHECK(s.token_row().kind == SettingsState::Kind::Token);
 }
 
@@ -190,7 +192,7 @@ TEST_CASE("the token row appears and disappears while the remote is being edited
     CHECK_FALSE(s.token_visible());
 }
 
-TEST_CASE("focus runs rows, then the token row, then the save button") {
+TEST_CASE("focus runs rows, then the token row, the connection test, then the save button") {
     World w;
     auto c = w.config();
     c.sync.remote = "https://github.com/me/notes.git";
@@ -199,7 +201,10 @@ TEST_CASE("focus runs rows, then the token row, then the save button") {
     CHECK(s.focus() == 13);
     CHECK_FALSE(s.on_button());
     s.handle(Key::Down);
+    CHECK(s.on_test());
+    s.handle(Key::Down);
     CHECK(s.on_button());
+    s.handle(Key::Up);
     s.handle(Key::Up);
     CHECK(s.on_token());
 }
@@ -288,7 +293,7 @@ TEST_CASE("Enter on an empty token row just moves on") {
     auto s = w.form(c);
     focus_token(s);
     s.handle(Key::Enter);
-    CHECK(s.on_button());
+    CHECK(s.on_test());
     CHECK(w.vault.calls.empty());
 }
 
@@ -420,4 +425,55 @@ TEST_CASE("sync_restart_needed ignores editor and author changes but not sync wi
     CHECK(changed([](core::Config& c) { c.sync.branch = "baska"; }));
     CHECK(changed([](core::Config& c) { c.sync.idle_seconds += 1; }));
     CHECK(changed([](core::Config& c) { c.notes_dir /= "alt"; }));
+}
+
+TEST_CASE(
+    "connection test: Enter on its slot asks to test; the form enables, the worker syncs, the result shows") {
+    World w;
+    auto c = w.config();
+    c.notes_dir = w.dir.path() / "fresh";  // World'ün a.md'si eski düzendir; senkron yeni depoda koşar
+    c.sync.remote = utf8(w.make_remote("remote.git"));
+    auto s = w.form(c);
+    s.handle(Key::Up);
+    REQUIRE(s.on_button());
+    s.handle(Key::Up);
+    REQUIRE(s.on_test());
+    CHECK(s.handle(Key::Enter) == Outcome::Test);
+
+    const std::optional<core::Config> candidate = s.begin_test(c);
+    REQUIRE(candidate.has_value());
+    CHECK(s.testing());
+    CHECK_FALSE(s.begin_test(c).has_value());  // tek test birden
+    // main'in işçisi aynı adayla tek senkron koşar; sonucu forma döner.
+    const auto synced = sync::SyncService(*candidate).sync_now();
+    CHECK(synced.has_value());
+    s.finish_test(synced ? std::expected<void, core::Error>{} : std::unexpected(synced.error()));
+    CHECK_FALSE(s.testing());
+    CHECK(s.test_result() == core::tr("tui.test_ok"));
+    const std::string small = screen_text(s, 60, 15);
+    CAPTURE(small);
+    CHECK(has(small, core::tr("tui.settings_test")));
+    CHECK(has(screen_text(s, 80, 24), core::tr("tui.test_ok")));
+    CHECK_FALSE(core::load_config().config.sync.enabled);  // test kaydetmez
+
+    // Bekleyen test yokken gelen geç sonuç yok sayılır (form kapanıp yeniden açıldı).
+    s.finish_test(std::unexpected(core::Error{core::Error::Code::Io, "sync.keychain_unavailable", {}}));
+    CHECK(s.test_result() == core::tr("tui.test_ok"));
+}
+
+TEST_CASE("connection test: a failing enable is the result and no sync starts") {
+    World w;
+    auto c = w.config();
+    c.sync.remote = utf8(w.make_remote("remote.git"));
+    auto s = w.form(c, [](const core::Config&, bool) -> std::expected<void, core::Error> {
+        return std::unexpected(core::Error{core::Error::Code::Io, "sync.keychain_unavailable", {}});
+    });
+    CHECK_FALSE(s.begin_test(c).has_value());
+    CHECK_FALSE(s.testing());
+    CHECK(has(s.test_result(), core::tr("sync.keychain_unavailable")));
+    // Uzun neden düğmeyi en küçük pencerede de itmez.
+    const std::string small = screen_text(s, 60, 15);
+    CAPTURE(small);
+    CHECK(has(small, core::tr("tui.settings_test")));
+    CHECK(has(small, core::tr("tui.settings_save")));
 }

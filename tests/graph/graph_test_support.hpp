@@ -72,8 +72,8 @@ private:
     sqlite3* db_ = nullptr;
 };
 
-inline Graph open_graph(const std::filesystem::path& path) {
-    Result<Graph> graph = Graph::open(path);
+inline Graph open_graph(const std::filesystem::path& path, const GraphLimits& limits = {}) {
+    Result<Graph> graph = Graph::open(path, limits);
     REQUIRE_MESSAGE(graph.has_value(), (graph.has_value() ? "" : graph.error().message_key));
     return std::move(*graph);
 }

@@ -1,11 +1,19 @@
 #include "core/config.hpp"
-#include "support/test_support.hpp"
+#include "edit/clipboard.hpp"
+#include "edit/completion.hpp"
+#include "edit/editor_buffer.hpp"
+#include "edit/input_line.hpp"
+#include "edit/language_servers.hpp"
+#include "edit/spellcheck.hpp"
+#include "search/fuzzy.hpp"
 #include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
+#include "tui/styled_view.hpp"
 #include "tui/tui_state.hpp"
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <doctest/doctest.h>
 #include <string>
 #include <string_view>
@@ -270,6 +278,30 @@ TEST_CASE("content mode without a searcher yields no matches instead of crashing
     s.handle(Key::Tab);
     type(s, "milk");
     CHECK(s.rows().empty());
+}
+
+// app::Listing kuralı (plan-parity A2): genel arama yalnız bağlı aramacıyla; uygulama onu hep bağlar.
+TEST_CASE("global mode without a searcher yields no matches instead of falling back to names") {
+    tui::TuiState s;
+    s.set_notes(sample());
+    s.handle(Key::Char, "f");
+    REQUIRE(s.mode() == Mode::Global);
+    type(s, "tod");
+    CHECK(s.rows().empty());
+}
+
+// app::Listing kuralı (plan-parity A2): bozuk argümanda eski satırlar kalmaz; son geçerli sorgu güncel
+// listeden yeniden kurulur, gitmiş not görünmez.
+TEST_CASE("an invalid argument rebuilds the last valid query on the current listing") {
+    tui::TuiState s;
+    s.set_notes({note("size-plan.md", 0), note("size-old.md", 1), note("other.md", 2)});
+    type(s, "size:abc");
+    REQUIRE(s.query_error());
+    REQUIRE(s.rows().size() == 2);
+    s.set_notes({note("size-plan.md", 0), note("other.md", 2)});
+    CHECK(s.query_error());
+    REQUIRE(s.rows().size() == 1);
+    CHECK(selected_path(s) == "size-plan.md");
 }
 
 TEST_CASE("same_listing detects added, changed and reordered notes") {
@@ -1030,4 +1062,22 @@ TEST_CASE("exit: Esc in List clears the filter and never quits; Ctrl-C stays the
     CHECK(s.handle(Key::CtrlC) == Intent::Quit);
     s.handle(Key::Right);
     CHECK(s.handle(Key::CtrlC) == Intent::Quit);
+}
+
+// Tek olgu: modüllerin kod varsayılanları defaults.toml'dakiyle aynı (config'siz kurulan nesneler ve
+// testler).
+TEST_CASE("tui and lsp limit structs default to the values in defaults.toml") {
+    const core::Config config = core::parse_config("").config;
+    CHECK(tui::lsp_limits_of(config.limits.lsp) == tui::LspLimits{});
+    CHECK(tui::view_limits_of(config.limits.tui) == tui::ViewLimits{});
+    CHECK(tui::syntax_limits_of(config.limits.tui) == tui::SyntaxLimits{});
+    CHECK(tui::completion_limits_of(config.limits.tui, config.tuning.completion_min_prefix_bytes) ==
+          tui::CompletionLimits{});
+    CHECK(config.limits.tui.spellcheck_line_bytes.value == tui::SpellChecker::kDefaultMaxLineBytes);
+    CHECK(config.limits.tui.paste_bytes.value == tui::SystemClipboard::kDefaultMaxPasteBytes);
+    CHECK(config.limits.tui.undo_bytes.value == tui::EditorBuffer::kDefaultUndoLimitBytes);
+    CHECK(config.limits.tui.save_suggestions.value == tui::SaveDialogInit::kDefaultSuggestions);
+    CHECK(config.limits.tui.search_history.value == tui::SearchHistoryLimits{}.entries);
+    CHECK(config.limits.tui.search_entry_bytes.value == tui::SearchHistoryLimits{}.entry_bytes);
+    CHECK(config.limits.search.fuzzy_candidate_chars.value == search::kDefaultFuzzyCandidateChars);
 }

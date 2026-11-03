@@ -1,6 +1,7 @@
 #pragma once
 
 // Eski düz dosya deposundan geçiş ve düz dosyaya dışa aktarma (SPEC-graph "Eski depodan geçiş").
+#include "core/config.hpp"
 #include "core/error.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
@@ -26,6 +27,9 @@ std::expected<void, Error> mark_notes_dir_current(const std::filesystem::path& n
 
 struct MigrationOptions {
     bool skip_failed = false;  // geçemeyen dosyalar raporlanır, yerinde kalır, kapı açılır
+    // limits.core.folder_path_bytes (sınırsız SIZE_MAX): bundan uzun klasör yolundaki dosya invalid_folder
+    // olur.
+    std::size_t folder_path_bytes = kDefaultFolderPathBytes;
 };
 
 struct SkippedFile {
@@ -80,8 +84,10 @@ std::expected<StrayScan, Error> find_stray_files(const NoteStore& store,
 // find_stray_files'ın bulduklarını (sınırsız) içe alır: aynı yedek, sınırlar, raporlama ve kalıcı liste. Boş
 // klasör kurmaz, silinmiş klasörü diriltmez. Tekrar çağrı etkisizdir; yeni dosya yoksa yedek de almaz.
 // Dosyalara dokunmaz; migrate_legacy_notes'la geçişi bitmiş kökte çağrılır. Farklı baytlar kopya not olur.
-std::expected<MigrationReport, Error> migrate_new_notes(const std::filesystem::path& notes_dir,
-                                                        const std::filesystem::path& data_directory);
+// `folder_path_bytes`: limits.core.folder_path_bytes (sınırsız SIZE_MAX), MigrationOptions'taki gibi.
+std::expected<MigrationReport, Error>
+migrate_new_notes(const std::filesystem::path& notes_dir, const std::filesystem::path& data_directory,
+                  std::size_t folder_path_bytes = kDefaultFolderPathBytes);
 
 // Geçişin dışarıda bıraktığı dosyalar (skipped ve failed), path tam yolla. Son geçiş sonucudur: dosya
 // düzeltilip geçiş yinelenince listeden çıkar. Dosya yoksa boş; okunamayan ya da bozuk liste hatadır, "hiçbir

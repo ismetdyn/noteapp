@@ -1,11 +1,13 @@
+#include "core/config.hpp"
 #include "core/i18n.hpp"
+#include "edit/editor_session.hpp"
+#include "edit/syntax.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
-#include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
 #include "tui/modals.hpp"
 #include "tui/pane_layout.hpp"
-#include "tui/syntax.hpp"
+#include "tui/styled_view.hpp"
 #include "tui/termination.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
@@ -366,7 +368,7 @@ TEST_CASE("editor view: the find bar shows the query; read-only shows the reason
     CHECK(screen.PixelAt(pane_x(kWidth), kPaneY).inverted);  // geçerli eşleşme seçili
 
     Fixture binary(std::string("ikili\0x", 7));
-    CHECK(contains(binary.frame(), core::tr("tui.editor_readonly_binary")));
+    CHECK(contains(binary.frame(), core::tr("document.readonly_binary")));
 }
 
 TEST_CASE("editor view: help names the editor keys, the external editor and the clipboard limit") {
@@ -610,10 +612,72 @@ TEST_CASE("editor syntax: an unknown extension or a file over the threshold is p
     CHECK(fg_of(unknown.frame(), "class") == ftxui::Color(ftxui::Color::Default));
 
     std::string big = "public class A {}\n";
-    big.resize(tui::kMaxHighlightBytes + 1, 'x');
+    big.resize(tui::kDefaultHighlightBytes + 1, 'x');
     SyntaxFixture large("big.java", big);
     REQUIRE(large.session.read_only() == EditorSession::ReadOnly::No);
     CHECK(large.session.syntax_spans(0).empty());
+}
+
+TEST_CASE(
+    "editor syntax: a note above the old 2 MiB threshold is colored when limits.tui.highlight_bytes is 0") {
+    std::string big = "public class A {}\n";
+    big.resize(tui::kDefaultHighlightBytes + 1, 'x');
+    const test::TempDir dir;
+    test::upsert_note(dir.path(), "big.java", big);
+    core::NoteStore store{dir.path()};
+    std::mutex mutex;
+    std::string clipboard;
+    tui::EditorHost host{store,
+                         mutex,
+                         clipboard,
+                         tui::terminal_cell_width,
+                         kLimit,
+                         core::kDefaultSlugMaxLength,
+                         [](std::string_view) { return std::string("md"); },
+                         [](const core::NotePath&) {},
+                         [] {},
+                         [](std::optional<std::size_t>) {},
+                         [](const core::Error&) {},
+                         [] {}};
+    host.syntax =
+        tui::syntax_limits_of(core::parse_config("[limits.tui]\nhighlight_bytes = 0\n").config.limits.tui);
+    EditorSession session(std::move(host));
+    session.open(core::NotePath::parse("big.java").value());
+    REQUIRE(session.is_open());
+    CHECK_FALSE(session.syntax_spans(0).empty());
+}
+
+TEST_CASE("editor undo history follows limits.tui.undo_bytes") {
+    const auto edited_after_undo = [](std::size_t undo_limit_bytes) {
+        const test::TempDir dir;
+        test::upsert_note(dir.path(), "a.md", "x\n");
+        core::NoteStore store{dir.path()};
+        std::mutex mutex;
+        std::string clipboard;
+        tui::EditorHost host{store,
+                             mutex,
+                             clipboard,
+                             tui::terminal_cell_width,
+                             kLimit,
+                             core::kDefaultSlugMaxLength,
+                             [](std::string_view) { return std::string("md"); },
+                             [](const core::NotePath&) {},
+                             [] {},
+                             [](std::optional<std::size_t>) {},
+                             [](const core::Error&) {},
+                             [] {}};
+        host.undo_limit_bytes = undo_limit_bytes;
+        EditorSession session(std::move(host));
+        session.open(core::NotePath::parse("a.md").value());
+        REQUIRE(session.is_open());
+        for (const char* letter : {"a", "b", "c", "d"})
+            session.handle(Key::Char, letter);
+        for (int i = 0; i < 8; ++i)
+            session.handle(Key::CtrlZ);
+        return session.buffer()->text();
+    };
+    CHECK(edited_after_undo(tui::EditorBuffer::kDefaultUndoLimitBytes) == "x\n");
+    CHECK(edited_after_undo(1) != "x\n");  // bütçeyi aşan adım tutulmaz
 }
 
 TEST_CASE("editor syntax: an edit recolors the later lines and undo restores them") {

@@ -6,7 +6,7 @@ endif()
 # Kapsam yalnız motorda: SQLite'ın iç dalları derlemi şişirir, sorgu dili yüzeyini büyütmez.
 target_compile_options(noteapp_graph PRIVATE -fsanitize=fuzzer-no-link)
 
-foreach(target fuzz_query fuzz_frame)
+foreach(target fuzz_query fuzz_frame fuzz_log)
     add_executable(${target} ${target}.cpp)
     target_include_directories(${target} PRIVATE ${PROJECT_SOURCE_DIR}/internal)
     target_link_libraries(${target} PRIVATE noteapp_graph)

@@ -19,8 +19,6 @@ namespace noteapp::graph::detail {
 class Store;
 struct ApplyContext;
 
-inline constexpr std::size_t kDefaultMaxMergeOwners = std::size_t{1} << 23U;
-
 // Sahip başına cihaz başına ilk ve son yazma. "Bir yazmayı görmüş mü" ve "hepsini görmüş mü" soruları için
 // tüm yazmaları tutmak gerekmez.
 struct WriteFacts {
@@ -48,7 +46,7 @@ class Merger {
 public:
     // O(ops): tüm çerçeveleri tarar. Yalnız ingest'in ilk uygulamasında, yazma kilidi alınmadan çağrılır.
     // Sahip sayısı max_owners'ı aşarsa LimitExceeded döner: durum belleği sınırlıdır.
-    static Result<Merger> open(Store& store, std::size_t max_owners = kDefaultMaxMergeOwners);
+    static Result<Merger> open(Store& store, std::size_t max_owners = GraphLimits{}.merge_owners);
     // Son taramadan beri eklenen çerçeveleri görür (başka süreçteki yerel yazma); kilit altında, O(yeni).
     Result<void> catch_up();
 
@@ -90,11 +88,21 @@ private:
 
 // Bir ingest'in okuyacağı toplam yeni çerçeve baytı: aşınca kalan günlükler durur ve sonraki ingest'te sürer.
 // Sırayla tekrar edilen çerçeve sayılmaz: ops'taki baytlarla sınırlıdır ve her ingest'te yeniden okunur.
-// max_merge_owners: birleşimin durum tuttuğu düğüm + kenar; aşan günlük merge_limit ile durur.
+// max_merge_owners: birleşimin durum tuttuğu düğüm + kenar; aşan günlük merge_limit ile durur. Değerler
+// GraphLimits'tendir (ingest_limits_of); hiçbiri birleşimin sonucunu değiştirmez, yalnız ne zaman
+// uygulandığını ve raporun ne kadarının tutulduğunu.
 struct IngestLimits {
-    std::uint64_t max_bytes = std::uint64_t{8} * 1024U * 1024U * 1024U;
-    std::size_t max_merge_owners = kDefaultMaxMergeOwners;
+    std::uint64_t max_bytes = GraphLimits{}.ingest_bytes;
+    std::size_t max_merge_owners = GraphLimits{}.merge_owners;
+    std::size_t max_peers = GraphLimits{}.peers;  // aşan yeni cihazın günlüğü peer_limit ile durur
+    std::size_t max_report_entries = GraphLimits{}.report_entries;
+    std::size_t max_touched_properties = GraphLimits{}.touched_properties;
+    FrameLimits frame{};  // kayıt başına
+    std::size_t group_bytes = GraphLimits{}.group_bytes;  // birleştirilen mantıksal çerçeve (parçalı grup)
+    std::size_t group_ops = GraphLimits{}.group_ops;      // çözülen mantıksal çerçevenin işlemi
 };
+
+IngestLimits ingest_limits_of(const GraphLimits& limits);
 
 Result<MergeReport> ingest_logs(Store& store, std::span<const std::filesystem::path> logs,
                                 const IngestLimits& limits = {});

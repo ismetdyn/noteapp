@@ -1,6 +1,7 @@
 #pragma once
 
-#include "tui/syntax.hpp"
+#include "core/limits.hpp"
+#include "edit/syntax.hpp"
 
 #include <cstddef>
 #include <optional>
@@ -10,13 +11,21 @@
 
 namespace noteapp::tui {
 
-// REVIEW'da biçimli görünümün (md, csv, json) üst sınırları: not güvenilmezdir, bellek ve süre girdiyle
-// doğrusal ve sınırlı kalmalı. Aşan not ham metne düşer ya da kesildiğini soluk satırla söyler.
-// Üretim UI iş parçacığındadır, bütçe 50 ms: bu sınır ölçümle seçildi (SPEC-tui "REVIEW biçimli görünüm").
-inline constexpr std::size_t kMaxRenderedViewBytes = std::size_t{256} * 1024;
-inline constexpr std::size_t kMaxViewLines = 100000;
-inline constexpr std::size_t kMaxTableRows = 5000;
-inline constexpr std::size_t kMaxTableColumns = 128;
+// REVIEW'da biçimli görünümün (md, csv, json) sınırları: `limits.tui.*` (view_limits_of; sınırsız SIZE_MAX).
+// Bellek ve süre girdiyle doğrusaldır; aşan not ham metne düşer ya da kesildiğini soluk satırla söyler.
+// Üretim UI iş parçacığındadır, bütçe 50 ms: varsayılanlar ölçümle seçildi (SPEC-tui "REVIEW biçimli
+// görünüm"). Üye varsayılanları defaults.toml ile aynıdır, bir test denetler.
+struct ViewLimits {
+    std::size_t source_bytes = std::size_t{256} * 1024;  // biçimli görünüme giren en büyük not (PreviewCache)
+    std::size_t lines = 100000;
+    std::size_t table_rows = 5000;
+    std::size_t table_columns = 128;
+    std::size_t highlight_line_bytes = kDefaultHighlightLineBytes;  // markdown kod bloğu
+
+    bool operator==(const ViewLimits&) const = default;
+};
+ViewLimits view_limits_of(const core::TuiLimits& limits);
+SyntaxLimits syntax_limits_of(const core::TuiLimits& limits);
 
 // Hücrenin görünüşü: yalnız yazı biçimi ve 16 ANSI renklerine inen sözdizimi türü (terminal bağımsız,
 // FTXUI'siz).
@@ -73,11 +82,12 @@ private:
 
 // `line` yalnız görüntülenecek metindir; dil Plain ise tüm satır `fallback` görünüşünü alır.
 InlineText highlighted_line(SyntaxLanguage language, std::string_view line, SyntaxState& state,
-                            TextLook fallback);
+                            TextLook fallback, std::size_t max_line_bytes = kDefaultHighlightLineBytes);
 
 class ViewBuilder {
 public:
-    ViewBuilder(int width, CellWidthFn cell_width);
+    // `max_lines` aşılınca kalan satırlar düşer, sonda soluk satır söyler.
+    ViewBuilder(int width, CellWidthFn cell_width, std::size_t max_lines = ViewLimits{}.lines);
 
     // İçeriği sarar: ilk satırın önünde `first`, devamında `next` (iki önek aynı genişlikte).
     void add(const InlineText& first, const InlineText& next, const InlineText& content,
@@ -101,6 +111,7 @@ private:
 
     int width_;
     CellWidthFn cell_width_;
+    std::size_t max_lines_;
     RenderedView view_;
     bool truncated_ = false;
 };
@@ -110,8 +121,8 @@ struct TableData {
     std::vector<std::vector<InlineText>> rows;
     std::vector<std::size_t> source_lines;
     std::size_t header_rows = 0;
-    std::size_t omitted_rows = 0;  // kMaxTableRows'u aşan, gösterilmeyen satırlar
-    std::size_t column_count = 0;  // kaynaktaki sütun sayısı; kMaxTableColumns'tan fazlası saklanmaz
+    std::size_t omitted_rows = 0;  // ViewLimits::table_rows'u aşan, gösterilmeyen satırlar
+    std::size_t column_count = 0;  // kaynaktaki sütun sayısı; ViewLimits::table_columns'tan fazlası saklanmaz
 };
 
 // Hücreler sütun genişliğinde sarılır, tablo `prefix` dahil genişliğe sığar; sığmayan sütunlar düşer ve

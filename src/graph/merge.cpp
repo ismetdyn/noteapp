@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
+#include <new>
 #include <optional>
 #include <set>
 #include <thread>
@@ -20,6 +21,7 @@ namespace noteapp::graph::detail {
 
 namespace {
 
+constexpr std::size_t kTailRecordBytes = 3 * sizeof(std::uint64_t);
 // Tasarım: 5.000 çerçevede bir commit. Yazma kilidi arada bırakılır, uygulama beklemez.
 constexpr std::size_t kFramesPerCommit = 5000;
 // Yazma kilidi çerçeve sayısına değil işe göre de bırakılır: küçük çerçeveler bayt, ağır işlemler süre
@@ -31,7 +33,8 @@ constexpr std::chrono::milliseconds kTimePerCommit{1000};
 constexpr std::chrono::milliseconds kWriterWindow{20};
 constexpr const char* kMergeLimitKey = "graph.merge_owner_limit";
 // Kenar başına özellik x silme karşılaştırması. Aşan kenarın özellikleri düşer: küme fonksiyonu, cihazlar
-// aynı karar.
+// aynı karar. Protokol sabitidir, config değildir (L4): değer birleşimin sonucunu belirler, cihaz başına
+// farklı olsa iki cihaz aynı op kümesinden farklı kenar özellikleri kurardı.
 constexpr std::size_t kMaxEdgePropDecisions = std::size_t{1} << 24U;
 
 Error corrupt(std::string reason) {
@@ -104,7 +107,7 @@ template <class Visit> Result<bool> visit_stored_frame(Store& store, std::int64_
         if (blob.size() != device.size())
             return std::unexpected(corrupt("bad_op_device"));
         std::ranges::copy(blob, device.begin());
-        Result<Frame> decoded = decode_frame(row->column_blob(2));
+        Result<Frame> decoded = decode_frame(row->column_blob(2), kStoredFrameLimits);
         if (!decoded && decoded.error().code != Error::Code::LimitExceeded)
             return std::unexpected(corrupt("bad_stored_frame"));
         return decoded;
@@ -146,9 +149,9 @@ template <class Visit> Result<void> for_each_stored_frame(Store& store, Visit&& 
 // - Kenar kimliği: kendinden farklı kimliği görmüş put aday olamaz; adaylardan en küçüğü kazanır.
 // - Kenar işlemi, ucun etkili silmesini görmemişse ya da ucun hiçbir yazmasını görmemişse düşer.
 // - Kenar özelliği, ayakta bir put görmemişse düşer.
-// Her karar O(işlem x cihaz): cihaz sayısı kMaxPeers ile sınırlı, görme cihaz başına tekdüze. Log düşmanca
-// olsa da iç içe "her yazma x her silme" taraması yoktur. Girdi sayısı saklı çerçevelerin sahipleridir:
-// sınırı Merger dayatır (IngestLimits::max_merge_owners), sığmayan çerçeve ops'a girmez.
+// Her karar O(işlem x cihaz): cihaz sayısı IngestLimits::max_peers ile sınırlı, görme cihaz başına tekdüze.
+// Log düşmanca olsa da iç içe "her yazma x her silme" taraması yoktur. Girdi sayısı saklı çerçevelerin
+// sahipleridir: sınırı Merger dayatır (IngestLimits::max_merge_owners), sığmayan çerçeve ops'a girmez.
 class History {
 public:
     void add(const DeviceId& device, const Frame& frame) {
@@ -677,6 +680,7 @@ Result<void> Merger::apply_frame(const DeviceId& device, const Frame& frame,
                                  std::span<const std::byte> payload) {
     const ApplyContext context = context_of(device, frame);
     last_identity_conflict_ = identity_conflict_in(frame);
+    const bool rebuild_before = needs_rebuild_;
     // Yeniden kurma bekliyorsa ara durum zaten geçersizdir: çerçeve yalnız kaydedilir, bitişte hepsi birlikte
     // kurulur. Kimlik çatışması da buraya düşer: kararı History verir, çerçeve kimseyi durduramaz.
     needs_rebuild_ =
@@ -689,8 +693,11 @@ Result<void> Merger::apply_frame(const DeviceId& device, const Frame& frame,
         needs_rebuild_ = true;
         applied = apply_in_savepoint(context, frame, payload);
     }
-    if (!applied)
+    if (!applied) {
+        // Çerçeve geri alındı (ör. TOOBIG): ops'ta yok, kurulacak bir şey getirmedi.
+        needs_rebuild_ = rebuild_before;
         return applied;
+    }
     scanned_id_ = std::max(scanned_id_, store_->last_insert_id());
     note_frame(context, frame);
     return {};
@@ -729,19 +736,28 @@ struct LogCursor {
     std::uint64_t valid_end = 0;
     std::uint64_t file_bytes = 0;
     std::optional<std::pair<std::uint64_t, std::vector<Dot>>> waiting;  // seq, deps
-    enum class Stop { None, BadFrame, PeerLimit, Budget, MergeLimit } stop = Stop::None;
+    enum class Stop { None, BadFrame, PeerLimit, Budget, MergeLimit, TooNew } stop = Stop::None;
     bool partial_tail = false;
+    // Dosyanın son değişikliği (ns); okunamadıysa yok. Boyutla birlikte "önceki ingest'ten beri değişmedi" sınaması.
+    std::optional<std::int64_t> file_time;
+    // Önceki ingest'te bitmemiş bulunan grubun başı; dosya o günden beri değişmediyse yeniden okunmaz.
+    std::optional<std::uint64_t> known_tail;
+    bool tail_read = false;  // bu ingest'te yarım grup okundu: yeri kaydedilir
+    // Yeni cihaz, nedensel olarak gerekmediği için kabulü sonraya bırakıldı (admit).
+    bool deferred = false;
 };
 
-// Rapor girdiyle büyür: düşmanca log her çerçevede kayıt ürettirebilir.
-constexpr std::size_t kMaxReportEntries = 4096;
-constexpr std::size_t kMaxTouchedProperties = std::size_t{1} << 20U;
-
-// Ingest oturumu: yazma işlemi tembel açılır. Yeni çerçeve yoksa kilit alınmaz ve ops taranmaz.
+// Ingest oturumu: yazma işlemi tembel açılır. Yeni çerçeve yoksa kilit alınmaz ve ops taranmaz. Rapor
+// girdiyle büyür (düşmanca log her çerçevede kayıt ürettirebilir): tavanı IngestLimits'tedir.
 class IngestSession {
 public:
+    // Kayıt ve grup depolamanın tek değer sınırını aşamaz: ops'a yazılamayan çerçeve ingest'i hata ile
+    // düşürmesin, o günlük bad_frame ile dursun.
     IngestSession(Store& store, MergeReport& report, const IngestLimits& limits)
-        : store_(store), report_(report), limits_(limits) {}
+        : store_(store), report_(report), limits_(limits) {
+        limits_.frame.bytes = std::min(limits_.frame.bytes, store.max_blob_bytes());
+        limits_.group_bytes = std::min(limits_.group_bytes, store.max_blob_bytes());
+    }
 
     IngestSession(const IngestSession&) = delete;
     IngestSession& operator=(const IngestSession&) = delete;
@@ -756,6 +772,8 @@ public:
             return bulk;
         for (const std::filesystem::path& path : paths)
             load(path);
+        if (const Result<void> recalled = recall_tails(); !recalled)
+            return recalled;
         // Bir ingest'te kim kabul edilir, geliş sırasına değil cihaz kimliğine bağlıdır.
         std::ranges::stable_sort(logs_, {}, &LogCursor::device);
         if (const Result<void> resumed = resume_interrupted_rebuild(); !resumed)
@@ -764,15 +782,21 @@ public:
         if (!peers)
             return std::unexpected(peers.error());
         known_peers_ = *peers;
-        bool progressed = true;
-        while (progressed) {
-            progressed = false;
-            for (LogCursor& log : logs_) {
-                const Result<bool> advanced = advance(log);
-                if (!advanced)
-                    return std::unexpected(advanced.error());
-                progressed = progressed || *advanced;
+        while (true) {
+            bool progressed = true;
+            while (progressed) {
+                progressed = false;
+                for (LogCursor& log : logs_) {
+                    const Result<bool> advanced = advance(log);
+                    if (!advanced)
+                        return std::unexpected(advanced.error());
+                    progressed = progressed || *advanced;
+                }
             }
+            if (open_admission_ || std::ranges::none_of(logs_, &LogCursor::deferred))
+                break;
+            // Nedensel olarak gereken her cihaz kabul edildi; kalan yerler kimlik sırasıyla dolar.
+            open_admission_ = true;
         }
         if (const Result<void> closed = close_batch(); !closed)
             return closed;
@@ -780,13 +804,15 @@ public:
             return rebuilt;
         if (const Result<void> stalled = report_positions(); !stalled)
             return stalled;
+        if (const Result<void> remembered = remember_tails(); !remembered)
+            return remembered;
         return report_conflicts();
     }
 
 private:
     void report_bad(const std::filesystem::path& path, const DeviceId& device, std::uint64_t seq,
                     std::string reason) {
-        if (report_.bad_frames.size() >= kMaxReportEntries) {
+        if (report_.bad_frames.size() >= limits_.max_report_entries) {
             ++report_.omitted;
             return;
         }
@@ -819,7 +845,8 @@ private:
             report_bad(path, unknown, 0, "log_directory_symlink");
             return;
         }
-        Result<std::optional<LogReader>> opened = LogReader::open(path);
+        Result<std::optional<LogReader>> opened =
+            LogReader::open(path, limits_.frame.bytes, limits_.group_bytes);
         if (!opened) {
             report_bad(path, unknown, 0, reason_of(opened.error()));
             return;
@@ -829,7 +856,8 @@ private:
         LogReader& reader = **opened;
         const LogReader::Status header = reader.read_header();
         if (header == LogReader::Status::Damaged) {
-            report_bad(path, unknown, 0, reason_of(reader.error()));
+            const bool too_new = reader.error().code == Error::Code::TooNew;  // cihaz başlıktan okundu
+            report_bad(path, too_new ? reader.device() : unknown, 0, reason_of(reader.error()));
             return;
         }
         if (header == LogReader::Status::PartialTail) {
@@ -846,6 +874,10 @@ private:
         log.offset = reader.offset();
         log.valid_end = reader.offset();
         log.file_bytes = reader.file_size();
+        std::error_code code;
+        const auto modified = std::filesystem::last_write_time(path, code);
+        if (!code)
+            log.file_time = modified.time_since_epoch().count();
         logs_.push_back(std::move(log));
     }
 
@@ -946,7 +978,7 @@ private:
             const auto* set = std::get_if<PropSet>(&op);
             if (set == nullptr)
                 continue;
-            if (touched_.size() >= kMaxTouchedProperties) {
+            if (touched_.size() >= limits_.max_touched_properties) {
                 ++report_.omitted;
                 return;
             }
@@ -967,16 +999,55 @@ private:
         return batch_is_full() ? close_batch() : Result<void>{};
     }
 
-    // Yeni cihaz sınırın içindeyse kabul edilir. Sınırda durur ve raporlanır: yerel yazma rehin kalmaz.
-    bool admit(LogCursor& log, std::uint64_t applied) {
-        if (applied != 0 || log.device == store_.device())
-            return true;
-        if (known_peers_ >= kMaxPeers) {
+    bool is_admitted(const DeviceId& device, std::uint64_t applied) const {
+        return applied != 0 || device == store_.device() || admitted_.contains(device);
+    }
+
+    // Gerekli cihaz kümesinin sınırı: tanınan cihaz x çerçevenin bağımlılık payı (config peers'ten türer). Aşan
+    // başvuru gerekli sayılmaz, kimlik sırasına kalır: küme de ayrılan yer sayacı da sınırlıdır.
+    std::size_t max_referenced() const {
+        return limits_.max_peers > SIZE_MAX / kDepsPerPeer ? SIZE_MAX : limits_.max_peers * kDepsPerPeer;
+    }
+
+    // Kabul edilmiş cihazın (ve bu cihazın) çerçevesinin bağımlılıkları nedensel olarak gereklidir; onların
+    // çerçeveleri de öyle (geçişli). Kabul edilmemiş cihaz kimseyi gerekli kılamaz. Gerekli olup henüz kabul
+    // edilmemiş her cihaz bir yer ayırır (reserved_): gereksiz cihaz onun yerini alamaz.
+    Result<void> note_references(const LogCursor& log, const Frame& frame, std::uint64_t applied) {
+        if (!is_admitted(log.device, applied))
+            return {};
+        for (const Dot& dep : frame.deps) {
+            if (referenced_.size() >= max_referenced())
+                return {};
+            if (!referenced_.insert(dep.dev).second)
+                continue;
+            const Result<std::uint64_t> dep_applied = store_.applied_seq(dep.dev);
+            if (!dep_applied)
+                return std::unexpected(dep_applied.error());
+            reserved_ += is_admitted(dep.dev, *dep_applied) ? 0 : 1;
+        }
+        return {};
+    }
+
+    enum class Admission { Yes, Later, Never };
+
+    // Yeni cihazın kabulü nedensel ihtiyaçladır (L4c): önce kabul edilmiş cihazların bağımlılığı, kalan yer
+    // ancak sonra kimlik sırasıyla. Sınırda durur ve raporlanır: yerel yazma rehin kalmaz.
+    Admission admit(LogCursor& log, std::uint64_t applied) {
+        if (is_admitted(log.device, applied))
+            return Admission::Yes;
+        const bool needed = referenced_.contains(log.device);
+        const bool full = known_peers_ >= limits_.max_peers ||
+                          (!needed && reserved_ >= limits_.max_peers - known_peers_);
+        if (!full && !needed && !open_admission_)
+            return Admission::Later;
+        if (full) {
             log.stop = LogCursor::Stop::PeerLimit;
-            return false;
+            return Admission::Never;
         }
         ++known_peers_;
-        return true;
+        admitted_.insert(log.device);
+        reserved_ -= needed ? 1 : 0;
+        return Admission::Yes;
     }
 
     // Sırası gelmemiş çerçeve dosyadan yeniden okunmaz: kapı bilgisi yeter.
@@ -1014,8 +1085,10 @@ private:
     bool charge_budget(const LogCursor& log, const Frame& frame, std::uint64_t applied, std::size_t bytes) {
         if (frame.seq <= applied && frame.seq > log.last_seq)
             return true;
+        // Bütçeden büyük tek çerçeve (büyük not) ingest'in ilk çerçevesiyse geçer: yoksa hiç uygulanamazdı.
+        const bool first = bytes_read_ == 0;
         bytes_read_ += bytes;
-        return bytes_read_ <= limits_.max_bytes;
+        return first || bytes_read_ <= limits_.max_bytes;
     }
 
     enum class Step { Advance, Hold, Stop };
@@ -1039,11 +1112,27 @@ private:
             log.stop = LogCursor::Stop::BadFrame;
             return Step::Stop;
         }
+        // Yalnız zincirin sıradaki çerçevesi bir şeyi gerekli kılar. Özeti tutmayan tekrar yukarıda reddedildi;
+        // uygulanmış tekrarın bağımlılıkları zaten uygulanmıştır.
+        // Küme ve bekleme bilgisi uzak girdiyle büyür: bellek biterse yalnız bu günlük durur.
+        try {
+            if (frame.seq == *applied + 1)
+                if (const Result<void> noted = note_references(log, frame, *applied); !noted)
+                    return std::unexpected(noted.error());
+        } catch (const std::bad_alloc&) {
+            stop_out_of_memory(log);
+            return Step::Stop;
+        }
         const Result<bool> ready = dependencies_met(frame.deps);
         if (!ready)
             return std::unexpected(ready.error());
         if (frame.seq != *applied + 1 || !*ready) {
-            log.waiting.emplace(frame.seq, frame.deps);
+            try {
+                log.waiting.emplace(frame.seq, frame.deps);
+            } catch (const std::bad_alloc&) {
+                stop_out_of_memory(log);
+                return Step::Stop;
+            }
             return Step::Hold;
         }
         const Result<bool> room = merger_has_room(frame);
@@ -1053,10 +1142,23 @@ private:
             log.stop = LogCursor::Stop::MergeLimit;
             return Step::Stop;
         }
-        if (!admit(log, *applied))
+        const Admission admission = admit(log, *applied);
+        if (admission == Admission::Never)
             return Step::Stop;
-        if (const Result<void> done = apply_frame(log, frame, payload); !done)
-            return std::unexpected(done.error());
+        if (admission == Admission::Later) {
+            bytes_read_ -= payload.size();  // kabul edilince yeniden okunur ve o zaman sayılır
+            log.deferred = true;
+            return Step::Hold;
+        }
+        if (const Result<void> done = apply_frame(log, frame, payload); !done) {
+            if (!is_too_big(done.error()))
+                return std::unexpected(done.error());
+            // Depolamanın satır ya da değer sınırına (SQLITE_LIMIT_LENGTH) sığmayan uzak çerçeve: çerçevenin
+            // içeriğidir, yerel hata değildir. Savepoint geri alındı; o günlük durur, ingest sürer.
+            report_bad(log.path, log.device, frame.seq, "too_big");
+            log.stop = LogCursor::Stop::BadFrame;
+            return Step::Stop;
+        }
         applied_any_ = true;
         return Step::Advance;
     }
@@ -1072,6 +1174,11 @@ private:
             log.partial_tail = true;
             break;
         case LogReader::Status::Damaged:
+            // Daha yeni biçim bozuk değildir: günlük durur, kullanıcıya güncelleme söylenir (stalled).
+            if (reader.error().code == Error::Code::TooNew) {
+                log.stop = LogCursor::Stop::TooNew;
+                break;
+            }
             report_bad(log.path, log.device, 0, reason_of(reader.error()));
             log.stop = LogCursor::Stop::BadFrame;
             break;
@@ -1084,6 +1191,11 @@ private:
     Result<bool> advance(LogCursor& log) {
         if (log.stop != LogCursor::Stop::None || log.offset >= log.file_bytes)
             return false;
+        if (log.deferred) {
+            if (!open_admission_ && !referenced_.contains(log.device))
+                return false;
+            log.deferred = false;
+        }
         const Result<bool> waiting = still_waiting(log);
         if (!waiting)
             return std::unexpected(waiting.error());
@@ -1091,24 +1203,45 @@ private:
             return false;
         log.waiting.reset();
 
-        Result<std::optional<LogReader>> opened = LogReader::open(log.path);
+        Result<std::optional<LogReader>> opened =
+            LogReader::open(log.path, limits_.frame.bytes, limits_.group_bytes);
         if (!opened || !opened->has_value()) {
             report_bad(log.path, log.device, 0, opened ? "log_vanished" : reason_of(opened.error()));
             log.stop = LogCursor::Stop::BadFrame;
             return false;
         }
         LogReader& reader = **opened;
+        // Başlık her açılışta yeniden okunur: kayıt biçimi (v1/v2) ondadır ve dosya arada değişmiş olabilir.
+        if (const LogReader::Status header = reader.read_header(); header != LogReader::Status::Frame) {
+            finished_by_status(log, reader, header);
+            return false;
+        }
         reader.seek(log.offset);
         applied_any_ = false;
         while (true) {
-            const LogReader::Status status = reader.next();
-            if (finished_by_status(log, reader, status))
+            if (log.known_tail == reader.offset()) {
+                log.valid_end = reader.offset();
+                finished_by_status(log, reader, LogReader::Status::PartialTail);
                 return applied_any_;
-            const Result<Frame> frame = decode_frame(reader.payload());
+            }
+            const std::optional<LogReader::Status> status = next_record(reader);
+            if (status == LogReader::Status::PartialTail) {
+                // Yarım grup okundu ve özetlendi: bütçeden düşer; yeri kaydedilir, dosya değişmedikçe atlanır.
+                bytes_read_ += reader.file_size() - reader.offset();
+                log.tail_read = true;
+            }
+            if (!status || finished_by_status(log, reader, *status)) {
+                if (!status)
+                    stop_out_of_memory(log);
+                return applied_any_;
+            }
+            const Result<Frame> frame = decode_frame(reader.payload(), decode_limits(reader.parts()));
             if (!frame) {
+                // Çözücünün tek LimitExceeded'ı bellektir: o günlük durur, ingest ve diğer günlükler sürer.
                 if (frame.error().code == Error::Code::LimitExceeded)
-                    return std::unexpected(frame.error());  // bellek, çerçevenin suçu değil
-                report_bad(log.path, log.device, 0, reason_of(frame.error()));
+                    stop_out_of_memory(log);
+                else
+                    report_bad(log.path, log.device, 0, reason_of(frame.error()));
                 log.stop = LogCursor::Stop::BadFrame;
                 return applied_any_;
             }
@@ -1123,6 +1256,125 @@ private:
         }
     }
 
+    // Uzak çerçevenin işlem sınırı: parça x frame_ops'u gönderen seçer (parça sayısı onundur), tek başına belleği
+    // sınırlamaz. group_ops çözülen belleği, merge_owners uygulanabilirliği sınırlar: daha çok işlemli çerçeve bu
+    // cihazda hiç uygulanamazdı, çözülmeden bekler.
+    FrameLimits decode_limits(std::size_t parts) const {
+        FrameLimits limits = logical_frame_limits(limits_.frame, parts);
+        limits.ops = std::min({limits.ops, limits_.group_ops, limits_.max_merge_owners});
+        return limits;
+    }
+
+    // Uzak grubun birleştirilmesi ayırma yapar (group_bytes'a dek): bellek biterse yalnız o günlük durur.
+    static std::optional<LogReader::Status> next_record(LogReader& reader) {
+        try {
+            return reader.next();
+        } catch (const std::bad_alloc&) {
+            return std::nullopt;
+        }
+    }
+
+    void stop_out_of_memory(LogCursor& log) {
+        report_bad(log.path, log.device, 0, "oom");
+        log.stop = LogCursor::Stop::BadFrame;
+    }
+
+    // Bitmemiş grubun yeri meta'da cihaz başına: başlangıç, dosya boyu, dosya zamanı (u64, u64, i64).
+    static constexpr std::string_view kTailPrefix = "partial_tail:";
+    static constexpr std::string_view kTailPrefixEnd = "partial_tail;";  // ':' + 1: önekin aralık sonu
+    static std::string tail_key(const DeviceId& device) { return std::string(kTailPrefix) + log_file_name(device); }
+
+    Result<void> recall_tails() {
+        for (LogCursor& log : logs_) {
+            if (!log.file_time)
+                continue;
+            Result<Statement> stored = store_.statement(StatementId::MetaGet);
+            if (!stored)
+                return std::unexpected(stored.error());
+            const std::string key = tail_key(log.device);
+            stored->bind_text(1, key);
+            const Result<bool> row = stored->step();
+            if (!row)
+                return std::unexpected(row.error());
+            if (!*row)
+                continue;
+            const std::span<const std::byte> value = stored->column_blob(0);
+            if (value.size() != kTailRecordBytes)
+                continue;  // bozuk kayıt yalnız atlamayı kaybettirir: grup yeniden okunur
+            const auto at = [&](std::size_t index) {
+                std::uint64_t word = 0;
+                for (std::size_t i = 0; i < sizeof word; ++i)
+                    word |= std::to_integer<std::uint64_t>(value[index * sizeof word + i]) << (i * 8U);
+                return word;
+            };
+            if (at(1) == log.file_bytes && static_cast<std::int64_t>(at(2)) == *log.file_time)
+                log.known_tail = at(0);
+        }
+        return {};
+    }
+
+    // Bu ingest'te bitmemiş grubu olmayan günlüğün (grubu bitti ya da günlük artık yok) kaydı: meta büyümesin.
+    Result<std::vector<std::string>> stale_tails() const {
+        Result<Statement> keys = store_.statement(StatementId::MetaKeysInRange);
+        if (!keys)
+            return std::unexpected(keys.error());
+        keys->bind_text(1, kTailPrefix).bind_text(2, kTailPrefixEnd);
+        std::vector<std::string> stale;
+        while (true) {
+            const Result<bool> row = keys->step();
+            if (!row)
+                return std::unexpected(row.error());
+            if (!*row)
+                return stale;
+            const std::string_view key = keys->column_text(0);
+            if (std::ranges::none_of(logs_, [&](const LogCursor& log) {
+                    return log.partial_tail && tail_key(log.device) == key;
+                }))
+                stale.emplace_back(key);
+        }
+    }
+
+    Result<void> remember_tails() {
+        const auto fresh = [](const LogCursor& log) { return log.tail_read && log.file_time.has_value(); };
+        const Result<std::vector<std::string>> stale = stale_tails();
+        if (!stale)
+            return std::unexpected(stale.error());
+        if (stale->empty() && std::ranges::none_of(logs_, fresh))
+            return {};
+        if (const Result<void> begun = store_.begin_write(); !begun)
+            return begun;
+        for (const std::string& key : *stale) {
+            Result<Statement> erase = store_.statement(StatementId::MetaDelete);
+            if (!erase)
+                return std::unexpected(erase.error());
+            erase->bind_text(1, key);
+            if (const Result<void> erased = erase->run(); !erased)
+                return erased;
+        }
+        for (const LogCursor& log : logs_) {
+            if (!fresh(log))
+                continue;
+            std::string value;
+            for (const std::uint64_t word :
+                 {log.valid_end, log.file_bytes, static_cast<std::uint64_t>(*log.file_time)})
+                for (std::size_t i = 0; i < sizeof word; ++i)
+                    value.push_back(static_cast<char>(word >> (i * 8U)));
+            Result<Statement> put = store_.statement(StatementId::MetaPut);
+            if (!put)
+                return std::unexpected(put.error());
+            const std::string key = tail_key(log.device);
+            put->bind_text(1, key).bind_blob(2, std::as_bytes(std::span(value.data(), value.size())));
+            if (const Result<void> written = put->run(); !written)
+                return written;
+        }
+        return store_.commit_write();
+    }
+
+    // SQLITE_TOOBIG (storage_error'ın LimitExceeded'ı); bellek (graph.oom) bu değildir.
+    static bool is_too_big(const Error& error) {
+        return error.code == Error::Code::LimitExceeded && error.message_key == "graph.storage_error";
+    }
+
     static const char* stall_reason(const LogCursor& log) {
         switch (log.stop) {
         case LogCursor::Stop::PeerLimit:
@@ -1133,9 +1385,13 @@ private:
             return "ingest_budget";
         case LogCursor::Stop::MergeLimit:
             return "merge_limit";
+        case LogCursor::Stop::TooNew:
+            return "log_too_new";
         case LogCursor::Stop::None:
             break;
         }
+        if (log.deferred)
+            return "peer_limit";
         return log.waiting ? "missing_dependency" : nullptr;
     }
 
@@ -1189,7 +1445,7 @@ private:
             }
             if (!differs)
                 continue;
-            if (report_.conflicts.size() >= kMaxReportEntries)
+            if (report_.conflicts.size() >= limits_.max_report_entries)
                 ++report_.omitted;
             else
                 report_.conflicts.push_back(MergeConflict{owner, key});
@@ -1211,10 +1467,25 @@ private:
     std::uint64_t bytes_read_ = 0;
     std::chrono::steady_clock::time_point batch_started_;
     std::uint64_t known_peers_ = 0;
+    std::set<DeviceId> referenced_;  // nedensel olarak gereken cihazlar (kabul edilmişlerin bağımlılıkları)
+    std::set<DeviceId> admitted_;    // bu ingest'te kabul edilen yeni cihazlar
+    bool open_admission_ = false;    // gerekenler bitti: kalan yer kimlik sırasıyla
+    std::size_t reserved_ = 0;       // gerekli olup henüz kabul edilmemiş cihaz sayısı
     std::set<std::pair<OwnerId, std::string>> touched_;
 };
 
 }  // namespace
+
+IngestLimits ingest_limits_of(const GraphLimits& limits) {
+    return IngestLimits{.max_bytes = limits.ingest_bytes,
+                        .max_merge_owners = limits.merge_owners,
+                        .max_peers = limits.peers,
+                        .max_report_entries = limits.report_entries,
+                        .max_touched_properties = limits.touched_properties,
+                        .frame = frame_limits_of(limits),
+                        .group_bytes = limits.group_bytes,
+                        .group_ops = limits.group_ops};
+}
 
 Result<MergeReport> ingest_logs(Store& store, std::span<const std::filesystem::path> logs,
                                 const IngestLimits& limits) {

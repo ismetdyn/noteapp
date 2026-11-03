@@ -84,7 +84,8 @@ int run_export(const ParsedArgs& args, const core::Config& config) {
     }
 
     core::NoteStore store = core::NoteStore::for_config(config);
-    const auto note = pick_best_note(store, parsed->positional.front());
+    const auto note =
+        pick_best_note(store, parsed->positional.front(), config.limits.search.fuzzy_candidate_chars.cap());
     if (!note)
         return note.error();
     // store.read bağ ve kök dışı denetimlerini yapar: PDF yalnız bu baytlardan üretilir, dosya yeniden

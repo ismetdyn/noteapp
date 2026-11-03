@@ -223,26 +223,30 @@ Ad verirken yazdığın uzantı değiştirilmez, yerine başkası konmaz, üstü
 
 En küçük pencere 60×15. Odaklı panelin çerçevesi kipe göre renklidir ve etiket taşır: `LIST` camgöbeği, `REVIEW` yeşil, `EDIT` eflatun, kaydedilmemişse `EDIT *`.
 
-REVIEW'da `.md` `glow` gibi biçimli görünür: başlık, kalın, eğik, kod (dil etiketiyle renkli), alıntı, liste, görev listesi, sarılan tablo, bağlantı metin + soluk URL, görsel `[görsel: alt]`, HTML yazıldığı gibi; ağa ya da dosyaya gidilmez. `.csv` hizalı tablo, `.json` girintili görünür; geçersiz ya da 256 KiB'ten büyükse ham metin ve soluk neden. `R` görünüm/ham arasında geçer (etikette yazar, oturum boyunca kalır), EDIT her zaman ham metindir. `/` gösterilen metinde arar, `e` üstte görünen bloğun kaynak satırında açar.
+REVIEW'da `.md` `glow` gibi biçimli görünür: başlık, kalın, eğik, kod (dil etiketiyle renkli), alıntı, liste, görev listesi, sarılan tablo, bağlantı metin + soluk URL, görsel `[görsel: alt]`, HTML yazıldığı gibi; ağa ya da dosyaya gidilmez. `.csv` hizalı tablo, `.json` girintili görünür; geçersiz ya da `limits.tui.view_bytes`'tan (256 KiB; `note config set limits.tui.view_bytes 0` ile sınırsız) büyükse ham metin ve soluk neden. `R` görünüm/ham arasında geçer (etikette yazar, oturum boyunca kalır), EDIT her zaman ham metindir. `/` gösterilen metinde arar, `e` üstte görünen bloğun kaynak satırında açar.
 
-EDIT'te satır numarası sütunu (geçerli satır vurgulu), gerçek terminal imleci, geçerli satır arka planı, dosya sonunun ötesinde `~` ve durum çubuğu (dosya, tip, UTF-8, LF/CRLF, BOM, satır:sütun, toplam satır) vardır; tıklama imleci oraya koyar. Sözdizimi vurgusu REVIEW ve EDIT'te, uzantıya göre (kaydedilmemiş taslakta canlı algılamayla); 2 MiB'den büyük dosya ve 64 KiB'den uzun satır düz metindir.
+EDIT'te satır numarası sütunu (geçerli satır vurgulu), gerçek terminal imleci, geçerli satır arka planı, dosya sonunun ötesinde `~` ve durum çubuğu (dosya, tip, UTF-8, LF/CRLF, BOM, satır:sütun, toplam satır) vardır; tıklama imleci oraya koyar. Sözdizimi vurgusu REVIEW ve EDIT'te, uzantıya göre (kaydedilmemiş taslakta canlı algılamayla); `limits.tui.highlight_bytes`'tan (2 MiB) büyük dosya ve `highlight_line_bytes`'tan (64 KiB) uzun satır düz metindir (`0` = sınırsız).
 
 ### `notes-gui`
 
 Pencerenin üstünde tek araç çubuğu, dosya yöneticisindeki gibi gruplu: `Yeni not` `Yeni klasör` | `Yeniden adlandır` `Taşı` `Sil` | `Çöp (n)` `PDF'e aktar`, sağda görünüm seçici `Ağaç` / `Ayrıntılar` / `Harita` (seçim `gui-state.toml`'da kalır). Düğmeler seçili satıra uygulanır: klasör satırında klasörü yeniden adlandırır ya da (onayla) siler, not satırında notu; `Yeni not` ve `Yeni klasör` seçili klasörün, not seçiliyse notun klasörünün içine açar. Yapamayacağı işte düğme kapalıdır, ipucu nedenini ve kısayolu söyler.
 
-- **Ağaç** (varsayılan): TUI'deki gibi klasörler ve notlar tek panelde, kök `Tümü`; oka ya da çift tıklayınca klasör açılır/kapanır. Açık klasörler yalnız bu oturumda hatırlanır; seçili not açılışta görünür olur.
+- **Ağaç** (varsayılan): TUI'deki gibi klasörler ve notlar tek panelde, kök `Tümü`; oka ya da çift tıklayınca klasör açılır/kapanır. Açık klasörler `gui-state.toml`'da kalır; seçili not açılışta görünür olur.
 - **Ayrıntılar**: yalnız geçerli klasörün içeriği, sütunlar Ad, Boyut, Değiştirilme, Oluşturulma; önce klasörler. Klasöre çift tıklama ya da `Enter` içine girer; üstte `Yukarı` ve tıklanabilir yol düğmeleri.
 - **Harita**: notlar çizge olarak, editör sağda kalır. Kenarlar `[[bağlantı]]` (oklu) ve ilişki (renkli, oksuz); düğüm rengi not tipinden, gösterilen not halkalı. Üstte `Tüm çizge` (kapalıyken gösterilen notun çevresi), `Derinlik` (varsayılan 2) ve `Etiketler` (etiketler küçük kare). Tıklama notu açar (bekleyen düzenleme önce kendi notuna kaydedilir), çift tıklama açıp Ağaç'a geçer, düğümü sürüklemek onu oraya sabitler. Tekerlek imlecin çevresinde yakınlaştırır; boşluğu sürüklemek ya da orta tuş kaydırır; harita odaktayken oklar kaydırır, `+`/`-` yakınlaştırır, `0` sığdırır. Arama kutusu eşleşen notları vurgular, gerisini soldurur (`tag:` dahil). En çok 2.000 düğüm çizilir, aşılınca üstte uyarı çıkar. Hedefinden önce kaydedilmiş bir notun `[[bağlantı]]`ı, not yeniden kaydedilene dek haritada çizilmez (bağlantı panelinde görünür).
 - Klasör satırı seçilince açık notun bekleyen düzenlemesi önce kaydedilir, sağ panelde editör yerine klasör özeti (yol, not ve klasör sayısı) görünür.
-- Arama kutusuna yazınca liste düz sonuca döner (vurgulu, seçili klasörün içinde); çöp görünümü de düz listedir.
+- Arama kutusuna yazınca liste düz sonuca döner (vurgulu, seçili klasörün içinde); çöp görünümü de düz listedir. Yanındaki düğme `Ad` / `İçerik` arasında geçer (`Ctrl+Shift+M`); kutuda `Tab` argümanı, etiketi ya da not adını tamamlar (çok aday varsa liste: yazı süzer, `Enter` ekler, `Esc` kapatır), soluk öneriyi `→` alır, `Ctrl+P` önceki aramalara döner (`Ctrl+N` ileri); argümanlar renklidir, bozuk değer kırmızı. Bulunan aramalar `gui-state.toml`'da hatırlanır (TUI kuralıyla, parola benzeri sorgu yazılmaz); `Ctrl+Shift+F` ad ve içerikte birlikte arar (`Tümü`), içerikte bulunan notun en iyi satırı yolun altında görünür. `Ctrl+Shift+T` etiketleri, `Ctrl+Shift+R` kayıtlı görünümleri listeler; seçilen `tag:` ya da `view:` sorgusu olur. `sync:new` gibi senkron argümanı not başına durumu kullanır (senkron açıkken).
+- **Sırala** düğmesi TUI'nin `o` menüsüdür: ad, güncelleme, oluşturma, boyut ya da ters çevir. Sıra ağaca, Ayrıntılar'a ve metinsiz aramaya uygulanır, varsayılan en yeni başta; seçim `gui-state.toml`'da kalır.
 - **Sıra no:** Ayarlar → Görünüm → `Sıra no` Ağaç ve Ayrıntılar'da TUI'deki gibi satır numarası gösterir (her klasörde 1'den); hemen uygulanır, `gui-state.toml`'da kalır.
 - **Bilgi paneli** (`Ctrl+I` ya da `Bilgi` başlığı): seçili notun boyutu, güncelleme ve oluşturma zamanı, senkron durumu, kaynak cihazı, tipi ve etiketleri; TUI'deki satır ayrıntısıyla aynı alanlar. Başlangıçta kapalıdır.
-- **Önizleme** (`md` ve `markdown` notlarında, `Ctrl+Shift+V` ya da başlıktaki `Önizleme` / `Düzenle`): Markdown biçimli ve salt okunur görünür; başlıklar büyük ve kalın, vurgu, listeler, kod blokları (eş aralıklı, zeminli), alıntı, yatay çizgi, basit tablo. `[[not]]` bağlantısına tıklamak bekleyen düzenlemeyi önce kendi notuna kaydeder, sonra o notu açar; olmayan nota giden `[[ad]]` soluk ve üstü çizilidir, tıklanmaz; dış bağlantı yalnız ipucunda gösterilir, açılmaz. HTML düz metin kalır, görsel yerine alt metni yazılır. Seçim oturum boyunca tüm Markdown notlarında kalır (TUI'deki `R` gibi); 256 KiB'tan büyük notta önizleme kapalıdır.
+- **Önizleme** (`md` ve `markdown` notlarında, `Ctrl+Shift+V` ya da başlıktaki `Önizleme` / `Düzenle`): Markdown biçimli ve salt okunur görünür; başlıklar büyük ve kalın, vurgu, listeler, kod blokları (eş aralıklı, zeminli), alıntı, yatay çizgi, basit tablo. `[[not]]` bağlantısına tıklamak bekleyen düzenlemeyi önce kendi notuna kaydeder, sonra o notu açar; olmayan nota giden `[[ad]]` soluk ve üstü çizilidir, tıklanmaz; dış bağlantı yalnız ipucunda gösterilir, açılmaz. HTML düz metin kalır, görsel yerine alt metni yazılır. Seçim oturum boyunca tüm önizlenen notlarda kalır (TUI'deki `R` gibi); `csv` not tablo, `json` not girintili ve renkli görünür (TUI ile aynı kural). `limits.tui.view_bytes`'tan (256 KiB) büyük notta önizleme kapalıdır; tablo satır/sütun ve satır sınırları da TUI'nin `limits.tui.*` anahtarlarıdır.
+- **Dış editör** (`Shift+E` listede, not menüsünde `Harici editörde aç`): seçili not `editor` ayarındaki programda açılır, kapanınca geri yazılır; pencere beklerken donmaz, editör açıkken kapanmaz. GUI'de bekleyen bir pencere editörü verin (`code --wait`, `gedit`); `nano` gibi terminal editörü terminalsiz başlatılan GUI'de açılamaz. **Kopyala** (`Ctrl+C` listede): notun baytları ya da klasör yolu panoya.
 
 | Tuş | Eylem |
 |---|---|
 | `Ctrl+K` / `Ctrl+P` | Arama kutusuna odak (`↑↓` listede gezer, `Enter` açar) |
+| `Ctrl+Shift+F` | Ad ve içerikte birlikte ara |
+| `Ctrl+Shift+T` / `Ctrl+Shift+R` | Etiket seçici / kayıtlı görünüm seçici |
 | `↑↓` `←→` `Enter` (listede) | Görünür satırlarda gezer; `→` klasörü açar ya da içine iner, `←` kapatır ya da üst klasöre çıkar; `Enter` notu editörde açar, Ayrıntılar'da klasöre girer |
 | `Ctrl+N` / `Ctrl+S` | Yeni not / şimdi kaydet |
 | `Ctrl+Shift+S` | Ad/klasör/tip diyaloğu |
@@ -253,7 +257,9 @@ Pencerenin üstünde tek araç çubuğu, dosya yöneticisindeki gibi gruplu: `Ye
 | `Ctrl+E` | PDF dışa aktar |
 | `Ctrl+L` | Editör altındaki bağlantı panelini aç ya da kapat (satıra tıklamak o notu açar) |
 | `Ctrl+I` | Bilgi panelini aç ya da kapat |
-| `Ctrl+Shift+V` | `md`/`markdown` notunda önizleme ↔ düzenleme |
+| `Ctrl+Shift+V` | `md`/`markdown`/`csv`/`json` notunda önizleme ↔ düzenleme |
+| `Shift+E` / `Ctrl+C` (listede) | Dış editörde aç / panoya kopyala |
+| `Ctrl+Shift+M` | Arama modu (Ad / İçerik) |
 | Oklar / `+` `-` / `0` (harita odaktayken) | Kaydır / yakınlaştır, uzaklaştır / sığdır |
 | `F5` | Şimdi senkronla |
 | `Ctrl+,` | Ayarlar sekmesi |
@@ -271,11 +277,11 @@ Eski sürüm notları `notes_dir` altında düz dosya tutuyordu. Yeni sürüm bu
 note graph migrate
 ```
 
-Oluşturulma zamanı dosyanın doğum zamanından alınır (yoksa son değişiklik). Önce özel bir yedek alır (`<veri dizini>/migration-backup-*`, yer ve silme komutu çıktıda), notları ve çöpü bayt bayt içe aktarır, doğrular. Eski dosyalara dokunmaz, kendiliğinden silmez; tekrar çalıştırmak güvenlidir. 60 MiB üstü dosya adıyla raporlanır ve yerinde kalır, geçiş sürer. Başka bir nedenle geçemeyen dosya (okunamayan, geçersiz ad) listelenir, kapı kapalı kalır; `note graph migrate --skip-failed` onları da yerinde bırakıp kapıyı açar.
+Oluşturulma zamanı dosyanın doğum zamanından alınır (yoksa son değişiklik). Önce özel bir yedek alır (`<veri dizini>/migration-backup-*`, yer ve silme komutu çıktıda), notları ve çöpü bayt bayt içe aktarır, doğrular. Eski dosyalara dokunmaz, kendiliğinden silmez; tekrar çalıştırmak güvenlidir. Büyük dosya da bayt bayt alınır; yalnız depolama sınırını (1 GB) aşan dosya adıyla raporlanır ve yerinde kalır, geçiş sürer. Başka bir nedenle geçemeyen dosya (okunamayan, geçersiz ad) listelenir, kapı kapalı kalır; `note graph migrate --skip-failed` onları da yerinde bırakıp kapıyı açar.
 
 Senkronlu iki cihazda: A'da `note graph migrate`, `note sync`; B'de `note graph migrate`, `note sync`. Sıra önemli değildir: aynı baytlar tek not olur, farklıysa kopya kalır. `note export --all DİZİN` ile denetledikten sonra eski dosyaları tek cihazda kaldır: `git -C <notes_dir> rm -r -- <dosyalar>`, `git commit`, `note sync`. Senkronsuz kullanımda dosyaları kendin silersin.
 
-**Silmeden önce `note graph status` çalıştır.** Geçişin dışarıda bıraktığı dosyalar ve okunamayan klasörler (60 MiB üstü, geçersiz ad, bağ, izni olmayan ya da yolu çok uzun dizin, `--skip-failed` ile geçilenler) veritabanında ve dışa aktarımda **yoktur**; tek kopyaları eski dosyalardır, silersen kaybolur. Liste `<veri dizini>/migration-skipped` dosyasında kalır: `note graph status` ve `note export --all` adlarını yazar, 1 ile çıkar. Düzeltip `note graph migrate`i yinelemek listeyi günceller; `--ignore-skipped` kaybı kabul eder, çıkış 0 olur.
+**Silmeden önce `note graph status` çalıştır.** Geçişin dışarıda bıraktığı dosyalar ve okunamayan klasörler (1 GB'tan büyük, geçersiz ad, bağ, izni olmayan ya da yolu çok uzun dizin, `--skip-failed` ile geçilenler) veritabanında ve dışa aktarımda **yoktur**; tek kopyaları eski dosyalardır, silersen kaybolur. Liste `<veri dizini>/migration-skipped` dosyasında kalır: `note graph status` ve `note export --all` adlarını yazar, 1 ile çıkar. Düzeltip `note graph migrate`i yinelemek listeyi günceller; `--ignore-skipped` kaybı kabul eder, çıkış 0 olur.
 
 `note graph status` yalnız geçerli `notes_dir`i denetler; aynı veri dizinine geçirilmiş başka dizinlerin kayıtlarını yalnız sayar, çıkış kodunu etkilemezler. `note export --all` ise veritabanının tümünü çıkardığı için bütün kayıtları yazmayı sürdürür. `note graph status --clear-skipped` bütün dizinlerin listesini yazıp unutur: yalnız kayıt silinir, eski dosyalara dokunulmaz, dosyalar hâlâ veritabanında değildir ve geçiş yinelenince o dizininkiler yeniden listelenir.
 
@@ -359,7 +365,7 @@ python = ["pylsp"]        # varsayılanın yerine
 html = [["vscode-html-language-server", "--stdio"]]   # htmx-lsp'siz
 ```
 
-**Sertleştirme.** Aşağıdaki ayarlar `src/tui/server_settings.cpp`'deki gömülü tablodan gelir (sunucu program adından
+**Sertleştirme.** Aşağıdaki ayarlar `src/edit/server_settings.cpp`'deki gömülü tablodan gelir (sunucu program adından
 tanınır: `/opt/x/rust-analyzer` de `rust-analyzer`'dır) ve `initializationOptions`, `workspace/configuration` cevabı ve
 `workspace/didChangeConfiguration` ile gider; her anahtar sunucunun güncel kaynağından doğrulandı:
 
@@ -417,7 +423,7 @@ Dil notun adından ya da uzantısından gelir (büyük/küçük harf fark etmez)
 `rb` (`ruby`), `php`, `kt`/`kts` (`kotlin`), `swift`, `zig`, `xml`, `ini`. `.env` ve `.properties` notları hiçbir sunucuya
 gitmez. Bozuk girdi açılışta uyarı verir ve atlanır; çöken sunucu o oturumda kapalı kalır, nedeni alt satırda bir kez görünür.
 
-**Gizlilik:** sunucusu tanımlı ve kurulu dillerin notları (2 MiB'a kadar) durum dizinindeki `lsp/workspace/` altına dosya olarak
+**Gizlilik:** sunucusu tanımlı ve kurulu dillerin notları (`limits.lsp.note_bytes`, varsayılan 2 MiB'a kadar) durum dizinindeki `lsp/workspace/` altına dosya olarak
 yazılır (yalnız sana açık: dizin 0700, dosyalar 0600; Linux'ta `~/.local/state/noteapp/lsp/workspace/`, Windows'ta
 `%LOCALAPPDATA%\noteapp\lsp\workspace\`) ki notlar arası import çözülsün; açtığın not sunucuya gönderilir. Dizin çıkışta
 silinmez, bir sonraki açılışta yeniden eşitlenir; dili listeden çıkarınca dosyaları silinir, tamamen silmek için
@@ -461,6 +467,10 @@ Başlangıçta `notes_dir` boşsa repo klonlanır ve bu cihazın notları diğer
 commit olarak gider. `notes_dir`'de görünür dosya varken remote da doluysa `sync.both_non_empty` ile reddedilir.
 Git yalnız taşıyıcıdır: depoya yalnız `graph/<cihaz>.oplog`, `.gitattributes` ve `.gitignore` commit'lenir. **Sınır:** günlük
 sıkıştırılmaz; silinen bir notun baytları eski günlük satırlarında ve git geçmişinde kalır. Depo özel olmalı, şifreleme yoktur.
+
+**Senkronlanan tüm cihazları birlikte güncelle.** Büyük not (`limits.graph.frame_bytes`'tan, varsayılan 64 MiB, büyük) ya da
+çok büyük tek işlem günlüğe yeni, parçalı biçimde yazılır. Eski sürüm bu biçimi okuyamaz: o cihazın günlüğünü bekletir ve
+"uygulamayı güncelle" der; veri kaybolmaz, güncelleyince sonraki senkron devam eder. Yeni sürüm eski günlükleri okur.
 
 Sonrasında not ekleyen/değiştiren her komut arka planda senkronu başlatır; TUI/GUI açılışta, değişikliklerden sonra
 (`idle_seconds`) ve çıkışta senkronlar. **Çakışma** (aynı not iki cihazda değişti): bir sürüm yerinde kalır, diğeri

@@ -1,10 +1,11 @@
+#include "core/config.hpp"
 #include "core/i18n.hpp"
 #include "core/note_store.hpp"
+#include "edit/completion.hpp"
+#include "edit/editor_session.hpp"
+#include "edit/spellcheck.hpp"
 #include "support/test_support.hpp"
-#include "tui/completion.hpp"
-#include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
-#include "tui/spellcheck.hpp"
 #include "tui/view.hpp"
 
 #include <algorithm>
@@ -109,6 +110,38 @@ TEST_CASE("suggestion: needs two bytes, a longer word and a word start") {
     CHECK_FALSE(tui::suggest_completion("toplam t", 8, "md", nullptr));
     CHECK_FALSE(tui::suggest_completion("toplam x toplam", 15, "md", nullptr));
     CHECK_FALSE(tui::suggest_completion("xtoplam to", 10, "md", nullptr));  // sözcük ortası
+}
+
+// L2: limits.tui.completion_* 0 (SIZE_MAX) ise eski tavanların üstü de önerilir.
+TEST_CASE("suggestion: words beyond the old window, length and table caps are offered when unlimited") {
+    const tui::CompletionLimits unlimited = tui::completion_limits_of(
+        core::parse_config("[limits.tui]\ncompletion_window_bytes = 0\ncompletion_word_bytes = 0\n"
+                           "completion_table_words = 0\n")
+            .config.limits.tui,
+        2);
+    // 256 KiB'lık pencerenin dışındaki tek aday.
+    const std::string far = "uzaksozcuk\n" + std::string(300 * 1024, ' ') + "\nuz";
+    CHECK_FALSE(tui::suggest_completion(far, end_of(far), "md", nullptr));
+    CHECK(tui::suggest_completion(far, end_of(far), "md", nullptr, unlimited) == "aksozcuk");
+
+    // 64 bayttan uzun sözcük.
+    const std::string word = "ab" + std::string(98, 'c');
+    const std::string longer = word + "\nab";
+    CHECK_FALSE(tui::suggest_completion(longer, end_of(longer), "md", nullptr));
+    CHECK(tui::suggest_completion(longer, end_of(longer), "md", nullptr, unlimited) == word.substr(2));
+
+    // tuning.completion_min_prefix_bytes 1: tek harfle öneri.
+    tui::CompletionLimits one_byte;
+    one_byte.min_prefix_bytes = 1;
+    const std::string single = "toplam t";
+    CHECK(tui::suggest_completion(single, end_of(single), "md", nullptr, one_byte) == "oplam");
+
+    // Sözcük tablosu 200.000 sözcükte durmaz.
+    std::string many;
+    for (int i = 0; i < 200'010; ++i)
+        many += "ww" + std::to_string(i) + ' ';
+    CHECK(tui::build_word_table({{"md", many}}).words.size() == tui::CompletionLimits{}.table_words);
+    CHECK(tui::build_word_table({{"md", many}}, unlimited).words.size() == 200'010);
 }
 
 TEST_CASE("suggestion: Turkish words complete whole code points") {
@@ -428,9 +461,19 @@ TEST_CASE("spell: over-long lines are not sent") {
     FakeHunspell fake;
     fake.install(kFakeBody);
     tui::SpellChecker spell("en_US", fake.on_ready(), kNoIdle);
-    CHECK(spell.misspelled(std::string(tui::SpellChecker::kMaxLineBytes + 1, 'k')).empty());
+    CHECK(spell.misspelled(std::string(tui::SpellChecker::kDefaultMaxLineBytes + 1, 'k')).empty());
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     CHECK(fake.ready.load() == 0);
+}
+
+TEST_CASE("spell: a line over the old 8 KiB limit is checked when limits.tui.spellcheck_line_bytes is 0") {
+    FakeHunspell fake;
+    fake.install(kFakeBody);
+    tui::SpellChecker spell("en_US", fake.on_ready(), kNoIdle, tui::SpellChecker::kDefaultTimeout, SIZE_MAX);
+    const std::string line = "iyi kotu " + std::string(tui::SpellChecker::kDefaultMaxLineBytes, 'k');
+    spell.misspelled(line);
+    REQUIRE(eventually([&] { return fake.ready.load() > 0; }));
+    CHECK_FALSE(spell.misspelled(line).empty());
 }
 
 TEST_CASE("misspelled words are underlined in EDIT and in REVIEW") {
@@ -578,7 +621,7 @@ TEST_CASE("spell: quitting while a write to a child that stopped reading is bloc
     // Okumaz, her isteğe boş yanıt verir: boru dolunca yazma takılır.
     fake.install("echo '@(#) ok'\nwhile :; do echo; done");
     const auto line = [](int i) {
-        return std::to_string(i) + std::string(tui::SpellChecker::kMaxLineBytes - 8, 'k');
+        return std::to_string(i) + std::string(tui::SpellChecker::kDefaultMaxLineBytes - 8, 'k');
     };
     auto spell =
         std::make_unique<tui::SpellChecker>("en_US", fake.on_ready(), kNoIdle, std::chrono::seconds(20));

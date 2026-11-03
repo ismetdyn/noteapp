@@ -1,19 +1,22 @@
 #pragma once
 
+#include "app/item_ops.hpp"
+#include "app/listing.hpp"
 #include "core/file_icons.hpp"
 #include "core/folder_tree.hpp"
+#include "core/limits.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
+#include "edit/editor_buffer.hpp"
+#include "edit/input_line.hpp"
+#include "edit/key.hpp"
+#include "edit/note_find.hpp"
 #include "search/content_index.hpp"
 #include "search/folder_order.hpp"
 #include "search/global_search.hpp"
 #include "search/query.hpp"
 #include "tui/commands.hpp"
-#include "tui/editor_buffer.hpp"
-#include "tui/input_line.hpp"
-#include "tui/key.hpp"
 #include "tui/link_panel.hpp"
-#include "tui/note_find.hpp"
 #include "tui/pane_layout.hpp"
 
 #include <chrono>
@@ -47,6 +50,7 @@ enum class Intent {
     CreateFromQuery,  // eşleşme yokken Enter: sorgu yeni notun ilk satırı olur
     NewNote,
     NewRow,        // `a`: listenin başında ad satırı
+    NewFolderRow,  // `folder.new`: aynı ad satırı, klasör adı için hazır
     MoveSelected,  // Ctrl-R: ad/klasör/tip diyaloğu
     DeleteSelected,
     SyncNow,
@@ -68,20 +72,19 @@ enum class Intent {
     UnlinkSelected,   // `L` ilişkili satırda: onaylı kaldırma
     LinkMissing,      // bağlantı panelinde gidilecek notu olmayan satır: nedeni söylenir
     ToggleIcons,      // palet: `icons` ayarını çevirir, config.toml'a yazar
+    ExportPdf,        // REVIEW `P`: altta çıktı yolu girdisi
+    FollowLink,       // REVIEW'da seçili [[bağlantı]]: depo çözer, hedef not açılır
 };
 
-// Çoklu seçimin ya da yank'in bir öğesi.
-struct ListItem {
-    core::NotePath path;
-    bool is_folder = false;
-};
+// Çoklu seçimin ya da yank'in bir öğesi (GUI ile ortak: app/item_ops.hpp).
+using ListItem = app::ItemRef;
 
 // `y`: `p`ye dek bekler; kaynaklar o anda okunur, kaybolan öğe yapıştırmada raporlanır.
 struct PendingYank {
     std::vector<ListItem> items;
 };
 
-enum class Mode { Name, Content, Global };
+using Mode = app::SearchMode;
 
 // Tuşların kime gideceğini belirler: harfler aynı anda hem süzüp hem eylem yapamaz (SPEC-tui "Tuşlar").
 enum class Focus { List, Search, Preview, PreviewFind, Editor, SortMenu, Links };
@@ -130,28 +133,15 @@ struct PreviewRange {
     std::size_t end_offset = 0;
 };
 
-// İçerik araması modele dışarıdan verilir: ContentIndex'in G/Ç'si ve tembel kurulumu modelin işi değil.
-using ContentSearcher = std::function<std::vector<search::ContentResult>(std::string_view query)>;
-// `f`: ad ve içerik birlikte.
-using GlobalSearcher = std::function<std::expected<std::vector<search::GlobalHit>, search::QueryError>(
-    std::string_view query, std::span<const core::NoteMeta> notes)>;
-
-// İki listeleme aynı notları (yol, mtime, boyut) aynı sırada mı içeriyor? Yeniden tarama "değişti mi" kararı
-// için.
-bool same_listing(std::span<const core::NoteInfo> a, std::span<const core::NoteInfo> b);
-
-// Yeniden taramanın karşılaştırdığı depo görüntüsü: biri farklıysa liste ve önizleme tazelenir.
-struct StoreScan {
-    std::vector<core::NoteInfo> notes;
-    std::size_t trash = 0;                // senkron yalnız çöpü de değiştirebilir; okunamayan çöp 0
-    std::vector<std::string> folders;     // boş klasör not listesini değiştirmez
-    std::uint64_t graph_version = 0;      // senkron yalnız ilişki değiştirmiş olabilir: bağlantı bölümü eskir
-    std::vector<std::string> views = {};  // kayıtlı görünüm adları; değişimi graph_version'da görünür
-};
-StoreScan scan_store(const core::NoteStore& store);
-// Kayıtlı görünüm adları ("Run view" ve `view:` tamamlaması).
-std::vector<std::string> view_names(const core::NoteStore& store);
-bool same_scan(const StoreScan& a, const StoreScan& b);
+// Tek tanım src/app'tedir (app/listing.hpp); bu adlar mevcut çağıranlar ve testler için kalır.
+using app::content_searcher;
+using app::ContentSearcher;
+using app::GlobalSearcher;
+using app::same_listing;
+using app::same_scan;
+using app::scan_store;
+using app::StoreScan;
+using app::view_names;
 
 // Sağ panelde mi çalışılıyor (yakınlaştırmada hangi panelin gösterileceği buna bağlı).
 bool right_pane_focused(Focus focus);
@@ -171,22 +161,28 @@ public:
     std::size_t page_rows() const;
 
     void set_notes(std::vector<core::NoteInfo> notes);
-    void set_content_searcher(ContentSearcher searcher) { content_searcher_ = std::move(searcher); }
-    void set_global_searcher(GlobalSearcher searcher) { global_searcher_ = std::move(searcher); }
+    void set_content_searcher(ContentSearcher searcher) { listing_.set_content_searcher(std::move(searcher)); }
+    void set_global_searcher(GlobalSearcher searcher) { listing_.set_global_searcher(std::move(searcher)); }
     // `view:` süzgecinin notları ve "Run view" listesi depodan gelir (model G/Ç yapmaz). Bağlanmazsa `view:`
     // hiçbir notu geçirmez.
-    void set_view_lookup(search::ViewLookup views) { view_lookup_ = std::move(views); }
+    void set_view_lookup(search::ViewLookup views) { listing_.set_view_lookup(std::move(views)); }
+    void set_fuzzy_candidate_chars(std::size_t chars) { listing_.set_fuzzy_candidate_chars(chars); }
     void set_views(std::vector<std::string> names);
     // İşçiden gelen senkron durumları (UI iş parçacığında): yeniden taramada da korunur.
     void set_sync_states(std::map<core::NotePath, core::SyncState> states);
-    std::span<const core::NoteMeta> metas() const { return metas_; }
+    std::span<const core::NoteMeta> metas() const { return listing_.metas(); }
     // Boş klasörler de görünsün diye deponun klasör listesi; notlardan türeyenlerle birleşir.
     void set_folders(std::vector<std::string> folders);
 
     // Klasör görünümü: süzgeç ve çöp yokken liste geçerli klasörün çocuklarıdır (önce klasörler).
     bool in_folder_view() const { return !trash_view_ && query().empty() && mode_ != Mode::Global; }
     const std::string& current_folder() const { return current_folder_; }
-    const FolderTree& folder_tree() const { return tree_; }
+    const FolderTree& folder_tree() const { return listing_.tree(); }
+    const app::Listing& listing() const { return listing_; }
+    // `view.details`: klasör görünümü yalnız geçerli klasörün çocuklarıdır (GUI Ayrıntılar); `view.tree`
+    // ağaca döner. Oturumluktur.
+    bool details_view() const { return details_view_; }
+    void set_details_view(bool details);
     void enter_folder(std::string folder);
     // Ata klasöre dönüşte çıkılan yolun çocuğu seçili kalır; kök üstü yoktur.
     void go_to_folder(std::string folder);
@@ -196,9 +192,12 @@ public:
     SharedInputSources name_input_sources() const;
     // `a`, `F2`: yazılan ad bu klasöre göredir (düz listede kök).
     std::string name_base_folder() const { return in_folder_view() ? current_folder_ : std::string{}; }
+    // `folder` ad satırında name_base_folder'a göre nasıl yazılır: `alt/`; kendisi ya da dışındaysa boş (ad
+    // buraya göredir).
+    std::string name_prefix_for(std::string_view folder) const;
     // Görünümdeki notun üst verisi (çöpte çöpün); yoksa nullptr.
     const core::NoteMeta* meta_of(const core::NotePath& path) const;
-    // Sorgunun bozuk argümanı: metin sayılmaz, satırlar son geçerli haliyle kalır.
+    // Sorgunun bozuk argümanı: metin sayılmaz, satırlar son geçerli sorgunun güncel listedeki sonucudur.
     const std::optional<search::QueryError>& query_error() const { return query_error_; }
 
     // Çöp görünümü (`T`): liste çöpü gösterir, yalnız gezinme, `u`, `D`, `E`, `T`, `q`, `Esc` çalışır.
@@ -288,6 +287,14 @@ public:
     // Bölümün `row`. görünen satırına tıklama: nota gider; eksik hedef ve başlıkta yalnız odaklar.
     void click_link(std::size_t row);
     void scroll_links(int delta);
+    // REVIEW'da seçili [[bağlantı]] (Tab/Shift+Tab, tıklama): hedef anahtarı (core::link_target); yoksa
+    // nullopt. Seçim not, görünüm ya da metin değişince düşer.
+    std::optional<std::string> selected_wiki_target() const;
+    std::optional<ByteRange> wiki_selection_on_line(std::size_t line) const;
+    // Gösterilen metnin `line` satırında `offset` baytı bir bağlantının içindeyse onu seçer.
+    bool select_wiki_link_at(std::size_t line, std::size_t offset);
+    // Bağlantıyla gidilen not seçilir, REVIEW başından sürer (süzgeç gizliyorsa temizlenir). Yoksa false.
+    bool open_note_in_review(const core::NotePath& path);
 
     // Fare.
     void scroll_preview(int delta);
@@ -305,6 +312,11 @@ public:
     // Sürükleme bitti; işaretçi başka hücreye gittiyse true (kopyalanacak metin var).
     bool finish_preview_selection();
     void clear_preview_selection() { preview_selection_.reset(); }
+    // Sürüklemeden biten tıklamanın konumu (finish_preview_selection'dan önce okunur); yoksa nullopt.
+    std::optional<PreviewPoint> preview_click_point() const {
+        return preview_selection_ && !preview_selection_->moved ? std::optional(preview_selection_->anchor)
+                                                                : std::nullopt;
+    }
     bool preview_selection_dragging() const { return preview_selection_ && preview_selection_->dragging; }
     int preview_selection_x() const { return preview_selection_ ? preview_selection_->x : 0; }
     int preview_selection_y() const { return preview_selection_ ? preview_selection_->y : 0; }
@@ -332,7 +344,7 @@ public:
     Mode mode() const { return mode_; }
     Focus focus() const { return focus_; }
     const std::vector<Row>& rows() const { return rows_; }
-    std::size_t total() const { return trash_view_ ? trash_metas_.size() : notes_.size(); }
+    std::size_t total() const { return trash_view_ ? trash_metas_.size() : listing_.notes().size(); }
     std::size_t selected() const { return selected_; }
     // Seçili not; klasör satırında nullptr: not isteyen her eylem klasörde kendiliğinden etkisizdir.
     const Row* selected_row() const {
@@ -365,8 +377,15 @@ public:
     // etiketi, yakınlaştırma ve komutların çalışacağı görünüm aynı kalır.
     static std::span<const Command> commands();
     static constexpr std::string_view kPaletteKey = ":";
-    static constexpr std::size_t kMaxRecentCommands = 20;
+    // limits.app.recent_commands: son kullanılanlar bununla kısalır, yüklenen tercihler de (set_list_prefs).
+    void set_recent_commands_limit(core::Limit limit) { recent_commands_limit_ = std::move(limit); }
+    // limits.tui.search_history ve search_entry_bytes: Enter ile hatırlanan aramalar ve yüklenen geçmiş.
+    void set_search_history_limits(SearchHistoryLimits limits) { search_history_limits_ = limits; }
+    const SearchHistoryLimits& search_history_limits() const { return search_history_limits_; }
     bool palette_open() const { return palette_.has_value(); }
+    // Satırın bağlam menüsü (sağ tık): GUI'nin satır menüsündeki komutlarla sınırlı palet, seçili satır için.
+    // Satır seçimde değilse seçim bırakılır: eylem tıklanan satıra uygulanır.
+    void open_row_menu();
     // Yalnız palette_open() iken.
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- çağıran palette_open() ile denetler
     const InputLine& palette_line() const { return palette_->line; }
@@ -386,6 +405,7 @@ private:
     struct PaletteState {
         InputLine line{InputKind::Find};
         const Command* selected = nullptr;
+        std::span<const std::string_view> only = {};  // boş: tüm komutlar; dolu: bağlam menüsü
     };
     std::optional<Intent> handle_command_key(Key key, std::string_view text);
     std::optional<unsigned> command_context() const;
@@ -411,6 +431,8 @@ private:
     void resize_list(int direction);
     void toggle_zoom();
     void focus_links();
+    void toggle_links();
+    void step_wiki_link(int direction);
     void toggle_review_view();
     void scroll_preview_top();
     void scroll_preview_bottom();
@@ -434,9 +456,6 @@ private:
     Intent intent_if_selected(Intent intent) const;
     Intent intent_if_any_row(Intent intent) const;
     std::vector<Row> rows_in_folder();
-    void append_folder_rows(const FolderNode& node, std::size_t depth, std::vector<Row>& rows) const;
-    Row folder_row(const FolderNode& node) const;
-    void rebuild_tree();
     bool open_selected_folder();
     void go_left();
     void select_key(const std::string& key);
@@ -446,12 +465,8 @@ private:
     void toggle_selected_details();
     void scroll_accelerated(int direction);
     Intent handle_sort_menu(std::string_view text);
-    bool filter_rows(std::vector<Row>& rows);
-    std::vector<Row> rows_by_name(const search::ParsedQuery& parsed) const;
-    std::vector<Row> rows_by_content(const search::ParsedQuery& parsed);
-    std::vector<Row> rows_global();
-    void sort_rows(std::vector<Row>& rows, const search::SortSpec& sort) const;
-    void rebuild_metas();
+    std::vector<Row> filter_rows();
+    void notes_changed();
     void begin_search(Mode mode);
     void begin_tag_search();
     static constexpr std::string_view kTagArgument = "tag:";
@@ -483,31 +498,26 @@ private:
     // iner.
     void scroll_to_source_line(std::size_t line);
 
-    std::vector<core::NoteInfo> notes_;
-    ContentSearcher content_searcher_;
-    GlobalSearcher global_searcher_;
-    search::ViewLookup view_lookup_;
-    std::vector<std::string> views_;     // kayıtlı görünüm adları, ada göre
-    std::vector<core::NoteMeta> metas_;  // notes_ ile aynı sırada
-    std::map<core::NotePath, std::size_t> meta_index_;
-    std::map<core::NotePath, core::SyncState> sync_states_;
+    // Notlar, klasörler, senkron durumları ve arama: satırlar buradan kurulur (TUI ve GUI tek kural).
+    app::Listing listing_;
+    std::vector<std::string> views_;  // kayıtlı görünüm adları, ada göre
     std::optional<search::QueryError> query_error_;
-    bool query_has_arguments_ = false;
     std::vector<core::NoteMeta> trash_metas_;
     std::size_t trash_count_ = 0;
     bool trash_view_ = false;
     std::set<core::NotePath> expanded_;
     std::set<core::NotePath> expanded_folders_;  // aynı adlı not ve klasör karışmasın
-    std::vector<std::string> folders_;
-    FolderTree tree_;
     std::string current_folder_;
     bool showing_folders_ = true;
+    bool details_view_ = false;
     std::optional<std::string> saved_spot_;  // düz listeye geçerken klasördeki seçim; dönüşte geri gelir
     mutable SharedInputSources relative_sources_;
     mutable std::string relative_sources_folder_;
     std::optional<std::size_t> last_click_row_;
     std::chrono::steady_clock::time_point last_click_at_{};
     ListPrefs prefs_;
+    core::Limit recent_commands_limit_;  // uygulama config'ten verir; verilmezse 0 = sınırsız
+    SearchHistoryLimits search_history_limits_;
     InputLine search_line_{InputKind::Search};
     mutable SharedInputSources input_sources_;
     core::IconStyle icon_style_ = core::IconStyle::Off;  // testler ve çizim için tarafsız varsayılan
@@ -520,7 +530,9 @@ private:
     const std::vector<std::string>* preview_text_ = nullptr;
     std::size_t preview_generation_ = 0;
     PreviewFind preview_find_;
+    std::optional<PreviewPoint> wiki_link_;  // REVIEW'da seçili [[bağlantı]]: satır ve bayt aralığı
     LinkPanel links_;
+    bool links_hidden_ = false;  // `links.toggle`: bu oturumda bölüm gizli
     std::size_t links_generation_ = 0;
     std::optional<core::NotePath> links_note_;
     bool review_rendered_ = true;

@@ -3,8 +3,8 @@
 #include "core/file_stat.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
-#include "tui/display_text.hpp"
-#include "tui/editor_session.hpp"
+#include "edit/display_text.hpp"
+#include "edit/editor_session.hpp"
 #include "tui/editor_view.hpp"
 #include "tui/input_view.hpp"
 #include "tui/modals.hpp"
@@ -560,10 +560,32 @@ ftxui::Element look_styled(ftxui::Element element, const TextLook& look) {
     return token_styled(std::move(element), look.token);
 }
 
+// REVIEW'daki hedefi olmayan [[bağlantı]]lar: GUI gibi soluk. Eksik listesi önizlemeyle aynı okumadan gelir.
+std::vector<ByteRange> missing_links_on(const TuiState& state, std::string_view line) {
+    std::vector<ByteRange> ranges;
+    const std::vector<std::string>& missing = state.link_panel().links().missing;
+    if (missing.empty())
+        return ranges;
+    for (const WikiSpan& span : wiki_spans(line))
+        if (std::ranges::find(missing, span.target) != missing.end())
+            ranges.push_back({span.begin, span.end});
+    return ranges;
+}
+
+// Ters çizilen aralık: fare seçimi, yoksa seçili bağlantı, yoksa geçerli arama eşleşmesi.
+std::optional<ByteRange> preview_inverted(const TuiState& state, std::size_t line, std::size_t line_size) {
+    if (const auto selected = state.preview_selection_on_line(line, line_size))
+        return selected;
+    if (const auto link = state.wiki_selection_on_line(line))
+        return link;
+    return state.preview_find().current_range_on_line(line);
+}
+
 // Biçimli görüntü satırı: seçim ve arama vurgusu görünüşün önüne geçer (ham satırdaki gibi).
 ftxui::Element paint_styled_line(std::string_view line, std::span<const StyledSpan> spans,
                                  std::optional<ByteRange> inverted_range,
-                                 const std::vector<ByteRange>& highlights) {
+                                 const std::vector<ByteRange>& highlights,
+                                 const std::vector<ByteRange>& dimmed = {}) {
     using namespace ftxui;
     std::vector<std::size_t> cuts = {0, line.size()};
     for (const StyledSpan& span : spans) {
@@ -577,6 +599,8 @@ ftxui::Element paint_styled_line(std::string_view line, std::span<const StyledSp
     if (inverted_range)
         add_range(*inverted_range);
     for (const ByteRange& range : highlights)
+        add_range(range);
+    for (const ByteRange& range : dimmed)
         add_range(range);
     std::ranges::sort(cuts);
     const auto [last, end] = std::ranges::unique(cuts);
@@ -597,6 +621,8 @@ ftxui::Element paint_styled_line(std::string_view line, std::span<const StyledSp
             run = run | bold | color(Color::Yellow);
         else if (span_index < spans.size() && spans[span_index].begin <= at)
             run = look_styled(std::move(run), spans[span_index].look);
+        if (std::ranges::any_of(dimmed, [&](const ByteRange& range) { return inside(range, at); }))
+            run = run | dim;
         parts.push_back(std::move(run));
     }
     return parts.empty() ? text("") : hbox(std::move(parts));
@@ -609,10 +635,9 @@ ftxui::Element rendered_pane(const TuiState& state, const Preview& preview, int 
     const auto wanted = static_cast<std::size_t>(std::max(height, 1));
     Elements lines;
     for (std::size_t i = state.preview_scroll(); i < preview.lines.size() && lines.size() < wanted; ++i) {
-        const std::optional<ByteRange> selected = state.preview_selection_on_line(i, preview.lines[i].size());
-        lines.push_back(paint_styled_line(preview.lines[i], preview.styled[i],
-                                          selected ? selected : state.preview_find().current_range_on_line(i),
-                                          state.preview_find().ranges_on_line(i)));
+        lines.push_back(paint_styled_line(
+            preview.lines[i], preview.styled[i], preview_inverted(state, i, preview.lines[i].size()),
+            state.preview_find().ranges_on_line(i), missing_links_on(state, preview.lines[i])));
     }
     return vbox(std::move(lines));
 }
@@ -686,20 +711,22 @@ ftxui::Element preview_pane(const TuiState& state, const Preview& preview, int h
         const std::vector<ByteRange> ranges = line_highlights(state, row, i, preview.lines[i]);
         std::vector<SyntaxSpan> spans;
         if (preview.language != SyntaxLanguage::Plain) {
-            const SyntaxState entry = preview.syntax.entry_state(preview.language, i, [&](std::size_t index) {
-                return std::string_view(preview.lines[index]);
-            });
-            highlight_line(preview.language, preview.lines[i], entry, &spans);
+            const SyntaxState entry = preview.syntax.entry_state(
+                preview.language, i,
+                [&](std::size_t index) { return std::string_view(preview.lines[index]); },
+                preview.highlight_line_bytes);
+            highlight_line(preview.language, preview.lines[i], entry, &spans, preview.highlight_line_bytes);
         }
-        const std::optional<ByteRange> selected = state.preview_selection_on_line(i, preview.lines[i].size());
         const std::vector<ByteRange> misspelled =
             spell && preview.spell_checked ? spell->misspelled(preview.lines[i]) : std::vector<ByteRange>{};
-        const RowPaint paint{std::nullopt,
-                             selected ? selected : state.preview_find().current_range_on_line(i),
-                             ranges,
-                             spans,
-                             0,
-                             misspelled};
+        const std::vector<ByteRange> missing = missing_links_on(state, preview.lines[i]);
+        const RowPaint paint{.cursor = std::nullopt,
+                             .selection = preview_inverted(state, i, preview.lines[i].size()),
+                             .highlights = ranges,
+                             .syntax = spans,
+                             .syntax_origin = 0,
+                             .misspelled = misspelled,
+                             .dimmed = missing};
         for (const VisualRow& visual : buffer.rows_of_line(0, columns))
             if (lines.size() < wanted)
                 lines.push_back(paint_row(buffer, visual, paint));
@@ -821,7 +848,7 @@ ftxui::Element summary_box(const std::vector<std::string>& lines, int window_hei
 constexpr int kSettingsWidth = 58;
 constexpr int kSettingsLabelWidth = 22;
 constexpr std::size_t kSettingsValueCells = 30;  // uzun yol/URL'de sondaki kısım görünür (imleç orada)
-constexpr int kSettingsFixedLines = 5;           // kenarlık 2 + düğme + hata + ipucu
+constexpr int kSettingsFixedLines = 6;           // kenarlık 2 + test + düğme + hata + ipucu
 
 ftxui::Element settings_row(const SettingsState::Row& row, bool focused) {
     using namespace ftxui;
@@ -882,6 +909,7 @@ std::string totals_text(const TuiState& state, int panel_height) {
 ftxui::Element rename_bar(const RenameState& rename, int width) {
     const char* label = rename.is_link()      ? "tui.link_label"
                         : rename.is_move_to() ? "tui.move_to_label"
+                        : rename.is_export()  ? "tui.export_label"
                                               : "tui.rename_label";
     return input_line_bar(core::tr(label), rename.line(), {}, rename.ghost(), core::tr("tui.rename_hints"),
                           width);
@@ -1002,6 +1030,9 @@ ftxui::Element settings_box(const SettingsState& settings, int window_height) {
                 error = row.error;
         for (std::size_t i = first; i < rows.size() && i < first + visible; ++i)
             body.push_back(settings_row(rows[i], settings.focus() == i));
+        Element test = text("[ " + core::tr("tui.settings_test") + " ]");
+        body.push_back(hbox({settings.on_test() ? test | inverted : test, text(" "),
+                             text(terminal_safe(settings.test_result())) | dim | xflex_shrink}));
         Element save = text("[ " + core::tr("tui.settings_save") + " ]");
         body.push_back((settings.on_button() ? save | inverted : save) | center);
         body.push_back(text(error) | color(Color::Red));
@@ -1294,21 +1325,22 @@ void PreviewCache::build_rendered(int width) {
     rendered_note_.clear();
     rendered_ok_ = false;
     const std::string_view source = preview_.text;
-    if (source.size() > kMaxRenderedViewBytes) {
-        rendered_note_ = core::tr("tui.view_note_too_large", {{"limit", human_size(kMaxRenderedViewBytes)}});
+    if (source.size() > view_limits_.source_bytes) {
+        rendered_note_ =
+            core::tr("tui.view_note_too_large", {{"limit", human_size(view_limits_.source_bytes)}});
         return;
     }
     std::optional<RenderedView> view;
     switch (preview_.view_kind) {
     case ViewKind::Markdown:
-        view = render_markdown(source, width, terminal_cell_width);
+        view = render_markdown(source, width, terminal_cell_width, view_limits_);
         break;
     case ViewKind::Csv:
-        view = render_csv(source, width, terminal_cell_width);
+        view = render_csv(source, width, terminal_cell_width, view_limits_);
         rendered_note_ = view ? std::string{} : core::tr("tui.view_note_not_table");
         break;
     case ViewKind::Json:
-        view = render_json(source, width, terminal_cell_width);
+        view = render_json(source, width, terminal_cell_width, view_limits_);
         rendered_note_ = view ? std::string{} : core::tr("tui.view_note_invalid_json");
         break;
     case ViewKind::None:
@@ -1421,7 +1453,8 @@ const Preview& PreviewCache::load(const Row* row, bool from_trash, const Reader&
         extension.empty() ? std::string{} : std::string(extension.begin() + 1, extension.end());
     preview_.spell_checked = spellcheck_applies_to(type);
     preview_.view_kind = view_kind_for(type);
-    if (content->text.size() <= kMaxHighlightBytes)
+    preview_.highlight_line_bytes = syntax_limits_.line_bytes;
+    if (content->text.size() <= syntax_limits_.note_bytes)
         preview_.language = type.empty() ? SyntaxLanguage::Plain : syntax_language_for(type);
     // Sarma geçerli UTF-8 ister; ikili sayılmayan ama bozuk bayt içeren notta gösterim için arındırılır.
     if (!core::is_valid_utf8(content->text) || content->text.find('\0') != std::string::npos) {

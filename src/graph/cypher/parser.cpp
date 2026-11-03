@@ -19,13 +19,6 @@ namespace noteapp::graph::detail::cypher {
 
 namespace {
 
-constexpr std::size_t kMaxQueryBytes = 64U * 1024U;
-constexpr int kMaxDepth = 64;
-constexpr int kMaxExprHeight = 64;
-constexpr int kMaxPatternElements = 256;
-constexpr std::size_t kMaxClauses = 64;
-constexpr int kMaxVarLengthHops = 10;
-
 // Değişken adı olamayan sözcükler. Etiket, tip ve özellik anahtarı olabilirler: `n.count`, `:Order`.
 constexpr std::array<std::string_view, 31> kReserved = {
     "MATCH",    "OPTIONAL", "WHERE",    "RETURN", "WITH", "CREATE", "MERGE", "SET",
@@ -51,8 +44,8 @@ template <std::size_t N> bool in_words(std::string_view word, const std::array<s
 // Bu sayede ifade fonksiyonları null dönmez; hata varken kurulan ağaç atılır.
 class Parser {
 public:
-    Parser(std::vector<Token> tokens, std::string_view source)
-        : tokens_(std::move(tokens)), source_(source) {}
+    Parser(std::vector<Token> tokens, std::string_view source, const QueryLimits& limits)
+        : tokens_(std::move(tokens)), source_(source), limits_(limits) {}
 
     Result<Query> run() {
         Query query = parse_clauses();
@@ -153,7 +146,7 @@ private:
     Query parse_clauses() {
         Query query;
         while (!at_end() && !at_symbol(";")) {
-            if (query.clauses.size() >= kMaxClauses) {
+            if (query.clauses.size() >= limits_.max_clauses) {
                 limit("clauses", peek().pos);
                 break;
             }
@@ -398,7 +391,7 @@ private:
     }
 
     void count_element(Position pos) {
-        if (++pattern_elements_ > kMaxPatternElements)
+        if (++pattern_elements_ > limits_.max_pattern_elements)
             limit("pattern_elements", pos);
     }
 
@@ -485,7 +478,7 @@ private:
         const auto [end, code] =
             std::from_chars(token.text.data(), token.text.data() + token.text.size(), value);
         (void)end;
-        if (code != std::errc{} || value > kMaxVarLengthHops)
+        if (code != std::errc{} || static_cast<std::size_t>(value) > limits_.max_var_length_hops)
             limit("var_length_hops", token.pos);
         ++at_;
         return value;
@@ -536,7 +529,7 @@ private:
     class DepthGuard {
     public:
         explicit DepthGuard(Parser& parser) : parser_(parser) {
-            if (++parser_.depth_ > kMaxDepth)
+            if (++parser_.depth_ > parser_.limits_.max_nesting)
                 parser_.limit("nesting_depth", parser_.peek().pos);
         }
         ~DepthGuard() { --parser_.depth_; }
@@ -561,7 +554,7 @@ private:
             height = std::max(height, arg->height);
         expr->height = height + 1;
         expr->args = std::move(args);
-        if (expr->height > kMaxExprHeight)
+        if (static_cast<std::size_t>(expr->height) > limits_.max_nesting)
             limit("expression_height", expr->pos);
         return expr;
     }
@@ -944,22 +937,23 @@ private:
     std::vector<Token> tokens_;
     std::string_view source_;
     std::size_t at_ = 0;
-    int depth_ = 0;
-    int pattern_elements_ = 0;
+    std::size_t depth_ = 0;
+    std::size_t pattern_elements_ = 0;
     std::optional<Error> error_;
+    QueryLimits limits_;
 };
 
 }  // namespace
 
-Result<Query> parse_query(const char* data, std::size_t size) {
-    if (size > kMaxQueryBytes)
+Result<Query> parse_query(const char* data, std::size_t size, const QueryLimits& limits) {
+    if (size > limits.max_text_bytes)
         return std::unexpected(located_error(Error::Code::LimitExceeded, "graph.limit_exceeded", Position{},
                                              {{"limit", "query_bytes"}}));
     const std::string_view source = size == 0 ? std::string_view() : std::string_view(data, size);
     Result<std::vector<Token>> tokens = tokenize(source);
     if (!tokens)
         return std::unexpected(std::move(tokens).error());
-    return Parser(std::move(*tokens), source).run();
+    return Parser(std::move(*tokens), source, limits).run();
 }
 
 }  // namespace noteapp::graph::detail::cypher

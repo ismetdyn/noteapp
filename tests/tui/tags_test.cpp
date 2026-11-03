@@ -1,9 +1,9 @@
 // T80: sağ panelde notun etiketleri, paletten etikete göre süzme, `tag:` tamamlaması.
 #include "core/i18n.hpp"
 #include "core/note_store.hpp"
+#include "edit/input_line.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
-#include "tui/input_line.hpp"
 #include "tui/link_panel.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"

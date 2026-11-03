@@ -10,8 +10,6 @@ namespace {
 
 // Tahmini sabit maliyet: bellek bütçesi için kesin ölçü gerekmez, büyüklük mertebesi yeter.
 constexpr std::size_t kMemoEntryBytes = 96;
-// Büyük değer önbelleğe girmez: tek bir 10 MiB gövde bütçeyi boşa harcamasın; zaten satır başına okunmaz.
-constexpr std::size_t kMaxMemoValueBytes = 4096;
 
 Result<void> read_adjacency(ReadTxn& txn, const NodeId& id, Direction direction,
                             std::optional<std::string_view> type, std::size_t max_entries,
@@ -38,6 +36,15 @@ const std::array<std::byte, 16>& owner_bytes(const OwnerId& owner) {
     return std::get<EdgeId>(owner).bytes;
 }
 
+// Sınırsız süre (milliseconds::max()) ya da saatin taşacağı büyük değer hiç dolmayan son an olur:
+// now + max nanosaniyeye çevrilirken taşardı.
+std::chrono::steady_clock::time_point deadline_after(std::chrono::milliseconds limit) {
+    using Clock = std::chrono::steady_clock;
+    const Clock::time_point now = Clock::now();
+    const auto room = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::time_point::max() - now);
+    return limit >= room ? Clock::time_point::max() : now + limit;
+}
+
 }  // namespace
 
 Error located_error(Error::Code code, std::string key, Position pos,
@@ -51,8 +58,7 @@ Error limit_error(std::string limit) {
     return Error{Error::Code::LimitExceeded, "graph.limit_exceeded", {{"limit", std::move(limit)}}};
 }
 
-Budget::Budget(const QueryLimits& limits)
-    : limits_(limits), deadline_(std::chrono::steady_clock::now() + limits.max_duration) {}
+Budget::Budget(const QueryLimits& limits) : limits_(limits), deadline_(deadline_after(limits.max_duration)) {}
 
 Result<void> Budget::check_clock() const {
     if (std::chrono::steady_clock::now() > deadline_)
@@ -103,7 +109,7 @@ Result<QueryValue> QueryMemo::property(ReadTxn& txn, const OwnerId& owner, int k
         return std::unexpected(std::move(stored).error());
     QueryValue value = from_stored(std::move(*stored));
     const std::size_t cost = value_bytes(value);
-    if (cost <= kMaxMemoValueBytes && reserve(kMemoEntryBytes + cost))
+    if (cost <= max_value_bytes_ && reserve(kMemoEntryBytes + cost))
         properties_.emplace(memo_key, value);
     return value;
 }

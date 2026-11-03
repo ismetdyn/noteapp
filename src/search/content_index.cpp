@@ -9,7 +9,6 @@ namespace noteapp::search {
 
 namespace {
 
-constexpr std::size_t kMaxHits = 3;
 constexpr std::size_t kSnippetCodePoints = 120;
 constexpr std::string_view kEllipsis = "…";
 
@@ -149,8 +148,8 @@ Hit make_hit(const EntryT& e, const std::vector<Occurrence>& occ, std::size_t fi
 
 }  // namespace
 
-ContentIndex::ContentIndex(const core::NoteStore& store, std::size_t max_note_bytes)
-    : store_(store), max_note_bytes_(max_note_bytes) {}
+ContentIndex::ContentIndex(const core::NoteStore& store, std::size_t max_note_bytes, std::size_t max_hits)
+    : store_(store), max_note_bytes_(max_note_bytes), max_hits_(max_hits) {}
 
 void ContentIndex::refresh() {
     std::map<core::NotePath, Entry> next;
@@ -216,7 +215,7 @@ std::vector<ContentResult> ContentIndex::search(std::string_view query, std::siz
         const Entry& e = c.note->second;
         ContentResult res{c.note->first, c.hit_count, {}};
         auto occ = scan(e.folded, terms);  // yalnız dönen sayfa için yeniden hesaplanır
-        for (std::size_t i = 0; i < occ.size() && res.first_hits.size() < kMaxHits;
+        for (std::size_t i = 0; i < occ.size() && res.first_hits.size() < max_hits_;
              i = end_of_line_group(e, occ, i))
             res.first_hits.push_back(make_hit(e, occ, i));
         results.push_back(std::move(res));

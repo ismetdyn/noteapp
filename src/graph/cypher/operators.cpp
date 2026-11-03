@@ -597,7 +597,7 @@ Result<void> check_sum_finite(const AggregateState& state, Position pos) {
 }
 
 Result<void> add_to_collect(AggregateState& state, QueryValue value, ExecContext& context, Position pos) {
-    if (value_depth(value) >= kMaxValueDepth)
+    if (static_cast<std::size_t>(value_depth(value)) >= context.budget.max_nesting())
         return std::unexpected(limit_error("memory"));
     (void)pos;
     CYPHER_TRY(context.budget.charge(value_bytes(value)));

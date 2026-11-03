@@ -146,17 +146,21 @@ rust-analyzer.cargo.buildScripts.enable = true
 slug_max_length = 60
 min_confidence = 0.5     # 0..1
 max_scan_bytes = 65536
-max_note_bytes = 10485760
+max_note_bytes = 10485760   # 0 = sınırsız; "64MiB" gibi birimli yazılabilir (core::Limit)
 rescan_seconds = 5
 autosave_ms = 1000
 exit_timeout_seconds = 10
 log_max_bytes = 1048576   # log.txt bu boyutu aşınca log.1.txt'ye döner
 sync_stale_lock_minutes = 10   # okunamayan sync.lock bundan eskiyse bayat; sahibi canlı kilit devralınmaz (SPEC-sync)
 sync_timeout_seconds = 120     # AutoSync bir `note sync --background` sürecini en çok bu kadar bekler (SPEC-sync karar 3)
-graph_batch_ops = 30000        # bir graf yazma işleminin işlem bütçesi, 1..32768; aşan iş bölünür (SPEC-graph "Sınırlar")
+graph_batch_ops = 30000        # bir graf yazma işleminin işlem bütçesi; aşan iş bölünür, reddedilmez
+completion_min_prefix_bytes = 2   # TUI gölge önerisinin beklediği en kısa önek (alt sınır, `0` geçersiz)
+
+[limits.search]          # kapasite sınırları; aşağıdaki "Sınırlar"
+content_results = 1000   # içerik aramasında (TUI, GUI) listelenen en çok not; 0 = hepsi
 ```
 - Varsayılanlar `resources/defaults.toml`'dan (gömülü) gelir; dosya yoksa varsayılanlarla çalışılır, ilk
-  kayıtta oluşturulur. Bilinmeyen anahtar → uyarı logu, yok sayılır. Geçersiz değer (yanlış tür, language ∉ {auto,tr,en}, boş/noktalı tip, idle_seconds ≤ 0, boş branch, ≤ 0 tuning) → o anahtar için varsayılan + uyarı; TOML sözdizimi hatası → tüm varsayılanlar + satır/sütunlu uyarı. `save_config` `[tuning]`'e yalnız
+  kayıtta oluşturulur. Bilinmeyen anahtar → uyarı logu, yok sayılır. Geçersiz değer (yanlış tür, language ∉ {auto,tr,en}, boş/noktalı tip, idle_seconds ≤ 0, boş branch, ≤ 0 tuning — `max_note_bytes` hariç, o bir sınırdır) → o anahtar için varsayılan + uyarı; TOML sözdizimi hatası → tüm varsayılanlar + satır/sütunlu uyarı. `save_config` `[tuning]`'e yalnız
   gömülü varsayılandan farklı anahtarları yazar: elle verilmiş ince ayar uygulamanın kaydında (ör. `note config
   set`) kaybolmaz, dokunulmamış varsayılan dosyaya gömülmez (T36).
 - `[lsp.servers]` girdisi tek tek doğrulanır: kimlik `a-z0-9_-`, en çok 32 bayt; argv en çok 64 boş olmayan, NUL'suz,
@@ -180,6 +184,70 @@ graph_batch_ops = 30000        # bir graf yazma işleminin işlem bütçesi, 1..
     kalmaz, sonraki `save_config` dosyadan da siler. Neden: elle yazılmış remote sessizce kaybolmasın; URL'deki kimlik
     zaten hiç kullanılmaz (token ortamdan ya da kasadan gelir, yoksa `sync.token_missing`).
   - URL'nin ham hâli hata ve uyarılara asla yazılmaz. SSH kullanıcı adı (`git@host:…`, `ssh://git@host/…`) etkilenmez.
+
+### Sınırlar (`[limits]`, L0)
+Kural (tasks/plan-limits.md): kullanıcının işlemi kaynak koddaki bir tavanla reddedilmez; kalan her kapasite sayısı
+config'tedir.
+- **Anahtar adı:** `limits.<modül>.<ad>`; dosyada `[limits.<modül>]` tablosunda `<ad> = …`. `<modül>` olguyu sahiplenen
+  kaynak modülüdür (`app`, `core`, `search`, `graph`, `sync`, `tui`, `gui`, `lsp`, `query`); `<ad>` snake_case ve ne
+  saydığını söyler (`max_tabs`, `content_results`, `view_max_duration`). Aynı olgu tek anahtardadır; iki arayüz aynı
+  değeri kullanıyorsa ikisi de o anahtarı okur (ör. `limits.search.content_results`: TUI ve GUI).
+- **Değer:** `0 = sınırsız`. Negatif olmayan TOML tam sayısı ya da dizge: adet `"1000"`; boyut `"512KiB"`, `"64MiB"`,
+  `"10MB"` (B, KB, MB, GB, TB = 10³; KiB, MiB, GiB, TiB = 2¹⁰), düz sayı bayt; süre `"250ms"`, `"5s"`, `"2min"`,
+  `"1h"`, düz sayı ms. Ek büyük/küçük harf duyarlı; işaret, boşluk, kesir yok; üst değer int64. Birim anahtarın
+  türündedir (`core::LimitUnit`): adet anahtarı birimli değeri reddeder.
+- **Bellekte:** `Config::limits` (`core::Limits`, modül başına bir struct), her değer `core::Limit{value, text}`:
+  `value` taban birimde, `text` dosyadaki yazım. Modüller 0 ile karşılaştırmaz: `allows(n)` (sınırsızda hep true,
+  sınır dahil), `cap()` (sınırsızda `SIZE_MAX`; kesit/sayaç üst değeri), `unlimited()`. Config bir kez yüklenir ve
+  modüle değer olarak geçer; global yok.
+- **Doğrulama:** geçersiz değer (negatif, kesir, bool, bozuk ya da yanlış birimli dizge) → `config.invalid_value`,
+  `reason` = `must_be_limit_count` | `must_be_limit_size` | `must_be_limit_duration`, varsayılan kalır. Bilinmeyen
+  modül/anahtar → `config.unknown_key`. `set_config_value` aynı kuralı kullanır (rakamlar tam sayı, birimli metin
+  dizge olarak denenir).
+- **CLI ve arayüz:** `note config list/get/set` `limits.*` anahtarlarını gösterir ve değiştirir (`core::limit_entries`;
+  değer dosyadaki yazımdır). Ayar ekranları `config_entries`'i listeler, `[limits]` orada yoktur: TUI ve GUI'de eşit
+  biçimde yalnız dosya/CLI.
+- **Kayıt:** `save_config` `[limits]`'i dosyada o an nasılsa öyle (birimli yazım, bilinmeyen ve bozuk girdiler dahil)
+  yazar; yalnız bellekteki değeri dosyanın verdiğinden farklı anahtar üzerine yazılır (rakamsa tam sayı, değilse
+  dizge). Dokunulmamış varsayılan dosyaya yazılmaz. Yorumlar korunmaz. Bilinen sınır (`[tuning]` ile aynı): uygulama
+  açıkken dosyada değiştirilen sınır, aynı oturumdaki bir ayar ekranı kaydında açılıştaki değere döner.
+- **Anahtar ekleme (modül görevi):** (1) `resources/defaults.toml`'da `[limits.<modül>]` altına bir satır (varsayılan ve
+  ne saydığı); (2) `core/limits.hpp`'de modül struct'ına bir `Limit` alanı (modül yoksa struct ve `Limits` alanı);
+  (3) `config.cpp` `limit_keys()`'e bir satır (anahtar, birim, alan; aynı modülün satırları art arda; tablonun boyu
+  `std::to_array` ile satırlardan çıkar, elle sayı yoktur); (4) bir test
+  (varsayılan, `0`, geçersiz → uyarı). Okuyan kod `config.limits.<modül>.<ad>`'ı kullanır, kopya sabit tutmaz.
+- **Graf ve sorgu (L4):** `[limits.graph]` motorun sınırları (çerçeve, cihaz, ingest, rapor, kenara alınan günlük,
+  `note graph import` satırı); `[limits.query]` kullanıcının kendi sorgusu (`note query`), `[limits.view]` görünüm
+  (`view:`, `note view run`, kayıt denetimi) — iki profil aynı 12 anahtarı taşır, varsayılanları aynıdır. Motor
+  config okumaz: `core::graph_limits_of` / `core::query_limits_of` (`core/graph_limits.hpp`) çevirir, `0` →
+  `SIZE_MAX` (süre `milliseconds::max()`); `NoteStore::for_config` ve CLI motoru bu değerlerle açar. Bir test
+  `defaults.toml` ile motorun kendi varsayılanlarının aynı olduğunu denetler (tek olgu). Hangi değerin her cihazda
+  aynı olması gerektiği ve protokolde sabit kalanlar: SPEC-graph "Sınırlar". `[tuning] graph_batch_ops`'un sabit
+  tavanı (32.768) kalktı; L4b'den beri çerçeve sınırına da kırpılmaz (işlem günlükte kayıtlara bölünür). İşlem başına bayt payı
+  etkin kayıt sınırının yarısıdır (`Graph::max_frame_bytes`: `frame_bytes` ile SQLite'ın tek değer sınırının küçüğü).
+
+- **Çekirdek, arama, senkron (L3):** `limits.core.folder_path_bytes` (4096 bayt; klasör yolu, derinlik sınırı yok;
+  güvenilmez girdi koruması, SPEC-graph "Sınırlar"), `limits.search.global_results` (200; genel arama sonucu),
+  `limits.search.content_hits` (3; içerik sonucunda not başına kesitli satır), `limits.search.fuzzy_candidate_chars`
+  (1024 kod noktası; vurgulu fuzzy eşleşmenin en uzun adayı, bellek sorgu × aday × 16 bayt),
+  `limits.sync.merge_input_bytes` (4 MiB; üç yönlü birleştirmenin en büyük girdisi, aşan çakışma kopya not olur).
+  Yapılandırmasız depo (`NoteStore(dizin)`, geçiş) `kDefaultFolderPathBytes` kullanır; bir test defaults.toml ile
+  aynı olduğunu denetler. OS dosya adı sınırının tek sahibi `core::kMaxFileNameBytes` (255, `note_path.hpp`).
+  Not başına bağlantı/etiket tavanı, klasör derinliği, kopya sayacı ve ad arama sigortası kaldırıldı (sonlu
+  kümede arama doğal olarak biter). Kalan tek ad deneme sigortası `create_private_temp_file`'ındır (rastgele ad,
+  dosya sistemi arızasına karşı; kapasite sınırı değildir).
+- **TUI ve dil sunucusu (L2, L5):** `[limits.tui]` biçimli görünüm (`view_bytes` 256 KiB, `view_lines`, `table_rows`,
+  `table_columns`), renklendirme (`highlight_bytes` 2 MiB, `highlight_line_bytes` 64 KiB), yazım satırı, tamamlama
+  (`completion_*`), yapıştırma (`paste_bytes` 32 MiB), arama geçmişi, geri alma (`undo_bytes` 64 MiB), taşıma
+  diyaloğu önerileri ve açılıştaki geçiş dışı dosya ipucu bütçesi (`stray_notice_files`, `stray_notice_bytes`).
+  `[limits.lsp]` sunucu çıktısı korumaları (çerçeve, JSON iç içeliği/değer sayısı, tanı, öneri, bekleyen cevap),
+  yansıtılan not boyu ve üç süre (`initialize_timeout`, `write_timeout`, `shutdown_timeout`). Değerler ve neyi
+  saydıkları defaults.toml'da, davranışları SPEC-tui'de. Alt sınır olan en kısa tamamlama öneki `[tuning]
+  completion_min_prefix_bytes`'tadır (`0 = sınırsız` anlamsız). TUI modülleri değeri kendi struct'ıyla alır
+  (`tui::view_limits_of`, `syntax_limits_of`, `completion_limits_of`, `lsp_limits_of`); bir test bu struct'ların
+  kod varsayılanlarının defaults.toml ile aynı olduğunu denetler. `note graph status`, `migrate --new` ve TUI
+  açılış ipucu depoyu config'le açar (`limits.core.folder_path_bytes`). OSC 52'nin 75.000 baytı terminal protokolü
+  sınırıdır, config'te değildir.
 
 ### i18n
 - Kataloglar `resources/i18n/{en,tr}.toml` (düz anahtarlar, `{ad}` yer tutucuları), derlemede gömülür.
@@ -246,7 +314,7 @@ Bu bölüm yukarıdaki "Yazma", "Listeleme", "Klasörler", "Yol güvenliği" ve 
 - **MODIFIED** `.trash` yerine `deleted_at`, API aynı. Silme gövdenin her head'ini görmüş olmalı, görmediği farklı baytlı düzenleme kazanır (saf okuma kuralı, `ReadTxn::saw`). `trashed_from` atıldığı yolu tutar: klasör silinmiş olsa da geri yükleme oraya döner.
 - **MODIFIED** `absolute_path` kalktı. Dosya isteyen araç `edit_in_temp_file` kullanır: özel dosya (`create_private_temp_file`, 0600, 0700 dizin), bağ okunmaz, çakışma denetimiyle geri yazma, sonra silme. Kayıt başarısızsa dosya kalır, hata yolunu söyler (`error.edit_kept`). Bilinen sınır: süreç öldürülürse dosya `<durum>/tmp` altında kalır.
 - **MODIFIED** `.keep` emekli: boş klasör `Folder` düğümüdür. `remove_folder` yalnız canlı notları sayar.
-- **MODIFIED** Not boyutu: tek çerçeve 64 MiB (SPEC-graph). Daha büyük not hata verir; geçişte 60 MiB üstü dosya atlanır ve raporlanır.
+- **MODIFIED** Not boyutu (L4b, 2026-11-03): çerçeve (`limits.graph.frame_bytes`) not boyutunu sınırlamaz; büyük not günlükte parçalara bölünür ve senkronlanır (SPEC-graph "Parçalı çerçeve ve çok çerçeveli işlem"). Tek sınır depolamanındır: not, işlemiyle birlikte SQLite'ın tek değer sınırına (1 GB) sığmalıdır, aşan kayıt `LimitExceeded`; geçişte bu sınırı aşan dosya `too_large` ile atlanır ve raporlanır.
 - **ADDED** `LINKS_TO`: `[[hedef]]`, `[[hedef|takma]]`, `[[hedef#başlık]]`, kayıtla aynı işlemde. Çözüm sırası yol, uzantısız yol, dosya adı, yalın ad. Hedef yazma anında çözülür: sonradan oluşan hedef, kaynak yeniden kaydedilene ya da `note graph migrate`'e kadar bağlanmaz. Not başına en çok 1024 bağlantı.
 - **ADDED** `created_at`, `origin` gerçek değerdir, `origin` derleme platformu sabitidir (`windows`, `linux`, `macos`, `android`; geçişte `unknown`). `origin:` ve `created:` araması çalışır.
 - **MODIFIED** `tuning.autosave_ms` 1000'den 3000'e. Ölçüm (30 dakikalık benzetim, `tests/perf/note_store_perf_test.cpp`): 2 KiB notta 1 sn'de 119 kayıt 462 KiB, 3 sn'de 57 kayıt 217 KiB; 20 KiB notta 2,6 MiB'den 1,26 MiB'ye. Nedenselliğe dokunmaz. Bedel: kapanmadan öldürülen GUI son 3 sn'yi kaybeder (kapanış ve not geçişi yine kaydeder).
@@ -283,3 +351,10 @@ Bu bölüm yukarıdaki "Yazma", "Listeleme", "Klasörler", "Yol güvenliği" ve 
 - **MODIFIED** `save_config` kökteki satır içi `lsp` tablosunu başlıklı yazar, tablo olmayan `lsp` değerini yazmaz (satır içi kapatma kayıtta kayboluyordu).
 - **ADDED** `core::find_program_on_absolute_path`: yalnız mutlak PATH girdileri; dil sunucusu araması bunu kullanır. `find_program` değişmedi.
 - **ADDED** `core::json_text`/`append_json` (Json yazımı), `Json::operator==`.
+
+## Değişiklik 2026-11-03 (L0 sınır sözleşmesi)
+- **ADDED** `[limits.<modül>]` bölümü, `core::Limit`/`Limits`/`LimitUnit`, `core::parse_limit`, `core::limit_entries`,
+  `reason.must_be_limit_{count,size,duration}`; ilk anahtar `limits.search.content_results` (TUI `main.cpp` ve GUI
+  `gui_state.cpp`'deki iki `kContentResultLimit = 1000` kopyasının yerine). Bkz. "Sınırlar".
+- **MODIFIED** `tuning.max_note_bytes` `core::Limit` oldu: `0 = sınırsız`, birimli yazım kabul edilir (A33).
+- **MODIFIED** `set_config_value` ve `note config list/get/set` `limits.*` anahtarlarını kabul eder.

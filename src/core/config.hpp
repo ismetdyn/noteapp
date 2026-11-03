@@ -2,6 +2,7 @@
 
 #include "core/error.hpp"
 #include "core/json_parser.hpp"
+#include "core/limits.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -47,18 +48,19 @@ struct LspConfig {
     bool operator==(const LspConfig&) const = default;
 };
 
-// Graf yazmasında işlem bütçesinin üst değeri: motorun çerçeve sınırının (65.536 işlem; uzak cihaz çerçeveyi
-// bununla çözer) yarısı. Bütçe dolunca iş sonraki işleme geçer; bir iş birimi kalan yarıya sığar.
-inline constexpr std::size_t kMaxGraphBatchOps = 32768;
-// defaults.toml `graph_batch_ops`ın yapılandırmasız NoteStore'daki (test, geçiş) karşılığı.
+// defaults.toml `graph_batch_ops`ın yapılandırmasız NoteStore'daki (test, geçiş) karşılığı. Üst değeri sabit
+// değildir; çerçeve sınırı da onu kırpmaz (L4b: işlem kayıtlara bölünür).
 inline constexpr std::size_t kDefaultGraphBatchOps = 30000;
+// defaults.toml `limits.core.folder_path_bytes`ın yapılandırmasız NoteStore'daki (test, geçiş) karşılığı; bir
+// test ikisinin aynı olduğunu denetler.
+inline constexpr std::size_t kDefaultFolderPathBytes = 4096;
 
 // Arayüzde görünmeyen ayarlar; defaults.toml'dan (ileri düzey kullanıcı geçersiz kılabilir) gelir.
 struct Tuning {
     std::size_t slug_max_length;
     double min_confidence;
     std::size_t max_scan_bytes;
-    std::uintmax_t max_note_bytes;
+    Limit max_note_bytes;          // bundan büyük not düzenlenmez/aranmaz; 0 = sınırsız, birimli yazılabilir
     int rescan_seconds;
     int autosave_ms;
     int exit_timeout_seconds;
@@ -66,6 +68,7 @@ struct Tuning {
     int sync_stale_lock_minutes;   // okunamayan kilit bundan eskiyse bayattır; sahibi canlı kilit devralınmaz
     int sync_timeout_seconds;      // AutoSync bir senkron sürecini bu kadar bekler, sonra sonlandırır
     std::size_t graph_batch_ops;   // graf işleminin işlem bütçesi; iş bölünür, kullanıcı işlemi reddedilmez
+    std::size_t completion_min_prefix_bytes;  // TUI tamamlamasının öneri için beklediği en kısa önek
 
     bool operator==(const Tuning&) const = default;
 };
@@ -81,6 +84,7 @@ struct Config {
     SyncConfig sync{};
     LspConfig lsp{};
     Tuning tuning{};
+    Limits limits{};  // [limits.<modül>]; 0 = sınırsız (SPEC-core "Sınırlar")
 
     bool operator==(const Config&) const = default;
 };
@@ -101,13 +105,19 @@ LoadedConfig parse_config(std::string_view user_toml);
 // noktalı anahtardır, liste "md, txt" biçiminde birleşir. `note config list/get` bunu kullanır.
 std::vector<std::pair<std::string, std::string>> config_entries(const Config& config);
 
+// [limits] anahtarları "limits.<modül>.<ad>" ve dosyadaki yazımları; `note config list/get` bunu da gösterir.
+// Ayar ekranları göstermez (yalnız dosya ve CLI).
+std::vector<std::pair<std::string, std::string>> limit_entries(const Config& config);
+
 // Tek bir ayarı metinden (ör. CLI argümanı) şemadaki türüne çevirip `config`'e uygular. Doğrulama
 // parse_config ile AYNIDIR (aynı kurallar); geçersiz değer/bilinmeyen anahtarda `config` değişmez ve ilk
-// uyarı Error olarak döner (ConfigInvalid). `types` virgülle ayrılır. Kaydetmek çağıranın işidir.
+// uyarı Error olarak döner (ConfigInvalid). `types` virgülle ayrılır; `limits.*` anahtarları da kabul edilir.
+// Kaydetmek çağıranın işidir.
 std::expected<void, Error> set_config_value(Config& config, std::string_view key, std::string_view value);
 
 // Kullanıcıya dönük tüm anahtarları ve [tuning]'in yalnız gömülü varsayılandan farklı anahtarlarını
-// config_file()'a atomik yazar; dizini oluşturur. Yorumlar korunmaz.
+// config_file()'a atomik yazar; dizini oluşturur. [lsp] ve [limits] dosyadaki hâliyle kalır; [limits]'te
+// yalnız bellekte değişen anahtar üzerine yazılır. Yorumlar korunmaz.
 std::expected<void, Error> save_config(const Config& config);
 
 }  // namespace noteapp::core

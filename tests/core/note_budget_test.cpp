@@ -343,3 +343,123 @@ TEST_CASE("removing nested folders leaves no stray subfolder when an inner folde
     CHECK(restored->string() == "outer/inner/n2.md");
     CHECK(store.folders() == Texts{"outer", "outer/inner"});
 }
+
+// L4b: çerçeve sınırları (limits.graph.frame_ops, frame_bytes) yalnız günlükteki kaydı sınırlar. Küçük seçilse
+// de kullanıcının işlemi ve not boyutu ona takılmaz; yazan çerçeveyi parçalara böler.
+TEST_CASE("small frame limits in config reject neither a note save nor a note larger than one frame") {
+    const TempDir home;
+    const noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
+    const LoadedConfig loaded = parse_config("[limits.graph]\nframe_ops = 4\nframe_bytes = \"64KiB\"\n");
+    REQUIRE(loaded.warnings.empty());
+    NoteStore store = NoteStore::for_config(loaded.config);
+    // İkili (NUL'lu) not taranmaz; bağlantı sayılsın diye metin.
+    std::string body(std::size_t{1} << 20U, 'x');
+    body += "\r\n#etiket [[hedef]]\n";
+    REQUIRE(seed_note(store, "hedef.md", "h\n"));
+    REQUIRE(seed_note(store, "buyuk.md", body));
+    const auto content = store.read(np("buyuk.md"));
+    REQUIRE(content.has_value());
+    CHECK(content->text == body);
+    CHECK(edges_into(store, "hedef.md") == 1);
+}
+
+// frame_bytes = 0 (sınırsız) toplu yazmanın işlem başına bayt payını sınırsız yapmaz: pay etkin kayıt
+// sınırından (SQLite'ın tek değer sınırı) türer, depo reddedeceği işlem üretmez.
+TEST_CASE("an unlimited frame_bytes still bounds the bytes a batch puts in one transaction") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    store.impl().graph_limits.frame_bytes = SIZE_MAX;
+    CHECK(store.impl().batch_bytes() <= std::size_t{INT32_MAX} / 2);
+}
+
+namespace {
+
+// Kaynağın `[[t0]] … [[t<n-1>]]` gövdesi ve hedefleri.
+std::string seed_targets(NoteStore& store, int count) {
+    std::string body;
+    for (int i = 0; i < count; ++i) {
+        REQUIRE(seed_note(store, "t/t" + std::to_string(i) + ".md", "t\n"));
+        body += "[[t" + std::to_string(i) + "]]\n";
+    }
+    return body;
+}
+
+std::size_t edges_from(const NoteStore& store, const std::string& source) {
+    std::size_t count = 0;
+    for (const std::string& edge : link_edges(store))
+        count += edge.starts_with(source + ">") ? 1 : 0;
+    return count;
+}
+
+std::string many_tags(int count) {
+    std::string body;
+    for (int i = 0; i < count; ++i)
+        body += "#etiket" + std::to_string(i) + " ";
+    return body + "\n";
+}
+
+std::size_t tag_count(const NoteStore& store, const std::string& path) {
+    for (const NoteMeta& meta : store.list_meta())
+        if (meta.path.string() == path)
+            return meta.tags.size();
+    FAIL("note not listed: " << path);
+    return 0;
+}
+
+}  // namespace
+
+// L3 (lead kararı 4): bir notun bağlantı ve etiket kenarları bütçeye sığmazsa kayıt reddedilmez, hiçbiri
+// sessizce düşmez; kalan türetme kaydın hemen ardından sonraki işlemlerde sürer.
+TEST_CASE("a note with more links than one transaction holds is saved with every edge") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    const std::string body = seed_targets(store, kSources);
+    store.impl().txn_ops_limit = kSmallLimit;
+    SUBCASE("create") {
+        REQUIRE(seed_note(store, "kaynak.md", body));
+    }
+    SUBCASE("edit") {
+        REQUIRE(seed_note(store, "kaynak.md", "boş\n"));
+        const auto current = store.read(np("kaynak.md"));
+        REQUIRE(current.has_value());
+        REQUIRE(store.write(np("kaynak.md"), body, current->revision).has_value());
+    }
+    CHECK(edges_from(store, "kaynak.md") == kSources);
+}
+
+TEST_CASE("removing more links than one transaction holds drops every edge") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    REQUIRE(seed_note(store, "kaynak.md", seed_targets(store, kSources)));
+    REQUIRE(edges_from(store, "kaynak.md") == kSources);
+    store.impl().txn_ops_limit = kSmallLimit;
+    const auto current = store.read(np("kaynak.md"));
+    REQUIRE(current.has_value());
+    REQUIRE(store.write(np("kaynak.md"), "bağlantısız\n", current->revision).has_value());
+    CHECK(edges_from(store, "kaynak.md") == 0);
+}
+
+TEST_CASE("a note with more tags than one transaction holds is saved with every tag") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    store.impl().txn_ops_limit = kSmallLimit;
+    REQUIRE(seed_note(store, "etiketli.md", many_tags(kSources)));
+    CHECK(tag_count(store, "etiketli.md") == kSources);
+    CHECK(store.tags().size() == kSources);
+}
+
+TEST_CASE(
+    "a note's own links and tags left after a crash between follow-ups are completed on the next open") {
+    const TempDir dir;
+    {
+        NoteStore store(dir.path());
+        const std::string body = seed_targets(store, kSources) + many_tags(kSources);
+        store.impl().txn_ops_limit = kSmallLimit;
+        store.impl().follow_up_allowed = [] { return false; };
+        REQUIRE(seed_note(store, "kaynak.md", body));  // kullanıcının işlemi commit edildi
+        CHECK(edges_from(store, "kaynak.md") < kSources);
+    }
+    const NoteStore reopened(dir.path());
+    CHECK(edges_from(reopened, "kaynak.md") == kSources);
+    CHECK(tag_count(reopened, "kaynak.md") == kSources);
+}

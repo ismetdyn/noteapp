@@ -1177,7 +1177,10 @@ struct Mesh {
     }
     void deliver(std::size_t from, std::size_t to) {
         const std::vector<fs::path> files{log_of(from)};
-        const auto got = core::ingest_note_logs(stores[to], files, noteapp::sync::merge_text);
+        const auto got = core::ingest_note_logs(
+            stores[to], files, [](std::string_view base, std::string_view ours, std::string_view theirs) {
+                return noteapp::sync::merge_text(base, ours, theirs, SIZE_MAX);
+            });
         REQUIRE_MESSAGE(got.has_value(), describe(got));
     }
     void shuffle_rounds(std::mt19937& rng, int rounds) {
@@ -1261,11 +1264,12 @@ TEST_CASE("no common ancestor: two separately migrated different files stay as n
     CHECK(mesh.stores[1].list().size() == 2);
 }
 
-// git_merge_file yazma kilidi altında koşar: büyük girdi birleşmez, çakışma kopyasına düşer.
+// git_merge_file yazma kilidi altında koşar: sınırdan (limits.sync.merge_input_bytes) büyük girdi birleşmez,
+// çakışma kopyasına düşer; sınırsızda (0 -> SIZE_MAX) eski 4 MiB tavanının üstü de birleşir.
 TEST_CASE("merge_text: an input over the size limit gives nothing, one at the limit still merges") {
     using noteapp::sync::merge_text;
     const noteapp::sync::GitRuntime runtime;  // libgit2'nin ayırıcısı: test tek başına da koşabilsin
-    constexpr std::size_t kLimit = std::size_t{4} * 1024U * 1024U;
+    constexpr std::size_t kLimit = std::size_t{4} * 1024U * 1024U;  // defaults.toml "4MiB"
     const auto versions = [](std::size_t total) {
         std::string middle;
         for (int line = 0; middle.size() + 5 < total; ++line)
@@ -1276,16 +1280,46 @@ TEST_CASE("merge_text: an input over the size limit gives nothing, one at the li
     };
     const auto at_limit = versions(kLimit);
     REQUIRE(at_limit[0].size() == kLimit);
-    CHECK(merge_text(at_limit[0], at_limit[1], at_limit[2]).has_value());
+    CHECK(merge_text(at_limit[0], at_limit[1], at_limit[2], kLimit).has_value());
     const auto over = versions(kLimit + 1);
     REQUIRE(over[0].size() == kLimit + 1);
-    CHECK_FALSE(merge_text(over[0], over[1], over[2]).has_value());
+    CHECK_FALSE(merge_text(over[0], over[1], over[2], kLimit).has_value());
+    CHECK(merge_text(over[0], over[1], over[2], SIZE_MAX) ==
+          "A\n" + over[0].substr(2, over[0].size() - 4) + "E\n");
 }
 
 TEST_CASE("merge_text: clean merge keeps bytes, overlap gives nothing") {
     using noteapp::sync::merge_text;
     const SyncFixture fx;
-    CHECK(merge_text("a\r\nb\nc\nd\ne\n", "A\r\nb\nc\nd\ne\n", "a\r\nb\nc\nd\nE\n") == "A\r\nb\nc\nd\nE\n");
-    CHECK_FALSE(merge_text("a\n", "b\n", "c\n").has_value());
-    CHECK(merge_text("", "x\n", "x\n") == "x\n");
+    CHECK(merge_text("a\r\nb\nc\nd\ne\n", "A\r\nb\nc\nd\ne\n", "a\r\nb\nc\nd\nE\n", SIZE_MAX) ==
+          "A\r\nb\nc\nd\nE\n");
+    CHECK_FALSE(merge_text("a\n", "b\n", "c\n", SIZE_MAX).has_value());
+    CHECK(merge_text("", "x\n", "x\n", SIZE_MAX) == "x\n");
+}
+
+// L4b: küçük çerçeve sınırında (config limits.graph.frame_bytes) çerçeveden büyük not iki cihaz arasında git
+// üzerinden bayt bayt taşınır; günlükte parçalara bölünür.
+TEST_CASE("a note larger than one frame syncs both ways when both devices use a small frame_bytes") {
+    const SyncFixture fx;
+    const Device a(fx, "A");
+    const Device b(fx, "B");
+    const auto small_sync = [](const Device& device) {
+        const EnvGuard guard("NOTEAPP_HOME", device.home);
+        core::Config config = device.config();
+        config.limits.graph.frame_bytes = core::Limit{64U * 1024U, "64KiB"};
+        auto result = noteapp::sync::SyncService(config).sync_now();
+        REQUIRE_MESSAGE(result.has_value(), describe(result));
+        CHECK(result->log_issues.empty());
+    };
+    std::string body(std::size_t{1} << 20U, 'x');
+    body[100] = '\0';
+    body += "\r\nson\n";
+    a.put("buyuk.md", body);
+    small_sync(a);
+    small_sync(b);
+    CHECK((b.body("buyuk.md") == body));  // çift parantez: 1 MiB değer iletiye basılmasın
+    b.put("buyuk.md", body + "B\n");
+    small_sync(b);
+    small_sync(a);
+    CHECK((a.body("buyuk.md") == body + "B\n"));
 }

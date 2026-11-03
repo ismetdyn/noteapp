@@ -117,35 +117,32 @@ TEST_CASE("migrate twice changes nothing: same notes, no new operations") {
     CHECK(box.run({"graph", "export", "--format", "jsonl"}).out == first.out);
 }
 
-TEST_CASE("a file over 60 MiB is skipped by name: original untouched, gate open, exit 0") {
+// L4b: çerçeve not boyutunu sınırlamaz; eskiden atlanan 60 MiB üstü dosya artık bayt bayt içe alınır.
+TEST_CASE("a file over 60 MiB, larger than one frame, is migrated byte for byte") {
     const Sandbox box("en");
     write_plain(box.notes() / "iyi.md", "iyi\n");
     const fs::path huge = box.notes() / "dev.bin";
     // resize_file MinGW + Wine'da çöküyor (mingw-crt checkfreespace): gerçekten yazılır.
-    write_plain(huge, std::string(std::size_t{61} * 1024U * 1024U, 'x'));
+    const std::string bytes(std::size_t{65} * 1024U * 1024U, 'x');
+    write_plain(huge, bytes);
 
     const auto migrated = box.run({"graph", "migrate"});
     CHECK_MESSAGE(migrated.exit_code == 0, migrated.err);
-    CHECK(migrated.err.find("dev.bin") != std::string::npos);
-    CHECK(fs::file_size(huge) == std::uintmax_t{61} * 1024U * 1024U);
+    CHECK(fs::file_size(huge) == bytes.size());
     CHECK(box.body("iyi.md") == "iyi\n");
+    CHECK((box.body("dev.bin") == bytes));  // çift parantez: 65 MiB değer iletiye basılmasın
     CHECK(box.run({"-n", "n", "metin"}).exit_code == 0);
 }
 
+// L4b'den önce 61 MiB'lik dosya da dışarıda kalıyordu; artık yalnız depolama sınırını (1 GB) aşan dosya
+// `too_large`dır, testte üretilemez. Dışarıda kalan dosya geçersiz addır: Windows'ta `nul` aygıttır, böyle
+// bir dosya oluşamaz; bu yüzden test yalnız POSIX'te koşar.
+#ifndef _WIN32
 TEST_CASE("files the migration left out stay visible until resolved: status and export --all exit 1") {
     const Sandbox box("en");
     write_plain(box.notes() / "iyi.md", "iyi\n");
-    const fs::path huge = box.notes() / "dev.bin";
-    write_plain(huge, std::string(std::size_t{61} * 1024U * 1024U, 'x'));
-#ifdef _WIN32
-    // Windows'ta `nul` aygıttır: böyle bir dosya oluşamaz, geçersiz ad dalı yalnız POSIX'te sınanır.
     constexpr const char* kLeftOutSummary = "NOT migrated (1,";
-    const auto has_invalid = [](const std::string&) { return true; };
-#else
-    constexpr const char* kLeftOutSummary = "NOT migrated (2,";
     write_plain(box.notes() / "ham" / "nul.bin", "x");
-    const auto has_invalid = [](const std::string& err) { return err.find("nul.bin") != std::string::npos; };
-#endif
     const TempDir out;
 
     const auto clean_before = box.run({"graph", "status"});
@@ -158,14 +155,14 @@ TEST_CASE("files the migration left out stay visible until resolved: status and 
     CHECK(migrated.err.find("do not delete") != std::string::npos);
 
     const auto listed = [&](const RunResult& result) {
-        return result.err.find("dev.bin") != std::string::npos && has_invalid(result.err) &&
+        return result.err.find("nul.bin") != std::string::npos &&
                result.err.find("NOT in any export") != std::string::npos;
     };
     const auto exported = box.run({"export", "--all", utf8(out.path() / "a")});
     CHECK(exported.exit_code == 1);
     CHECK(listed(exported));
     CHECK(slurp(out.path() / "a" / "iyi.md") == "iyi\n");  // sağlam notlar yine çıkar
-    CHECK_FALSE(fs::exists(out.path() / "a" / "dev.bin"));
+    CHECK_FALSE(fs::exists(out.path() / "a" / "ham" / "nul.bin"));
 
     const auto accepted = box.run({"export", "--all", utf8(out.path() / "b"), "--ignore-skipped"});
     CHECK(accepted.exit_code == 0);
@@ -184,7 +181,6 @@ TEST_CASE("files the migration left out stay visible until resolved: status and 
     CHECK(box.run({"export", "--pdf", "iyi", "--ignore-skipped"}).exit_code == 2);
 
     // Yeni süreçte de bilir; sorun çözülüp geçiş yinelenince liste boşalır.
-    fs::remove(huge);
     fs::remove_all(box.notes() / "ham");
     const auto again = box.run({"graph", "migrate"});
     CHECK_MESSAGE(again.exit_code == 0, again.err);
@@ -194,6 +190,7 @@ TEST_CASE("files the migration left out stay visible until resolved: status and 
     CHECK(clean.out.find("Nothing was left out") != std::string::npos);
     CHECK(box.run({"export", "--all", utf8(out.path() / "c")}).exit_code == 0);
 }
+#endif
 
 TEST_CASE("a damaged list of left-out files fails loudly instead of saying nothing was skipped") {
     const Sandbox box("en");
@@ -581,6 +578,71 @@ TEST_CASE("graph import: oversized line, huge array, bad base64, edge without a 
     CHECK(refused.err.find("Line ") != std::string::npos);
 }
 
+// Lead kararı 2 (tasks/plan-limits.md): tek satır çerçeve tavanından (65.536 işlem) çok işlem üretse de
+// reddedilmez. L4b: satır tek işlemdir (ya hepsi ya hiç), çerçeveleri yazan böler; yeniden içe aktarma işlem
+// yazmaz (idempotent).
+TEST_CASE("graph import takes a line with more operations than one frame holds as one transaction") {
+    const Sandbox box("en");
+    const TempDir out;
+    const fs::path dump = out.path() / "d.jsonl";
+    // Etiket satırda tek JSON değeridir (satır başına 100.000 değer): 70.000 etiket + put_node varsayılan
+    // çerçeve sınırını (65.536) aşar.
+    constexpr int kLabels = 70000;
+    std::string line = "{\"k\":\"node\",\"id\":\"00000000000000000000000000000001\",\"labels\":[";
+    for (int i = 0; i < kLabels; ++i)
+        line += (i == 0 ? "\"L" : ",\"L") + std::to_string(i) + "\"";
+    write_plain(dump, "{\"k\":\"noteapp-graph\",\"v\":1}\n" + line + "],\"props\":{\"x\":{\"i\":\"7\"}}}\n");
+
+    const auto imported = box.run({"graph", "import", utf8(dump)});
+    INFO(imported.err);
+    REQUIRE(imported.exit_code == 0);
+    const auto count = box.run({"query", "MATCH (n:L69999) RETURN n.x"});
+    CHECK(count.out == "n.x\n7\n");
+    const auto seq_after = [&box] {
+        auto graph = noteapp::graph::Graph::open(box.data() / "graph.db");
+        REQUIRE(graph.has_value());
+        return *graph->last_seq();
+    };
+    const std::uint64_t first = seq_after();
+    CHECK(first == 1);  // satır bölünmez: tek işlem
+
+    const auto again = box.run({"graph", "import", utf8(dump)});
+    INFO(again.err);
+    CHECK(again.exit_code == 0);
+    CHECK(seq_after() == first);
+}
+
+// Lead bulgusu: make_room satır ortasında commit ediyordu; çerçeveden büyük değer sonra reddedilince yarım düğüm
+// kalıyor, yineleme onu reddediyordu. Satır tek işlemdir; değer çerçeveden büyük olabilir.
+TEST_CASE("graph import: a line with a value larger than one frame lands whole and a rerun changes nothing") {
+    const Sandbox box("en");
+    std::ofstream(box.config_file(), std::ios::app) << "[limits.graph]\nframe_bytes = \"64KiB\"\n";
+    const TempDir out;
+    const fs::path dump = out.path() / "d.jsonl";
+    const std::string text(200U * 1024U, 'a');
+    write_plain(dump, "{\"k\":\"noteapp-graph\",\"v\":1}\n"
+                      "{\"k\":\"node\",\"id\":\"00000000000000000000000000000001\",\"labels\":[\"Big\"],"
+                      "\"props\":{\"a\":{\"i\":\"1\"},\"t\":{\"s\":\"" +
+                          text + "\"},\"z\":{\"i\":\"2\"}}}\n");
+    const auto seq_after = [&box] {
+        auto graph = noteapp::graph::Graph::open(box.data() / "graph.db");
+        REQUIRE(graph.has_value());
+        return *graph->last_seq();
+    };
+
+    const auto imported = box.run({"graph", "import", utf8(dump)});
+    INFO(imported.err);
+    REQUIRE(imported.exit_code == 0);
+    CHECK(box.run({"query", "MATCH (n:Big) RETURN n.z"}).out == "n.z\n2\n");
+    CHECK(box.run({"query", "MATCH (n:Big) WHERE n.t STARTS WITH 'aaa' RETURN n.a"}).out == "n.a\n1\n");
+    CHECK(seq_after() == 1);
+
+    const auto again = box.run({"graph", "import", utf8(dump)});
+    INFO(again.err);
+    CHECK(again.exit_code == 0);
+    CHECK(seq_after() == 1);
+}
+
 TEST_CASE("graph import accepts null in an unknown field and still refuses it in a known one") {
     const Sandbox box("en");
     const TempDir out;
@@ -779,20 +841,23 @@ TEST_CASE(
     CHECK(box.run({"graph", "migrate", "--yok"}).exit_code == 2);
 }
 
-// Yalnız Linux: PATH_MAX dizini açtırır, derin dosyayı adıyla görürüz. Windows'ta MinGW _wopendir MAX_PATH'te
-// durur, dosya görülemez; o yol note_limits_test'te atasının raporuyla sınanır.
-TEST_CASE("a file too deep for the store stops migration; --skip-failed names it, keeps it, opens the gate") {
+// L3: derinlik sınırı yok; geçişi durduran klasör yolunun baytıdır (limits.core.folder_path_bytes). Sınır
+// küçültülür: OS'un yol sınırı varsayılanı (4096) aşan dosyayı zaten oluşturtmaz.
+TEST_CASE(
+    "a file whose folder path is over the store limit stops migration; --skip-failed names it, keeps it, "
+    "opens the gate") {
     const Sandbox box("en");
-    std::string deep = "d";
-    for (int i = 1; i < 129; ++i)
-        deep += "/d";
-    deep += "/derin.md";
+    REQUIRE(box.run({"config", "set", "limits.core.folder_path_bytes", "100"}).exit_code == 0);
+    const std::string deep =
+        std::string(60, 'k') + "/" + std::string(60, 'l') + "/derin.md";  // klasör 121 bayt
     write_plain(box.notes() / deep, "derin\n");
+    write_plain(box.notes() / "iyi.md", "iyi\n");
 
     const auto failed = box.run({"graph", "migrate"});
     CHECK_MESSAGE(failed.exit_code == 1, failed.err);
     CHECK(failed.err.find("NOT migrated: " + deep) != std::string::npos);
-    CHECK(failed.err.find("too deep") != std::string::npos);
+    CHECK(failed.err.find("folder path is too long") != std::string::npos);
+    CHECK(failed.err.find("NOT migrated: iyi.md") == std::string::npos);
 
     const auto skipped = box.run({"graph", "migrate", "--skip-failed"});
     CHECK_MESSAGE(skipped.exit_code == 0, skipped.err);
@@ -1035,24 +1100,25 @@ TEST_CASE("a note made in the app at the same path: same bytes is known, other b
     CHECK(box.run({"graph", "status"}).exit_code == 0);
 }
 
+// L4b: 61 MiB artık içe alınır; dışarıda kalan yeni dosya geçersiz addır (Windows'ta `nul` oluşamaz).
+#ifndef _WIN32
 TEST_CASE("new files over the limits: status names them, --new skips and records them like migrate") {
     const Sandbox box("en");
     write_plain(box.notes() / "iyi.md", "iyi\n");
     REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
-    write_plain(box.notes() / "dev.bin", std::string(std::size_t{61} * 1024U * 1024U, 'x'));
+    write_plain(box.notes() / "ham" / "nul.bin", "x");
     write_plain(box.notes() / "sonra.md", "sonra\n");
 
     const auto status = box.run({"graph", "status"});
     CHECK(status.exit_code == 1);
-    CHECK(status.err.find("dev.bin") != std::string::npos);
+    CHECK(status.err.find("nul.bin") != std::string::npos);
     CHECK(status.err.find("sonra.md") != std::string::npos);
 
     const auto imported = box.run({"graph", "migrate", "--new"});
     CHECK_MESSAGE(imported.exit_code == 0, imported.err);
-    CHECK(imported.err.find("dev.bin") != std::string::npos);
+    CHECK(imported.err.find("nul.bin") != std::string::npos);
     CHECK(box.body("sonra.md") == "sonra\n");
-    CHECK_FALSE(box.exists("dev.bin"));
-    CHECK(fs::file_size(box.notes() / "dev.bin") == std::uintmax_t{61} * 1024U * 1024U);
+    CHECK(fs::file_size(box.notes() / "ham" / "nul.bin") == 1);
 
     const auto recorded = box.run({"graph", "status"});  // kayıtlı: bir kez, eski yoldan
     CHECK(recorded.exit_code == 1);
@@ -1060,6 +1126,29 @@ TEST_CASE("new files over the limits: status names them, --new skips and records
     CHECK(recorded.err.find("--new") == std::string::npos);
     CHECK(box.run({"graph", "status", "--ignore-skipped"}).exit_code == 0);
 }
+
+// L2: status ve migrate --new deponun config'teki klasör yolu sınırını kullanır (eskiden hep 4096).
+TEST_CASE("status and migrate --new use the configured folder path limit") {
+    const Sandbox box("en");
+    write_plain(box.notes() / "iyi.md", "iyi\n");
+    REQUIRE(box.run({"graph", "migrate"}).exit_code == 0);
+    REQUIRE(box.run({"config", "set", "limits.core.folder_path_bytes", "100"}).exit_code == 0);
+    const std::string deep = std::string(60, 'k') + "/" + std::string(60, 'l') + "/derin.md";  // klasör 121 bayt
+    write_plain(box.notes() / deep, "derin\n");
+
+    const auto status = box.run({"graph", "status"});
+    CHECK(status.exit_code == 1);
+    CHECK_MESSAGE(status.err.find("folder path is too long") != std::string::npos, status.err);
+
+    // migrate gibi: dosya içe alınmaz, yerinde kalır, bir kez ve nedeniyle raporlanır.
+    const auto imported = box.run({"graph", "migrate", "--new"});
+    CHECK_MESSAGE(imported.exit_code == 1, imported.err);
+    CHECK(imported.err.find("folder path is too long") != std::string::npos);
+    CHECK(imported.err.find("saved bytes differ") == std::string::npos);
+    CHECK_FALSE(box.exists(deep));
+    CHECK(fs::exists(box.notes() / deep));
+}
+#endif
 
 TEST_CASE("the stray scan stops at its limits and says so, and sees the old trash too") {
     using noteapp::core::find_stray_files;

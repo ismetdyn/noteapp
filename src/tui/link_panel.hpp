@@ -4,9 +4,19 @@
 
 #include <cstddef>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace noteapp::tui {
+
+// REVIEW satırındaki bir [[bağlantı]]: [begin, end) ayraçlar dahil, `target` core::link_target anahtarıdır
+// (satırın içine bakar). Deponun taramasıyla aynı kural, satır başına: satırı aşan bağlantı yoktur.
+struct WikiSpan {
+    std::size_t begin = 0;
+    std::size_t end = 0;
+    std::string_view target;
+};
+std::vector<WikiSpan> wiki_spans(std::string_view line);
 
 // REVIEW'un altındaki bağlantı bölümünün saf modeli: düz satırlar, seçim, pencere. Seçim yalnız öğe
 // satırlarında gezer; binlerce satırda çizim ve kaydırma görünene orantılıdır, başka kopya yoktur.

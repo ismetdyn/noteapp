@@ -1,5 +1,7 @@
+#include "core/config.hpp"
+#include "edit/language_servers.hpp"
+#include "edit/lsp_client.hpp"
 #include "support/test_support.hpp"
-#include "tui/lsp_client.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -17,6 +19,8 @@
 #endif
 
 using noteapp::tui::LspClient;
+namespace tui = noteapp::tui;
+namespace core = noteapp::core;
 namespace lsp = noteapp::core::lsp;
 using namespace std::chrono_literals;
 using Clock = std::chrono::steady_clock;
@@ -286,9 +290,29 @@ TEST_CASE("hostile_server_data_is_contained") {
     REQUIRE(items);
     CHECK(items->size() == 2);
     CHECK(std::ranges::none_of(*items, [](const lsp::CompletionItem& item) {
-        return item.insert_text.size() > LspClient::kMaxCompletionInsertBytes ||
-               item.label.size() > LspClient::kMaxCompletionLabelBytes;
+        return item.insert_text.size() > tui::LspClientLimits{}.completion_insert_bytes ||
+               item.label.size() > tui::LspClientLimits{}.completion_label_bytes;
     }));
+}
+
+// L5: limits.lsp.completion_insert_bytes ve completion_label_bytes 0 ise eski 8 KiB / 1 KiB üstü öğe gelir.
+TEST_CASE("completion_items_over_the_old_size_caps_arrive_when_the_limits_are_unlimited") {
+    Probe probe;
+    const tui::LspLimits limits = tui::lsp_limits_of(
+        core::parse_config("[limits.lsp]\ncompletion_insert_bytes = 0\ncompletion_label_bytes = 0\n")
+            .config.limits.lsp);
+    LspClient client(LspClient::Options{.language = "fake",
+                                        .command = {NOTEAPP_FAKE_LSP_SERVER, "hostile"},
+                                        .root_uri = "file:///workspace",
+                                        .limits = limits.client},
+                     [&probe] { ++probe.notified; });
+    client.open(std::string(kUri), "python", "line one\nline two", 1);
+    REQUIRE(eventually([&] { return !client.diagnostics(std::string(kUri)).empty(); }));
+    const auto ticket = client.request_completion(std::string(kUri), 1, {});
+    REQUIRE(ticket);
+    const auto items = wait_completion(client, *ticket);
+    REQUIRE(items);
+    CHECK(items->size() == 4);
 }
 
 TEST_CASE("shutdown_is_bounded_in_every_mode") {

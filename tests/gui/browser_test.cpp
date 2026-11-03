@@ -74,12 +74,13 @@ TEST_CASE_FIXTURE(BrowserFixture, "the tree lists folders before notes, nested u
     add_note("alpha.md", "a", 30);
     add_note("home/c.md", "c", 40);
     auto state = make_state();
-    CHECK(row_paths(*state) == Paths{"d:", "d:home", "d:work", "n:alpha.md", "n:zeta.md"});
+    // Karar 6: varsayılan sıra TUI'ninki, en yeni başta (klasörde alt ağacın en yeni notu).
+    CHECK(row_paths(*state) == Paths{"d:", "d:work", "d:home", "n:zeta.md", "n:alpha.md"});
     const auto& rows = state->browser_rows();
     REQUIRE(rows.size() == 5);
     CHECK(rows[0].depth == 0);
     CHECK(rows[1].depth == 1);
-    CHECK(rows[1].name == "home");
+    CHECK(rows[1].name == "work");
     CHECK(rows[1].has_children);
     CHECK_FALSE(rows[1].expanded);
 }

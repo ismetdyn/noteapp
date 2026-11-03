@@ -42,11 +42,11 @@ NameTerms name_terms(std::string_view text) {
 }
 
 // Her terim yolda fuzzy geçmeli; puanlar toplanır, konumlar birleşir.
-void match_name(const NameTerms& query, const std::string& path, Row& row) {
+void match_name(const NameTerms& query, const std::string& path, std::size_t max_candidate, Row& row) {
     double score = 0;
     std::vector<std::size_t> positions;
     for (const std::string& term : query.terms) {
-        auto match = fuzzy_match(term, path);
+        auto match = fuzzy_match(term, path, max_candidate);
         if (!match)
             return;
         score += match->score;
@@ -62,7 +62,8 @@ void match_name(const NameTerms& query, const std::string& path, Row& row) {
 }
 
 std::vector<Row> matching_rows(std::string_view text, const std::vector<std::size_t>& allowed,
-                               std::span<const core::NoteMeta> notes, const ContentIndex& content_index) {
+                               std::span<const core::NoteMeta> notes, const ContentIndex& content_index,
+                               std::size_t max_candidate) {
     const NameTerms query = name_terms(text);
     std::vector<Row> rows;
     rows.reserve(allowed.size());
@@ -71,7 +72,7 @@ std::vector<Row> matching_rows(std::string_view text, const std::vector<std::siz
     for (const std::size_t i : allowed) {
         std::string path = notes[i].path.string();
         Row row{i, path.size()};
-        match_name(query, path, row);
+        match_name(query, path, max_candidate, row);
         rows.push_back(std::move(row));
         row_by_path.emplace(std::move(path), rows.size() - 1);
     }
@@ -134,9 +135,12 @@ void sort_explicitly(std::vector<Row>& rows, const SortSpec& sort, std::span<con
 
 }  // namespace
 
+namespace {
+
 std::expected<std::vector<GlobalHit>, QueryError>
-search_all(std::string_view query, std::span<const core::NoteMeta> notes, const ContentIndex& content_index,
-           std::size_t limit, std::chrono::system_clock::time_point now, const ViewLookup& views) {
+search_within(std::string_view query, std::span<const core::NoteMeta> notes,
+              const ContentIndex& content_index, std::size_t limit, std::size_t max_candidate,
+              std::chrono::system_clock::time_point now, const ViewLookup& views) {
     const auto parsed = parse_query(query, views);
     if (!parsed)
         return std::unexpected(parsed.error());
@@ -153,7 +157,7 @@ search_all(std::string_view query, std::span<const core::NoteMeta> notes, const 
         return hits;
     }
 
-    std::vector<Row> rows = matching_rows(parsed->text, allowed, notes, content_index);
+    std::vector<Row> rows = matching_rows(parsed->text, allowed, notes, content_index, max_candidate);
     sort_by_relevance(rows, notes);
     if (parsed->sort) {
         sort_explicitly(rows, *parsed->sort, notes);
@@ -171,6 +175,16 @@ search_all(std::string_view query, std::span<const core::NoteMeta> notes, const 
                       row.content_hits > 0 ? content_index.best_hit(path, parsed->text) : std::nullopt});
     }
     return hits;
+}
+
+}  // namespace
+
+std::expected<std::vector<GlobalHit>, QueryError>
+search_all(std::string_view query, std::span<const core::NoteMeta> notes, const ContentIndex& content_index,
+           const core::SearchLimits& limits, std::chrono::system_clock::time_point now,
+           const ViewLookup& views) {
+    return search_within(query, notes, content_index, limits.global_results.cap(),
+                         limits.fuzzy_candidate_chars.cap(), now, views);
 }
 
 }  // namespace noteapp::search

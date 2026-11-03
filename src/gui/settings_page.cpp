@@ -21,9 +21,6 @@ std::string https_host(const std::string& remote) {
 
 SettingsPage::SettingsPage(core::Config config, const Deciders& deciders, SettingsHost host)
     : applied_(std::move(config)), deciders_(deciders), host_(std::move(host)) {
-    tokens.has = [](std::string_view h) { return sync::has_token(h); };
-    tokens.store = [](std::string_view h, std::string_view t) { return sync::store_token(h, t); };
-    tokens.clear = [](std::string_view h) { return sync::clear_token(h); };
     for (const auto& [key, ignored] : core::config_entries(applied_))
         keys_.push_back(key);
     load(applied_);

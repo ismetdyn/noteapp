@@ -290,7 +290,8 @@ Result<QueryValue> eval_list(const Expr& expr, const Row& row, ExecContext& cont
         // Sorgu kısa olsa da WITH zinciriyle liste üstel büyüyebilir: kopya bütçeyi aşmadan durur.
         bytes += value_bytes(*item);
         depth = std::max(depth, value_depth(*item));
-        if (context.budget.would_exceed(bytes) || depth >= kMaxValueDepth)
+        if (context.budget.would_exceed(bytes) ||
+            static_cast<std::size_t>(depth) >= context.budget.max_nesting())
             return std::unexpected(limit_error("memory"));
         list.items.push_back(std::move(*item));
     }

@@ -12,8 +12,6 @@ using graph::NodeId;
 
 namespace {
 
-constexpr std::size_t kMaxTagsPerNote = 256;  // işlem başına op sınırına düşmesin; fazlası etiketlenmez
-constexpr std::size_t kMaxTagBytes = 128;
 // Kodda `#include`, `#fff`, `# yorum` etiket değildir: yalnız düzyazı tipleri taranır.
 constexpr std::array<std::string_view, 3> kProseTypes = {"md", "markdown", "txt"};
 
@@ -77,7 +75,7 @@ std::string_view tag_at(std::string_view line, std::size_t hash, std::size_t& en
     std::string_view tag = line.substr(hash + 1, at - hash - 1);
     while (tag.ends_with('/'))  // `#proje/` iç içe ayıracıdır, etiketin parçası değil
         tag.remove_suffix(1);
-    if (tag.empty() || tag.starts_with('/') || !has_letter || tag.size() > kMaxTagBytes)
+    if (tag.empty() || tag.starts_with('/') || !has_letter)
         return {};
     return tag;
 }
@@ -130,7 +128,7 @@ bool closes_fence(std::string_view line, std::string_view fence, std::string_vie
 
 void scan_line(std::string_view line, std::map<std::string, std::string>& tags) {
     std::size_t at = 0;
-    while (at < line.size() && tags.size() < kMaxTagsPerNote) {
+    while (at < line.size()) {
         if (const std::size_t skipped = skip_span(line, at); skipped != at) {
             at = skipped;
             continue;
@@ -153,7 +151,7 @@ std::vector<std::string> note_tags(std::string_view path, std::string_view body)
         return {};
     std::map<std::string, std::string> tags;  // anahtar -> ilk yazım
     std::string_view open_fence;
-    for (std::size_t start = 0; start <= body.size() && tags.size() < kMaxTagsPerNote;) {
+    for (std::size_t start = 0; start <= body.size();) {
         const std::size_t newline = std::min(body.find('\n', start), body.size());
         const std::string_view line = body.substr(start, newline - start);
         start = newline + 1;
@@ -195,21 +193,24 @@ std::expected<void, Error> WriteContext::update_tags(const NodeId& id, std::stri
     auto existing = neighbor_edges(id, graph::Direction::Out, kTagged, path);
     if (!existing)
         return std::unexpected(existing.error());
-    std::vector<NodeId> dropped;
+    // Not başına tavan yok: bütçeye sığmayan etiketler unfinished ile sonraki işlemlere kalır. Silinen
+    // kenarın sahipsiz etiketi hemen silinir: kenar gidince sonraki geçiş onu bir daha görmezdi.
     for (const auto& [edge, tag] : *existing) {
         if (wanted.erase(tag) > 0)
             continue;
+        if (over_budget())
+            return leave_unfinished(id);
         NOTEAPP_TRY_GRAPH(txn.delete_edge(edge), path);
-        dropped.push_back(tag);
+        NOTEAPP_TRY(remove_orphan_tag(tag, path));
     }
     for (const auto& [tag, names] : wanted) {
+        if (over_budget())
+            return leave_unfinished(id);
         NOTEAPP_TRY(ensure_tag(tag, names.key, names.display, path));
         NOTEAPP_TRY_GRAPH(txn.put_edge(graph::derive_edge_id(kTagged, as_bytes(id_text(id) + id_text(tag))),
                                        id, kTagged, tag),
                           path);
     }
-    for (const NodeId& tag : dropped)
-        NOTEAPP_TRY(remove_orphan_tag(tag, path));
     return {};
 }
 

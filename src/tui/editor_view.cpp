@@ -2,7 +2,7 @@
 
 #include "core/i18n.hpp"
 #include "core/text.hpp"
-#include "tui/display_text.hpp"
+#include "edit/display_text.hpp"
 #include "tui/input_view.hpp"
 #include "tui/view.hpp"
 
@@ -42,6 +42,7 @@ struct CellLook {
     // Unspecified: tanı yok (DiagnosticMark bu değeri taşımaz).
     core::lsp::DiagnosticSeverity diagnostic = core::lsp::DiagnosticSeverity::Unspecified;
     bool hidden = false;  // görünmez bidi/sıfır genişlikli karakterin işareti
+    bool dimmed = false;
     bool operator==(const CellLook&) const = default;
 };
 
@@ -108,6 +109,8 @@ ftxui::Element styled(const std::string& run, CellLook look) {
     const bool diagnosed = look.diagnostic != core::lsp::DiagnosticSeverity::Unspecified;
     if (look.misspelled || diagnosed)
         element = element | underlined;
+    if (look.dimmed)
+        element = element | dim;
     switch (look.style) {
     case CellStyle::Highlight:
         return element | bold | color(Color::Yellow);
@@ -262,8 +265,14 @@ ftxui::Element paint_row(const EditorBuffer& buffer, const VisualRow& row, const
     int cell = 0;
     for (std::size_t at = row.begin; at < row.end;) {
         const Glyph glyph = buffer.glyph_at(at, cell);
-        const CellLook look{style_at(at, paint), tokens.at(at), is_misspelled(at, paint),
-                            diagnostic_at(at, paint), glyph.hidden != 0};
+        const CellLook look{style_at(at, paint),
+                            tokens.at(at),
+                            is_misspelled(at, paint),
+                            diagnostic_at(at, paint),
+                            glyph.hidden != 0,
+                            std::ranges::any_of(paint.dimmed, [at](const ByteRange& range) {
+                                return at >= range.begin && at < range.end;
+                            })};
         const bool at_cursor = paint.cursor && at == *paint.cursor;
         if ((look != run_look || at_cursor) && !run.empty()) {
             parts.push_back(styled(run, run_look));

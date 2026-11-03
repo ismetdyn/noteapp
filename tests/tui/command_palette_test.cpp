@@ -3,9 +3,9 @@
 #include "core/file_icons.hpp"
 #include "core/i18n.hpp"
 #include "core/paths.hpp"
+#include "edit/editor_session.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
-#include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/modals.hpp"
@@ -78,6 +78,11 @@ std::string screen_text(const tui::TuiState& state, int width = kWidth, int heig
 void type(tui::TuiState& state, std::string_view text) {
     for (std::size_t i = 0; i < text.size(); ++i)
         state.handle(Key::Char, text.substr(i, 1));
+}
+
+void type_row(tui::NewRowState& row, std::string_view text) {
+    for (std::size_t i = 0; i < text.size(); ++i)
+        row.handle(Key::Char, text.substr(i, 1));
 }
 
 // Klasör, iki not; bağlantısız. Seçim ilk notta (a.md).
@@ -472,8 +477,10 @@ TEST_CASE("palette: recently used first, across reopen and through the prefs fil
     CHECK(restarted.palette_rows().front().command->id == "column.origin");
 }
 
-TEST_CASE("palette: the recent list is capped, also when the file was edited by hand") {
+// Sınır limits.app.recent_commands'tır (0 = sınırsız); elle düzenlenmiş dosya da yüklenirken kısalır.
+TEST_CASE("palette: the recent list follows limits.app.recent_commands, also when the file was edited by hand") {
     tui::TuiState state = sample_state();
+    state.set_recent_commands_limit(core::Limit{3, "3"});
     for (const Command& command : tui::TuiState::commands()) {
         if (!(command.contexts & tui::kInList))
             continue;
@@ -489,13 +496,21 @@ TEST_CASE("palette: the recent list is capped, also when the file was edited by 
         if (state.focus() != Focus::List)
             state.handle(Key::Escape);
     }
-    CHECK(state.list_prefs().recent_commands.size() <= tui::TuiState::kMaxRecentCommands);
+    CHECK(state.list_prefs().recent_commands.size() == 3);
 
     std::string text = "recent_commands = [";
     for (int i = 0; i < 500; ++i)
         text += "\"x" + std::to_string(i) + "\", ";
     text += "\"last\"]\n";
-    CHECK(tui::parse_list_prefs(text).recent_commands.size() == tui::TuiState::kMaxRecentCommands);
+    const core::Limit configured = core::parse_config("").config.limits.app.recent_commands;
+    tui::TuiState loaded = sample_state();
+    loaded.set_recent_commands_limit(configured);
+    loaded.set_list_prefs(tui::parse_list_prefs(text));
+    CHECK(loaded.list_prefs().recent_commands.size() == configured.value);
+    tui::TuiState unlimited = sample_state();
+    unlimited.set_recent_commands_limit(core::Limit{0, "0"});
+    unlimited.set_list_prefs(tui::parse_list_prefs(text));
+    CHECK(unlimited.list_prefs().recent_commands.size() == 501);
 }
 
 // ---- Çalışamayan ----
@@ -605,6 +620,130 @@ TEST_CASE("tree.toggle_all opens every folder, then closes them") {
     CHECK(state.handle(Key::Enter) == Intent::SavePrefs);
     CHECK_FALSE(state.is_folder_open("work"));
     CHECK(state.rows().size() == 3);
+}
+
+// ---- T1/T2: yalnız GUI'de olan komutlar ----
+
+TEST_CASE("save: Ctrl+S in the editor is the table's save row; elsewhere the palette says where it runs") {
+    tui::TuiState state = sample_state();
+    state.handle(Key::Char, ":");
+    const Command* save = palette_row(state, "save");
+    REQUIRE(save != nullptr);
+    CHECK(save->key == Key::CtrlS);
+    CHECK(std::string_view(reason_of(state, "save")) == "tui.cmd_why_editor");
+    state.handle(Key::Escape);
+    state.enter_editor();
+    CHECK(state.handle(Key::CtrlS) == Intent::EditorKey);
+}
+
+TEST_CASE("links.toggle hides the links section under REVIEW, blocks links.focus, then shows it again") {
+    constexpr int kPaneRows = 20;
+    tui::TuiState state = state_for(tui::kInReview);
+    REQUIRE(state.links_reserved_rows(kPaneRows) > 0);
+    state.handle(Key::Char, ":");
+    aim(state, "links.toggle");
+    CHECK(state.handle(Key::Enter) == Intent::None);
+    CHECK(state.links_reserved_rows(kPaneRows) == 0);
+    CHECK(state.handle(Key::Char, "b") == Intent::None);
+    CHECK(state.focus() == Focus::Preview);
+    state.handle(Key::Char, ":");
+    CHECK(std::string_view(reason_of(state, "links.focus")) == "tui.cmd_why_links");
+    aim(state, "links.toggle");
+    state.handle(Key::Enter);
+    CHECK(state.links_reserved_rows(kPaneRows) > 0);
+}
+
+TEST_CASE("view.details lists only the current folder's children; view.tree brings the open tree back") {
+    tui::TuiState state = sample_state();
+    REQUIRE(state.select_folder("work"));
+    state.toggle_tree(state.selected());
+    const auto shown = [&] {
+        std::vector<std::string> paths;
+        for (const tui::Row& row : state.rows())
+            paths.push_back(row.path.string());
+        return paths;
+    };
+    REQUIRE(shown() == std::vector<std::string>{"work", "work/c.md", "a.md", "b.md"});
+    state.handle(Key::Char, ":");
+    aim(state, "view.details");
+    state.handle(Key::Enter);
+    CHECK(shown() == std::vector<std::string>{"work", "a.md", "b.md"});
+    state.handle(Key::Char, ":");
+    aim(state, "view.tree");
+    state.handle(Key::Enter);
+    CHECK(shown() == std::vector<std::string>{"work", "work/c.md", "a.md", "b.md"});
+}
+
+TEST_CASE("folder.new opens the name row for a folder; the name is relative to the list's folder") {
+    tui::TuiState state = sample_state();
+    state.handle(Key::Char, ":");
+    aim(state, "folder.new");
+    CHECK(state.handle(Key::Enter) == Intent::NewFolderRow);
+    CHECK(state.name_prefix_for("").empty());
+    CHECK(state.name_prefix_for("work") == "work/");
+    state.enter_folder("work");
+    CHECK(state.name_prefix_for("work").empty());
+    CHECK(state.name_prefix_for("work/sub") == "sub/");
+    CHECK(state.name_prefix_for("other").empty());  // listenin klasörü dışı: ad buraya göredir
+
+    tui::NewRowState row(tui::NewRowState::FolderName{}, "sub/", {});
+    CHECK(row.text() == "sub//");
+    type_row(row, "x");
+    CHECK(row.text() == "sub/x/");
+    CHECK(tui::names_folder(row.text()));
+}
+
+TEST_CASE("folder.new through the name row creates the folder in the store, not a note") {
+    StoreFixture fixture;
+    tui::NewRowState typed(tui::NewRowState::FolderName{}, "", {});
+    type_row(typed, "plans");
+    std::optional<tui::NewRowState> row(std::move(typed));
+    bool opened = false;
+    fixture.actions.submit_new_row(row, {"", "md", 40}, [&](const core::NotePath&) { opened = true; });
+    CHECK_FALSE(row.has_value());
+    CHECK_FALSE(opened);
+    const std::vector<std::string> folders = fixture.store->folders();
+    CHECK(std::ranges::find(folders, "plans") != folders.end());
+}
+
+TEST_CASE(
+    "export.pdf asks the path with <name>.pdf, writes the PDF, and replaces a file only on a second Enter") {
+    StoreFixture fixture;
+    const test::TempDir out;
+    REQUIRE(fixture.state.select_note(np("a.md")));
+    fixture.state.focus_preview();
+    fixture.actions.run(fixture.state.handle(Key::Char, "P"), fixture.confirm, fixture.rename);
+    REQUIRE(fixture.rename.has_value());
+    CHECK(fixture.rename->text() == "a.pdf");
+    CHECK(fixture.rename->cursor() == 1);  // ad düzenlenir, uzantı kalır
+
+    const auto retype = [&](const std::string& text) {
+        fixture.actions.handle_rename_key(fixture.rename, Key::End, {});
+        while (!fixture.rename->text().empty())
+            fixture.actions.handle_rename_key(fixture.rename, Key::Backspace, {});
+        for (std::size_t i = 0; i < text.size(); ++i)
+            fixture.actions.handle_rename_key(fixture.rename, Key::Char, std::string_view(text).substr(i, 1));
+    };
+    const std::filesystem::path target = out.path() / "a.pdf";
+    retype(test::utf8(target));
+    fixture.actions.handle_rename_key(fixture.rename, Key::Enter, {});
+    CHECK_FALSE(fixture.rename.has_value());
+    CHECK(test::slurp(target).starts_with("%PDF"));
+    CHECK(has(fixture.status.message, "a.pdf"));
+
+    // Var olan dosya: ilk Enter yazmaz, satır açık kalır ve nedeni söyler; ikinci Enter ezer.
+    {
+        std::ofstream(target, std::ios::binary | std::ios::trunc) << "old";
+    }
+    fixture.actions.run(fixture.state.handle(Key::Char, "P"), fixture.confirm, fixture.rename);
+    retype(test::utf8(target));
+    fixture.actions.handle_rename_key(fixture.rename, Key::Enter, {});
+    REQUIRE(fixture.rename.has_value());
+    CHECK_FALSE(fixture.rename->error().empty());
+    CHECK(test::slurp(target) == "old");
+    fixture.actions.handle_rename_key(fixture.rename, Key::Enter, {});
+    CHECK_FALSE(fixture.rename.has_value());
+    CHECK(test::slurp(target).starts_with("%PDF"));
 }
 
 TEST_CASE("icons.toggle flips the setting, writes config.toml and takes effect at once") {

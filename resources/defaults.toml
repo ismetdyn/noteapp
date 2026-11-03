@@ -38,7 +38,7 @@ scss = ["vscode-css-language-server", "--stdio"]
 less = ["vscode-css-language-server", "--stdio"]
 dockerfile = ["docker-langserver", "--stdio"]
 sql = ["sql-language-server", "up", "--method", "stdio"]   # yalnız kendi ayarında bağlantı varsa veritabanına bağlanır
-# Sertleştirilerek açık (T59e; ayar tablosu src/tui/server_settings.cpp):
+# Sertleştirilerek açık (T59e; ayar tablosu src/edit/server_settings.cpp):
 java = ["jdtls"]                     # Maven/Gradle içe aktarma ve wrapper indirme kapalı; -data state_dir/lsp/jdtls-data
 go = ["gopls"]                       # GOTOOLCHAIN=local GOPROXY=off GOVCS=*:off CGO_ENABLED=0; komut lensleri kapalı
 rust = ["rust-analyzer"]             # build.rs, proc-macro ve cargo check kapalı; noDeps + CARGO_NET_OFFLINE
@@ -53,11 +53,138 @@ json = ["vscode-json-language-server", "--stdio"]        # $schema yalnız file:
 slug_max_length = 60          # not adı slug'ının en çok karakteri
 min_confidence = 0.5          # tip tespitinde kabul eşiği (0..1)
 max_scan_bytes = 65536        # tip tespitinde taranan en çok bayt
-max_note_bytes = 10485760     # bundan büyük notlar düzenlenmez/aranmaz (10 MiB)
+max_note_bytes = 10485760     # bundan büyük notlar düzenlenmez/aranmaz (10 MiB); 0 = sınırsız, "64MiB" gibi birimli yazılabilir
 rescan_seconds = 5            # GUI/TUI dizin yeniden tarama aralığı
 autosave_ms = 3000            # GUI otomatik kayıt gecikmesi
 exit_timeout_seconds = 10     # çıkışta bekleyen senkron için üst sınır
 log_max_bytes = 1048576       # log.txt bu boyutu aşınca log.1.txt'ye döner (1 MiB)
 sync_stale_lock_minutes = 10  # okunamayan senkron kilidi bundan eskiyse bayat sayılır; sahibi canlı kilit devralınmaz
 sync_timeout_seconds = 120    # AutoSync bir senkron sürecini en çok bu kadar bekler, sonra sonlandırır
-graph_batch_ops = 30000       # bir graf işlemindeki işlem bütçesi; aşan iş sonraki işlemlere bölünür, reddedilmez (1..32768)
+graph_batch_ops = 30000       # bir graf işlemindeki işlem bütçesi; aşan iş sonraki işlemlere bölünür, reddedilmez
+completion_min_prefix_bytes = 2   # TUI editöründe gölge öneri için yazılmış en kısa sözcük öneki (bayt)
+
+# Kapasite sınırları: anahtar `limits.<modül>.<ad>`, 0 = sınırsız. Boyut "512KiB"/"64MiB"/"10MB", süre
+# "250ms"/"5s"/"2min"/"1h" yazılabilir; düz sayı taban birimdir (bayt, ms). `note config set limits.… 0` ile
+# değişir, ayar ekranında görünmez (SPEC-core "Sınırlar").
+[limits.app]
+recent_commands = 20          # komut paletinde (TUI, GUI) hatırlanan son kullanılan komut
+trash_undo_steps = 0          # çöp geri alma yığını (TUI `u`, GUI Geri al); dolunca en eski adım düşer
+
+# Not deposu. Görüntü her klasörün tam yolunu tutar: 0'da senkronla gelen N düzeylik klasör zinciri ~N² bayt
+# bellek ister (100.000 düzey ~10 GB). Aşan klasörün notları açılmaz, unreachable listesinde raporlanır.
+[limits.core]
+folder_path_bytes = 4096      # klasör yolunun baytı (derinlik sınırı yok)
+
+[limits.search]
+content_results = 1000        # içerik aramasında (TUI, GUI) listelenen en çok not
+global_results = 200          # genel aramada (ad + içerik) listelenen en çok not; 0: hepsi
+content_hits = 3              # içerik sonucunda not başına gösterilen eşleşen satır; 0: hepsi
+# fuzzy eşleşmenin vurgu konumu ürettiği en uzun aday (kod noktası). Bellek sorgu x aday x 16 bayt: 0'da
+# 4.000 karakterlik yol ve sorgu ~256 MB ister. Uzun aday yine eşleşir, yalnız vurgusuz ve sona yakın sıralanır.
+fuzzy_candidate_chars = 1024
+
+[limits.sync]
+# Üç yönlü birleştirmenin en büyük girdisi; aşan çakışma kopya not olur (içerik kaybı yok). Birleştirme yazma
+# kilidi altında koşar: büyük ve çok farklı iki gövde (onlarca MB) depoyu saniyelerce kilitler; 0: sınırsız.
+# ÖNEMLİ: senkronlanan her cihazda aynı olmalı; farklıysa biri birleştirir, öteki fazladan kopya not kurar.
+merge_input_bytes = "4MiB"
+
+# Graf motoru. ÖNEMLİ: frame_bytes, frame_ops ve peers senkronlanan her cihazda aynı olmalı. Büyüğünü seçen
+# cihazın kaydını varsayılanlı cihaz bad_frame/peer_limit ile bekletir (veri kaybı yok; değer orada da
+# yükselince sonraki senkron sürer). Diğerleri cihaza özgüdür, birleşimin sonucunu değiştirmez. Birleşimi
+# belirleyen sayılar (taban arama bütçesi, kenar özelliği karar bütçesi, ad uzunluğu) protokolde sabittir,
+# burada değildir (SPEC-graph "Sınırlar"). Not ve işlem bu sınırlara takılmaz: günlükte parçalara bölünür.
+[limits.graph]
+frame_bytes = "64MiB"         # günlükteki tek kayıt. 0: SQLite'ın tek değer sınırına (1 GB) dek, daha fazlası olmaz
+frame_ops = 65536             # kayıt başına işlem; kullanıcı işlemi reddedilmez, kayıtlara bölünür
+group_bytes = "1GiB"          # bellekte birleştirilen bir uzak işlem (parçalı grup); aşan günlük bekler. SQLite sınırı (1 GB) ayrıca geçerli
+# Bir uzak işlemin çözülen işlem sayısı; aşan günlük bad_frame (too_many_ops) ile bekler. Çözülmüş işlem 104 bayt:
+# 4194304 işlem ~436 MB. En kötü bellek ~ kodlu grup (group_bytes) + işlemler (group_ops x 104 B) + değer/ad
+# kopyası (en çok group_bytes): varsayılanlarla ~2,5 GiB. 0: sınırsız; 1 GiB'lık küçük işlemli grup ~6 GiB çözülür.
+group_ops = 4194304
+peers = 256                   # tanınan uzak cihaz; çerçevenin bağımlılık sınırı bunun 4 katıdır
+hlc_skew = "24h"              # ileri saatli uzak HLC bundan ötedeyse kendi saate alınmaz. 0: bozuk saatli cihaz bu cihazın saatini ileri iter
+ingest_bytes = "8GiB"         # bir senkronda okunan yeni günlük baytı; kalanı sonraki senkrona
+merge_owners = 8388608        # birleşimin bellekte izlediği düğüm + kenar; aşan günlük merge_limit ile bekler
+report_entries = 4096         # senkron raporundaki bozuk çerçeve ve çakışma kaydı; fazlası yalnız sayılır
+touched_properties = 1048576  # çakışma raporu için izlenen özellik
+set_aside_logs = 3            # tutulan kenara alınmış yerel günlük kopyası (en yenisi dahil)
+import_line_bytes = "128MiB"  # `note graph import` satırı; okunurken sınırlanır
+
+# Terminal arayüzü. Değerler tuş bütçesini (50 ms) korur; aşan iş reddedilmez: biçimli görünüm ham metne,
+# renklendirme düz metne düşer, kesilen tablo soluk satırla söylenir. 0'da büyük not o işi uzatır (ör. 10 MiB'lık
+# not biçimli görünümde ya da sona atlarken renklendirmede saniyeler sürebilir).
+[limits.tui]
+view_bytes = "256KiB"         # REVIEW biçimli görünümü (md, csv, json); büyüğü ham metin gösterilir
+view_lines = 100000           # biçimli görünümün satırı; fazlası soluk satırla söylenir
+table_rows = 5000             # biçimli tablonun satırı
+table_columns = 128           # biçimli tablonun saklanan sütunu
+highlight_bytes = "2MiB"      # sözdizimi renklendirilen en büyük not
+highlight_line_bytes = "64KiB"   # renklendirilen en uzun satır; uzunu düz çizilir
+spellcheck_line_bytes = "8KiB"   # yazım denetlenen en uzun satır
+completion_window_bytes = "256KiB"  # tamamlamanın imleç çevresinde (iki yana) taradığı pencere
+completion_word_bytes = 64    # önerilen en uzun sözcük
+completion_table_words = 200000   # diğer notlardan toplanan sözcük
+completion_candidates = 5000  # açılır listenin aday havuzu
+completion_note_words = 2000  # açılır listeye bu nottan giren sözcük
+completion_note_bytes = "2MiB"    # sözcük tablosuna okunan en büyük not
+completion_table_bytes = "64MiB"  # sözcük tablosuna okunan toplam not baytı
+paste_bytes = "32MiB"         # sistem panosundan yapıştırılan metin
+search_history = 200          # hatırlanan arama sorgusu
+search_entry_bytes = 1024     # hatırlanan en uzun sorgu
+undo_bytes = "64MiB"          # editörde not başına geri alma geçmişi; dolunca en eski adım düşer
+save_suggestions = 5          # taşıma diyaloğunda (Ctrl-R) gösterilen klasör önerisi
+stray_notice_files = 2000     # açılışta notes içindeki geçiş dışı dosya ipucunun taradığı dosya; fazlası `note graph status`'ta
+stray_notice_bytes = "8MiB"   # aynı ipucunun okuduğu bayt
+
+# Dil sunucusu (TUI). Sunucu çıktısı güvenilmezdir: aşan çerçeve sunucuyu durdurur, aşan öğe atlanır.
+# 0'ın riski: header_bytes, body_bytes, message_values, pending_reply_bytes sınırsızsa bozuk sunucu belleği
+# doldurabilir; message_depth sınırsızsa çok derin iç içe JSON yığını taşırıp süreci düşürebilir; süreler
+# sınırsızsa takılan sunucu o işi (kapanışta çıkışı) sonsuza dek bekletir.
+[limits.lsp]
+note_bytes = "2MiB"           # sunucuya gönderilen ve çalışma alanına yansıtılan en büyük not
+header_bytes = "4KiB"         # çerçeve başlığı
+body_bytes = "16MiB"          # çerçeve gövdesi
+message_depth = 64            # gövdenin JSON iç içeliği
+message_values = 250000       # gövdenin JSON değer sayısı
+diagnostics = 1000            # belge başına tanı
+diagnostic_message_bytes = 512    # tanı iletisi; uzunu kesilir
+completion_items = 500        # öneri cevabındaki öğe
+completion_insert_bytes = "8KiB"  # öğenin ekleme metni; aşan öğe atlanır
+completion_label_bytes = 1024 # öğenin etiketi; aşan öğe atlanır
+pending_reply_bytes = "1MiB"  # sunucu isteklerine bekleyen cevaplar; aşan sunucu durdurulur
+initialize_timeout = "10s"    # initialize cevabı; büyük projede yavaş sunucu için artırılabilir
+write_timeout = "5s"          # sunucu stdin'i bu süre okumazsa takılmış sayılır
+shutdown_timeout = "1s"       # kapanışta shutdown cevabı; ardından 500 ms çıkış beklenir, süreç öldürülür
+
+# Sorgu profilleri: [limits.query] kullanıcının kendi sorgusu (`note query`), [limits.view] görünüm (`view:`,
+# `note view run`). Görünüm başka cihazdan gelebilir, kökeni izlenmez: kendi korumalı profilini kullanır.
+# Aşım kesilmiş sonuç değil hatadır. text, nesting, pattern_elements ya da clauses 0 olursa çok derin iç içe
+# sorgu yığını taşırıp süreci düşürebilir.
+[limits.query]
+rows = 100000                 # sonuç satırı
+expansions = 1000000          # gezilen kenar
+duration = "5s"               # sorgu başına süre
+memory = "256MiB"             # sıralama, gruplama, sonuç gibi tutulan satırlar
+memo = "64MiB"                # sorgu içi önbellek; dolunca sonuç aynı, sorgu yavaşlar
+memo_value = "4KiB"           # bundan büyük değer önbelleğe girmez
+text = "64KiB"                # sorgu metni
+nesting = 64                  # parantez/liste iç içeliği, ifade yüksekliği, liste değeri derinliği
+pattern_elements = 256        # desendeki düğüm + ilişki
+clauses = 64                  # cümle
+var_length_hops = 10          # `*1..N`'deki N
+plan_nodes = 200000           # plan ifade düğümü
+
+[limits.view]
+rows = 100000
+expansions = 1000000
+duration = "5s"
+memory = "256MiB"
+memo = "64MiB"
+memo_value = "4KiB"
+text = "64KiB"
+nesting = 64
+pattern_elements = 256
+clauses = 64
+var_length_hops = 10
+plan_nodes = 200000

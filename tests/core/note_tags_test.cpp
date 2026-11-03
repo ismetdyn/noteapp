@@ -62,7 +62,11 @@ void exchange_log(NoteStore& from, NoteStore& to, const fs::path& logs) {
     const auto name = own_log_name(from);
     REQUIRE(name.has_value());
     const std::vector<fs::path> files{logs / *name};
-    REQUIRE(ingest_note_logs(to, files, noteapp::sync::merge_text).has_value());
+    REQUIRE(ingest_note_logs(to, files,
+                             [](std::string_view base, std::string_view ours, std::string_view theirs) {
+                                 return noteapp::sync::merge_text(base, ours, theirs, SIZE_MAX);
+                             })
+                .has_value());
 }
 
 }  // namespace
@@ -106,6 +110,26 @@ TEST_CASE("note_tags reads prose notes only: code types and binary notes have no
     CHECK(note_tags("main.c", "#include <stdio.h>\n").empty());
     CHECK(note_tags("a.py", "#todo").empty());
     CHECK(note_tags("a.md", std::string("#ikili\0x", 9)).empty());
+}
+
+// L3: etiket sayısı ve uzunluğu sınırsızdır; eski tavanların (256 etiket, 128 bayt) üstü sessizce düşmez.
+TEST_CASE("note_tags keeps more than 256 tags and tags longer than 128 bytes") {
+    std::string body;
+    for (int i = 0; i < 300; ++i)
+        body += "#e" + std::to_string(i) + " ";
+    CHECK(note_tags("a.md", body).size() == 300);
+    const std::string long_tag(200, 'u');
+    CHECK(note_tags("a.md", "#" + long_tag) == Texts{long_tag});
+}
+
+TEST_CASE("a saved note with more than 256 tags has every TAGGED edge") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    std::string body;
+    for (int i = 0; i < 300; ++i)
+        body += "#e" + std::to_string(i) + " ";
+    REQUIRE(seed_note(store, "a.md", body));
+    CHECK(tagged(dir.path(), "a").size() == 300);
 }
 
 TEST_CASE("saving a note writes Tag nodes and TAGGED edges that Cypher can match") {

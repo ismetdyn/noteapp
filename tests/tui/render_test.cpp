@@ -210,7 +210,7 @@ TEST_CASE("content mode lists hit counts and the preview highlights the first hi
     test::upsert_note(dir.path(), "few.md", "one needle\nsecond needle\n");
     test::upsert_note(dir.path(), "none.md", "nothing\n");
     const core::NoteStore store(dir.path());
-    search::ContentIndex index(store, 1024 * 1024);
+    search::ContentIndex index(store, 1024 * 1024, 3);
     index.refresh();
 
     tui::TuiState state;
@@ -833,7 +833,7 @@ TEST_CASE("review syntax: PreviewCache picks the language from the extension") {
     const test::TempDir dir;
     test::upsert_note(dir.path(), "a.java", "int a;\n");
     test::upsert_note(dir.path(), "b.xyz", "int a;\n");
-    test::upsert_note(dir.path(), "big.java", std::string(tui::kMaxHighlightBytes + 1, 'x'));
+    test::upsert_note(dir.path(), "big.java", std::string(tui::kDefaultHighlightBytes + 1, 'x'));
     const core::NoteStore store(dir.path());
     const auto language_of = [&](const std::string& name) {
         tui::PreviewCache cache;
@@ -843,6 +843,11 @@ TEST_CASE("review syntax: PreviewCache picks the language from the extension") {
     CHECK(language_of("a.java") == tui::SyntaxLanguage::Java);
     CHECK(language_of("b.xyz") == tui::SyntaxLanguage::Plain);
     CHECK(language_of("big.java") == tui::SyntaxLanguage::Plain);
+
+    // limits.tui.highlight_bytes 0: eski 2 MiB eşiğinin üstü de renklenir.
+    tui::PreviewCache unlimited({}, tui::SyntaxLimits{.note_bytes = SIZE_MAX});
+    const tui::Row big{core::NotePath::parse("big.java").value(), {}, 0, {}};
+    CHECK(unlimited.get(store, &big).language == tui::SyntaxLanguage::Java);
 }
 
 constexpr int kFirstRowY = 2;  // üst çubuk, panel kenarı

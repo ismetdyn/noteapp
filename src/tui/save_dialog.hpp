@@ -1,10 +1,12 @@
 #pragma once
 
+#include "app/item_ops.hpp"
 #include "core/config.hpp"
 #include "core/error.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
 #include "detect/detect.hpp"
+#include "search/fuzzy.hpp"
 #include "tui/tui_state.hpp"
 
 #include <chrono>
@@ -20,6 +22,8 @@ namespace noteapp::tui {
 
 // Diyaloğu kuran girdiler. Hepsi dışarıdan verilir: model G/Ç yapmaz, saattten bağımsızdır (test edilebilir).
 struct SaveDialogInit {
+    // Klasör önerisi en çok bu kadar satır gösterilir (SPEC-tui); limits.tui.save_suggestions varsayılanı.
+    static constexpr std::size_t kDefaultSuggestions = 5;
     std::string content;               // editörden dönen metin; ad slug'ı ilk dolu satırdan
     std::string folder;                // ön dolu klasör (bkz. initial_folder)
     std::vector<std::string> folders;  // NoteStore::folders(): öneri havuzu
@@ -31,6 +35,9 @@ struct SaveDialogInit {
     bool move = false;
     std::string name;
     std::string type;
+    // limits.tui.save_suggestions ve limits.search.fuzzy_candidate_chars (sınırsız SIZE_MAX).
+    std::size_t max_suggestions = SaveDialogInit::kDefaultSuggestions;
+    std::size_t fuzzy_candidate_chars = search::kDefaultFuzzyCandidateChars;
 };
 
 // Kaydet diyaloğunun onayladığı değerler; NoteStore::create'e (yeni not) ya da move'a (T22) girdi olur.
@@ -47,9 +54,6 @@ public:
     enum class Field { Name, Folder, Type };
     // Submit: istek hazır (request()). Discard: kullanıcı notu atmayı onayladı.
     enum class Outcome { Editing, Submit, Discard };
-
-    // Klasör önerisi en çok bu kadar satır gösterilir (SPEC-tui).
-    static constexpr std::size_t kMaxSuggestions = 5;
 
     explicit SaveDialogState(SaveDialogInit init);
 
@@ -129,6 +133,13 @@ public:
     enum class Outcome { Editing, Cancelled, Submit };
 
     explicit NewRowState(SharedInputSources sources = {}) { line_.set_sources(std::move(sources)); }
+    // `folder.new`: `prefix` + `/` ön dolu, imleç sondaki `/`ten önce; yazılan ad klasör olur (names_folder).
+    struct FolderName {};
+    NewRowState(FolderName, std::string prefix, SharedInputSources sources)
+        : NewRowState(std::move(sources)) {
+        const std::size_t cursor = prefix.size();
+        line_.set_text(std::move(prefix) + "/", cursor);
+    }
 
     Outcome handle(Key key, std::string_view text = {});
 
@@ -158,6 +169,10 @@ public:
     // `L`: `from` notuna ilişkilendirilecek notun yolu; girdi boş başlar.
     struct LinkTarget {};
     RenameState(LinkTarget, core::NotePath from, SharedInputSources sources);
+    // PDF dışa aktarma: `from` notunun çıktı yolu; `file_name` ile dolar, imleç uzantıdan önce. Göreli yol
+    // çalışma dizinine göredir (CLI `note export --pdf` gibi).
+    struct ExportTarget {};
+    RenameState(ExportTarget, core::NotePath from, std::string file_name);
 
     Outcome handle(Key key, std::string_view text = {});
 
@@ -168,6 +183,7 @@ public:
     bool is_folder() const { return is_folder_; }
     bool is_move_to() const { return !items_.empty(); }
     bool is_link() const { return is_link_; }
+    bool is_export() const { return is_export_; }
     const std::vector<ListItem>& items() const { return items_; }
     void set_items(std::vector<ListItem> items) { items_ = std::move(items); }
     std::size_t cursor() const { return line_.cursor(); }  // bayt ofseti, kod noktası başında
@@ -181,19 +197,14 @@ private:
     std::string base_;
     bool is_folder_ = false;
     bool is_link_ = false;
+    bool is_export_ = false;
     std::vector<ListItem> items_;
     InputLine line_;
     std::string error_;
 };
 
-// `a`: ad satırındaki metinden boş not; uzantı yazılmadıysa default_type, klasör yazılmadıysa default_folder.
-// Yazılan ad doluysa -2 eklenmez, hata döner: satır açık kalır.
-// `a` metni klasör mü: `/` ile biter, kök değildir.
-bool names_folder(std::string_view text);
-
-std::expected<core::CreatedNote, core::Error> create_named_note(core::NoteStore& store, std::string_view name,
-                                                                std::string_view default_folder,
-                                                                std::string_view default_type,
-                                                                std::size_t slug_max_length);
+// `a`: ad satırı kuralı GUI ile ortak (app/item_ops.hpp); bu adlar mevcut çağıranlar ve testler için kalır.
+using app::create_named_note;
+using app::names_folder;
 
 }  // namespace noteapp::tui

@@ -48,9 +48,11 @@ pdf::Block paragraph(std::string text) {
 
 }  // namespace
 
+constexpr std::size_t kWordBytes = std::size_t{256} * 1024;  // limits.tui.view_bytes varsayılanı
+
 TEST_CASE("preview layout: one 256 KiB word wraps in linear time and keeps every byte inside the width") {
     const FontScene scene;
-    const std::vector<pdf::Block> blocks{paragraph(std::string(GuiState::kMaxPreviewBytes, 'x'))};
+    const std::vector<pdf::Block> blocks{paragraph(std::string(kWordBytes, 'x'))};
     constexpr float kNarrowWidth = 200.0F;
     const auto start = std::chrono::steady_clock::now();
     const PreviewLayout layout = layout_preview(blocks, scene.fonts(), kFontPixels, kNarrowWidth, resolve_all);
@@ -61,7 +63,7 @@ TEST_CASE("preview layout: one 256 KiB word wraps in linear time and keeps every
         bytes += run.text.size();
         inside = inside && run.pos.x + run.width <= kNarrowWidth + 0.5F;
     }
-    CHECK(bytes == GuiState::kMaxPreviewBytes);
+    CHECK(bytes == kWordBytes);
     CHECK(inside);
     CHECK(layout.runs.size() > 1000);  // gerçekten sarıldı: tek koşu yanlış yeşil olmasın
     // Kare bütçesi değil, karesel davranışı yakalayan sınır: eski kod bu boyutta 4,7 sn sürüyordu (Debug).

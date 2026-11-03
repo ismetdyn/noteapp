@@ -242,14 +242,15 @@ std::expected<BrowseArgs, int> parse_browse_args(const std::vector<std::string>&
 
 // "En iyi eşleşme" (SPEC-cli): tam yol varsa o; yoksa rank_notes ilk sonucu ve seçilen yol stderr'e yazılır.
 // Eşleşme yoksa mesajı yazar ve 1 döner. Tek kaynak: show/edit/export aynı kuralı kullanır.
-std::expected<core::NoteInfo, int> pick_best_note(const core::NoteStore& store, const std::string& query) {
+std::expected<core::NoteInfo, int> pick_best_note(const core::NoteStore& store, const std::string& query,
+                                                  std::size_t max_candidate) {
     const std::vector<core::NoteInfo> notes = store.list();
     if (const auto exact = core::NotePath::parse(query)) {
         const auto it = std::ranges::find(notes, *exact, &core::NoteInfo::path);
         if (it != notes.end())
             return *it;
     }
-    const auto ranked = search::rank_notes(query, notes);
+    const auto ranked = search::rank_notes(query, notes, max_candidate);
     if (ranked.empty()) {
         std::cerr << core::tr("cli.no_match", {{"query", query}}) << '\n';
         return std::unexpected(kExitUser);
@@ -298,6 +299,13 @@ bool is_token_key(std::string_view key) {
     return key == "sync.token";
 }
 
+// Ayar ekranlarının anahtarları ve [limits] (yalnız dosya ve CLI).
+std::vector<std::pair<std::string, std::string>> all_entries(const core::Config& config) {
+    auto entries = core::config_entries(config);
+    std::ranges::move(core::limit_entries(config), std::back_inserter(entries));
+    return entries;
+}
+
 }  // namespace
 
 std::optional<core::Config> load_config_for_update() {
@@ -321,7 +329,7 @@ int run_config(const ParsedArgs& args, const core::Config& config) {
         return kExitOk;
     }
     if (verb == "list" && operands == 0) {
-        for (const auto& [key, value] : core::config_entries(config))
+        for (const auto& [key, value] : all_entries(config))
             std::cout << key << " = " << value << '\n';
         return kExitOk;
     }
@@ -331,7 +339,7 @@ int run_config(const ParsedArgs& args, const core::Config& config) {
             std::cerr << core::tr("cli.token_not_config") << '\n';
             return kExitUsage;
         }
-        const auto entries = core::config_entries(config);
+        const auto entries = all_entries(config);
         const auto entry = std::ranges::find(entries, key, &std::pair<std::string, std::string>::first);
         if (entry == entries.end()) {
             std::cerr << core::tr("cli.config_unknown_key", {{"key", key}}) << '\n';
@@ -352,7 +360,7 @@ int run_config(const ParsedArgs& args, const core::Config& config) {
         if (const auto saved = core::save_config(*fresh); !saved)
             return fail(saved.error());
         // Normalleşmiş değeri yazdır (ör. "md, py ,rs" → "md, py, rs"): kaydedilen budur.
-        for (const auto& [saved_key, saved_value] : core::config_entries(*fresh))
+        for (const auto& [saved_key, saved_value] : all_entries(*fresh))
             if (saved_key == key)
                 std::cout << saved_key << " = " << saved_value << '\n';
         return kExitOk;
@@ -475,7 +483,8 @@ int run_ls(const ParsedArgs& args, const core::Config& config) {
         notes.push_back(core::NoteInfo{metas[index].path, metas[index].updated_at, metas[index].size});
     // Boş metinde rank_notes saf mtime azalan sıradır; ayrı bir yol gerekmez.
     std::vector<std::size_t> order;
-    for (const search::Ranked& r : search::rank_notes(query->text, notes))
+    for (const search::Ranked& r :
+         search::rank_notes(query->text, notes, config.limits.search.fuzzy_candidate_chars.cap()))
         order.push_back(allowed[r.index]);
     if (query->sort)
         search::sort_notes(order, *query->sort, metas);
@@ -493,7 +502,8 @@ int run_show(const ParsedArgs& args, const core::Config& config) {
         return kExitUsage;
     }
     core::NoteStore store = core::NoteStore::for_config(config);
-    const auto note = pick_best_note(store, parsed->positional.front());
+    const auto note =
+        pick_best_note(store, parsed->positional.front(), config.limits.search.fuzzy_candidate_chars.cap());
     if (!note)
         return note.error();
     const auto content = store.read(note->path);
@@ -523,7 +533,8 @@ int run_edit(const ParsedArgs& args, const core::Config& config) {
         return kExitUsage;
     }
     core::NoteStore store = core::NoteStore::for_config(config);
-    const auto note = pick_best_note(store, parsed->positional.front());
+    const auto note =
+        pick_best_note(store, parsed->positional.front(), config.limits.search.fuzzy_candidate_chars.cap());
     if (!note)
         return note.error();
     // Editör dosya ister: not özel geçici dosyaya çıkar, çakışma denetimiyle geri yazılır, dosya silinir.
@@ -580,7 +591,8 @@ int run_find(const ParsedArgs& args, const core::Config& config) {
     }
 
     core::NoteStore store = core::NoteStore::for_config(config);
-    search::ContentIndex index(store, config.tuning.max_note_bytes);
+    search::ContentIndex index(store, config.tuning.max_note_bytes.cap(),
+                               config.limits.search.content_hits.cap());
     index.refresh();
     const auto results = index.search(query, limit);
     if (results.empty()) {
@@ -647,7 +659,7 @@ int run_reserved(const ParsedArgs& args, const core::Config& config) {
     if (args.command == "export")
         return run_export(args, config);
     if (args.command == "query")
-        return run_query(args);
+        return run_query(args, config);
     if (args.command == "graph")
         return run_graph(args, config);
     if (args.command == "tags")

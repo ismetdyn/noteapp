@@ -24,7 +24,7 @@ inline constexpr std::size_t kMaxJsonValues = 100000;
 struct JsonLimits {
     int max_depth = kMaxJsonDepth;  // kök 0
     std::size_t max_values = kMaxJsonValues;
-    // Import satırı zaten okunurken sınırlanır (kMaxLineBytes).
+    // Import satırı zaten okunurken sınırlanır (limits.graph.import_line_bytes).
     std::size_t max_bytes = std::numeric_limits<std::size_t>::max();
 };
 

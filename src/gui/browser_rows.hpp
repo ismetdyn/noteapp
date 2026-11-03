@@ -1,14 +1,11 @@
 #pragma once
 
-#include "core/folder_tree.hpp"
-#include "core/note_store.hpp"
+#include "app/listing.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
-#include <set>
-#include <span>
 #include <string>
 #include <vector>
 
@@ -29,13 +26,15 @@ struct BrowserRow {
     std::optional<std::filesystem::file_time_type> updated_at = std::nullopt;
     std::optional<std::filesystem::file_time_type> created_at = std::nullopt;
     std::size_t number = 0;  // TUI'deki sıra no: klasörünün içinde 1'den; kökte 0 (numarasız)
+    // Not: senkron durumu (işçi doldurur) ve kaynak cihaz; klasörde yok.
+    std::optional<core::SyncState> sync = std::nullopt;
+    std::optional<std::string> origin = std::nullopt;
 };
 
-// Ağaç: kök, ardından açık klasörlerin çocukları; her düzeyde önce klasörler, sonra notlar, adla sıralı.
-std::vector<BrowserRow> tree_rows(const core::FolderTree& tree, std::span<const core::NoteMeta> metas,
-                                  const std::set<std::string>& expanded);
-// Ayrıntılar: yalnız `folder`ın doğrudan çocukları, aynı sırayla.
-std::vector<BrowserRow> folder_rows(const core::FolderTree& tree, std::span<const core::NoteMeta> metas,
-                                    const std::string& folder);
+// Satırları ve sıralarını app::Listing kurar; burada yalnız çizim alanları (boyut, tarihler) eklenir.
+// Ağaç: GUI'nin kök satırı (hep açık, numarasız), altında Listing::tree_rows bir düzey derinde.
+std::vector<BrowserRow> tree_rows(const app::Listing& listing);
+// Ayrıntılar: yalnız `folder`ın doğrudan çocukları (Listing::folder_rows).
+std::vector<BrowserRow> folder_rows(const app::Listing& listing, const std::string& folder);
 
 }  // namespace noteapp::gui

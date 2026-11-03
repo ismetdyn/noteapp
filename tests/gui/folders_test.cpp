@@ -113,7 +113,7 @@ TEST_CASE_FIXTURE(FolderFixture, "deleting a non-empty folder never happens with
     CHECK(note_exists("work/b.md"));
     CHECK(dir_exists("work"));
     // Onay metni klasör adını ve not sayısını taşır.
-    CHECK(last_confirm == tr("gui.confirm_delete_folder", {{"folder", "work"}, {"count", "2"}}));
+    CHECK(last_confirm == tr("gui.confirm_trash_folder", {{"folder", "work"}, {"count", "2"}}));
 
     delete_answer = true;
     state->delete_folder("work");
@@ -122,21 +122,45 @@ TEST_CASE_FIXTURE(FolderFixture, "deleting a non-empty folder never happens with
     CHECK(state->folders().empty());
 }
 
-TEST_CASE_FIXTURE(FolderFixture, "deleting an empty folder asks a simple confirmation") {
+// plan-parity karar 1: klasör silme çöpe gider, kalıcı silme yalnız çöpten.
+TEST_CASE_FIXTURE(FolderFixture,
+                  "deleting a folder with notes moves them to the trash; undo brings it back") {
+    add_note("work/a.md", "a", 10);
+    add_note("work/sub/b.md", "b", 20);
+    add_note("keep.md", "keep", 30);
+    auto state = make_state();
+    wire(*state);
+
+    delete_answer = true;
+    state->delete_folder("work");
+    CHECK_FALSE(has_folder(*state, "work"));
+    CHECK(note_exists(".trash/work/a.md"));  // hiçbir şey kalıcı silinmedi
+    CHECK(note_exists(".trash/work/sub/b.md"));
+    CHECK(note_exists("keep.md"));
+
+    REQUIRE(state->can_undo_trash());
+    state->undo_trash();
+    CHECK(note_exists("work/a.md"));
+    CHECK(note_exists("work/sub/b.md"));
+    CHECK_FALSE(note_exists(".trash/work/a.md"));
+    CHECK(has_folder(*state, "work"));
+    CHECK(has_folder(*state, "work/sub"));
+}
+
+// Kaybedilecek not yok ve Geri al klasörü getirir: TUI `d` kuralı, onay sorulmaz.
+TEST_CASE_FIXTURE(FolderFixture, "deleting an empty folder needs no confirmation and undo brings it back") {
     auto state = make_state();
     wire(*state);
     name_answer = "boş";
     state->new_folder("");
     REQUIRE(dir_exists("boş"));
 
-    delete_answer = false;
     state->delete_folder("boş");
-    CHECK(dir_exists("boş"));
-    CHECK(last_confirm == tr("gui.confirm_delete_empty_folder", {{"folder", "boş"}}));
-
-    delete_answer = true;
-    state->delete_folder("boş");
+    CHECK(confirms == 0);
     CHECK_FALSE(dir_exists("boş"));
+    REQUIRE(state->can_undo_trash());
+    state->undo_trash();
+    CHECK(dir_exists("boş"));
 }
 
 TEST_CASE_FIXTURE(FolderFixture, "deleting an unknown folder reports the error and touches nothing") {

@@ -4,6 +4,23 @@
 
 namespace noteapp::tui {
 
+std::vector<WikiSpan> wiki_spans(std::string_view line) {
+    std::vector<WikiSpan> spans;
+    for (std::size_t at = 0;;) {
+        const std::size_t open = line.find("[[", at);
+        if (open == std::string_view::npos)
+            break;
+        const std::size_t close = line.find("]]", open + 2);
+        if (close == std::string_view::npos)
+            break;
+        const std::string_view target = core::link_target(line.substr(open + 2, close - open - 2));
+        if (!target.empty())
+            spans.push_back({open, close + 2, target});
+        at = close + 2;
+    }
+    return spans;
+}
+
 void LinkPanel::set(core::NoteLinks links, bool same_note) {
     links_ = std::move(links);
     lines_ = core::link_lines(links_);

@@ -368,6 +368,25 @@ TEST_CASE("a collision gets -2 on copy, never overwrites and reports each") {
     CHECK(has(f.summary(), "v1.2.tar-2.gz"));
 }
 
+// L2: eski deneme tavanı 1000 addı; depo boş adı sınırsız arar.
+TEST_CASE("a note copy finds a free name past a thousand taken numbered names") {
+    Fixture f;
+    f.put("a.md", "new");
+    std::vector<core::ImportedNote> taken;
+    for (int i = 1; i <= 1000; ++i) {
+        const std::string path = i == 1 ? std::string("dest/a.md") : "dest/a-" + std::to_string(i) + ".md";
+        taken.push_back({core::NotePath::parse(path).value(), "old", std::chrono::system_clock::now()});
+    }
+    test::bulk_seed(f.dir.path(), taken);
+    f.load();
+    f.select("a.md");
+    f.press("y");
+    f.enter("dest/");
+    f.press("p");
+    CHECK(f.body("dest/a-1001.md") == "new");
+    CHECK(f.body("dest/a.md") == "old");
+}
+
 TEST_CASE("a folder collision gets -2 on copy, twice") {
     Fixture f;
     f.put("work/a.md", "A");
@@ -383,6 +402,20 @@ TEST_CASE("a folder collision gets -2 on copy, twice") {
         f.state.handle(Key::Escape);
         f.state.handle(Key::Left);
     }
+}
+
+TEST_CASE("a folder pasted into its own parent becomes a -2 copy beside it") {
+    Fixture f;
+    f.put("work/a.md", "A");
+    f.load();
+    f.select("work/");
+    f.press("y");
+    REQUIRE(f.state.current_folder().empty());
+    f.press("p");
+    CHECK(has(f.summary(), "1 done, 0 failed"));
+    CHECK(has(f.summary(), "work -> work-2"));
+    CHECK(f.body("work-2/a.md") == "A");
+    CHECK(f.body("work/a.md") == "A");
 }
 
 TEST_CASE("copying a folder into itself is refused and reported; the rest continues") {

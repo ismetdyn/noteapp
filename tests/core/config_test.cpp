@@ -6,6 +6,7 @@
 #include "support/test_support.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <doctest/doctest.h>
 #include <fstream>
@@ -14,6 +15,8 @@
 #include <optional>
 #include <random>
 #include <string>
+#include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <stdlib.h>  // _wputenv_s
@@ -71,7 +74,7 @@ TEST_CASE("parse_config with empty input yields the embedded defaults") {
     CHECK(c.tuning.slug_max_length == 60);
     CHECK(c.tuning.min_confidence == doctest::Approx(0.5));
     CHECK(c.tuning.max_scan_bytes == 65536);
-    CHECK(c.tuning.max_note_bytes == 10485760);
+    CHECK(c.tuning.max_note_bytes == Limit{10485760, "10485760"});
     CHECK(c.tuning.rescan_seconds == 5);
     CHECK(c.tuning.autosave_ms == 3000);
     CHECK(c.tuning.exit_timeout_seconds == 10);
@@ -152,7 +155,6 @@ TEST_CASE("parse_config falls back to the default and warns on each invalid valu
         {"[tuning]\nsync_stale_lock_minutes = 0", "tuning.sync_stale_lock_minutes"},
         {"[tuning]\nsync_timeout_seconds = 0", "tuning.sync_timeout_seconds"},
         {"[tuning]\ngraph_batch_ops = 0", "tuning.graph_batch_ops"},
-        {"[tuning]\ngraph_batch_ops = 32769", "tuning.graph_batch_ops"},
     };
     for (const Case& tc : cases) {
         CAPTURE(tc.toml);
@@ -327,13 +329,14 @@ TEST_CASE("save_config round-trips every [tuning] key that differs from the defa
     c.tuning.slug_max_length += 1;
     c.tuning.min_confidence = 0.123456789;
     c.tuning.max_scan_bytes += 1;
-    c.tuning.max_note_bytes += 1;
+    c.tuning.max_note_bytes = Limit{10485761, "10485761"};
     c.tuning.rescan_seconds += 1;
     c.tuning.autosave_ms += 1;
     c.tuning.exit_timeout_seconds += 1;
     c.tuning.log_max_bytes += 1;
     c.tuning.sync_stale_lock_minutes += 1;
     c.tuning.sync_timeout_seconds += 1;
+    c.tuning.completion_min_prefix_bytes += 1;
     REQUIRE(save_config(c).has_value());
 
     const LoadedConfig reloaded = load_config();
@@ -770,4 +773,308 @@ TEST_CASE("save_config writes no lsp section when the file has none") {
     const std::string text(std::istreambuf_iterator<char>(in), {});
     CHECK(text.find("[lsp") == std::string::npos);
     CHECK(load_config().config.lsp == parse_config("").config.lsp);
+}
+
+// --- [limits] sözleşmesi (L0): 0 = sınırsız, boyut/süre birimleri, tek uyarı yolu, gidiş-dönüş ---
+
+TEST_CASE("parse_limit reads plain integers, size and duration units and rejects garbage") {
+    constexpr std::uint64_t kKiB = 1024;
+    CHECK(parse_limit("0", LimitUnit::Count) == 0U);
+    CHECK(parse_limit("1000", LimitUnit::Count) == 1000U);
+    CHECK(parse_limit("512KiB", LimitUnit::Bytes) == 512 * kKiB);
+    CHECK(parse_limit("64MiB", LimitUnit::Bytes) == 64 * kKiB * kKiB);
+    CHECK(parse_limit("10MB", LimitUnit::Bytes) == 10'000'000U);
+    CHECK(parse_limit("2GiB", LimitUnit::Bytes) == 2 * kKiB * kKiB * kKiB);
+    CHECK(parse_limit("7B", LimitUnit::Bytes) == 7U);
+    CHECK(parse_limit("4096", LimitUnit::Bytes) == 4096U);
+    CHECK(parse_limit("250ms", LimitUnit::Milliseconds) == 250U);
+    CHECK(parse_limit("5s", LimitUnit::Milliseconds) == 5000U);
+    CHECK(parse_limit("2min", LimitUnit::Milliseconds) == 120'000U);
+    CHECK(parse_limit("1h", LimitUnit::Milliseconds) == 3'600'000U);
+    CHECK(parse_limit("0s", LimitUnit::Milliseconds) == 0U);  // birimli sıfır da sınırsızdır
+
+    for (const char* bad : {"", "-1", "+5", " 5", "5 ", "abc", "5MiBx", "MiB", "1.5MiB", "10mb", "5s",
+                            "99999999999999999999", "9223372036854775808"}) {
+        CAPTURE(bad);
+        CHECK_FALSE(parse_limit(bad, LimitUnit::Count).has_value());
+    }
+    CHECK_FALSE(parse_limit("5s", LimitUnit::Bytes).has_value());
+    CHECK_FALSE(parse_limit("5MiB", LimitUnit::Milliseconds).has_value());
+    CHECK_FALSE(parse_limit("9000000TiB", LimitUnit::Bytes).has_value());  // int64 taşması
+}
+
+TEST_CASE("Limit treats 0 as unlimited in allows and cap") {
+    const Limit unlimited{0, "0"};
+    CHECK(unlimited.unlimited());
+    CHECK(unlimited.allows(UINT64_MAX));
+    CHECK(unlimited.cap() == SIZE_MAX);
+    const Limit five{5, "5"};
+    CHECK_FALSE(five.unlimited());
+    CHECK(five.allows(5));
+    CHECK_FALSE(five.allows(6));
+    CHECK(five.cap() == 5U);
+}
+
+TEST_CASE("limits.search.content_results defaults to 1000 and accepts 0 as unlimited") {
+    CHECK(parse_config("").config.limits.search.content_results == Limit{1000, "1000"});
+
+    const LoadedConfig zero = parse_config("[limits.search]\ncontent_results = 0\n");
+    CHECK(zero.warnings.empty());
+    CHECK(zero.config.limits.search.content_results.unlimited());
+    const LoadedConfig quoted = parse_config("limits.search.content_results = \"25\"\n");
+    CHECK(quoted.warnings.empty());
+    CHECK(quoted.config.limits.search.content_results == Limit{25, "25"});
+}
+
+// L3: çekirdek, arama ve senkron sınırları.
+TEST_CASE("L3 limits keep today's defaults, accept 0 as unlimited and reject a wrong unit") {
+    const Limits defaults = parse_config("").config.limits;
+    CHECK(defaults.core.folder_path_bytes == Limit{4096, "4096"});
+    CHECK(defaults.search.global_results == Limit{200, "200"});
+    CHECK(defaults.search.content_hits == Limit{3, "3"});
+    CHECK(defaults.search.fuzzy_candidate_chars == Limit{1024, "1024"});
+    CHECK(defaults.sync.merge_input_bytes == Limit{4U * 1024U * 1024U, "4MiB"});
+
+    const LoadedConfig zero = parse_config(
+        "[limits.core]\nfolder_path_bytes = 0\n[limits.search]\nglobal_results = 0\ncontent_hits = 0\n"
+        "fuzzy_candidate_chars = 0\n[limits.sync]\nmerge_input_bytes = 0\n");
+    CHECK(zero.warnings.empty());
+    CHECK(zero.config.limits.core.folder_path_bytes.unlimited());
+    CHECK(zero.config.limits.search.global_results.unlimited());
+    CHECK(zero.config.limits.search.content_hits.unlimited());
+    CHECK(zero.config.limits.search.fuzzy_candidate_chars.unlimited());
+    CHECK(zero.config.limits.sync.merge_input_bytes.unlimited());
+
+    const LoadedConfig sized =
+        parse_config("[limits.core]\nfolder_path_bytes = \"8KiB\"\n[limits.sync]\n"
+                     "merge_input_bytes = \"64MiB\"\n[limits.search]\ncontent_hits = \"5MiB\"\n");
+    CHECK(sized.config.limits.core.folder_path_bytes.value == 8192U);
+    CHECK(sized.config.limits.sync.merge_input_bytes.value == 64U * 1024U * 1024U);
+    CHECK(sized.config.limits.search.content_hits == Limit{3, "3"});
+    CHECK(has_warning_about(sized, "limits.search.content_hits", "config.invalid_value"));
+}
+
+// L2/L5: TUI ve dil sunucusu sınırları config'tedir; varsayılan bugünkü değerdir, 0 = sınırsız.
+TEST_CASE("limits.tui and limits.lsp keep today's defaults, accept 0 as unlimited and reject a wrong unit") {
+    const Config defaults = parse_config("").config;
+    const TuiLimits& tui = defaults.limits.tui;
+    CHECK(tui.view_bytes == Limit{256U * 1024U, "256KiB"});
+    CHECK(tui.view_lines.value == 100000U);
+    CHECK(tui.table_rows.value == 5000U);
+    CHECK(tui.table_columns.value == 128U);
+    CHECK(tui.highlight_bytes.value == 2U * 1024U * 1024U);
+    CHECK(tui.highlight_line_bytes.value == 64U * 1024U);
+    CHECK(tui.spellcheck_line_bytes.value == 8U * 1024U);
+    CHECK(tui.paste_bytes.value == 32U * 1024U * 1024U);
+    CHECK(tui.search_history.value == 200U);
+    CHECK(tui.undo_bytes.value == 64U * 1024U * 1024U);
+    CHECK(tui.save_suggestions.value == 5U);
+    CHECK(tui.stray_notice_files.value == 2000U);
+    CHECK(tui.stray_notice_bytes.value == 8U * 1024U * 1024U);
+    const LspLimits& lsp = defaults.limits.lsp;
+    CHECK(lsp.note_bytes.value == 2U * 1024U * 1024U);
+    CHECK(lsp.body_bytes.value == 16U * 1024U * 1024U);
+    CHECK(lsp.message_depth.value == 64U);
+    CHECK(lsp.initialize_timeout.value == 10000U);
+    CHECK(lsp.write_timeout.value == 5000U);
+    CHECK(lsp.shutdown_timeout.value == 1000U);
+    CHECK(defaults.tuning.completion_min_prefix_bytes == 2U);
+    // Her anahtarın defaults.toml'da değeri var (boş yazım = dosyada unutulmuş anahtar, sessizce sınırsız).
+    for (const auto& [key, text] : limit_entries(defaults)) {
+        CAPTURE(key);
+        CHECK_FALSE(text.empty());
+    }
+
+    const LoadedConfig zero = parse_config(
+        "[limits.tui]\nview_bytes = 0\ntable_rows = 0\nundo_bytes = 0\n[limits.lsp]\nbody_bytes = 0\n"
+        "write_timeout = 0\n");
+    CHECK(zero.warnings.empty());
+    CHECK(zero.config.limits.tui.view_bytes.unlimited());
+    CHECK(zero.config.limits.tui.table_rows.unlimited());
+    CHECK(zero.config.limits.tui.undo_bytes.unlimited());
+    CHECK(zero.config.limits.lsp.body_bytes.unlimited());
+    CHECK(zero.config.limits.lsp.write_timeout.unlimited());
+
+    const LoadedConfig sized = parse_config(
+        "[limits.tui]\nview_bytes = \"4MiB\"\ntable_rows = \"5KiB\"\n[limits.lsp]\ninitialize_timeout = \"2min\"\n"
+        "[tuning]\ncompletion_min_prefix_bytes = 0\n");
+    CHECK(sized.config.limits.tui.view_bytes.value == 4U * 1024U * 1024U);
+    CHECK(sized.config.limits.lsp.initialize_timeout.value == 120000U);
+    CHECK(sized.config.limits.tui.table_rows.value == 5000U);
+    CHECK(has_warning_about(sized, "limits.tui.table_rows", "config.invalid_value"));
+    CHECK(sized.config.tuning.completion_min_prefix_bytes == 2U);  // alt sınır: 0 geçersiz
+    CHECK(has_warning_about(sized, "tuning.completion_min_prefix_bytes", "config.invalid_value"));
+
+    Config c = defaults;
+    REQUIRE(set_config_value(c, "limits.lsp.message_values", "0"));
+    CHECK(c.limits.lsp.message_values.unlimited());
+    const auto entries = limit_entries(c);
+    const auto listed = [&](std::string_view key) {
+        return std::ranges::find(entries, key, &std::pair<std::string, std::string>::first) != entries.end();
+    };
+    CHECK(listed("limits.tui.stray_notice_bytes"));
+    CHECK(listed("limits.lsp.shutdown_timeout"));
+}
+
+TEST_CASE("limits.app.recent_commands defaults to 20 and accepts 0 as unlimited") {
+    CHECK(parse_config("").config.limits.app.recent_commands == Limit{20, "20"});
+
+    const LoadedConfig zero = parse_config("[limits.app]\nrecent_commands = 0\n");
+    CHECK(zero.warnings.empty());
+    CHECK(zero.config.limits.app.recent_commands.unlimited());
+    const LoadedConfig sized = parse_config("[limits.app]\nrecent_commands = \"5MiB\"\n");
+    CHECK(sized.config.limits.app.recent_commands == Limit{20, "20"});
+    CHECK(has_warning_about(sized, "limits.app.recent_commands", "config.invalid_value"));
+}
+
+TEST_CASE("limits.app.trash_undo_steps defaults to 0 (unlimited) and takes a count") {
+    CHECK(parse_config("").config.limits.app.trash_undo_steps.unlimited());
+
+    const LoadedConfig sized = parse_config("[limits.app]\ntrash_undo_steps = 50\n");
+    CHECK(sized.warnings.empty());
+    CHECK(sized.config.limits.app.trash_undo_steps == Limit{50, "50"});
+    const LoadedConfig bytes = parse_config("[limits.app]\ntrash_undo_steps = \"5MiB\"\n");
+    CHECK(bytes.config.limits.app.trash_undo_steps.unlimited());
+    CHECK(has_warning_about(bytes, "limits.app.trash_undo_steps", "config.invalid_value"));
+}
+
+TEST_CASE("an invalid [limits] value warns through the config path and keeps the default") {
+    for (const std::string value : {"-1", "\"lots\"", "\"5MiB\"", "true", "1.5"}) {
+        CAPTURE(value);
+        const LoadedConfig loaded = parse_config("[limits.search]\ncontent_results = " + value + "\n");
+        CHECK(loaded.config.limits.search.content_results == Limit{1000, "1000"});
+        REQUIRE(loaded.warnings.size() == 1);
+        CHECK(loaded.warnings[0].message_key == "config.invalid_value");
+        CHECK(arg_of(loaded.warnings[0], "key") == "limits.search.content_results");
+        CHECK(arg_of(loaded.warnings[0], "reason") == "must_be_limit_count");
+    }
+    const LoadedConfig unknown = parse_config("[limits]\nnope = 1\n[limits.search]\ntypo = 2\n");
+    CHECK(has_warning_about(unknown, "limits.nope", "config.unknown_key"));
+    CHECK(has_warning_about(unknown, "limits.search.typo", "config.unknown_key"));
+    CHECK(has_warning_about(parse_config("limits = 3\n"), "limits", "config.invalid_value"));
+}
+
+TEST_CASE("tuning.max_note_bytes accepts 0 as unlimited and size units") {
+    const LoadedConfig zero = parse_config("[tuning]\nmax_note_bytes = 0\n");
+    CHECK(zero.warnings.empty());
+    CHECK(zero.config.tuning.max_note_bytes.unlimited());
+    const LoadedConfig units = parse_config("[tuning]\nmax_note_bytes = \"64MiB\"\n");
+    CHECK(units.warnings.empty());
+    CHECK(units.config.tuning.max_note_bytes.value == 64U * 1024U * 1024U);
+    const LoadedConfig bad = parse_config("[tuning]\nmax_note_bytes = -1\n");
+    CHECK(bad.config.tuning.max_note_bytes.value == 10485760U);
+    CHECK(has_warning_about(bad, "tuning.max_note_bytes", "config.invalid_value"));
+}
+
+TEST_CASE("set_config_value sets limits keys with the file rules and limit_entries lists them") {
+    Config c = parse_config("").config;
+    const auto entry = [&c](std::string_view key) {
+        const auto entries = limit_entries(c);
+        const auto found = std::ranges::find(entries, key, &std::pair<std::string, std::string>::first);
+        return found == entries.end() ? std::string("<missing>") : found->second;
+    };
+    CHECK(entry("limits.search.content_results") == "1000");
+
+    REQUIRE(set_config_value(c, "limits.search.content_results", "0"));
+    CHECK(c.limits.search.content_results.unlimited());
+    CHECK(entry("limits.search.content_results") == "0");
+
+    for (const char* bad : {"-3", "abc", "5MiB", ""}) {
+        CAPTURE(bad);
+        const auto set = set_config_value(c, "limits.search.content_results", bad);
+        REQUIRE_FALSE(set.has_value());
+        CHECK(arg_of(set.error(), "key") == "limits.search.content_results");
+    }
+    CHECK(c.limits.search.content_results.unlimited());  // reddedilen değer dokunmaz
+    CHECK_FALSE(set_config_value(c, "limits.search.nope", "1"));
+    CHECK_FALSE(set_config_value(c, "limits.search", "1"));
+    // Ayar ekranları config_entries'i listeler; [limits] yalnız dosyada ve CLI'da (iki arayüz eşit).
+    for (const auto& [key, value] : config_entries(c))
+        CHECK_FALSE(key.starts_with("limits."));
+}
+
+// L4: graf, kullanıcı sorgusu ve görünüm sınırları config'tedir; varsayılan bugünkü değerdir, 0 = sınırsız.
+TEST_CASE("limits.graph, limits.query and limits.view default to today's values and accept 0 and units") {
+    const Limits defaults = parse_config("").config.limits;
+    CHECK(defaults.graph.frame_bytes == Limit{64U * 1024U * 1024U, "64MiB"});
+    CHECK(defaults.graph.frame_ops == Limit{65536, "65536"});
+    CHECK(defaults.graph.group_bytes == Limit{std::uint64_t{1} << 30U, "1GiB"});
+    CHECK(defaults.graph.group_ops == Limit{std::uint64_t{1} << 22U, "4194304"});
+    CHECK(defaults.graph.peers == Limit{256, "256"});
+    CHECK(defaults.graph.hlc_skew == Limit{24U * 60U * 60U * 1000U, "24h"});
+    CHECK(defaults.graph.import_line_bytes == Limit{128U * 1024U * 1024U, "128MiB"});
+    CHECK(defaults.query.rows == Limit{100000, "100000"});
+    CHECK(defaults.query.duration == Limit{5000, "5s"});
+    CHECK(defaults.query.text == Limit{64U * 1024U, "64KiB"});
+    CHECK(defaults.view == defaults.query);  // görünüm profili korumalı kalır: bugünkü değerler
+
+    const LoadedConfig set =
+        parse_config("[limits.graph]\nframe_ops = 10\nset_aside_logs = 0\ngroup_bytes = 0\n"
+                     "[limits.query]\nrows = 0\nduration = \"2min\"\n"
+                     "[limits.view]\nrows = 3\nmemory = \"1MiB\"\n");
+    INFO((set.warnings.empty() ? std::string() : set.warnings.front().message_key));
+    CHECK(set.warnings.empty());
+    CHECK(set.config.limits.graph.frame_ops == Limit{10, "10"});
+    CHECK(set.config.limits.graph.set_aside_logs.unlimited());
+    CHECK(set.config.limits.graph.group_bytes.unlimited());
+    CHECK(set.config.limits.query.rows.unlimited());
+    CHECK(set.config.limits.query.duration.value == 120000);
+    CHECK(set.config.limits.view.rows == Limit{3, "3"});
+    CHECK(set.config.limits.view.memory.value == 1024U * 1024U);
+    CHECK(set.config.limits.view.duration == defaults.view.duration);  // profiller ayrı
+
+    const LoadedConfig bad = parse_config(
+        "[limits.view]\nduration = \"5MiB\"\n[limits.graph]\npeers = -1\ngroup_bytes = \"5s\"\n");
+    CHECK(has_warning_about(bad, "limits.view.duration"));
+    CHECK(has_warning_about(bad, "limits.graph.peers"));
+    CHECK(has_warning_about(bad, "limits.graph.group_bytes"));
+    CHECK(bad.config.limits == defaults);
+}
+
+// Bütçenin sabit tavanı (32.768) kalktı; L4b'den beri çerçeve sınırı da onu kırpmaz (işlem kayıtlara bölünür).
+TEST_CASE("tuning.graph_batch_ops has no fixed ceiling") {
+    const LoadedConfig big =
+        parse_config("[tuning]\ngraph_batch_ops = 100000\n[limits.graph]\nframe_ops = 0\n");
+    CHECK(big.warnings.empty());
+    CHECK(big.config.tuning.graph_batch_ops == 100000);
+}
+
+TEST_CASE("save_config keeps the [limits] section as the user wrote it") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+    fs::create_directories(config_dir());
+    // Sonraki sürümün anahtarı ve birimli yazım da korunur.
+    std::ofstream(config_file(), std::ios::binary)
+        << "[limits.search]\ncontent_results = \"0\"\nfuture_key = \"64MiB\"\n"
+           "[tuning]\nmax_note_bytes = \"64MiB\"\n";
+    Config c = load_config().config;
+    REQUIRE(c.limits.search.content_results.unlimited());
+    c.language = "en";  // başka bir ayar kaydı
+    REQUIRE(save_config(c).has_value());
+
+    const std::string text = slurp(config_file());
+    CHECK(text.find("content_results = \"0\"") != std::string::npos);
+    CHECK(text.find("future_key = \"64MiB\"") != std::string::npos);
+    const std::size_t tuning_line = text.find("max_note_bytes = ");
+    REQUIRE(tuning_line != std::string::npos);
+    CHECK(text.substr(tuning_line, text.find('\n', tuning_line) - tuning_line).find("64MiB") !=
+          std::string::npos);
+    const LoadedConfig reloaded = load_config();
+    CHECK(reloaded.config.limits == c.limits);
+    CHECK(reloaded.config.tuning == c.tuning);
+    CHECK(has_warning_about(reloaded, "limits.search.future_key", "config.unknown_key"));
+}
+
+TEST_CASE("save_config writes a limits value changed in memory and nothing when untouched") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+    Config c = parse_config("").config;
+    REQUIRE(save_config(c).has_value());
+    CHECK(slurp(config_file()).find("limits") == std::string::npos);  // varsayılan dosyaya gömülmez
+
+    REQUIRE(set_config_value(c, "limits.search.content_results", "0"));
+    REQUIRE(save_config(c).has_value());
+    const LoadedConfig reloaded = load_config();
+    CHECK(reloaded.warnings.empty());
+    CHECK(reloaded.config.limits.search.content_results == Limit{0, "0"});
 }

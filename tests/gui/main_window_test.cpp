@@ -103,17 +103,17 @@ TEST_CASE_FIXTURE(WindowFixture, "Up/Down in the search box move the list select
     state->focus_search();
     settle(*view);
 
-    // Ağaç sırası adladır (kök, alpha, beta, gamma); açılışta en yeni not (gamma) seçilidir.
+    // Ağaç varsayılan sırada, en yeni başta (kök, gamma, beta, alpha); açılışta en yeni not seçilidir.
     REQUIRE(current(*state) == "gamma.md");
-    press(*view, ImGuiKey_UpArrow);
+    press(*view, ImGuiKey_DownArrow);
     CHECK(current(*state) == "beta.md");
     CHECK(state->buffer() == "beta body");
     press(*view, ImGuiKey_DownArrow);
     press(*view, ImGuiKey_DownArrow);  // sınırda kenetlenir
-    CHECK(current(*state) == "gamma.md");
-    press(*view, ImGuiKey_UpArrow);
-    press(*view, ImGuiKey_UpArrow);
     CHECK(current(*state) == "alpha.md");
+    press(*view, ImGuiKey_UpArrow);
+    press(*view, ImGuiKey_UpArrow);
+    CHECK(current(*state) == "gamma.md");
 }
 
 TEST_CASE_FIXTURE(WindowFixture, "Enter in the search box focuses the editor") {
@@ -381,8 +381,10 @@ TEST_CASE_FIXTURE(WindowFixture, "a read-only note ignores typing") {
     settle(*view);
 
     type_text(*view, "x");
-    CHECK(state->buffer() == "caf\xe9");
+    // Salt-okunur görünüm TUI ile aynı arındırılmış metindir (app::sanitized_utf8); dosya değişmez.
+    CHECK(state->buffer() == "caf\xEF\xBF\xBD");
     CHECK_FALSE(state->dirty());
+    CHECK(read_note("latin.txt") == "caf\xe9");
 }
 
 TEST_CASE_FIXTURE(WindowFixture, "a clean note reloaded from disk stays editable with the new text") {
@@ -483,10 +485,10 @@ TEST_CASE_FIXTURE(WindowFixture, "Up/Down in the focused list move the selection
     auto view = make_view(*state);
     state->request_focus(FocusRequest::List);
     settle(*view);
-    // Ağaç sırası adladır: kök, alpha, beta; açılışta en yeni not (beta) seçilidir.
-    press(*view, ImGuiKey_UpArrow);
-    CHECK(current(*state) == "alpha.md");
+    // Ağaç sırası varsayılan sıradır, en yeni başta: kök, beta, alpha; açılışta en yeni not (beta) seçilidir.
     press(*view, ImGuiKey_DownArrow);
+    CHECK(current(*state) == "alpha.md");
+    press(*view, ImGuiKey_UpArrow);
     CHECK(current(*state) == "beta.md");
 }
 

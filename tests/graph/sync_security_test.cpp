@@ -6,6 +6,7 @@
 #include "sync_test_support.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <doctest/doctest.h>
@@ -265,7 +266,7 @@ TEST_CASE("trailing_huge_length_is_reported_as_a_partial_tail") {
     {
         std::ofstream out(log, std::ios::binary | std::ios::app);
         std::string length(4, '\0');
-        const auto over = static_cast<std::uint32_t>(kMaxFrameBytes);
+        const auto over = static_cast<std::uint32_t>(kDefaultFrameBytes);
         for (std::size_t i = 0; i < length.size(); ++i)
             length[i] = static_cast<char>(over >> (i * 8U));
         out << length << std::string(kFrameDigestBytes, 'x');
@@ -503,4 +504,291 @@ TEST_CASE("set-aside logs are capped: the newest stay, older copies go") {
         kept += entry.path().filename().string().find(".aside-") != std::string::npos ? 1 : 0;
     CHECK(kept == 3);
     CHECK(fs::exists(newest));
+}
+
+// L4: motor sınırları açılışta verilir (Graph::open, config limits.graph.*). Okuyan kendi kayıt sınırını uzak
+// çerçevede uygular. Farklı değer veri kaybettirmez: düşük sınırlı cihazda günlük bad_frame ile durur, sınır
+// yükselince sonraki ingest sürer (SPEC-graph "Sınırlar"). L4b: yerel commit çerçeve sınırına bağlı değildir;
+// yazan, kendi sınırıyla parçalara böler.
+TEST_CASE("frame op limit comes from GraphLimits for remote frames and never rejects a local commit") {
+    const TempDir dir;
+    GraphLimits small;
+    small.frame_ops = 3;
+    {
+        Result<Graph> writer = Graph::open(dir.path() / "small.db", small);
+        REQUIRE(writer.has_value());
+        WriteTxn txn = test::begin_write(*writer);
+        for (int i = 0; i < 4; ++i)
+            GRAPH_OK(txn.put_node(node_named("w" + std::to_string(i))));
+        GRAPH_OK(txn.commit());
+    }
+
+    Device sender;
+    sender.commit([](WriteTxn& txn) {
+        for (int i = 0; i < 4; ++i)
+            GRAPH_OK(txn.put_node(node_named("s" + std::to_string(i))));
+    });
+    const std::vector<fs::path> logs{sender.exported()};
+    const fs::path receiver_db = dir.path() / "receiver.db";
+    {
+        Result<Graph> receiver = Graph::open(receiver_db, small);
+        REQUIRE(receiver.has_value());
+        const Result<MergeReport> report = receiver->ingest_logs(logs);
+        REQUIRE(report.has_value());
+        REQUIRE(report->stalled.size() == 1);
+        CHECK(report->stalled[0].reason == "bad_frame");
+        CHECK(reports_reason(*report, "too_many_ops"));
+    }
+    Result<Graph> raised = Graph::open(receiver_db);
+    REQUIRE(raised.has_value());
+    const Result<MergeReport> report = raised->ingest_logs(logs);
+    REQUIRE(report.has_value());
+    CHECK(report->stalled.empty());
+    CHECK(*raised->read()->has_node(node_named("s3")));
+}
+
+// Sınırsız (SIZE_MAX) çerçeve: kullanıcı işlemi bugünkü 65.536 işlem tavanını aşar.
+TEST_CASE("an unlimited frame op limit commits more operations than the old ceiling") {
+    const TempDir dir;
+    GraphLimits open;
+    open.frame_ops = SIZE_MAX;
+    Result<Graph> graph = Graph::open(dir.path() / "g.db", open);
+    REQUIRE(graph.has_value());
+    WriteTxn txn = test::begin_write(*graph);
+    for (std::size_t i = 0; i <= kDefaultFrameOps; ++i)
+        GRAPH_OK(txn.put_node(node_named("n" + std::to_string(i))));
+    GRAPH_OK(txn.commit());
+    CHECK(*graph->last_seq() == 1);
+}
+
+// Kenara alınan kopya sayısı da config'tedir; 0 (SIZE_MAX) hepsini tutar.
+TEST_CASE("the set-aside cap comes from GraphLimits") {
+    const TempDir dir;
+    GraphLimits keep_all;
+    keep_all.set_aside_logs = SIZE_MAX;
+    Result<Graph> graph = Graph::open(dir.path() / "g.db", keep_all);
+    REQUIRE(graph.has_value());
+    {
+        WriteTxn txn = test::begin_write(*graph);
+        GRAPH_OK(txn.put_node(kN));
+        GRAPH_OK(txn.commit());
+    }
+    const fs::path outbox = dir.path() / "out";
+    fs::create_directories(outbox);
+    REQUIRE(graph->export_log(outbox).has_value());
+    const fs::path log = outbox / log_file_name(graph->device());
+    for (int i = 0; i < 5; ++i) {
+        std::ofstream(log, std::ios::binary) << std::string(64, 'z') << i;
+        const auto exported = graph->export_log(outbox);
+        REQUIRE(exported.has_value());
+        REQUIRE(exported->set_aside.has_value());
+    }
+    std::size_t kept = 0;
+    for (const fs::directory_entry& entry : fs::directory_iterator(outbox))
+        kept += entry.path().filename().string().find(".aside-") != std::string::npos ? 1 : 0;
+    CHECK(kept == 5);
+}
+
+namespace {
+
+// Düşük kimlikli sahte cihazlar: kimlik sırasıyla kabulde dürüst cihazlardan önce gelirler.
+std::vector<fs::path> fake_logs(const fs::path& directory, std::uint8_t set, int count) {
+    std::vector<fs::path> logs;
+    for (int i = 0; i < count; ++i) {
+        DeviceId device{};
+        device[1] = static_cast<std::byte>(set);
+        device[2] = static_cast<std::byte>(i & 0xFF);
+        device[3] = static_cast<std::byte>(i >> 8);
+        const std::vector<std::string> frames{encode_frame(frame_of(1, {NodePut{node_named("fake")}}))};
+        logs.push_back(write_log(directory, device, frames));
+    }
+    return logs;
+}
+
+void check_honest_state(Device& device) {
+    ReadTxn read = test::begin_read(device.graph());
+    CHECK(*read.has_node(kN));
+    CHECK(*read.has_node(kM));
+    CHECK(*read.property(kN, "x") == Value{std::int64_t{1}});
+}
+
+}  // namespace
+
+// L4c: tanınan cihaz sınırı (peers) kimlik sırasıyla ilk gelene doluyordu; düşük kimlikli 256 sahte günlük
+// gerçek cihazları kilitlerdi. Kabul nedensel ihtiyaçla: kabul edilmiş cihazların çerçevelerinin bağımlılığı
+// önce gelir.
+TEST_CASE("fake device logs do not lock out a device that an admitted device depends on") {
+    const TempDir transit;
+    Device a;
+    Device b;
+    Device receiver;
+    a.commit([](WriteTxn& txn) { GRAPH_OK(txn.put_node(kN)); });
+    receiver.ingest({a.exported()});
+    b.commit([](WriteTxn& txn) { GRAPH_OK(txn.put_node(kM)); });
+    a.ingest({b.exported()});
+    a.commit([](WriteTxn& txn) { GRAPH_OK(txn.set_property(kN, "x", std::int64_t{1})); });  // B:1'e bağlı
+
+    std::vector<fs::path> logs = fake_logs(transit.path(), 1, 256);
+    logs.push_back(a.exported());
+    logs.push_back(b.log_path());
+    const MergeReport report = receiver.ingest(logs);
+    check_honest_state(receiver);
+    for (const StalledLog& stalled : report.stalled)
+        CHECK((stalled.device != a.graph().device() && stalled.device != b.graph().device()));
+}
+
+TEST_CASE("two devices behind different fake sets still get each other's changes") {
+    const TempDir transit;
+    Device a;
+    Device b;
+    a.commit([](WriteTxn& txn) { GRAPH_OK(txn.put_node(kN)); });
+    const fs::path a_log = a.exported();
+    b.commit([](WriteTxn& txn) { GRAPH_OK(txn.put_node(kM)); });
+    const fs::path b_log = b.exported();
+    Device x;
+    Device y;
+    x.ingest({a_log});  // x yalnız A'yı, y yalnız B'yi tanır
+    y.ingest({b_log});
+    a.ingest({b_log});
+    a.commit([](WriteTxn& txn) { GRAPH_OK(txn.set_property(kN, "x", std::int64_t{1})); });  // B:1'e bağlı
+    a.exported();
+    b.ingest({a_log});
+    b.commit([](WriteTxn& txn) { GRAPH_OK(txn.set_property(kM, "y", std::int64_t{2})); });  // A:2'ye bağlı
+    b.exported();
+
+    for (const auto& [device, set] : {std::pair{&x, std::uint8_t{1}}, std::pair{&y, std::uint8_t{2}}}) {
+        std::vector<fs::path> logs = fake_logs(transit.path() / std::to_string(set), set, 256);
+        logs.push_back(a_log);
+        logs.push_back(b_log);
+        device->ingest(logs);
+        check_honest_state(*device);
+        ReadTxn read = test::begin_read(device->graph());
+        CHECK(*read.property(kM, "y") == Value{std::int64_t{2}});
+    }
+}
+
+// L4c: depodan gelen sahte `<cihaz>.oplog.aside-*` dosyaları (checkout'la yeni mtime alır) budamada bu cihazın
+// gerçek kenara alınmış kopyalarını sildiremez: yalnız bu cihazın oluşturduğu kopyalar budanır.
+TEST_CASE("forged set-aside names from the repository cannot get real set-aside copies deleted") {
+    Device device;
+    device.commit([](WriteTxn& txn) { GRAPH_OK(txn.put_node(kN)); });
+    const fs::path log = device.exported();
+    test::write_file(log, "bozuk");
+    const auto first = device.graph().export_log(device.outbox());
+    REQUIRE(first.has_value());
+    REQUIRE(first->set_aside.has_value());
+    const fs::path real = *first->set_aside;
+
+    std::vector<fs::path> forged;
+    for (int i = 0; i < 3; ++i) {
+        forged.push_back(fs::path(log.string() + ".aside-forged" + std::to_string(i)));
+        test::write_file(forged.back(), "x");
+        fs::last_write_time(forged.back(), fs::file_time_type::clock::now() + std::chrono::hours{1});
+    }
+    test::write_file(log, "yine bozuk");
+    const auto second = device.graph().export_log(device.outbox());
+    REQUIRE(second.has_value());
+    REQUIRE(second->set_aside.has_value());
+    CHECK(fs::exists(real));
+    CHECK(fs::exists(*second->set_aside));
+    for (const fs::path& path : forged)
+        CHECK(fs::exists(path));  // başkasının dosyasına da dokunulmaz
+}
+
+// L4d bulgu 1: özeti tutmadığı için reddedilen sahte çerçevenin bağımlılıkları cihazları "gerekli" yapamaz.
+// Yoksa sahte cihazlar ayrılan yerleri alır ve gerçekten gereken cihaz (B) sonra yer bulamazdı.
+TEST_CASE("a forged frame that is rejected marks no device as needed") {
+    const TempDir transit;
+    GraphLimits four;
+    four.peers = 4;
+    Device a;
+    Device d;
+    a.commit([](WriteTxn& txn) { GRAPH_OK(txn.put_node(kN)); });
+    d.commit([](WriteTxn& txn) { GRAPH_OK(txn.put_node(node_named("d"))); });
+    Device receiver(four);
+    receiver.ingest({a.exported(), d.exported()});  // 4 yerin 2'si
+    Device b;
+    b.commit([](WriteTxn& txn) { GRAPH_OK(txn.put_node(kM)); });
+    a.ingest({b.exported()});
+    a.commit([](WriteTxn& txn) { GRAPH_OK(txn.set_property(kN, "x", std::int64_t{1})); });  // B:1'e bağlı
+
+    std::vector<fs::path> logs = fake_logs(transit.path() / "s", 9, 3);
+    std::vector<Dot> sybils;
+    for (int i = 0; i < 3; ++i) {
+        DeviceId device{};
+        device[1] = std::byte{9};
+        device[2] = static_cast<std::byte>(i);
+        sybils.push_back(Dot{device, 1});
+    }
+    // D'nin günlüğünde uygulanmış seq 1'in sahtesi: farklı içerik, sahte cihazlara bağımlılık.
+    const std::vector<std::string> forged{encode_frame(frame_of(1, {NodePut{node_named("sahte")}}, sybils))};
+    logs.push_back(write_log(transit.path() / "d", d.graph().device(), forged));
+    logs.push_back(a.exported());
+    receiver.ingest(logs);  // B henüz yok: yeri ayrılmalı
+    logs.push_back(b.log_path());
+    receiver.ingest(logs);
+    check_honest_state(receiver);
+}
+
+// L4d bulgu 2: her gereksiz cihazın kabul denemesi gereken cihaz kümesini veritabanında baştan tarıyordu
+// (1024 gerekli x 300 deneme ~ 300.000 sorgu). Ayrılan yer sayaçla tutulur; küme config'ten türeyen sınırla
+// büyür.
+TEST_CASE("admitting unneeded devices does not rescan the needed ones for every attempt") {
+    const TempDir transit;
+    DeviceId first{};
+    first[15] = std::byte{1};  // en küçük kimlik: ikinci aşamada ilk kabul edilen
+    std::vector<Dot> absent;
+    for (std::size_t i = 0; i < kDefaultDeps; ++i) {
+        DeviceId device{};
+        device[0] = std::byte{0x7B};
+        device[1] = static_cast<std::byte>(i & 0xFFU);
+        device[2] = static_cast<std::byte>(i >> 8U);
+        absent.push_back(Dot{device, 1});
+    }
+    const std::vector<std::string> frames{
+        encode_frame(frame_of(1, {NodePut{kN}})),
+        encode_frame(frame_of(2, {PropSet{kN, "x", std::int64_t{1}}}, absent))};
+    std::vector<fs::path> logs = fake_logs(transit.path(), 5, 300);
+    logs.push_back(write_log(transit.path(), first, frames));
+
+    Device device;
+    const auto store = open_store(device);
+    std::uint64_t statements = 0;
+    sqlite3_trace_v2(
+        store->connection_for_test(), SQLITE_TRACE_STMT,
+        [](unsigned, void* count, void*, void*) {
+            ++*static_cast<std::uint64_t*>(count);
+            return 0;
+        },
+        &statements);
+    const Result<MergeReport> report = detail::ingest_logs(*store, logs, IngestLimits{});
+    sqlite3_trace_v2(store->connection_for_test(), 0, nullptr, nullptr);
+    REQUIRE(report.has_value());
+    CHECK(*store->applied_seq(first) == 1);
+    CHECK(statements < 50000);
+}
+
+// L4d bulgu 3: kenara alınan kopyaların adları günlük dizinine göredir; dizin taşınsa da budama sürer.
+TEST_CASE("set-aside copies are tracked relative to the log directory and pruned after it moves") {
+    Device device;
+    device.commit([](WriteTxn& txn) { GRAPH_OK(txn.put_node(kN)); });
+    const fs::path log = device.exported();
+    for (int i = 0; i < 3; ++i) {
+        test::write_file(log, "bozuk" + std::to_string(i));
+        const auto exported = device.graph().export_log(device.outbox());
+        REQUIRE(exported.has_value());
+        REQUIRE(exported->set_aside.has_value());
+    }
+    const fs::path moved = device.dir() / "tasindi";
+    fs::rename(device.outbox(), moved);
+    for (int i = 0; i < 2; ++i) {
+        test::write_file(moved / log.filename(), "yine" + std::to_string(i));
+        const auto exported = device.graph().export_log(moved);
+        REQUIRE(exported.has_value());
+        REQUIRE(exported->set_aside.has_value());
+    }
+    std::size_t kept = 0;
+    for (const fs::directory_entry& entry : fs::directory_iterator(moved))
+        kept += entry.path().filename().string().find(".aside-") != std::string::npos ? 1 : 0;
+    CHECK(kept == 3);
 }

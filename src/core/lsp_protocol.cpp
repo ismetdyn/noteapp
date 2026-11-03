@@ -135,9 +135,9 @@ bool is_utf8_continuation(char c) {
 }
 
 // Satır sonları boşluk olur; sınırı aşan mesaj bir karakterin ortasından kesilmez.
-std::string one_line(std::string_view text) {
+std::string one_line(std::string_view text, std::size_t max_bytes) {
     std::string out;
-    for (std::size_t i = 0; i < text.size() && out.size() <= kMaxDiagnosticMessageBytes; ++i) {
+    for (std::size_t i = 0; i < text.size() && out.size() <= max_bytes; ++i) {
         char c = text[i];
         if (c == '\r' && i + 1 < text.size() && text[i + 1] == '\n')
             ++i;
@@ -145,8 +145,8 @@ std::string one_line(std::string_view text) {
             c = ' ';
         out += c;
     }
-    if (out.size() > kMaxDiagnosticMessageBytes) {
-        std::size_t cut = kMaxDiagnosticMessageBytes;
+    if (out.size() > max_bytes) {
+        std::size_t cut = max_bytes;
         for (std::size_t back = 0; back < kMaxUtf8Continuations && cut > 0 && is_utf8_continuation(out[cut]);
              ++back)
             --cut;
@@ -163,14 +163,14 @@ DiagnosticSeverity severity_of(const Json* json) {
     return static_cast<DiagnosticSeverity>(*value);
 }
 
-std::optional<Diagnostic> diagnostic_of(const Json& json) {
+std::optional<Diagnostic> diagnostic_of(const Json& json, std::size_t max_message_bytes) {
     const auto range = range_of(field(json, "range", Json::Kind::Object));
     const Json* message = field(json, "message", Json::Kind::String);
     if (!range || message == nullptr)
         return std::nullopt;
     return Diagnostic{.range = *range,
                       .severity = severity_of(field(json, "severity", Json::Kind::Number)),
-                      .message = one_line(message->text)};
+                      .message = one_line(message->text, max_message_bytes)};
 }
 
 struct Utf8Step {
@@ -209,18 +209,18 @@ std::expected<std::optional<std::string>, FrameError> FrameReader::next() {
         return std::unexpected(error);
     };
     const std::string_view pending = std::string_view(buffer_).substr(consumed_);
-    const std::string_view window = pending.substr(0, kMaxHeaderBytes);
+    const std::string_view window = pending.substr(0, limits_.header_bytes);
     const std::size_t header_end = window.find(kHeaderEnd);
     if (header_end == std::string_view::npos) {
-        if (pending.size() >= kMaxHeaderBytes)
+        if (pending.size() >= limits_.header_bytes)
             return fail(FrameError::HeaderTooLarge);
         return std::nullopt;
     }
     const auto length = content_length(window.substr(0, header_end));
     if (!length)
         return fail(length.error());
-    // Gövde gelmeden reddedilir: sunucu 16 MiB'ı aşan belleği zorlayamaz.
-    if (*length > kMaxBodyBytes)
+    // Gövde gelmeden reddedilir: sunucu sınırı aşan belleği zorlayamaz.
+    if (*length > limits_.body_bytes)
         return fail(FrameError::BodyTooLarge);
     const std::size_t body_start = header_end + kHeaderEnd.size();
     if (pending.size() - body_start < *length)
@@ -234,8 +234,8 @@ std::string frame(std::string_view body) {
     return "Content-Length: " + std::to_string(body.size()) + std::string(kHeaderEnd) + std::string(body);
 }
 
-std::optional<Json> parse_message(std::string_view body) {
-    return JsonParser(body, kMessageLimits).parse();
+std::optional<Json> parse_message(std::string_view body, const ProtocolLimits& limits) {
+    return JsonParser(body, limits.message()).parse();
 }
 
 PositionEncoding negotiated_encoding(const Json& initialize_result) {
@@ -363,7 +363,8 @@ std::optional<std::string> reply_to_server_request(const Json& message, const Js
     return out;
 }
 
-std::optional<PublishedDiagnostics> parse_publish_diagnostics(const Json& params) {
+std::optional<PublishedDiagnostics> parse_publish_diagnostics(const Json& params,
+                                                              const ProtocolLimits& limits) {
     const Json* uri = field(params, "uri", Json::Kind::String);
     const Json* list = field(params, "diagnostics", Json::Kind::Array);
     if (uri == nullptr || list == nullptr)
@@ -373,21 +374,21 @@ std::optional<PublishedDiagnostics> parse_publish_diagnostics(const Json& params
                                  integer_of<std::int64_t>(field(params, "version", Json::Kind::Number)),
                              .diagnostics = {}};
     for (const Json& json : list->items) {
-        if (out.diagnostics.size() == kMaxDiagnostics)
+        if (out.diagnostics.size() >= limits.diagnostics)
             break;
-        if (auto diagnostic = diagnostic_of(json))
+        if (auto diagnostic = diagnostic_of(json, limits.diagnostic_message_bytes))
             out.diagnostics.push_back(std::move(*diagnostic));
     }
     return out;
 }
 
-std::vector<CompletionItem> parse_completion_result(const Json& result) {
+std::vector<CompletionItem> parse_completion_result(const Json& result, const ProtocolLimits& limits) {
     const Json* list = result.kind == Json::Kind::Array ? &result : field(result, "items", Json::Kind::Array);
     if (list == nullptr)
         return {};
     std::vector<CompletionItem> out;
     for (const Json& item : list->items) {
-        if (out.size() == kMaxCompletionItems)
+        if (out.size() >= limits.completion_items)
             break;
         const Json* label = field(item, "label", Json::Kind::String);
         if (label == nullptr)

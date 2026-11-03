@@ -72,6 +72,7 @@ public:
     bool would_exceed(std::size_t bytes) const { return memory_ + bytes > limits_.max_memory_bytes; }
     std::size_t max_expansions() const { return limits_.max_expansions; }
     std::size_t max_rows() const { return limits_.max_rows; }
+    std::size_t max_nesting() const { return limits_.max_nesting; }
 
 private:
     static constexpr std::uint64_t kTicksPerClockCheck = 1023;  // saat okuması satır başına pahalı olurdu
@@ -89,7 +90,8 @@ private:
 // yazan sorguda kapalıdır (bütçe 0). Bütçe dolunca yalnız yeni giriş eklenmez: sonuç aynı kalır.
 class QueryMemo {
 public:
-    explicit QueryMemo(std::size_t budget_bytes) : budget_(budget_bytes) {}
+    QueryMemo(std::size_t budget_bytes, std::size_t max_value_bytes)
+        : budget_(budget_bytes), max_value_bytes_(max_value_bytes) {}
 
     Result<AdjacencyRef> adjacency(ReadTxn& txn, const NodeId& id, Direction direction, const TypeSet& types,
                                    std::size_t max_entries);
@@ -116,6 +118,8 @@ private:
     bool reserve(std::size_t bytes);
 
     std::size_t budget_;
+    // Büyük değer önbelleğe girmez: tek dev gövde bütçeyi boşa harcamasın; zaten satır başına okunmaz.
+    std::size_t max_value_bytes_;
     std::size_t used_ = 0;
     std::unordered_map<Key, AdjacencyRef, KeyHash> adjacency_;
     std::unordered_map<Key, QueryValue, KeyHash> properties_;
@@ -126,7 +130,8 @@ private:
 struct ExecContext {
     ExecContext(ReadTxn& read_txn, WriteTxn* write_txn, Store& store_ref, const QueryLimits& limits,
                 std::size_t memo_budget)
-        : read(read_txn), write(write_txn), store(store_ref), budget(limits), memo(memo_budget) {}
+        : read(read_txn), write(write_txn), store(store_ref), budget(limits),
+          memo(memo_budget, limits.max_memo_value_bytes) {}
 
     ReadTxn& read;
     WriteTxn* write;

@@ -23,6 +23,9 @@ struct ImVec2;
 
 namespace noteapp::gui {
 
+struct GuiCommand;
+enum class CommandScope;
+
 // Harita kamerası: ekran = tuval köşesi + offset + yerleşim konumu * zoom. auto_fit açıkken her kare çizge
 // tuvale sığdırılır; kullanıcı kaydırınca, yakınlaşınca ya da düğüm sürükleyince kapanır, `0` yeniden açar.
 struct MapCamera {
@@ -91,6 +94,7 @@ public:
     // sağlar.
     static constexpr float kRowIconScale = 1.3F;
     static constexpr float kRowIconSlotEms = 1.6F;
+    static constexpr std::size_t kDetailsFields = 5;  // Ayrıntılar'ın üst veri alanı sayısı
     // Harita yerleşimi kare başına en çok bu kadar adım atar; 2.000 düğümde bütçesi (ölçüm: SPEC-gui kabul
     // 11).
     static constexpr int kMapIterationsPerFrame = 1;
@@ -108,6 +112,7 @@ private:
     void apply_window_scale();
     void run_intents();
     void queue(std::function<void()> intent);
+    void queue_command(const GuiCommand& command);  // gui/commands.hpp tablosundaki eylem
     int idle_timeout_ms() const;
 
     void draw_root();
@@ -118,6 +123,11 @@ private:
     float reconcile_pane_size(float& stored, std::optional<float>& last_size, float actual, float min_size,
                               float max_size) const;
     void draw_search_row();
+    void search_line_keys();  // InputText'ten önce: geçmiş, gölge, açık listenin tuşları
+    void draw_search_text(const std::string& text);  // renkli argümanlar ve gölge öneri
+    void draw_search_popup();
+    void draw_sort_menu();
+    void draw_picker();
     void draw_toolbar();
     void draw_toolbar_separator(float gap);
     void draw_view_switch(float row_start_x, float row_width, float gap);
@@ -127,6 +137,10 @@ private:
     float row_number_width();
     void draw_row_number(const std::string& name, std::size_t number, ImVec2 position, float width);
     void draw_note_list();
+    void draw_quick_add();
+    void run_scope_commands(CommandScope scope);  // kapsamın tuşlarına basıldıysa komutu kuyruğa alır
+    void draw_column_menu();
+    void draw_trash_preview();
     bool begin_selected_row(int current, bool focus_row, ImGuiListClipper& clipper);
     void end_selected_row(const std::string& name, bool changed);
     void draw_tree_rows(bool focus_row);
@@ -135,8 +149,8 @@ private:
     void draw_details_rows(bool focus_row);
     void draw_details_row(const BrowserRow& row, const std::string& name, bool selected,
                           std::chrono::system_clock::time_point now);
-    const std::array<float, 3>& details_column_widths(const std::vector<BrowserRow>& rows,
-                                                      std::chrono::system_clock::time_point now);
+    const std::array<float, kDetailsFields>& details_column_widths(const std::vector<BrowserRow>& rows,
+                                                                   std::chrono::system_clock::time_point now);
     void draw_folder_summary();
     void draw_note_rows(bool focus_row);
     void draw_map();
@@ -154,6 +168,10 @@ private:
     void draw_header_row();
     void draw_editor(float reserved_height);
     void draw_preview(float reserved_height);
+    void draw_markdown_preview();
+    void draw_data_preview();  // csv ve json: TUI REVIEW'un ayrıştırması (app::parse_csv, app::pretty_json)
+    void draw_csv_table(const app::CsvTable& table);
+    void draw_json_lines(const std::vector<app::JsonLine>& lines);
     float panel_height(std::size_t lines, bool open, float available_height) const;
     struct InfoColumns {
         float label = 0.0F;
@@ -179,12 +197,19 @@ private:
     void draw_connection_test_row();
     bool button(const std::string& name, const std::string& label);
     void remember_item_center(const std::string& name);
+    // Adlı alanı test kancasına yazar (item_rects_). Tek yazma noktası: MinGW GCC -O3, std::function içine
+    // satır içi açılan lambdada map::operator[]'ı yanlış düğüm boyuyla görüp -Wstringop-overflow verir.
+    void remember_rect(const std::string& name, ImVec2 min, ImVec2 max, bool disabled = false);
     void handle_shortcuts();
 
     void run_modal(const std::string& title, const std::function<bool()>& body);
     template <typename Choice> Choice ask_choice(const ChoiceBox<Choice>& box);
     std::optional<SaveDetails> ask_save_details(const SaveDialogRequest& request);
-    std::optional<std::string> ask_folder_name(const std::string& title, const std::string& initial);
+    // Tek satırlık ad istemi; alan etiketi verilmezse "Klasör adı".
+    std::optional<std::string> ask_folder_name(const std::string& title, const std::string& initial,
+                                               const std::string& field_label = {});
+    std::optional<std::string> ask_palette();  // seçilen komut kimliği
+    void show_help_dialog();
     enum class PathKind { SaveFile, Folder };
     // Yol elle yazılır ya da yerel dosya diyaloğu (portal/zenity) ile seçilir; yerel diyalog yoksa alan kalır
     // (plan Riskler: Linux dosya diyaloğu).
@@ -221,6 +246,9 @@ private:
     bool close_requested_ = false;
     bool rescan_on_focus_ = false;  // diyalogda gelen odak da kaybolmaz: tarama kare dışında çalışır
     bool search_active_ = false;
+    bool escape_pressed_ = false;        // bu karede Esc (genel rota): açık tamamlama listesini kapatır
+    bool search_popup_hovered_ = false;  // fare tamamlama listesinde: kutu odağı bıraksa da liste kalır
+    bool picker_shown_ = false;  // seçici açılır pencereyi geçen karede çizdi: kapanışı kullanıcı yaptı mı
     bool editor_active_ = false;
     bool list_focused_ = false;
     bool refocus_editor_ = false;
@@ -228,8 +256,9 @@ private:
     int scrolled_row_ = -1;
     std::string scrolled_item_;  // gezginde en son kaydırılan seçili satır (ad: yol, sıra değil)
     bool follow_selection_ = false;
-    // Ayrıntılar'ın sabit sütun genişlikleri (boyut, değiştirilme, oluşturulma) ve ölçüldükleri durum.
-    std::array<float, 3> details_widths_{};
+    // Ayrıntılar'ın üst veri alanlarının genişlikleri (boyut, değiştirilme, oluşturulma, senkron, kaynak) ve
+    // ölçüldükleri durum.
+    std::array<float, kDetailsFields> details_widths_{};
     std::size_t details_widths_rebuilds_ = 0;
     float details_widths_font_ = 0.0F;
     std::string details_widths_day_;  // klavyeyle seçim değişti: gezinti imleci yeni seçili satıra gelsin

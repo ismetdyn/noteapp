@@ -1,6 +1,7 @@
 #include "search/fuzzy.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <doctest/doctest.h>
 #include <string>
 #include <vector>
@@ -12,13 +13,15 @@ namespace {
 
 using Positions = std::vector<std::size_t>;
 
+constexpr std::size_t kCap = 1024;  // limits.search.fuzzy_candidate_chars varsayılanı
+
 core::NoteInfo note(const std::string& path, int mtime_ticks = 0) {
     return core::NoteInfo{*core::NotePath::parse(path),
                           std::filesystem::file_time_type{std::chrono::seconds{mtime_ticks}}, 0};
 }
 
 double score_of(std::string_view q, std::string_view c) {
-    auto m = fuzzy_match(q, c);
+    auto m = fuzzy_match(q, c, kCap);
     REQUIRE(m.has_value());
     return m->score;
 }
@@ -26,7 +29,7 @@ double score_of(std::string_view q, std::string_view c) {
 }  // namespace
 
 TEST_CASE("fuzzy: subsequence matches with word-boundary positions") {
-    auto m = fuzzy_match("wmn", "work/meeting-notes.md");
+    auto m = fuzzy_match("wmn", "work/meeting-notes.md", kCap);
     REQUIRE(m.has_value());
     CHECK(m->positions == Positions{0, 5, 13});
 }
@@ -48,49 +51,60 @@ TEST_CASE("fuzzy: camelCase boundary and consecutive run get bonuses") {
 }
 
 TEST_CASE("fuzzy: non-subsequence returns nullopt") {
-    CHECK_FALSE(fuzzy_match("xyz", "work/meeting-notes.md").has_value());
-    CHECK_FALSE(fuzzy_match("ab", "ba").has_value());
-    CHECK_FALSE(fuzzy_match("a", "").has_value());
+    CHECK_FALSE(fuzzy_match("xyz", "work/meeting-notes.md", kCap).has_value());
+    CHECK_FALSE(fuzzy_match("ab", "ba", kCap).has_value());
+    CHECK_FALSE(fuzzy_match("a", "", kCap).has_value());
 }
 
 TEST_CASE("fuzzy: Turkish folding matches and highlights original characters") {
-    auto a = fuzzy_match("ogrenci", "Öğrenci.md");
+    auto a = fuzzy_match("ogrenci", "Öğrenci.md", kCap);
     REQUIRE(a.has_value());
     CHECK(a->positions == Positions{0, 2, 4, 5, 6, 7, 8});  // Ö ve ğ iki baytlık
 
-    auto b = fuzzy_match("ISIK", "ışık.txt");
+    auto b = fuzzy_match("ISIK", "ışık.txt", kCap);
     REQUIRE(b.has_value());
     CHECK(b->positions == Positions{0, 2, 4, 6});
 
-    auto c = fuzzy_match("şehir", "SEHIR.md");
+    auto c = fuzzy_match("şehir", "SEHIR.md", kCap);
     REQUIRE(c.has_value());
     CHECK(c->positions == Positions{0, 1, 2, 3, 4});
 
-    auto d = fuzzy_match("istanbul", "İSTANBUL.md");
+    auto d = fuzzy_match("istanbul", "İSTANBUL.md", kCap);
     REQUIRE(d.has_value());
     CHECK(d->positions.front() == 0);
     CHECK(d->positions[1] == 2);  // İ iki bayt
 }
 
 TEST_CASE("fuzzy: empty query matches everything with score 0 and no positions") {
-    auto m = fuzzy_match("", "anything.md");
+    auto m = fuzzy_match("", "anything.md", kCap);
     REQUIRE(m.has_value());
     CHECK(m->score == 0.0);
     CHECK(m->positions.empty());
 }
 
 TEST_CASE("fuzzy: exact match and very long candidate") {
-    auto exact = fuzzy_match("abc", "ABC");
+    auto exact = fuzzy_match("abc", "ABC", kCap);
     REQUIRE(exact.has_value());
     CHECK(exact->positions == Positions{0, 1, 2});
     CHECK(exact->score > score_of("abc", "abcd"));
 
     std::string longc(5000, 'a');
-    auto m = fuzzy_match("aa", longc);
+    auto m = fuzzy_match("aa", longc, kCap);
     REQUIRE(m.has_value());
     CHECK(m->score > 0.0);
     CHECK(m->positions.empty());
-    CHECK_FALSE(fuzzy_match("b", longc).has_value());
+    CHECK_FALSE(fuzzy_match("b", longc, kCap).has_value());
+}
+
+// L3: aday tavanı config'tedir; sınırsızda (0 -> SIZE_MAX) uzun aday da vurgu konumu alır.
+TEST_CASE("fuzzy: an unlimited candidate cap gives positions for a candidate over 1024 code points") {
+    const std::string longc = std::string(5000, 'x') + "ab";
+    const auto capped = fuzzy_match("ab", longc, kCap);
+    REQUIRE(capped.has_value());
+    CHECK(capped->positions.empty());
+    const auto unlimited = fuzzy_match("ab", longc, SIZE_MAX);
+    REQUIRE(unlimited.has_value());
+    CHECK(unlimited->positions == Positions{5000, 5001});
 }
 
 TEST_CASE("rank_notes: orders by score, then shorter path, then newer mtime") {
@@ -99,14 +113,14 @@ TEST_CASE("rank_notes: orders by score, then shorter path, then newer mtime") {
         note("meeting.md"),                 // 1
         note("zzz.md"),                     // 2: eşleşmez
     };
-    auto r = rank_notes("mtg", notes);
+    auto r = rank_notes("mtg", notes, kCap);
     REQUIRE(r.size() == 2);
     CHECK(r[0].index == 0);
     CHECK(r[1].index == 1);
 
     // Aynı puan, aynı uzunluk -> mtime azalan
     std::vector<core::NoteInfo> ties{note("a/x.md", 1), note("b/x.md", 5), note("c/x.md", 3)};
-    auto t = rank_notes("x", ties);
+    auto t = rank_notes("x", ties, kCap);
     REQUIRE(t.size() == 3);
     CHECK(t[0].index == 1);
     CHECK(t[1].index == 2);
@@ -114,24 +128,24 @@ TEST_CASE("rank_notes: orders by score, then shorter path, then newer mtime") {
 
     // Aynı puan, farklı uzunluk -> kısa yol önce
     std::vector<core::NoteInfo> lens{note("ab.md", 9), note("a.md", 1)};
-    CHECK(rank_notes("md", lens)[0].index == 1);
+    CHECK(rank_notes("md", lens, kCap)[0].index == 1);
 }
 
 TEST_CASE("rank_notes: empty query returns all notes newest first, regardless of input order") {
     std::vector<core::NoteInfo> notes{note("a.md", 1), note("b.md", 9), note("c.md", 5)};
-    auto r = rank_notes("", notes);
+    auto r = rank_notes("", notes, kCap);
     REQUIRE(r.size() == 3);
     CHECK(r[0].index == 1);
     CHECK(r[1].index == 2);
     CHECK(r[2].index == 0);
     CHECK(r[0].match.positions.empty());
-    CHECK(rank_notes("", {}).empty());
+    CHECK(rank_notes("", {}, kCap).empty());
 }
 
 // Boş sorguda yol uzunluğu sırayı etkilememeli (T29'da bulundu): daha yeni ama daha uzun yol önce gelir.
 TEST_CASE("rank_notes: empty query ignores path length, newer longer path comes first") {
     std::vector<core::NoteInfo> notes{note("beta.md", 1), note("gamma-notes.md", 5)};
-    auto r = rank_notes("", notes);
+    auto r = rank_notes("", notes, kCap);
     REQUIRE(r.size() == 2);
     CHECK(r[0].index == 1);
     CHECK(r[1].index == 0);
@@ -139,7 +153,7 @@ TEST_CASE("rank_notes: empty query ignores path length, newer longer path comes 
 
 TEST_CASE("rank_notes: empty query breaks mtime ties by path") {
     std::vector<core::NoteInfo> notes{note("zeta.md", 3), note("alpha-long.md", 3)};
-    auto r = rank_notes("", notes);
+    auto r = rank_notes("", notes, kCap);
     REQUIRE(r.size() == 2);
     CHECK(r[0].index == 1);
 }

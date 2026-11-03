@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/limits.hpp"
 #include "core/note_store.hpp"
 #include "search/content_index.hpp"
 #include "search/query.hpp"
@@ -26,16 +27,15 @@ struct GlobalHit {
     std::optional<Hit> best_line = std::nullopt;
 };
 
-// Yeterince geniş varsayılan: sonuç listesi tek ekrandan büyük, kesitler yalnız dönen sonuçlar için üretilir.
-inline constexpr std::size_t kGlobalSearchLimit = 200;
-
 // Ad ve içerik birlikte: sorgu argümanları notes'u süzer, kalan metin her terimiyle yolda fuzzy ya da notta
 // tam metin (ContentIndex kuralı) aranır. Sıra: güçlü ad eşleşmeleri -> içerik eşleşmeleri -> zayıf ad
-// eşleşmeleri; `sort:` verilirse o sıra, eşitlikte bu sıra. limit güçlü ad eşleşmeleriyle dolacaksa limit/4'ü
-// içerik ve zayıf eşleşmelere ayrılır: içerik sonuçları kaybolmaz. SPEC-search "Genel arama".
+// eşleşmeleri; `sort:` verilirse o sıra, eşitlikte bu sıra. Sonuç sayısı limits.search.global_results (0:
+// hepsi); sınır güçlü ad eşleşmeleriyle dolacaksa dörtte biri içerik ve zayıf eşleşmelere ayrılır: içerik
+// sonuçları kaybolmaz. Ad eşleşmesinin aday tavanı limits.search.fuzzy_candidate_chars. SPEC-search "Genel
+// arama".
 std::expected<std::vector<GlobalHit>, QueryError>
 search_all(std::string_view query, std::span<const core::NoteMeta> notes, const ContentIndex& content_index,
-           std::size_t limit = kGlobalSearchLimit,
+           const core::SearchLimits& limits,
            std::chrono::system_clock::time_point now = std::chrono::system_clock::now(),
            const ViewLookup& views = {});
 

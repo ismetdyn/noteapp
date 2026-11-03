@@ -39,8 +39,8 @@ save_view(NoteStore& store, std::string_view name, std::string_view query, bool 
           std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 std::expected<void, Error> remove_view(NoteStore& store, std::string_view name);
 
-// Görünümü salt-okunur modda ve varsayılan sorgu sınırlarıyla çalıştırır. Yazan sorgu InvalidQuery
-// (error.view_writes) döner; işlem açılmaz, graf değişmez.
+// Görünümü salt-okunur modda ve görünüm profiliyle (config limits.view.*; kökeni izlenmez, korumalı kalır)
+// çalıştırır. Yazan sorgu InvalidQuery (error.view_writes) döner; işlem açılmaz, graf değişmez.
 std::expected<graph::QueryResult, Error> run_view(const NoteStore& store, std::string_view name);
 
 // `view:` süzgecinin notları: sonuçtaki canlı Note düğümleri ve canlı not yolunu taşıyan metin hücreleri.

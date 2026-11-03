@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bir fuzz adımı: süre sınırlı, derlem kalıcı; tekrar çağrılınca kaldığı yerden sürer. Toplam girdi sayısı STATE
 # dosyasında birikir. Crash, 10 sn üstü sorgu ve sızıntı çıkış kodu 1 verir, kanıt ARTIFACTS altına düşer.
-#   run_fuzz.sh <query|frame|jsonl|lsp> <derleme dizini> <çalışma dizini> [süre sn] [işçi]
+#   run_fuzz.sh <query|frame|log|jsonl|lsp> <derleme dizini> <çalışma dizini> [süre sn] [işçi]
 set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 2; }
@@ -12,7 +12,7 @@ work_dir="${3:?work dir}"
 seconds="${4:-300}"
 workers="${5:-8}"
 source_dir="$(cd "$(dirname "$0")" && pwd)"
-[[ "$target" == query || "$target" == frame || "$target" == jsonl || "$target" == lsp ]] || die "unknown target: $target"
+[[ "$target" == query || "$target" == frame || "$target" == log || "$target" == jsonl || "$target" == lsp ]] || die "unknown target: $target"
 
 corpus="$work_dir/$target/corpus"
 artifacts="$work_dir/$target/artifacts"
@@ -21,6 +21,10 @@ state="$work_dir/$target/total_inputs"
 mkdir -p "$corpus" "$artifacts" "$logs"
 
 seed_corpus() {
+    if [[ "$target" == log ]]; then
+        "$build_dir/tests/graph/fuzz/make_frame_seeds" "$work_dir/$target/frame-seeds" "$corpus"
+        return
+    fi
     if [[ "$target" == frame ]]; then
         "$build_dir/tests/graph/fuzz/make_frame_seeds" "$corpus"
         return

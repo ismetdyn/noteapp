@@ -15,7 +15,7 @@
 //                    döner
 //   flood            initialize cevabından sonra ayrı iş parçacığından durmadan istek yağdırır,
 //                    stdin'i okumayı sürdürür, shutdown'a cevap vermez
-//   config-bomb      initialized'dan sonra cevabı kMaxPendingReplyBytes'ı aşan tek bir
+//   config-bomb      initialized'dan sonra cevabı pending_reply_bytes sınırını aşan tek bir
 //                    workspace/configuration sorar
 //   slow-reader      normal; initialized'dan sonra birkaç workspace/configuration sorar, shutdown'a
 //                    cevap verdikten sonra stdin'den kSlowReadInterval'da bir kSlowReadPage okur
@@ -332,7 +332,8 @@ private:
         reply(message, R"({"capabilities":{"positionEncoding":")" + std::string(encoding) +
                            R"(","textDocumentSync":1,"completionProvider":{}}})");
         if (mode_ == "oversize")
-            write_raw("Content-Length: " + std::to_string(lsp::kMaxBodyBytes + 1) + std::string(kHeaderEnd));
+            write_raw("Content-Length: " + std::to_string(lsp::ProtocolLimits{}.body_bytes + 1) +
+                      std::string(kHeaderEnd));
         if (mode_ == "deaf") {
             std::this_thread::sleep_for(kForever);
             return 0;

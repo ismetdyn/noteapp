@@ -27,6 +27,8 @@ enum class OwnerTag : std::uint8_t { Node = 0, Edge = 1 };
 
 constexpr std::size_t kIdBytes = 16;
 constexpr std::size_t kDotBytes = kIdBytes + sizeof(std::uint64_t);
+// En kısa kodlu işlem: etiket + tek kimlik (node_put, node_del, edge_del).
+constexpr std::size_t kMinOpBytes = 1 + kIdBytes;
 
 Error bad_frame(std::string reason) {
     return Error{Error::Code::BadFrame, "graph.bad_frame", {{"reason", std::move(reason)}}};
@@ -275,12 +277,15 @@ Result<Op> read_op(Reader& reader) {
     return std::unexpected(bad_frame("unknown_op"));
 }
 
-Result<std::vector<Dot>> read_deps(Reader& reader) {
+Result<std::vector<Dot>> read_deps(Reader& reader, std::size_t max_deps) {
     const auto count = reader.read_le<std::uint32_t>();
     if (!count)
         return std::unexpected(bad_frame("truncated_deps"));
-    if (*count > kMaxDeps)
+    if (*count > max_deps)
         return std::unexpected(bad_frame("too_many_deps"));
+    // Sayı güvenilmezdir ve sınır kaldırılabilir: ayırmadan önce kalan baytla doğrulanır.
+    if (*count > reader.remaining() / kDotBytes)
+        return std::unexpected(bad_frame("truncated_deps"));
     std::vector<Dot> deps;
     deps.reserve(*count);
     for (std::uint32_t i = 0; i < *count; ++i) {
@@ -321,7 +326,7 @@ template <class Decode> auto without_throwing(Decode&& decode) -> decltype(decod
 }
 
 Result<Value> parse_value(std::span<const std::byte> encoded);
-Result<Frame> parse_frame(std::span<const std::byte> payload);
+Result<Frame> parse_frame(std::span<const std::byte> payload, const FrameLimits& limits);
 Result<std::vector<Dot>> parse_dots(std::span<const std::byte> encoded);
 
 }  // namespace
@@ -330,8 +335,37 @@ Result<Value> decode_value(std::span<const std::byte> encoded) {
     return without_throwing([&] { return parse_value(encoded); });
 }
 
-Result<Frame> decode_frame(std::span<const std::byte> payload) {
-    return without_throwing([&] { return parse_frame(payload); });
+// Biçim tavanı config'ten bağımsızdır: zarfın uzunluğu, deps ve ops sayıları u32'dir. Sınırsız da bunu
+// aşamaz.
+FrameLimits frame_limits_of(const GraphLimits& limits) {
+    constexpr std::size_t kFormatMax = UINT32_MAX;
+    const std::size_t deps =
+        limits.peers > kFormatMax / kDepsPerPeer ? kFormatMax : limits.peers * kDepsPerPeer;
+    return FrameLimits{std::min(limits.frame_bytes, kFormatMax), std::min(limits.frame_ops, kFormatMax),
+                       deps};
+}
+
+FrameLimits logical_frame_limits(const FrameLimits& record, std::size_t parts) {
+    const std::size_t count = std::max<std::size_t>(parts, 1);
+    const std::size_t ops = record.ops > SIZE_MAX / count ? SIZE_MAX : record.ops * count;
+    return FrameLimits{SIZE_MAX, ops, record.deps};
+}
+
+std::optional<std::size_t> peek_op_count(std::span<const std::byte> payload) {
+    Reader reader(payload);
+    if (!reader.take(2 * sizeof(std::uint64_t)))
+        return std::nullopt;
+    const auto deps = reader.read_le<std::uint32_t>();
+    if (!deps || *deps > reader.remaining() / kDotBytes || !reader.take(*deps * kDotBytes))
+        return std::nullopt;
+    const auto ops = reader.read_le<std::uint32_t>();
+    if (!ops)
+        return std::nullopt;
+    return *ops;
+}
+
+Result<Frame> decode_frame(std::span<const std::byte> payload, const FrameLimits& limits) {
+    return without_throwing([&] { return parse_frame(payload, limits); });
 }
 
 Result<std::vector<Dot>> decode_dots(std::span<const std::byte> encoded) {
@@ -427,8 +461,8 @@ std::string encode_frame(const Frame& frame) {
 
 namespace {
 
-Result<Frame> parse_frame(std::span<const std::byte> payload) {
-    if (payload.size() > kMaxFrameBytes)
+Result<Frame> parse_frame(std::span<const std::byte> payload, const FrameLimits& limits) {
+    if (payload.size() > limits.bytes)
         return std::unexpected(bad_frame("frame_too_large"));
     Reader reader(payload);
     Frame frame;
@@ -441,7 +475,7 @@ Result<Frame> parse_frame(std::span<const std::byte> payload) {
     frame.seq = *seq;
     frame.hlc = *hlc;
 
-    Result<std::vector<Dot>> deps = read_deps(reader);
+    Result<std::vector<Dot>> deps = read_deps(reader, limits.deps);
     if (!deps)
         return std::unexpected(deps.error());
     frame.deps = std::move(*deps);
@@ -451,10 +485,12 @@ Result<Frame> parse_frame(std::span<const std::byte> payload) {
         return std::unexpected(bad_frame("truncated_ops"));
     if (*count == 0)
         return std::unexpected(bad_frame("no_ops"));
-    if (*count > kMaxFrameOps)
+    if (*count > limits.ops)
         return std::unexpected(bad_frame("too_many_ops"));
-    // Sayı güvenilmezdir: önceden ayırma yapılmaz, her işlem en az bir bayt tükettiğinden döngü girdiyle
-    // sınırlıdır.
+    // Sayı güvenilmezdir: önce kalan baytla doğrulanır (en kısa işlem kMinOpBytes), ancak sonra ayrılır.
+    if (*count > reader.remaining() / kMinOpBytes)
+        return std::unexpected(bad_frame("truncated_ops"));
+    frame.ops.reserve(*count);
     for (std::uint32_t i = 0; i < *count; ++i) {
         Result<Op> op = read_op(reader);
         if (!op)

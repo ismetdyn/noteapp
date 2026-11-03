@@ -1,10 +1,11 @@
+#include "core/config.hpp"
 #include "core/i18n.hpp"
 #include "core/text.hpp"
+#include "edit/clipboard.hpp"
+#include "edit/display_text.hpp"
+#include "edit/editor_session.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
-#include "tui/clipboard.hpp"
-#include "tui/display_text.hpp"
-#include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/markdown_view.hpp"
@@ -426,7 +427,7 @@ TEST_CASE("hostile nesting stays bounded, inside the width and fast") {
             const RenderedView view = md(input, 40);
             check_parallel(view);
             check_fits(view, 40);
-            CHECK(view.lines.size() <= tui::kMaxViewLines + 1);
+            CHECK(view.lines.size() <= tui::ViewLimits{}.lines + 1);
         });
         if (noteapp::test::kWallClockBudgets)
             CHECK(ms < kHostileBudgetMs);
@@ -441,8 +442,8 @@ TEST_CASE("huge tables are bounded and say how much is hidden") {
     const long ms = elapsed_ms([&] {
         const RenderedView view = md(source, 40);
         check_fits(view, 40);
-        CHECK(view.lines.size() <= tui::kMaxTableRows + 3);
-        CHECK(contains(joined(view), std::to_string(100000 + 1 - tui::kMaxTableRows)));
+        CHECK(view.lines.size() <= tui::ViewLimits{}.table_rows + 3);
+        CHECK(contains(joined(view), std::to_string(100000 + 1 - tui::ViewLimits{}.table_rows)));
     });
     if (noteapp::test::kWallClockBudgets)
         CHECK(ms < kHostileBudgetMs);
@@ -463,9 +464,48 @@ TEST_CASE("huge tables are bounded and say how much is hidden") {
 
 TEST_CASE("very long paragraph is cut at the line limit with a note") {
     const RenderedView view = md(repeated("ab ", 400000) + "\n", 4);
-    CHECK(view.lines.size() == tui::kMaxViewLines + 1);
+    CHECK(view.lines.size() == tui::ViewLimits{}.lines + 1);
     CHECK(look_of(view, view.lines.back()).dim);
     check_parallel(view);
+}
+
+// L2: limits.tui.view_lines/table_rows/table_columns 0 (SIZE_MAX) ise eski tavanların üstü kesilmez.
+TEST_CASE("rendered views above the old line, row and column caps are whole when the limits are unlimited") {
+    constexpr std::size_t kUnlimited = SIZE_MAX;
+    const tui::ViewLimits unlimited{
+        .lines = kUnlimited, .table_rows = kUnlimited, .table_columns = kUnlimited};
+
+    const RenderedView paragraph =
+        tui::render_markdown(repeated("ab ", 400000) + "\n", 4, tui::terminal_cell_width, unlimited);
+    CHECK(paragraph.lines.size() > tui::ViewLimits{}.lines + 1);
+    CHECK_FALSE(look_of(paragraph, paragraph.lines.back()).dim);
+
+    std::string rows;
+    for (int i = 0; i < 6000; ++i)
+        rows += "| a" + std::to_string(i) + " | b |\n";
+    const RenderedView table =
+        tui::render_markdown("| x | y |\n|---|---|\n" + rows, 40, tui::terminal_cell_width, unlimited);
+    CHECK(contains(joined(table), "a5999"));
+
+    std::string csv = "a,b\n";
+    for (int i = 0; i < 6000; ++i)
+        csv += std::to_string(i) + ",2\n";
+    const auto whole = tui::render_csv(csv, 40, tui::terminal_cell_width, unlimited);
+    REQUIRE(whole);
+    CHECK(contains(joined(*whole), "5999"));
+
+    // 130 sütun (eski tavan 128): saklanan sütun sayısı genişliğe sığanı kısıtlamaz; dar ekranda sığmayan
+    // sütun yine soluk satırla söylenir, ama 128'in ötesi atılmaz.
+    std::string header;
+    std::string values;
+    for (int c = 0; c < 130; ++c) {
+        header += (c == 0 ? "" : ",") + std::string("h") + std::to_string(c);
+        values += (c == 0 ? "" : ",") + std::string("v") + std::to_string(c);
+    }
+    const auto wide =
+        tui::render_csv(header + "\n" + values + "\n", 2000, tui::terminal_cell_width, unlimited);
+    REQUIRE(wide);
+    CHECK(contains(joined(*wide), "v129"));
 }
 
 TEST_CASE("empty markdown is one empty line") {
@@ -508,7 +548,7 @@ TEST_CASE("csv handles quotes, crlf, short rows and hostile input") {
     const long ms = elapsed_ms([&] {
         const auto capped = tui::render_csv(big, 40, tui::terminal_cell_width);
         REQUIRE(capped);
-        CHECK(capped->lines.size() <= tui::kMaxTableRows + 3);
+        CHECK(capped->lines.size() <= tui::ViewLimits{}.table_rows + 3);
     });
     if (noteapp::test::kWallClockBudgets)
         CHECK(ms < kHostileBudgetMs);
@@ -542,10 +582,10 @@ TEST_CASE("invalid json falls back") {
     }
 }
 
-TEST_CASE("hostile json depth is refused without blowing the stack and long values wrap") {
+TEST_CASE("deep json renders above the old depth cap without blowing the stack and long values wrap") {
     CHECK_FALSE(tui::render_json(repeated("[", 1000000), 40, tui::terminal_cell_width));
-    CHECK(tui::render_json(repeated("[", tui::kMaxJsonDepth) + repeated("]", tui::kMaxJsonDepth), 40,
-                           tui::terminal_cell_width));
+    // Eski sınır 128 iç içelikti; yazıcı özyinelemesiz olunca sınır yok.
+    CHECK(tui::render_json(repeated("[", 10000) + repeated("]", 10000), 40, tui::terminal_cell_width));
     const auto wrapped =
         tui::render_json("{\"a\":\"" + repeated("uzun ", 100) + "\"}", 30, tui::terminal_cell_width);
     REQUIRE(wrapped);
@@ -971,13 +1011,22 @@ TEST_CASE("invalid json and non-table csv stay raw highlighted with a dim note")
 
 TEST_CASE("notes over the view limit stay raw with a note") {
     ReviewFixture f;
-    f.open("a.json", "[" + repeated("1,", tui::kMaxRenderedViewBytes / 2) + "1]");
+    f.open("a.json", "[" + repeated("1,", tui::ViewLimits{}.source_bytes / 2) + "1]");
     CHECK_FALSE(f.shown->rendered);
     CHECK(contains(f.shown->note, "KiB"));
     ReviewFixture g;
-    g.open("a.md", repeated("# a\n", tui::kMaxRenderedViewBytes / 4 + 1));
+    g.open("a.md", repeated("# a\n", tui::ViewLimits{}.source_bytes / 4 + 1));
     CHECK_FALSE(g.shown->rendered);
     CHECK(g.shown->lines[0] == "# a");
+}
+
+TEST_CASE("a note above the old 256 KiB view limit renders when limits.tui.view_bytes is 0") {
+    ReviewFixture f;
+    f.preview = tui::PreviewCache(
+        tui::view_limits_of(core::parse_config("[limits.tui]\nview_bytes = 0\n").config.limits.tui), {});
+    f.open("a.md", repeated("# a\n", tui::ViewLimits{}.source_bytes / 4 + 1));
+    CHECK(f.shown->rendered);
+    CHECK(f.shown->note.empty());
 }
 
 TEST_CASE("a sample rendering is written when asked") {
@@ -1006,7 +1055,7 @@ TEST_CASE("a sample rendering is written when asked") {
         // Sınırın tam boyundaki girdiler: yüksüz en kötü süre, UI iş parçacığı bütçesiyle (50 ms)
         // karşılaştırılır.
         const auto filled = [](std::string_view unit) {
-            return repeated(unit, tui::kMaxRenderedViewBytes / unit.size());
+            return repeated(unit, tui::ViewLimits{}.source_bytes / unit.size());
         };
         const std::pair<const char*, std::string> inputs[] = {
             {"mixed", filled(sample)},
@@ -1026,7 +1075,7 @@ TEST_CASE("a sample rendering is written when asked") {
             {"hostile_strong", filled("**a*")},
         };
         std::ofstream timing(std::string(directory) + "/render-timing-ms.txt");
-        timing << "limit_bytes " << tui::kMaxRenderedViewBytes << '\n';
+        timing << "limit_bytes " << tui::ViewLimits{}.source_bytes << '\n';
         const auto worst_of_three = [](const auto& work) {
             long worst = 0;
             for (int run = 0; run < 3; ++run)
@@ -1040,7 +1089,7 @@ TEST_CASE("a sample rendering is written when asked") {
                << '\n';
         // Uçtan uca genişlik değişimi: yeniden sarma + görüntü metni + eşlemenin modele kopyası.
         ReviewFixture resized;
-        resized.open("buyuk.md", inputs[0].second.substr(0, tui::kMaxRenderedViewBytes));
+        resized.open("buyuk.md", inputs[0].second.substr(0, tui::ViewLimits{}.source_bytes));
         timing << "publish_mixed " << worst_of_three([&] {
             resized.state.set_window(resized.state.window_width() == kWidth ? kWidth - 10 : kWidth, kHeight);
             resized.now += std::chrono::seconds(1);

@@ -62,7 +62,11 @@ inline std::string dump_of(const std::filesystem::path& db) {
 
 class Device {
 public:
-    Device() : db_(dir_.path() / "graph.db"), outbox_(dir_.path() / "out"), graph_(open_graph(db_)) {
+    Device() : Device(GraphLimits{}) {}
+    // Config'ten gelen motor sınırlarıyla açılan cihaz (limits.graph.*).
+    explicit Device(const GraphLimits& limits)
+        : db_(dir_.path() / "graph.db"), outbox_(dir_.path() / "out"), limits_(limits),
+          graph_(open_graph(db_, limits)) {
         std::filesystem::create_directories(outbox_);
     }
 
@@ -72,7 +76,7 @@ public:
     const std::filesystem::path& dir() const { return dir_.path(); }
 
     void close() { graph_.reset(); }
-    void reopen() { graph_ = open_graph(db_); }
+    void reopen() { graph_ = open_graph(db_, limits_); }
 
     std::filesystem::path exported() {
         GRAPH_OK(graph_->export_log(outbox_));
@@ -105,6 +109,7 @@ private:
     noteapp::test::TempDir dir_;
     std::filesystem::path db_;
     std::filesystem::path outbox_;
+    GraphLimits limits_;
     std::optional<Graph> graph_;
 };
 

@@ -103,14 +103,19 @@ inline void press(View& view, ImGuiKeyChord chord) {
     const auto key = static_cast<ImGuiKey>(chord & ~ImGuiMod_Mask_);
     const bool ctrl = (chord & ImGuiMod_Ctrl) != 0;
     const bool shift = (chord & ImGuiMod_Shift) != 0;
+    const bool alt = (chord & ImGuiMod_Alt) != 0;
     if (ctrl)
         io.AddKeyEvent(ImGuiMod_Ctrl, true);
     if (shift)
         io.AddKeyEvent(ImGuiMod_Shift, true);
+    if (alt)
+        io.AddKeyEvent(ImGuiMod_Alt, true);
     io.AddKeyEvent(key, true);
     view.draw_frame();
     ImGuiIO& after = ImGui::GetIO();
     after.AddKeyEvent(key, false);
+    if (alt)
+        after.AddKeyEvent(ImGuiMod_Alt, false);
     if (shift)
         after.AddKeyEvent(ImGuiMod_Shift, false);
     if (ctrl)

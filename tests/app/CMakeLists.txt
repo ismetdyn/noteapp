@@ -1,0 +1,9 @@
+noteapp_add_test(app
+    commands_test.cpp
+    data_preview_test.cpp
+    document_test.cpp
+    item_ops_test.cpp
+    listing_test.cpp
+    settings_test.cpp
+    stray_notice_test.cpp
+    trash_ops_test.cpp)

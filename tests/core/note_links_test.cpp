@@ -106,6 +106,32 @@ TEST_CASE("links lists an unresolved target as missing, not as outgoing") {
     CHECK_FALSE(links->empty());
 }
 
+// L3: not başına hedef sayısı sınırsızdır; eski 1024 tavanının üstündeki hedefler sessizce düşmez.
+TEST_CASE("a note with more than 1024 link targets keeps every target") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    constexpr std::size_t kTargets = 1100;
+    std::string body;
+    for (std::size_t i = 0; i < kTargets; ++i)
+        body += "[[yok" + std::to_string(i) + "]] ";
+    REQUIRE(seed_note(store, "a.md", body));
+    const auto links = store.links(np("a.md"));
+    REQUIRE(links.has_value());
+    CHECK(links->missing.size() == kTargets);
+}
+
+// L3: hedef metninin bayt tavanı (512) yok: uzun klasör yolundaki not tam yoluyla bağlanır.
+TEST_CASE("a link target longer than 512 bytes resolves to the note at that path") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    const std::string folder =
+        std::string(200, 'k') + "/" + std::string(200, 'l') + "/" + std::string(200, 'm');
+    REQUIRE(seed_note(store, folder + "/hedef.md", "h\n"));
+    REQUIRE(seed_note(store, "a.md", "[[" + folder + "/hedef]]\n"));
+    CHECK(link_edges(store) == Texts{"a.md>" + folder + "/hedef.md"});
+    CHECK(store.resolve_link(folder + "/hedef") == np(folder + "/hedef.md"));
+}
+
 TEST_CASE("resolve_link follows the write rule: path, path without type, file name, bare name") {
     const TempDir dir;
     NoteStore store(dir.path());

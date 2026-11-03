@@ -70,6 +70,23 @@ TEST_CASE_FIXTURE(ContentFixture, "content mode lists matches with their line co
     CHECK(state->current_path().has_value());                                          // ilk sonuç seçili
 }
 
+// TUI ile aynı anahtar: limits.search.content_results (0 = tüm sonuçlar).
+TEST_CASE_FIXTURE(ContentFixture,
+                  "content results are capped by limits.search.content_results, 0 lists all") {
+    seed();
+    REQUIRE(noteapp::core::set_config_value(config, "limits.search.content_results", "1"));
+    auto capped = make_state();
+    capped->set_query("istanbul");
+    capped->toggle_search_mode();
+    CHECK(rows(*capped) == std::vector<std::string>{"alpha.md  (2)"});
+
+    REQUIRE(noteapp::core::set_config_value(config, "limits.search.content_results", "0"));
+    auto unlimited = make_state();
+    unlimited->set_query("istanbul");
+    unlimited->toggle_search_mode();
+    CHECK(rows(*unlimited) == std::vector<std::string>{"alpha.md  (2)", "beta.md  (1)"});
+}
+
 // Kayıt listeyi tazeler: düzenleme notu aramadan düşürürse editör başka nota geçer ya da boşalır. Kaydı
 // tetikleyen işlem yine başladığı nota uygulanmalı (alpha.md -> beta.txt olayı).
 struct DroppedNoteFixture : ContentFixture {
@@ -256,7 +273,7 @@ TEST_CASE_FIXTURE(ContentFixture, "toggle button, API and Tab from the search bo
 
     state->focus_search();
     settle(*view);
-    press(*view, ImGuiKey_Tab);  // Tab geri çevirir, odak kutuda kalır
+    press(*view, ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_M);  // kısayol geri çevirir, odak kutuda kalır
     CHECK_FALSE(state->content_mode());
     CHECK(view->search_active());
     CHECK(rows(*state).empty());  // ad modunda "istanbul" hiçbir yola uymaz
@@ -265,7 +282,7 @@ TEST_CASE_FIXTURE(ContentFixture, "toggle button, API and Tab from the search bo
 
     state->focus_search();
     settle(*view);
-    press(*view, ImGuiKey_Tab);
+    press(*view, ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_M);
     CHECK(state->content_mode());
     CHECK(rows(*state).empty());  // içerikte "alp" yok
 

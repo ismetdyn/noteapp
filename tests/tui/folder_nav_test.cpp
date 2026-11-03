@@ -1,10 +1,10 @@
 // T70: klasör gezinmesi. Model saf: liste bellekteki anlık görüntüden gelir; eylemler gerçek depoyla.
 #include "core/file_icons.hpp"
 #include "core/i18n.hpp"
+#include "edit/display_text.hpp"
+#include "edit/editor_session.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
-#include "tui/display_text.hpp"
-#include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/mouse.hpp"

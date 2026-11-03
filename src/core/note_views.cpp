@@ -163,8 +163,7 @@ std::expected<graph::QueryResult, Error> run_locked(NoteStore::Impl& impl, std::
         return std::unexpected(view.error());
     if (impl.before_view_run)
         impl.before_view_run();
-    auto result =
-        impl.opened_graph().query(view->query, {}, graph::QueryMode::ReadOnly, graph::QueryLimits{});
+    auto result = impl.opened_graph().query(view->query, {}, graph::QueryMode::ReadOnly, impl.view_limits);
     if (!result)
         return std::unexpected(query_error(result.error(), name, path_utf8(impl.database())));
     return std::move(*result);
@@ -240,7 +239,8 @@ std::expected<SavedView, Error> find_view(const NoteStore& store, std::string_vi
 std::expected<void, Error> save_view(NoteStore& store, std::string_view name, std::string_view query,
                                      bool overwrite, chr::system_clock::time_point now) {
     NOTEAPP_TRY(validate_view_name(name));
-    if (auto checked = graph::check_query(query, graph::QueryMode::ReadOnly); !checked)
+    if (auto checked = graph::check_query(query, graph::QueryMode::ReadOnly, {}, store.impl().view_limits);
+        !checked)
         return std::unexpected(query_error(checked.error(), name, path_utf8(store.impl().database())));
     const std::string key = view_key(name);
     return store.impl().write<void>([&](WriteContext& context) -> std::expected<void, Error> {

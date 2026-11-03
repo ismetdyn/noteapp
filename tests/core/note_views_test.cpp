@@ -2,6 +2,8 @@
 // yazan sorgu kayıtta ve çalıştırmada reddedilir; senkronla gelen kötü niyetli görünüm hiçbir şey
 // değiştirmez. İki cihazın aynı görünümü aynı düğümdür, eşzamanlı düzenleme mevcut kuralla (en büyük head)
 // yakınsar.
+#include "core/config.hpp"
+#include "core/graph_limits.hpp"
 #include "core/note_store.hpp"
 #include "core/note_store_impl.hpp"
 #include "core/note_sync.hpp"
@@ -288,4 +290,43 @@ TEST_CASE("views: a failing view runs the engine once per snapshot, like a succe
     CHECK_FALSE(view_notes(store, "count").has_value());
     CHECK(notes_of(store, "all") == Texts{"a.md", "b.md"});
     CHECK(runs == 4);
+}
+
+// L4: View düğümü kökenini (cihazı) taşımaz: her görünüm korumalı limits.view.* ile çalışır. Kullanıcının
+// sınırsız limits.query.*'ı senkronla gelen görünüme geçmez; limits.view.* yükseltilince aynı görünüm
+// çalışır.
+TEST_CASE("a synced view runs under limits.view even when the user's own queries are unlimited") {
+    const TempDir logs;
+    const TempDir a_dir;
+    NoteStore a(a_dir.path());
+    for (int i = 0; i < 4; ++i)
+        REQUIRE(seed_note(a, "n" + std::to_string(i) + ".md", "x\n"));
+    REQUIRE(save_view(a, "all", "MATCH (n:Note) RETURN n", false).has_value());
+    REQUIRE(export_note_log(a, logs.path()).has_value());
+    const auto a_log = own_log_name(a);
+    REQUIRE(a_log.has_value());
+    const std::vector<fs::path> files{logs.path() / *a_log};
+
+    const TempDir home;
+    const noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
+    const LoadedConfig protective = parse_config("[limits.query]\nrows = 0\n[limits.view]\nrows = 2\n");
+    REQUIRE(protective.warnings.empty());
+    NoteStore b = NoteStore::for_config(protective.config);
+    REQUIRE(ingest_note_logs(b, files).has_value());
+    const auto capped = view_notes(b, "all");
+    REQUIRE_FALSE(capped.has_value());
+    CHECK(capped.error().message_key == "graph.limit_exceeded");
+
+    const LoadedConfig raised = parse_config("[limits.view]\nrows = 0\n");
+    REQUIRE(raised.warnings.empty());
+    NoteStore b_raised = NoteStore::for_config(raised.config);
+    CHECK(notes_of(b_raised, "all").size() == 4);
+}
+
+// defaults.toml ile motorun kendi varsayılanları aynı olgudur: biri değişip öteki kalırsa bu test düşer.
+TEST_CASE("the limits in defaults.toml are the engine's own defaults") {
+    const Limits limits = parse_config("").config.limits;
+    CHECK(graph_limits_of(limits.graph) == graph::GraphLimits{});
+    CHECK(query_limits_of(limits.query) == graph::QueryLimits{});
+    CHECK(query_limits_of(limits.view) == graph::QueryLimits{});
 }

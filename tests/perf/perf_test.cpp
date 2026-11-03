@@ -241,7 +241,7 @@ TEST_CASE("content search: 5000 notes of ~5 KB, warm search within 100 ms") {
     }
     test::bulk_seed(dir.path(), seeded);
 
-    search::ContentIndex index{store, 10 * 1024 * 1024};
+    search::ContentIndex index{store, 10 * 1024 * 1024, 3};
     const double cold = time_ms([&] { index.refresh(); });
     std::vector<search::ContentResult> results;
     const double first = time_ms([&] { results = index.search("proje bütçe", 50); });
@@ -286,7 +286,8 @@ TEST_CASE("rank_notes: 5000 realistic paths within 20 ms") {
     std::vector<double> samples;
     std::size_t matches = 0;
     for (int run = 0; run < kRuns; ++run)
-        samples.push_back(time_ms([&] { matches = search::rank_notes("wmn", notes).size(); }));
+        samples.push_back(time_ms(
+            [&] { matches = search::rank_notes("wmn", notes, search::kDefaultFuzzyCandidateChars).size(); }));
     MESSAGE("rank_notes(5000 paths): median " << median(samples) << " ms, " << matches << " matches");
     CHECK(matches > 0);
     CHECK(median(samples) <= 20.0);

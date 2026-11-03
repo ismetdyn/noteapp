@@ -14,12 +14,6 @@
 
 namespace noteapp::graph::detail::cypher {
 
-namespace {
-// Geçerli 64 KiB sorgu 64 bin düğümün altındadır. Diğer ad açılımı bunu çarpabildiğinden plan aşamasının da
-// bütçesi var.
-constexpr std::size_t kMaxPlanExprNodes = 200'000;
-}  // namespace
-
 Plan::Plan() = default;
 Plan::Plan(Plan&&) noexcept = default;
 Plan& Plan::operator=(Plan&&) noexcept = default;
@@ -216,7 +210,7 @@ private:
                                        {{"reason", "non_finite"}});
             return;
         }
-        if (value_depth(found->second) >= kMaxValueDepth && !error_)
+        if (static_cast<std::size_t>(value_depth(found->second)) >= limits_.max_nesting && !error_)
             error_ = limit_error("value_depth");
         // Her kullanım değeri kopyalar: `[$b, $b, ...]` plan aşamasında belleği çarpmasın.
         param_bytes_ += value_bytes(found->second);
@@ -456,7 +450,7 @@ private:
     // Kopyadan önce sayılır: `[1, …] AS a ORDER BY [a, a, …]` kopyalamadan reddedilmeli.
     ExprPtr budgeted_clone(const Expr& expr) {
         plan_nodes_ += expr_nodes(expr);
-        if (plan_nodes_ > kMaxPlanExprNodes) {
+        if (plan_nodes_ > limits_.max_plan_nodes) {
             if (!error_)
                 error_ = limit_error("plan_nodes");
             return std::make_unique<Expr>();
@@ -998,7 +992,7 @@ private:
 }  // namespace
 
 Result<Plan> build_plan(std::string_view cypher, const Params& params, const QueryLimits& limits) {
-    Result<Query> query = parse_query(cypher.data(), cypher.size());
+    Result<Query> query = parse_query(cypher.data(), cypher.size(), limits);
     if (!query)
         return std::unexpected(std::move(query).error());
     Plan plan;

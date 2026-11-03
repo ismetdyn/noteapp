@@ -1,10 +1,10 @@
 #include "core/i18n.hpp"
+#include "edit/editor_session.hpp"
+#include "edit/note_find.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
-#include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
 #include "tui/mouse.hpp"
-#include "tui/note_find.hpp"
 #include "tui/pane_layout.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
@@ -13,6 +13,7 @@
 #include <fstream>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -303,4 +304,54 @@ TEST_CASE("mouse: the editor's two bottom bars are not text rows") {
     f.mouse(f.divider() + 5, kHeight - 2, MouseButton::Left);  // durum çubuğu
     f.mouse(f.divider() + 5, kHeight - 3, MouseButton::Left);  // panelin alt kenarı
     CHECK(f.editor.buffer()->cursor() == before);
+}
+
+namespace {
+
+std::set<std::string_view> menu_ids(const tui::TuiState& state) {
+    std::set<std::string_view> ids;
+    for (const tui::PaletteRow& row : state.palette_rows())
+        ids.insert(row.command->id);
+    return ids;
+}
+
+}  // namespace
+
+TEST_CASE("mouse: right click on a note row opens the GUI's note menu for that row") {
+    Fixture f;
+    f.mouse(10, kRowY + 1, MouseButton::Right);
+    REQUIRE(f.state.palette_open());
+    CHECK(f.state.selected() == 1);
+    CHECK(f.state.focus() == Focus::List);
+    CHECK(menu_ids(f.state) == std::set<std::string_view>{"move", "trash", "delete"});
+    while (f.state.palette_selected()->id != "trash")
+        f.state.handle(Key::Down);
+    CHECK(f.state.handle(Key::Enter) == tui::Intent::TrashSelected);
+    CHECK_FALSE(f.state.palette_open());
+    // Yazılan süzgeç menünün dışına çıkmaz; Esc kapatır.
+    f.mouse(10, kRowY, MouseButton::Right);
+    f.state.handle(Key::Char, "s");
+    f.state.handle(Key::Char, "e");
+    for (const std::string_view id : menu_ids(f.state))
+        CHECK((id == "move" || id == "trash" || id == "delete"));
+    f.state.handle(Key::Escape);
+    CHECK_FALSE(f.state.palette_open());
+    f.state.handle(Key::Char, ":");
+    CHECK(menu_ids(f.state).size() > 10);  // sonraki palet yine tümünü gösterir
+}
+
+TEST_CASE("mouse: right click on a folder row opens the folder menu; an unmarked row drops the marks") {
+    Fixture f;
+    test::upsert_note(f.dir.path(), "work/d.md", "x\n");
+    f.state.set_notes(f.store.list());
+    f.state.set_folders(f.store.folders());
+    REQUIRE(f.state.rows().front().is_folder);
+    f.state.select_index(1);
+    f.state.handle(Key::Char, "x");
+    REQUIRE(f.state.marked_count() == 1);
+    f.mouse(10, kRowY, MouseButton::Right);
+    REQUIRE(f.state.palette_open());
+    CHECK(f.state.selected() == 0);
+    CHECK(f.state.marked_count() == 0);
+    CHECK(menu_ids(f.state) == std::set<std::string_view>{"folder.new", "rename", "trash"});
 }

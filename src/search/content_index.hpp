@@ -25,7 +25,7 @@ struct Hit {
 struct ContentResult {
     core::NotePath path;
     std::size_t hit_count{};      // en az bir terim geçen satır sayısı
-    std::vector<Hit> first_hits;  // ilk 3 eşleşen satır
+    std::vector<Hit> first_hits;  // ilk eşleşen satırlar, en çok limits.search.content_hits
 };
 
 // İçerik sorgusunun katlanmış terimleri: boşlukla ayrılır, "..." arası tek ifade. Arama ve arayüz vurgusu
@@ -44,7 +44,8 @@ struct ContentCount {
 // "Eşzamanlılık").
 class ContentIndex {
 public:
-    ContentIndex(const core::NoteStore& store, std::size_t max_note_bytes);
+    // max_hits: sonuç başına kesiti üretilen satır (limits.search.content_hits; sınırsız SIZE_MAX).
+    ContentIndex(const core::NoteStore& store, std::size_t max_note_bytes, std::size_t max_hits);
 
     // Yalnız yeni veya (mtime, boyut) değişen notları yeniden okur; silinenleri, ikilileri ve büyükleri
     // düşürür.
@@ -71,6 +72,7 @@ private:
 
     const core::NoteStore& store_;
     std::size_t max_note_bytes_;
+    std::size_t max_hits_;
     std::map<core::NotePath, Entry> entries_;
     std::size_t read_count_ = 0;
 };

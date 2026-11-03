@@ -1,17 +1,17 @@
+#include "app/sync_status_worker.hpp"
 #include "core/i18n.hpp"
 #include "core/note_store.hpp"
 #include "core/paths.hpp"
+#include "edit/display_text.hpp"
+#include "edit/editor_session.hpp"
 #include "graph/graph.hpp"
 #include "search/content_index.hpp"
 #include "search/global_search.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
-#include "tui/display_text.hpp"
-#include "tui/editor_session.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/modals.hpp"
 #include "tui/mouse.hpp"
-#include "tui/sync_status_worker.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
 
@@ -160,6 +160,23 @@ TEST_CASE("slash: query arguments filter and sort, the text still fuzzy matches"
     CHECK(row_paths(s) == std::vector<std::string>{"personal/todo.md"});
 }
 
+// R1: klasör (ya da çöp) görünümü aramayı bitirir; sonraki bozuk sorgu eski aramanın satırlarına dönmez.
+TEST_CASE("slash: after the folder view an invalid argument does not bring back the earlier search") {
+    core::init_i18n("en");
+    tui::TuiState s;
+    s.set_notes({info("size-plan.md"), info("other.md")});
+    s.handle(Key::Char, "/");
+    s.handle(Key::Char, "plan");
+    REQUIRE(row_paths(s) == std::vector<std::string>{"size-plan.md"});
+    s.handle(Key::Escape);
+    s.handle(Key::Escape);
+    REQUIRE(s.in_folder_view());
+    s.handle(Key::Char, "/");
+    s.handle(Key::Char, "size:abc");
+    REQUIRE(s.query_error());
+    CHECK(row_paths(s).size() == 2);  // ilk açılıştaki gibi sorgusuz liste, "plan" araması değil
+}
+
 TEST_CASE("slash: an invalid argument shows its located error and is never treated as text") {
     core::init_i18n("en");
     tui::TuiState s;
@@ -222,10 +239,10 @@ TEST_CASE("f: global search shows the hit line; Enter opens REVIEW scrolled to t
     f.put("uzun.md", body);
     f.put("diger.md", "baska\n");
     f.load();
-    search::ContentIndex index(*f.store, 1024 * 1024);
+    search::ContentIndex index(*f.store, 1024 * 1024, 3);
     index.refresh();
     f.state.set_global_searcher([&](std::string_view query, std::span<const core::NoteMeta> metas) {
-        return search::search_all(query, metas, index);
+        return search::search_all(query, metas, index, core::SearchLimits{});
     });
     CHECK(f.state.handle(Key::Char, "f") == Intent::None);
     CHECK(f.state.focus() == Focus::Search);
@@ -251,10 +268,10 @@ TEST_CASE("f: arguments work and an invalid value shows an error") {
     f.put("a.md", "icerik\n");
     f.put("b.txt", "icerik\n");
     f.load();
-    search::ContentIndex index(*f.store, 1024 * 1024);
+    search::ContentIndex index(*f.store, 1024 * 1024, 3);
     index.refresh();
     f.state.set_global_searcher([&](std::string_view query, std::span<const core::NoteMeta> metas) {
-        return search::search_all(query, metas, index);
+        return search::search_all(query, metas, index, core::SearchLimits{});
     });
     f.state.handle(Key::Char, "f");
     type(f.state, "type:md icerik");
@@ -752,7 +769,7 @@ TEST_CASE("sync status worker delivers off the calling thread and coalesces requ
     const std::vector<core::NoteMeta> metas = {core::NoteMeta{core::NotePath::parse("a.md").value()},
                                                core::NoteMeta{core::NotePath::parse("b.md").value()}};
     {
-        tui::SyncStatusWorker worker([&](tui::SyncStates states) {
+        app::SyncStatusWorker worker([&](app::SyncStates states) {
             const std::scoped_lock lock(mutex);
             threads.push_back(std::this_thread::get_id());
             delivered = states.size();

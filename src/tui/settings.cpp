@@ -76,12 +76,6 @@ bool user_config_broken() {
     return false;
 }
 
-TokenStore system_token_store() {
-    return {[](std::string_view host) { return sync::has_token(host); },
-            [](std::string_view host, std::string_view token) { return sync::store_token(host, token); },
-            [](std::string_view host) { return sync::clear_token(host); }};
-}
-
 SyncEnabler system_sync_enabler() {
     return [](const core::Config& next, bool replace_origin) {
         return sync::SyncService(next).enable(next.sync.remote, replace_origin);
@@ -233,6 +227,8 @@ SettingsState::Outcome SettingsState::handle_key(Key key, std::string_view text)
     case Key::Enter:
         if (on_button())
             return Outcome::Submit;
+        if (on_test())
+            return Outcome::Test;
         if (on_token() && !token_.empty()) {
             store_token();  // kasaya yazar, odak yerinde kalır
             return Outcome::Editing;
@@ -247,7 +243,7 @@ SettingsState::Outcome SettingsState::handle_key(Key key, std::string_view text)
     default:
         break;
     }
-    if (on_button())
+    if (on_button() || on_test())
         return Outcome::Editing;
     if (on_token()) {
         switch (key) {
@@ -373,26 +369,36 @@ std::optional<core::Config> SettingsState::submit(const core::Config& base, bool
     return next;
 }
 
+std::optional<core::Config> SettingsState::begin_test(const core::Config& base) {
+    if (testing_)
+        return std::nullopt;
+    test_result_.clear();
+    auto next = build(base);
+    if (!next)
+        return std::nullopt;
+    if (token_visible() && !token_.empty() && !store_token())
+        return std::nullopt;
+    if (const auto enabled = services_.enable(*next, false); !enabled) {
+        test_result_ = core::tr("tui.test_failed", {{"detail", core::format_error(enabled.error())}});
+        return std::nullopt;
+    }
+    testing_ = true;
+    test_result_ = core::tr("tui.test_running");
+    return next;
+}
+
+void SettingsState::finish_test(const std::expected<void, core::Error>& outcome) {
+    if (!testing_)
+        return;
+    testing_ = false;
+    test_result_ = outcome ? core::tr("tui.test_ok")
+                           : core::tr("tui.test_failed", {{"detail", core::format_error(outcome.error())}});
+}
+
 std::string settings_label(const SettingsState::Row& row) {
     std::string key = row.key;
     std::ranges::replace(key, '.', '_');
     return core::tr("tui.settings_" + key);
-}
-
-std::string config_warnings_message(const std::vector<core::Error>& warnings) {
-    std::string joined;
-    for (const auto& warning : warnings) {
-        if (!joined.empty())
-            joined += "; ";
-        joined += core::format_error(warning);
-    }
-    return joined;
-}
-
-bool sync_restart_needed(const core::Config& before, const core::Config& after) {
-    return before.sync.enabled != after.sync.enabled || before.sync.remote != after.sync.remote ||
-           before.sync.branch != after.sync.branch || before.sync.idle_seconds != after.sync.idle_seconds ||
-           before.notes_dir != after.notes_dir;
 }
 
 }  // namespace noteapp::tui

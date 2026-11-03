@@ -65,9 +65,8 @@ std::string id_hex(const NodeId& id) {
     return text;
 }
 
-bool folder_path_within_limits(std::string_view folder) {
-    return folder.size() <= kMaxFolderPathBytes &&
-           static_cast<std::size_t>(std::ranges::count(folder, '/')) < kMaxFolderDepth;
+bool folder_path_within_limits(std::string_view folder, std::size_t max_bytes) {
+    return folder.size() <= max_bytes;
 }
 
 NoteParts split_note_path(std::string_view path) {
@@ -87,7 +86,7 @@ NoteParts split_note_path(std::string_view path) {
 }
 
 // "a.tar.gz", 2 -> "a.tar-2.gz": create()'in ad ekiyle aynı biçim.
-std::expected<NotePath, Error> numbered_path(const NotePath& path, int number) {
+std::expected<NotePath, Error> numbered_path(const NotePath& path, std::size_t number) {
     const NoteParts parts = split_note_path(path.string());
     std::string text = parts.folder.empty() ? std::string() : parts.folder + "/";
     text += parts.name + "-" + std::to_string(number);
@@ -180,13 +179,9 @@ graph::Result<std::vector<NodeId>> nodes_labeled(graph::ReadTxn& txn, std::strin
 struct FolderNode {
     std::string name;
     std::optional<NodeId> parent;
-    std::optional<std::string> path;  // adı ya da atası geçersizse, çok derinse boş
-    std::size_t depth = 0;
+    std::optional<std::string> path;  // adı ya da atası geçersizse, yolu sınırdan uzunsa boş
     bool resolved = false;
 };
-
-// Aynı ad en çok bu kadar kopya alır: 100.000 aynı adlı not her görüntüde milyarlarca denemeye dönmesin.
-constexpr int kMaxCollisionCopies = 1000;
 
 using FolderMap = std::map<NodeId, FolderNode>;
 
@@ -215,7 +210,7 @@ void break_cycles(FolderMap& folders) {
 
 // Tek klasörün yolu; üstü çözülmüş olmalı. Ad uzaktan gelebilir: NotePath kapısından geçmeyen yol hiçbir yere
 // ulaşmaz (SPEC-graph "Güvenilmez girdi").
-void resolve_folder(FolderMap& folders, FolderNode& folder) {
+void resolve_folder(FolderMap& folders, FolderNode& folder, std::size_t max_bytes) {
     folder.resolved = true;
     const FolderNode* parent = nullptr;
     if (folder.parent)
@@ -223,13 +218,11 @@ void resolve_folder(FolderMap& folders, FolderNode& folder) {
             parent = &found->second;
     if (parent != nullptr && !parent->path)
         return;
-    folder.depth = parent == nullptr ? 1 : parent->depth + 1;
-    if (folder.name.empty() || folder.name.find('/') != std::string::npos || !NotePath::parse(folder.name) ||
-        folder.depth > kMaxFolderDepth)
+    if (folder.name.empty() || folder.name.find('/') != std::string::npos || !NotePath::parse(folder.name))
         return;
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- üst doluysa path'i yukarıda denetlendi
     const std::size_t parent_bytes = parent == nullptr ? 0 : parent->path->size() + 1;
-    if (parent_bytes + folder.name.size() > kMaxFolderPathBytes)
+    if (folder.name.size() > max_bytes || parent_bytes > max_bytes - folder.name.size())
         return;
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- üst doluysa path'i yukarıda denetlendi
     folder.path = parent == nullptr ? folder.name : *parent->path + "/" + folder.name;
@@ -237,7 +230,7 @@ void resolve_folder(FolderMap& folders, FolderNode& folder) {
 
 // Özyinelemesiz: 200.000 halkalı zincir yığını taşırır, üstelik günlükten geri gelip her açılışta çökerdi.
 // Döngüler break_cycles'ta kesildi, her yürüyüş köke ya da çözülmüş üste varır.
-void resolve_folders(FolderMap& folders) {
+void resolve_folders(FolderMap& folders, std::size_t max_bytes) {
     std::vector<FolderNode*> trail;
     for (auto& [id, start] : folders) {
         for (FolderNode* current = &start; current != nullptr && !current->resolved;) {
@@ -246,7 +239,7 @@ void resolve_folders(FolderMap& folders) {
             current = parent == folders.end() ? nullptr : &parent->second;
         }
         for (; !trail.empty(); trail.pop_back())
-            resolve_folder(folders, *trail.back());
+            resolve_folder(folders, *trail.back(), max_bytes);
     }
 }
 
@@ -254,7 +247,7 @@ const std::optional<std::string>& folder_path(const FolderMap& folders, const No
     return folders.at(id).path;
 }
 
-graph::Result<FolderMap> load_folders(graph::ReadTxn& txn) {
+graph::Result<FolderMap> load_folders(graph::ReadTxn& txn, std::size_t max_bytes) {
     auto ids = nodes_labeled(txn, kFolderLabel);
     if (!ids)
         return std::unexpected(ids.error());
@@ -271,7 +264,7 @@ graph::Result<FolderMap> load_folders(graph::ReadTxn& txn) {
                         FolderNode{text == nullptr ? std::string() : *text, *parent, std::nullopt, false});
     }
     break_cycles(folders);
-    resolve_folders(folders);
+    resolve_folders(folders, max_bytes);
     return folders;
 }
 
@@ -298,17 +291,19 @@ void assign_unique_paths(std::vector<NoteRow>& rows, std::unordered_map<std::str
         else
             index.emplace(path, i);
     }
-    // Ad başına sayaç sürer: her kaybeden 2'den başlasaydı aynı adlı n not O(n²) deneme ederdi.
-    std::unordered_map<std::string, int> next_number;
+    // Ad başına sayaç sürer: her kaybeden 2'den başlasaydı aynı adlı n not O(n²) deneme ederdi. Tavan yok:
+    // her deneme ya yerleştirir ya alınmış (sonlu) bir adı atlar, toplam deneme kaybeden + alınmış ad
+    // kadardır.
+    std::unordered_map<std::string, std::size_t> next_number;
     std::vector<bool> dropped(rows.size(), false);
     for (const std::size_t i : losers) {
         const std::string base = rows[i].info.path.string();
-        int& number = next_number.try_emplace(base, 2).first->second;
+        std::size_t& number = next_number.try_emplace(base, 2).first->second;
         bool placed = false;
-        for (; number <= kMaxCollisionCopies + 1 && !placed; ++number) {
+        for (; !placed; ++number) {
             auto candidate = numbered_path(rows[i].info.path, number);
             if (!candidate)
-                break;  // ad sınırı
+                break;  // ekli ad dosya adı sınırını (kMaxFileNameBytes) aşıyor
             if (!taken(candidate->string())) {
                 index.emplace(candidate->string(), i);
                 rows[i].info.path = std::move(*candidate);
@@ -477,11 +472,13 @@ graph::Result<std::optional<LoadedNote>> load_note(graph::ReadTxn& txn, const No
 
 }  // namespace
 
-graph::Result<Snapshot> build_snapshot(graph::ReadTxn& txn, const std::array<std::byte, 16>& device) {
-    auto folders = load_folders(txn);
+graph::Result<Snapshot> build_snapshot(graph::ReadTxn& txn, const std::array<std::byte, 16>& device,
+                                       std::size_t folder_path_bytes) {
+    auto folders = load_folders(txn, folder_path_bytes);
     if (!folders)
         return std::unexpected(folders.error());
     Snapshot snapshot;
+    snapshot.folder_path_bytes = folder_path_bytes;
     for (const auto& [id, node] : *folders)
         if (const std::optional<std::string>& path = folder_path(*folders, id); path)
             snapshot.folders[*path].push_back(id);
@@ -525,7 +522,7 @@ std::shared_ptr<const Snapshot> NoteStore::Impl::current() {
         std::error_code ec;
         if (!fs::exists(database(), ec))
             return nullptr;
-        auto opened = graph::Graph::open(database());
+        auto opened = graph::Graph::open(database(), graph_limits);
         if (!opened) {
             last_error = from_graph(opened.error(), path_utf8(database()));
             log_error("note store: cannot open graph: " + last_error->message_key);
@@ -550,7 +547,7 @@ std::expected<std::shared_ptr<const Snapshot>, Error> NoteStore::Impl::refresh_i
         return std::unexpected(from_graph(version.error(), path_utf8(database())));
     if (snapshot && *version == snapshot_version)
         return snapshot;
-    auto built = build_snapshot(txn, opened_graph().device());
+    auto built = build_snapshot(txn, opened_graph().device(), folder_path_bytes);
     if (!built)
         return std::unexpected(from_graph(built.error(), path_utf8(database())));
     snapshot = std::make_shared<const Snapshot>(std::move(*built));
@@ -574,7 +571,7 @@ std::expected<void, Error> NoteStore::Impl::open_for_write() {
         return {};
     if (const std::error_code made = create_private_directories(directory))
         return std::unexpected(io_error(path_utf8(directory), made.message()));
-    auto opened = graph::Graph::open(database());
+    auto opened = graph::Graph::open(database(), graph_limits);
     if (!opened)
         return std::unexpected(from_graph(opened.error(), path_utf8(database())));
     graph = std::move(*opened);

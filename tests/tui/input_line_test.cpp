@@ -1,10 +1,10 @@
 #include "core/i18n.hpp"
 #include "core/note_store.hpp"
+#include "edit/completion.hpp"
+#include "edit/editor_session.hpp"
+#include "edit/input_line.hpp"
 #include "search/query.hpp"
 #include "support/test_support.hpp"
-#include "tui/completion.hpp"
-#include "tui/editor_session.hpp"
-#include "tui/input_line.hpp"
 #include "tui/input_view.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/save_dialog.hpp"
@@ -409,17 +409,34 @@ TEST_CASE("remember_search keeps newest first, dedupes and caps") {
     CHECK_FALSE(tui::remember_search(history, "\xFF\xFE", nullptr));
     for (int i = 0; i < 250; ++i)
         tui::remember_search(history, "q" + std::to_string(i), nullptr);
-    CHECK(history.size() == tui::kMaxSearchHistory);
+    CHECK(history.size() == tui::SearchHistoryLimits{}.entries);
     CHECK(history.front() == "q249");
 }
 
 TEST_CASE("remember_search refuses an overlong entry, the state file also drops it") {
     std::vector<std::string> history;
-    const std::string longest(tui::kMaxSearchEntryBytes, 'q');
+    const std::string longest(tui::SearchHistoryLimits{}.entry_bytes, 'q');
     CHECK(tui::remember_search(history, longest, nullptr));
     CHECK_FALSE(tui::remember_search(history, longest + "q", nullptr));
     CHECK(history.size() == 1);
     CHECK(tui::parse_search_history("[\"" + longest + "q\", \"ok\"]") == std::vector<std::string>{"ok"});
+}
+
+// L2: limits.tui.search_history ve search_entry_bytes 0 (SIZE_MAX) ise eski tavanların üstü de kalır.
+TEST_CASE("search history keeps more than the old 200 entries and longer queries when unlimited") {
+    const tui::SearchHistoryLimits unlimited{.entries = SIZE_MAX, .entry_bytes = SIZE_MAX};
+    std::vector<std::string> history;
+    for (int i = 0; i < 250; ++i)
+        REQUIRE(tui::remember_search(history, "q" + std::to_string(i), nullptr, unlimited));
+    CHECK(history.size() == 250);
+    std::string longer;
+    while (longer.size() <= tui::SearchHistoryLimits{}.entry_bytes)
+        longer += "arama ";
+    longer += "son";
+    CHECK(tui::remember_search(history, longer, nullptr, unlimited));
+    CHECK(tui::parse_search_history(tui::format_search_history(history), unlimited).size() == 251);
+    CHECK(tui::parse_list_prefs("search_history = " + tui::format_search_history(history) + "\n", unlimited)
+              .search_history.size() == 251);
 }
 
 TEST_CASE("remember_search refuses token-like values and note names but keeps arguments") {
@@ -457,7 +474,7 @@ TEST_CASE("search history round-trips through tui-state.toml and hostile lines a
     std::string big = "[";
     for (int i = 0; i < 300; ++i)
         big += "\"q" + std::to_string(i) + "\",";
-    CHECK(tui::parse_search_history(big + "]").size() == tui::kMaxSearchHistory);
+    CHECK(tui::parse_search_history(big + "]").size() == tui::SearchHistoryLimits{}.entries);
 }
 
 TEST_CASE("search: Tab opens the popup, Ctrl+T toggles name and content, nothing leaves the input") {

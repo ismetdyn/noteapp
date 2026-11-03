@@ -2,7 +2,7 @@
 
 #include "core/i18n.hpp"
 #include "core/text.hpp"
-#include "tui/display_text.hpp"
+#include "edit/display_text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -99,8 +99,9 @@ bool is_closing_fence(std::string_view line, char fence) {
 // Metni olmayan blok (yatay çizgi, boş öğe) son tüketilen yerden sonraki ilk dolu satırdır.
 class MarkdownRenderer {
 public:
-    MarkdownRenderer(std::string_view source, int width, CellWidthFn cell_width)
-        : source_(source), lines_(source), view_(width, cell_width), width_(std::max(width, 1)) {}
+    MarkdownRenderer(std::string_view source, int width, CellWidthFn cell_width, const ViewLimits& limits)
+        : source_(source), lines_(source), view_(width, cell_width, limits.lines), limits_(limits),
+          width_(std::max(width, 1)) {}
 
     RenderedView finish() && {
         close_leaf();
@@ -343,7 +344,7 @@ private:
 
     void open_row() {
         row_line_.reset();
-        skip_row_ = open_table().rows.size() >= kMaxTableRows;
+        skip_row_ = open_table().rows.size() >= limits_.table_rows;
         if (skip_row_)
             ++open_table().omitted_rows;
         else
@@ -353,7 +354,7 @@ private:
 
     void close_cell() {
         ++row_cells_;
-        if (!skip_row_ && open_table().rows.back().size() < kMaxTableColumns)
+        if (!skip_row_ && open_table().rows.back().size() < limits_.table_columns)
             open_table().rows.back().push_back(std::move(inline_));
         inline_ = {};
     }
@@ -562,7 +563,8 @@ private:
             const std::size_t end = code_.find('\n', start);
             const std::string shown = code_line(std::string_view(code_).substr(start, end - start));
             view_.add(*prefix, next,
-                      highlighted_line(code_language_, shown, state, token_look(TokenKind::Code)),
+                      highlighted_line(code_language_, shown, state, token_look(TokenKind::Code),
+                                       limits_.highlight_line_bytes),
                       line + index);
             prefix = &next;
             if (end == std::string::npos)
@@ -618,6 +620,7 @@ private:
     std::string_view source_;
     SourceLines lines_;
     ViewBuilder view_;
+    ViewLimits limits_;
     int width_;
     Leaf leaf_ = Leaf::None;
     std::optional<std::size_t> leaf_line_;
@@ -652,26 +655,10 @@ MarkdownRenderer& renderer_of(void* userdata) {
 
 }  // namespace
 
-ViewKind view_kind_for(std::string_view extension) {
-    if (extension.empty())
-        return ViewKind::None;
-    switch (syntax_language_for(extension)) {
-    case SyntaxLanguage::Markdown:
-        return ViewKind::Markdown;
-    case SyntaxLanguage::Json:
-        return ViewKind::Json;
-    default:
-        break;
-    }
-    std::string lowered(extension);
-    std::ranges::transform(lowered, lowered.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return lowered == "csv" ? ViewKind::Csv : ViewKind::None;
-}
-
-RenderedView render_markdown(std::string_view source, int width, CellWidthFn cell_width) {
+RenderedView render_markdown(std::string_view source, int width, CellWidthFn cell_width,
+                             const ViewLimits& limits) {
     const std::string_view body = source.starts_with(kBom) ? source.substr(kBom.size()) : source;
-    MarkdownRenderer renderer(body, width, cell_width);
+    MarkdownRenderer renderer(body, width, cell_width, limits);
     MD_PARSER parser{};
     // PDF dışa aktarımıyla aynı sözdizimi. MD_FLAG_NOHTML sözleşmedir: HTML düz metin kalır, not güvenilmez.
     parser.flags = MD_FLAG_TABLES | MD_FLAG_TASKLISTS | MD_FLAG_STRIKETHROUGH | MD_FLAG_PERMISSIVEAUTOLINKS |

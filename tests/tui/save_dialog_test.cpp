@@ -149,6 +149,22 @@ TEST_CASE("folder suggestions are fuzzy, capped at five, and include Turkish nam
     CHECK(d.suggestions().empty());
 }
 
+TEST_CASE("folder suggestions follow limits.tui.save_suggestions; 0 shows every match") {
+    const I18nEn en;
+    auto seven = make_init();
+    seven.max_suggestions = 7;
+    SaveDialogState d(seven);
+    d.handle(Key::Tab);
+    backspaces(d, 4);
+    CHECK(d.suggestions().size() == 7);
+    auto all = make_init();
+    all.max_suggestions = SIZE_MAX;
+    SaveDialogState e(all);
+    e.handle(Key::Tab);
+    backspaces(e, 4);
+    CHECK(e.suggestions().size() == all.folders.size());
+}
+
 TEST_CASE("Tab completes the top suggestion; a second Tab moves on") {
     const I18nEn en;
     SaveDialogState d(make_init());

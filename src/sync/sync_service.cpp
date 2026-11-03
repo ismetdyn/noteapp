@@ -5,6 +5,7 @@
 #include "core/i18n.hpp"
 #include "core/log.hpp"
 #include "core/migration.hpp"
+#include "core/note_path.hpp"
 #include "core/note_store.hpp"
 #include "core/note_sync.hpp"
 #include "core/paths.hpp"
@@ -62,7 +63,6 @@ constexpr std::size_t kLogNameBytes = kLogHexBytes + std::string_view(".oplog").
 constexpr std::size_t kMaxReportedIssues = 20;  // durum dosyası büyümesin; kalanı sayı olarak bildirilir
 constexpr std::string_view kBranchPrefix = "refs/heads/";
 constexpr std::string_view kPushRejected = "sync.push_rejected";
-constexpr std::size_t kMaxFileNameBytes = 255;  // Linux NAME_MAX; Windows'un 255 UTF-16 birimi de sığar
 constexpr std::size_t kMaxExtensionBytes = 32;  // bundan uzunu uzantı sayılmaz: kopyanın adını doldururdu
 // OS kullanıcı/makine adı okunamazsa yazarda boş alan kalmasın diye son çare değerler.
 constexpr std::string_view kUnknownUser = "noteapp";
@@ -417,8 +417,8 @@ std::expected<std::string, core::Error> write_conflict_copy(git_repository* repo
     for (int number = 1;; ++number) {
         const std::string suffix = number == 1 ? "" : " " + std::to_string(number);
         const std::string tail = std::format(" (conflict {}){}{}", stamp, suffix, extension);
-        const fs::path name =
-            original.parent_path() / path_from_utf8(cut_utf8(stem, kMaxFileNameBytes - tail.size()) + tail);
+        const fs::path name = original.parent_path() /
+                              path_from_utf8(cut_utf8(stem, core::kMaxFileNameBytes - tail.size()) + tail);
         const core::FileWriteResult written = core::write_new_file(workdir / name, content);
         if (!written.already_exists && !written.ec)
             return utf8(name);
@@ -816,6 +816,9 @@ std::string hex_device(const std::array<std::byte, 16>& device) {
     return text;
 }
 
+// Motorun bir günlüğü daha yeni biçimde bulduğu neden (SPEC-graph "Parçalı çerçeve" (c)).
+constexpr std::string_view kLogTooNew = "log_too_new";
+
 // Motorun raporu kullanıcıya gidecek hatalara çevrilir; yol yerine cihaz: yol iç ayrıntıdır.
 void collect_issues(const graph::MergeReport& report, SyncResult& result) {
     result.log_issues.clear();
@@ -824,14 +827,28 @@ void collect_issues(const graph::MergeReport& report, SyncResult& result) {
         if (result.log_issues.size() < kMaxReportedIssues)
             result.log_issues.push_back(std::move(issue));
     };
-    for (const graph::StalledLog& stalled : report.stalled)
+    // Daha yeni sürümün günlüğü bozuk değildir: kullanıcıya bu cihazdaki uygulamayı güncellemesi söylenir.
+    const auto too_new = [&](const std::array<std::byte, 16>& device) {
+        add(sync_error("sync.log_too_new", {{"device", hex_device(device)}}));
+    };
+    for (const graph::StalledLog& stalled : report.stalled) {
+        if (stalled.reason == kLogTooNew) {
+            too_new(stalled.device);
+            continue;
+        }
         add(sync_error("sync.log_stalled", {{"device", hex_device(stalled.device)},
                                             {"seq", std::to_string(stalled.applied_seq)},
                                             {"reason", stalled.reason}}));
-    for (const graph::BadFrameReport& bad : report.bad_frames)
+    }
+    for (const graph::BadFrameReport& bad : report.bad_frames) {
+        if (bad.reason == kLogTooNew) {
+            too_new(bad.device);
+            continue;
+        }
         add(sync_error(
             "sync.log_bad_frame",
             {{"device", hex_device(bad.device)}, {"seq", std::to_string(bad.seq)}, {"reason", bad.reason}}));
+    }
     for (const graph::PartialTail& tail : report.partial_tails)
         add(sync_error("sync.log_partial_tail", {{"device", hex_device(tail.device)},
                                                  {"valid", std::to_string(tail.valid_bytes)},
@@ -1279,7 +1296,12 @@ std::expected<bool, core::Error> exchange_logs(LogCycle& cycle) {
     const auto logs = log_files(cycle.config.notes_dir);
     if (!logs)
         return std::unexpected(logs.error());
-    auto ingested = core::ingest_note_logs(cycle.store, *logs, merge_text);
+    const std::size_t max_merge_bytes = cycle.config.limits.sync.merge_input_bytes.cap();
+    auto ingested = core::ingest_note_logs(
+        cycle.store, *logs,
+        [max_merge_bytes](std::string_view base, std::string_view ours, std::string_view theirs) {
+            return merge_text(base, ours, theirs, max_merge_bytes);
+        });
     if (!ingested)
         return std::unexpected(ingested.error());
     cycle.result.pulled += ingested->changed_notes;

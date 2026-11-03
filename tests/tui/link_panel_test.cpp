@@ -1,9 +1,9 @@
 // T78: REVIEW altındaki bağlantı bölümü ve `L` ilişkisi. Model saf; eylemler gerçek depoyla, çizim ekran
 // metniyle.
 #include "core/i18n.hpp"
+#include "edit/editor_session.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
-#include "tui/editor_session.hpp"
 #include "tui/editor_view.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/mouse.hpp"

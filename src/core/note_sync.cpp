@@ -83,7 +83,7 @@ std::set<graph::NodeId> sources_of_placed(const Snapshot* before, const Snapshot
 // yazılır: doğru sürümün yazmasında kenarlar zaten tamdır, işlem yazılmaz, cihazlar arasında gidip gelmez.
 // Türetilmiş veridir: hata senkronu durdurmaz, loglanır; notun sonraki yazması onarır.
 void derive_ingested(NoteStore::Impl& impl, const std::vector<graph::NodeId>& ids) {
-    if (auto done = impl.derive_notes(ids, true); !done)
+    if (auto done = impl.derive_notes(ids, NoteStore::Impl::Derive::TagsAndMissingLinks); !done)
         log_warn("note sync: cannot derive ingested notes: " + format_error(done.error()));
 }
 
@@ -114,7 +114,7 @@ ingest_note_logs(NoteStore& store, std::span<const std::filesystem::path> logs, 
     std::ranges::copy(sources_of_placed(before.get(), *merged_view), std::back_inserter(derive));
     std::ranges::sort(derive);
     derive.erase(std::ranges::unique(derive).begin(), derive.end());
-    // Çakışan her not ayrı, her kopya ayrı işlem: biri çözülemezse (çerçeveye sığmıyor, disk) head'ler
+    // Çakışan her not ayrı, her kopya ayrı işlem: biri çözülemezse (depolama sınırı, disk) head'ler
     // yerinde kalır, raporlanır, diğerleri ve senkron sürer. Çerçeve içeriği ingest'i durduramaz (SPEC-graph
     // "Güvenilmez girdi").
     for (const std::vector<NoteRow>* rows : {&merged_view->live, &merged_view->trash})

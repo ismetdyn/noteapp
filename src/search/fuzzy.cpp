@@ -23,9 +23,8 @@ constexpr double kBonusCapital = 0.7;
 constexpr double kBonusDot = 0.6;
 constexpr double kNegInf = -std::numeric_limits<double>::infinity();
 
-// fzy 1024 kod noktasından uzun adayı DP'ye sokmaz (bellek/zaman); biz de eşleşmeyi alt dizi olarak
-// doğrulayıp düşük ama pozitif puanla döneriz, konum üretmeyiz.
-constexpr std::size_t kMaxCandidate = 1024;
+// fzy uzun adayı DP'ye sokmaz (bellek/zaman); sınır config'tedir (limits.search.fuzzy_candidate_chars). Uzun
+// adayda eşleşme alt dizi olarak doğrulanır, düşük ama pozitif puanla döner, konum üretilmez.
 constexpr double kLongCandidateScore = 0.001;
 
 // Tam eşleşmenin (sorgu == aday) puanı: DP sonuçlarının hiçbiri bunu aşamaz.
@@ -57,7 +56,8 @@ double bonus_after(char32_t last, char32_t cur) {
     return 0.0;
 }
 
-std::optional<FuzzyMatch> match_folded(const Folded& q, std::string_view candidate) {
+std::optional<FuzzyMatch> match_folded(const Folded& q, std::string_view candidate,
+                                       std::size_t max_candidate) {
     const std::size_t n = q.text.size();
     if (n == 0)
         return FuzzyMatch{0.0, {}};
@@ -77,7 +77,7 @@ std::optional<FuzzyMatch> match_folded(const Folded& q, std::string_view candida
             return std::nullopt;
     }
 
-    if (m > kMaxCandidate)
+    if (m > max_candidate)
         return FuzzyMatch{kLongCandidateScore, {}};
 
     auto offset_of = [&h](std::size_t j) { return h.byte_offsets[j]; };
@@ -137,18 +137,20 @@ std::optional<FuzzyMatch> match_folded(const Folded& q, std::string_view candida
 
 }  // namespace
 
-std::optional<FuzzyMatch> fuzzy_match(std::string_view query, std::string_view candidate) {
-    return match_folded(fold(query), candidate);
+std::optional<FuzzyMatch> fuzzy_match(std::string_view query, std::string_view candidate,
+                                      std::size_t max_candidate) {
+    return match_folded(fold(query), candidate, max_candidate);
 }
 
-std::vector<Ranked> rank_notes(std::string_view query, std::span<const core::NoteInfo> notes) {
+std::vector<Ranked> rank_notes(std::string_view query, std::span<const core::NoteInfo> notes,
+                               std::size_t max_candidate) {
     const Folded q = fold(query);  // sorgu bir kez katlanır
     std::vector<Ranked> out;
     std::vector<std::size_t> path_len(notes.size());  // sıralamada tekrar string üretmemek için
     out.reserve(notes.size());
     for (std::size_t i = 0; i < notes.size(); ++i) {
         const std::string path = notes[i].path.string();
-        if (auto m = match_folded(q, path)) {
+        if (auto m = match_folded(q, path, max_candidate)) {
             path_len[i] = path.size();
             out.push_back({i, std::move(*m)});
         }

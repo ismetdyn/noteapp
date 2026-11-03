@@ -23,12 +23,12 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `note export --pdf YOL [-o ÇIKTI]` | PDF dışa aktar (aşağıda) |
 | `note sync` · `sync status` · `sync on\|off` · `sync init REMOTE [--replace]` | Senkron yönetimi (aşağıda) |
 | `note sync login [HOST]` · `sync logout [HOST]` | Token'ı ekosuz stdin'den okuyup kasaya yazar / siler |
-| `note config path\|list\|get ANAHTAR\|set ANAHTAR DEĞER` | Config yönetimi |
+| `note config path\|list\|get ANAHTAR\|set ANAHTAR DEĞER` | Config yönetimi; `limits.*` dahil (`0` = sınırsız, SPEC-core "Sınırlar") |
 | `note query [--write] [--json] [--param K=D]… CYPHER` | Graph sorgusu (aşağıda) |
 | `note tags [--json]` | Canlı notların `#etiket`leri ve not sayıları, `Tag.name` sırasıyla: satır `gösterim<TAB>sayı`; `--json` `[{"name","display","count"}]` (SPEC-graph "Etiketler") |
-| `note view save AD CYPHER [--force]` · `view ls [--json]` · `view run AD [--json]` · `view rm AD` · `view show AD` | Kayıtlı Cypher görünümleri (T81, SPEC-graph "Görünümler"). `save` sorguyu çalıştırmadan denetler: yazan, `$parametre`li ya da bozuk sorgu çıkış 2, hiçbir şey kaydedilmez; var olan ad (`Work` = `work`) `--force` olmadan çıkış 1. `ls` satırı `ad<TAB>sorgu` (sorgunun satır sonu `\n`), `--json` `[{"name","query","created_at","updated_at"}]` (zaman unix ms). `run` çıktısı `note query`yle (`--json` dahil) bayt bayt aynıdır, her zaman salt okunur ve sorgu sınırlarıyla çalışır; yazan görünüm (senkronla ya da `query --write` ile gelmiş) çıkış 2 ile reddedilir, graf değişmez. `show` sorguyu yazar. Bilinmeyen ad çıkış 1. Ad ve sorgu senkronla gelebilir: terminal temizliğinden geçer. `save` ve `rm` notlar gibi arka plan senkronunu başlatır |
+| `note view save AD CYPHER [--force]` · `view ls [--json]` · `view run AD [--json]` · `view rm AD` · `view show AD` | Kayıtlı Cypher görünümleri (T81, SPEC-graph "Görünümler"). `save` sorguyu çalıştırmadan denetler: yazan, `$parametre`li ya da bozuk sorgu çıkış 2, hiçbir şey kaydedilmez; var olan ad (`Work` = `work`) `--force` olmadan çıkış 1. `ls` satırı `ad<TAB>sorgu` (sorgunun satır sonu `\n`), `--json` `[{"name","query","created_at","updated_at"}]` (zaman unix ms). `run` çıktısı `note query`yle (`--json` dahil) bayt bayt aynıdır, her zaman salt okunur ve görünüm profiliyle (`limits.view.*`, SPEC-graph "Görünümler") çalışır; yazan görünüm (senkronla ya da `query --write` ile gelmiş) çıkış 2 ile reddedilir, graf değişmez. `show` sorguyu yazar. Bilinmeyen ad çıkış 1. Ad ve sorgu senkronla gelebilir: terminal temizliğinden geçer. `save` ve `rm` notlar gibi arka plan senkronunu başlatır |
 | `note graph migrate [--skip-failed]` | Eski düz dosyaları içe aktar ([SPEC-graph.md](SPEC-graph.md)) |
-| `note graph export --format jsonl [-o DOSYA]`, `note graph import [--overwrite] DOSYA` | Tüm graph'ı JSON satırları olarak çıkar ya da yükle; satırın JSON kuralları ve sınırları SPEC-graph "Sınırlar" (bilinmeyen alanda `null` kabul) |
+| `note graph export --format jsonl [-o DOSYA]`, `note graph import [--overwrite] DOSYA` | Tüm graph'ı JSON satırları olarak çıkar ya da yükle; satırın JSON kuralları ve sınırları SPEC-graph "Sınırlar" (bilinmeyen alanda `null` kabul). İçe aktarma satır aralarında işlemlere bölünür; bir satır tek işlemdir (ya hepsi ya hiç): çerçeveden (`limits.graph.frame_ops`, `frame_bytes`) büyük satır reddedilmez; yineleme işlem yazmaz |
 | `note export --all DİZİN` | Tüm notları bayt bayt düz dosya olarak çıkar |
 | `note --help` · `note help KOMUT` · `note --version` | Yardım (i18n) |
 
@@ -89,6 +89,9 @@ metne (yoksa `pdf.image_placeholder`) iner; hiçbir görsel/bağlantı hedefine 
 `note query` uygulamanın deposu `<veri dizini>/graph.db` üzerinde çalışır. Dosya yoksa çıkış 1; yalnız
 `--write` oluşturur. `--write` olmadan yazan sorgu çıkış 2. Söz dizimi, desteklenmeyen öğe, eksik parametre, geçersiz
 `--param`: 2. Çalışma anı hatası ve aşılan sınır: 1. Bozuk veya yeni sürüm dosya, G/Ç: 3. Dil: [SPEC-graph](SPEC-graph.md).
+Sınırlar kullanıcının profilidir: `limits.query.*` (satır, süre, bellek, metin, iç içelik…; `0` = sınırsız, SPEC-core
+"Sınırlar"). Görünüm (`note view run`, `view:`) bundan etkilenmez, `limits.view.*` ile çalışır. Graf `limits.graph.*`
+ile açılır (`note graph import`/`export` de).
 `--param k=v`: `null`, `true`, `false`, tam sayı, sonlu ondalık otomatik; `k="12"`, `inf`, `nan` ve aralık dışı sayı (`1e999`) metindir. Değer sorgu metnine girmez.
 Tablo her zaman terminal için temizlenir (hücrede `\n` ve `\t` görünür kaçış olur, `bytes` `<bytes:N>`). `--json`:
 `{"columns":[…],"rows":[[…]]}`; denetim karakterleri `\uXXXX`, `bytes` `{"$bytes":"<base64>"}`, zaman

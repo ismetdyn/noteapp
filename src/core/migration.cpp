@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cstdint>
 #include <format>
 #include <fstream>
 #include <iterator>
@@ -36,9 +37,9 @@ constexpr const char* kDigestFile = "migrated-digests";  // içe alınan dosyala
 constexpr const char* kTrashDir = ".trash";
 constexpr const char* kKeepFile = ".keep";
 constexpr const char* kOplogDir = "graph";
-constexpr std::uintmax_t kBatchBytes = 32U * 1024U * 1024U;    // işlem başına: çerçeve sınırı 64 MiB
-constexpr std::size_t kBatchNotes = 500;                       // işlem başına: çerçeve sınırı 65.536 işlem
-constexpr std::uintmax_t kMaxNoteBytes = 60U * 1024U * 1024U;  // tek çerçeveye sığmalı, zarfı için pay
+// Notun içe alındığı işlemde gövdeden başka yazılanlar (ad, zamanlar, etiket ve bağlantı hedefleri) için pay:
+// bağlantı hedefleri en çok 1024 x 4 KiB'tır.
+constexpr std::uintmax_t kNoteTxnHeadroomBytes = 16U * 1024U * 1024U;
 
 // <32 küçük hex>.oplog ya da kenara alınmış <..>.oplog.aside-*: taşıyıcıdır, not değildir.
 bool is_oplog_name(std::string_view name) {
@@ -280,15 +281,23 @@ std::string report_path(const LegacyTree::File& file, bool trashed) {
     return trashed ? trash_report_path(file.relative) : file.relative;
 }
 
-// İçe alınamayacak dosyanın nedeni; alınabilirse boş.
-std::optional<std::string> import_refusal(const LegacyTree::File& file) {
+// İçe alınamayacak dosyanın nedeni; alınabilirse boş. Klasör sınırı deponun sınırıdır
+// (limits.core.folder_path_bytes): görüntünün çözemeyeceği not yazılmaz.
+std::optional<std::string> import_refusal(const LegacyTree::File& file, std::size_t folder_path_bytes) {
     if (!NotePath::parse(file.relative) || !is_valid_utf8(file.relative))
         return "invalid_name";
-    if (!folder_path_within_limits(split_note_path(file.relative).folder))
+    if (!folder_path_within_limits(split_note_path(file.relative).folder, folder_path_bytes))
         return "invalid_folder";
-    if (file.stat.size > kMaxNoteBytes)
-        return "too_large";
     return std::nullopt;
+}
+
+// Gövde, işlemiyle birlikte depolamanın tek değer sınırına sığmalıdır (L4b: çerçeve sınırı değil). Graf
+// açılamıyorsa sınır yoktur: içe aktarma aynı hatayla zaten durur.
+std::uintmax_t max_note_bytes(NoteStore& store) {
+    if (!store.impl().open_for_write())
+        return UINTMAX_MAX;
+    const std::uintmax_t stored = store.impl().opened_graph().max_stored_bytes();
+    return stored > kNoteTxnHeadroomBytes ? stored - kNoteTxnHeadroomBytes : 0;
 }
 
 // Bir ağacın dosyalarını partiler halinde içe aktarır; dosya başına sorun rapora girer, parti sürer.
@@ -296,6 +305,7 @@ std::expected<void, Error> import_tree(NoteStore& store, const std::vector<Legac
                                        bool trashed, MigrationReport& report) {
     std::vector<ImportedNote> batch;
     std::uintmax_t batch_bytes = 0;
+    const std::uintmax_t max_bytes = max_note_bytes(store);
     const auto flush = [&]() -> std::expected<void, Error> {
         if (batch.empty())
             return {};
@@ -320,12 +330,13 @@ std::expected<void, Error> import_tree(NoteStore& store, const std::vector<Legac
             report.failed.push_back({report_path(file, trashed), "invalid_name"});
             continue;
         }
-        if (!folder_path_within_limits(split_note_path(file.relative).folder)) {
+        if (!folder_path_within_limits(split_note_path(file.relative).folder,
+                                       store.impl().folder_path_bytes)) {
             report.failed.push_back(
                 {report_path(file, trashed), "invalid_folder"});  // görünmez düğüm yazılmaz
             continue;
         }
-        if (file.stat.size > kMaxNoteBytes) {  // tek çerçeveye sığmaz: geçişi durdurmaz, dosya yerinde kalır
+        if (file.stat.size > max_bytes) {  // depoya sığmaz: geçişi durdurmaz, dosya yerinde kalır
             report.skipped.push_back({report_path(file, trashed), "too_large"});
             continue;
         }
@@ -334,7 +345,9 @@ std::expected<void, Error> import_tree(NoteStore& store, const std::vector<Legac
             report.failed.push_back({report_path(file, trashed), "unreadable"});
             continue;
         }
-        if (batch_bytes + bytes->size() > kBatchBytes || batch.size() >= kBatchNotes)
+        // Parti baytı etkin kayıt sınırının yarısıdır (Impl::batch_bytes); işlem sayısını import_notes
+        // bütçeyle böler.
+        if (batch_bytes + bytes->size() > store.impl().batch_bytes())
             if (auto flushed = flush(); !flushed)
                 return flushed;
         batch_bytes += bytes->size();
@@ -379,7 +392,7 @@ std::expected<void, Error> verify_tree(const NoteStore& store, const std::vector
                                        bool trashed, const LostNotes& lost, MigrationReport& report,
                                        DigestLedger& imported) {
     for (const LegacyTree::File& file : files) {
-        if (import_refusal(file))
+        if (import_refusal(file, store.impl().folder_path_bytes))
             continue;  // rapora zaten girdi
         auto bytes = slurp_file(file.absolute);
         if (!bytes)
@@ -485,12 +498,13 @@ std::expected<void, Error> save_skipped_files(const fs::path& notes_dir, const f
 }
 
 // Kurulabilir klasörler; sınırı aşan rapora girer.
-std::vector<std::string> importable_folders(const LegacyTree& live, MigrationReport& report) {
+std::vector<std::string> importable_folders(const LegacyTree& live, std::size_t folder_path_bytes,
+                                            MigrationReport& report) {
     std::vector<std::string> folders;
     for (const std::string& folder : live.folders) {
         if (!NotePath::parse(folder) || !is_valid_utf8(folder))
             continue;
-        if (folder_path_within_limits(folder))
+        if (folder_path_within_limits(folder, folder_path_bytes))
             folders.push_back(folder);
         else
             report.failed.push_back({folder, "invalid_folder"});
@@ -502,7 +516,7 @@ std::expected<void, Error> import_everything(NoteStore& store, const LegacyTree&
                                              const LegacyTree& trash, MigrationReport& report) {
     NOTEAPP_TRY(import_tree(store, live.files, false, report));
     NOTEAPP_TRY(import_tree(store, trash.files, true, report));
-    const std::vector<std::string> folders = importable_folders(live, report);
+    const std::vector<std::string> folders = importable_folders(live, store.impl().folder_path_bytes, report);
     NOTEAPP_TRY(store.import_folders(folders));
     report.folders = folders.size();
     return store.relink_notes();
@@ -649,7 +663,7 @@ files_not_in_graph(const NoteStore& store, const DigestLedger& ledger,
                    const std::vector<LegacyTree::File>& files, bool trashed, DigestLedger& known_out) {
     std::vector<LegacyTree::File> kept;
     for (const LegacyTree::File& file : files) {
-        if (import_refusal(file)) {
+        if (import_refusal(file, store.impl().folder_path_bytes)) {
             kept.push_back(file);
             continue;
         }
@@ -670,10 +684,12 @@ files_not_in_graph(const NoteStore& store, const DigestLedger& ledger,
     return kept;
 }
 
-std::vector<LegacyTree::File> importable_of(const std::vector<LegacyTree::File>& files) {
+std::vector<LegacyTree::File> importable_of(const std::vector<LegacyTree::File>& files,
+                                            std::size_t folder_path_bytes) {
     std::vector<LegacyTree::File> importable;
-    std::ranges::copy_if(files, std::back_inserter(importable),
-                         [](const LegacyTree::File& file) { return !import_refusal(file); });
+    std::ranges::copy_if(files, std::back_inserter(importable), [&](const LegacyTree::File& file) {
+        return !import_refusal(file, folder_path_bytes);
+    });
     return importable;
 }
 
@@ -710,7 +726,7 @@ std::expected<void, Error> scan_files(const std::vector<LegacyTree::File>& files
         std::string path = report_path(file, trashed);
         if (walk.recorded.contains(path))
             continue;
-        if (auto refusal = import_refusal(file)) {
+        if (auto refusal = import_refusal(file, walk.store.impl().folder_path_bytes)) {
             walk.scan.files.push_back({std::move(path), std::move(*refusal)});
             continue;
         }
@@ -758,12 +774,13 @@ std::expected<StrayScan, Error> find_stray_files(const NoteStore& store, const f
     return std::move(walk.scan);
 }
 
-std::expected<MigrationReport, Error> migrate_new_notes(const fs::path& notes_dir,
-                                                        const fs::path& data_directory) {
+std::expected<MigrationReport, Error>
+migrate_new_notes(const fs::path& notes_dir, const fs::path& data_directory, std::size_t folder_path_bytes) {
     MigrationReport report;
     const LegacyTrees trees = walk_trees(notes_dir);
     seed_report(trees, report);
     NoteStore store(data_directory);
+    store.impl().folder_path_bytes = folder_path_bytes;
     const auto ledger = read_digest_ledger(notes_dir, data_directory);
     if (!ledger)
         return std::unexpected(ledger.error());
@@ -775,8 +792,8 @@ std::expected<MigrationReport, Error> migrate_new_notes(const fs::path& notes_di
     if (!trash)
         return std::unexpected(trash.error());
 
-    const std::vector<LegacyTree::File> new_live = importable_of(*live);
-    const std::vector<LegacyTree::File> new_trash = importable_of(*trash);
+    const std::vector<LegacyTree::File> new_live = importable_of(*live, store.impl().folder_path_bytes);
+    const std::vector<LegacyTree::File> new_trash = importable_of(*trash, store.impl().folder_path_bytes);
     if (!new_live.empty() || !new_trash.empty()) {
         auto backup = take_backup(notes_dir, data_directory, new_live, new_trash);
         if (!backup)
@@ -785,11 +802,12 @@ std::expected<MigrationReport, Error> migrate_new_notes(const fs::path& notes_di
     }
     NOTEAPP_TRY(import_tree(store, *live, false, report));
     NOTEAPP_TRY(import_tree(store, *trash, true, report));
-    importable_folders(trees.live, report);  // klasör kurulmaz: yalnız sınır raporu listede kalsın
+    importable_folders(trees.live, store.impl().folder_path_bytes, report);  // klasör kurulmaz: yalnız rapor
     if (report.imported > 0 || !report.conflict_copies.empty())
         NOTEAPP_TRY(store.relink_notes());
 
     const NoteStore fresh(data_directory);
+    fresh.impl().folder_path_bytes = folder_path_bytes;  // reddedilen dosya bir de verify_failed olmasın
     const LostNotes lost = lost_notes_of(fresh);
     NOTEAPP_TRY(verify_tree(fresh, *live, false, lost, report, recorded));
     NOTEAPP_TRY(verify_tree(fresh, *trash, true, lost, report, recorded));
@@ -828,9 +846,11 @@ migrate_legacy_notes(const fs::path& notes_dir, const fs::path& data_directory, 
     report.backup = *backup;
 
     NoteStore store(data_directory);
+    store.impl().folder_path_bytes = options.folder_path_bytes;
     NOTEAPP_TRY(import_everything(store, live, trash, report));
     // Taze bağlantı: önbellekten değil veritabanından okunmuş bayt karşılaştırılır.
     const NoteStore fresh(data_directory);
+    fresh.impl().folder_path_bytes = options.folder_path_bytes;
     const LostNotes lost = lost_notes_of(fresh);
     DigestLedger imported;
     NOTEAPP_TRY(verify_tree(fresh, live.files, false, lost, report, imported));

@@ -242,6 +242,165 @@ TEST_CASE("renders the editor tabs to PNG") {
     }
 }
 
+// R3 tek başına (`-tc="renders the sort menu*"`): genel arama (en iyi satırla), etiket seçici, sıralama
+// menüsü.
+TEST_CASE("renders the sort menu, the tag picker and global search to PNG") {
+    const char* directory = std::getenv("NOTEAPP_SHOT_DIR");
+    REQUIRE(directory != nullptr);
+    std::filesystem::create_directories(directory);
+    struct Shot {
+        const char* size_name;
+        int width;
+        int height;
+        float scale;
+        bool dark;
+    };
+    for (const Shot& shot :
+         {Shot{"1000x650", 1000, 650, 1.0F, false}, Shot{"1000x650", 1000, 650, 1.0F, true},
+          Shot{"min", 1, 1, 1.0F, false}}) {
+        LayoutScene scene(shot.width, shot.height, shot.scale);
+        if (shot.dark)
+            apply_dark_theme();
+        scene.fixture.add_note("gündem-planı.md", "#proje #toplantı\nhafta\n", 2);
+        scene.fixture.add_note("proje/özet.md", "#proje\nbütçe ve gündem dışı konular\n", 3);
+        scene.state->rescan();
+        const auto file = [&](const std::string& what) {
+            return std::filesystem::path(directory) / std::format("{}-{}-s{:.2f}-{}.png", what, shot.size_name,
+                                                                  shot.scale, shot.dark ? "dark" : "light");
+        };
+        scene.state->search_global();
+        scene.state->set_query("gündem");
+        gui_test::settle(*scene.view);
+        save_png(file("global-search"));
+
+        scene.state->open_picker(noteapp::gui::Picker::Tag);
+        gui_test::settle(*scene.view);
+        save_png(file("tag-picker"));
+        scene.state->close_picker();
+        scene.state->set_query("");
+        gui_test::settle(*scene.view);
+
+        scene.state->open_sort_menu();
+        gui_test::settle(*scene.view);
+        save_png(file("sort-menu"));
+    }
+}
+
+// G2/G3 tek başına (`-tc="renders the palette*"`): komut paleti, yardım, ağaçta ve çöpte çoklu seçim, çöp
+// önizlemesi, Ayrıntılar'da senkron sütunu, hızlı ekleme satırı.
+TEST_CASE("renders the palette, help, marks, columns and quick add to PNG") {
+    const char* directory = std::getenv("NOTEAPP_SHOT_DIR");
+    REQUIRE(directory != nullptr);
+    std::filesystem::create_directories(directory);
+    struct Shot {
+        const char* size_name;
+        int width;
+        int height;
+        float scale;
+        bool dark;
+    };
+    for (const Shot& shot :
+         {Shot{"1000x650", 1000, 650, 1.0F, false}, Shot{"1000x650", 1000, 650, 1.0F, true},
+          Shot{"min", 1, 1, 1.0F, false}, Shot{"min", 1, 1, 2.0F, false}}) {
+        LayoutScene scene(shot.width, shot.height, shot.scale);
+        if (shot.dark)
+            apply_dark_theme();
+        const auto file = [&](const std::string& what) {
+            return std::filesystem::path(directory) / std::format("{}-{}-s{:.2f}-{}.png", what, shot.size_name,
+                                                                  shot.scale, shot.dark ? "dark" : "light");
+        };
+        const auto path = [](const char* text) { return *noteapp::core::NotePath::parse(text); };
+        // Ağaçta iki not işaretli, imleç üçüncüde.
+        scene.state->open_note(path("ayar.toml"));
+        scene.state->toggle_mark();
+        scene.state->toggle_mark();
+        scene.state->request_focus(noteapp::gui::FocusRequest::List);
+        gui_test::settle(*scene.view);
+        save_png(file("marks-tree"));
+        scene.state->clear_marks();
+
+        scene.state->begin_quick_add();
+        gui_test::settle(*scene.view);
+        gui_test::type_text(*scene.view, "yeni-fikir");
+        save_png(file("quick-add"));
+        scene.state->cancel_quick_add();
+
+        scene.state->set_browser_view(noteapp::gui::BrowserView::Details);
+        scene.state->set_details_column(noteapp::gui::DetailsColumn::Sync);
+        gui_test::settle(*scene.view);
+        save_png(file("details-sync"));
+        scene.state->set_details_column(noteapp::gui::DetailsColumn::SizeAndDate);
+        scene.state->set_browser_view(noteapp::gui::BrowserView::Tree);
+
+        scene.with_dialog([&] { scene.state->open_palette(); }, [&] { save_png(file("palette")); });
+        scene.with_dialog([&] { scene.state->show_help(); }, [&] { save_png(file("help")); });
+
+        // Çöpte iki not işaretli, seçilinin metni ve bilgisi sağda.
+        scene.fixture.add_note(".trash/eski-taslak.md", "çöpteki ikinci not\nikinci satır\n", 2);
+        scene.show_trash_view();
+        scene.state->mark_all();
+        scene.state->set_info_open(true);
+        gui_test::settle(*scene.view);
+        save_png(file("marks-trash"));
+    }
+}
+
+// G4 tek başına (`-tc="renders the G4*"`): CSV tablosu, JSON görünümü, arama kutusunda gölge öneri, renkli
+// argümanlar ve Tab listesi.
+TEST_CASE("renders the G4 data previews and the search line to PNG") {
+    const char* directory = std::getenv("NOTEAPP_SHOT_DIR");
+    REQUIRE(directory != nullptr);
+    std::filesystem::create_directories(directory);
+    for (const bool dark : {false, true}) {
+        LayoutScene scene(1000, 650, 1.0F);
+        if (dark)
+            apply_dark_theme();
+        scene.fixture.add_note(
+            "veri/şehirler.csv",
+            "şehir;nüfus;bölge;not\nİstanbul;15655924;Marmara;\"en kalabalık; liman\"\n"
+            "Ankara;5803482;İç Anadolu;başkent\nİzmir;4479525;Ege;\"\"\"Körfez\"\" kenti\"\n",
+            1);
+        scene.fixture.add_note(
+            "veri/ayar.json",
+            "{\"ad\":\"noteapp\",\"sürüm\":3,\"etkin\":true,\"etiketler\":[\"proje\",\"plan\"],"
+            "\"sınırlar\":{\"satır\":5000,\"sütun\":128,\"boş\":null},\"oran\":-1.5e3}",
+            2);
+        scene.fixture.add_note("planlama.md", "#proje taslak\n", 3);
+        scene.state->rescan();
+        const auto file = [&](const std::string& what) {
+            return std::filesystem::path(directory) /
+                   std::format("{}-1000x650-s1.00-{}.png", what, dark ? "dark" : "light");
+        };
+        scene.state->open_note(*noteapp::core::NotePath::parse("veri/şehirler.csv"));
+        scene.state->toggle_preview();
+        gui_test::settle(*scene.view);
+        REQUIRE(scene.state->showing_preview());
+        save_png(file("g4-csv"));
+        scene.state->open_note(*noteapp::core::NotePath::parse("veri/ayar.json"));
+        gui_test::settle(*scene.view);
+        REQUIRE(scene.state->showing_preview());
+        save_png(file("g4-json"));
+
+        const auto type_in_search = [&](const char* text) {
+            scene.state->set_query({});
+            scene.state->focus_search();
+            gui_test::settle(*scene.view);
+            gui_test::type_text(*scene.view, text);
+            gui_test::settle(*scene.view);
+        };
+        type_in_search("planl");
+        REQUIRE_FALSE(scene.state->search_ghost().empty());
+        save_png(file("g4-search-ghost"));
+        type_in_search("tag:proje size:kocaman plan");
+        save_png(file("g4-search-args"));
+        type_in_search("type:");
+        gui_test::press(*scene.view, ImGuiKey_Tab);
+        gui_test::settle(*scene.view);
+        REQUIRE(scene.state->search_popup() != nullptr);
+        save_png(file("g4-search-popup"));
+    }
+}
+
 TEST_CASE("renders every layout scene to PNG") {
     const char* directory = std::getenv("NOTEAPP_SHOT_DIR");
     REQUIRE(directory != nullptr);

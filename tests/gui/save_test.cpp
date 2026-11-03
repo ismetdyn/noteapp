@@ -4,6 +4,7 @@
 #include "detect/detect.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/save_dialog.hpp"
+#include "support/read_only_fixtures.hpp"
 #include "window_fixture.hpp"
 
 #include <algorithm>
@@ -695,4 +696,122 @@ TEST_CASE_FIXTURE(WindowFixture, "save as on a multi-dot note keeps the whole na
     CHECK(note_exists("a.tar.gz"));
     CHECK_FALSE(note_exists("a.tar"));
     CHECK_FALSE(note_exists("a.gz"));
+}
+
+// --- A5: ortak belge modeli (src/app/document) ---
+
+// Kararlar 3 ve 4: otomatik kayıt soru açmaz; çakışma bayrak olur, açık kayıt sorar (TUI ile aynı).
+TEST_CASE_FIXTURE(SaveFixture, "autosave never asks: a conflict is shown and the explicit save asks") {
+    add_note("alpha.md", "original", 10);
+    auto state = make_state();
+    wire(*state, std::nullopt, ConflictChoice::Cancel);
+    state->edit_text("mine");
+    add_note("alpha.md", "external", 0);
+    state->tick(after_ms(kAutosaveMs * 4));
+    CHECK(calls.conflict == 0);
+    CHECK(read_note("alpha.md") == "external");
+    CHECK(state->buffer() == "mine");
+    CHECK(header_has(*state, "gui.state_modified"));
+    CHECK(state->status() == noteapp::core::tr("gui.changed_on_disk"));
+    state->edit_text("mine+");
+    state->tick(after_ms(kAutosaveMs * 8));
+    CHECK(calls.conflict == 0);  // açık kayda dek bir daha denenmez
+    state->save_now();
+    CHECK(calls.conflict == 1);
+}
+
+TEST_CASE_FIXTURE(SaveFixture, "autosave never creates a note that was deleted on disk") {
+    add_note("alpha.md", "original", 10);
+    auto state = make_state();
+    wire(*state, SaveDetails{"restored", "", "md"}, ConflictChoice::Cancel);
+    state->edit_text("mine");
+    remove_note("alpha.md");
+    state->tick(after_ms(kAutosaveMs * 4));
+    CHECK(calls.dialog == 0);
+    CHECK_FALSE(note_exists("alpha.md"));
+    CHECK(state->buffer() == "mine");
+    CHECK(state->status() == noteapp::core::tr("gui.deleted_on_disk"));
+}
+
+TEST_CASE_FIXTURE(SaveFixture, "a conflict copy keeps CRLF and BOM bytes and later saves stay CRLF") {
+    add_note("win.txt", std::string(kBom) + "one\r\n", 10);
+    auto state = make_state();
+    wire(*state, std::nullopt, ConflictChoice::SaveCopy);
+    REQUIRE(state->buffer() == "one\n");
+    state->edit_text("one\nmine\n");
+    add_note("win.txt", "external", 0);
+    state->save_now();
+    REQUIRE(current(*state) == "win (copy).txt");
+    CHECK(read_note("win (copy).txt") == std::string(kBom) + "one\r\nmine\r\n");
+    state->edit_text("one\nmine\nmore\n");
+    state->save_now();
+    CHECK(read_note("win (copy).txt") == std::string(kBom) + "one\r\nmine\r\nmore\r\n");
+}
+
+TEST_CASE_FIXTURE(SaveFixture, "a vanished CRLF note keeps its bytes when saved through the dialog") {
+    add_note("win.txt", std::string(kBom) + "one\r\n", 10);
+    auto state = make_state();
+    wire(*state, SaveDetails{"restored", "", "txt"}, ConflictChoice::Cancel);
+    remove_note("win.txt");
+    state->edit_text("one\ntwo\n");
+    state->save_now();
+    CHECK(calls.dialog == 1);
+    CHECK(read_note("restored.txt") == std::string(kBom) + "one\r\ntwo\r\n");
+}
+
+TEST_CASE_FIXTURE(SaveFixture, "a new note is created with the bytes in the editor") {
+    auto state = make_state();
+    wire(*state, SaveDetails{"pasted", "", "txt"}, ConflictChoice::Cancel);
+    state->new_note();
+    state->edit_text("a\r\nb\r\n");  // panodan gelen CRLF
+    state->save_now();
+    CHECK(read_note("pasted.txt") == "a\r\nb\r\n");
+}
+
+TEST_CASE_FIXTURE(SaveFixture, "mixed line endings are written back byte for byte") {
+    add_note("mixed.txt", "a\r\nb\nc", 10);
+    auto state = make_state();
+    REQUIRE(current(*state) == "mixed.txt");
+    state->edit_text(state->buffer() + "d");
+    state->save_now();
+    CHECK(read_note("mixed.txt") == "a\r\nb\ncd");
+}
+
+// TUI'deki eşi tests/edit/editor_session_test.cpp: aynı örnekler (tests/support/read_only_fixtures.hpp).
+TEST_CASE_FIXTURE(SaveFixture, "read-only: the shared fixtures are read-only in the GUI and never written") {
+    constexpr std::size_t kLimit = 16 * 1024;
+    config.tuning.max_note_bytes = noteapp::core::Limit{kLimit, "16KiB"};
+    for (const auto& item : noteapp::test::read_only_cases(kLimit)) {
+        const std::string name = item.name;
+        CAPTURE(name);
+        add_note(item.name, item.bytes, 10);
+        auto state = make_state();
+        state->rescan();
+        state->select_row(state->model().index_of(*noteapp::core::NotePath::parse(item.name)));
+        REQUIRE(current(*state) == item.name);
+        CHECK_FALSE(state->editable());
+        CHECK(state->header().find(noteapp::app::read_only_reason(item.reason, kLimit)) != std::string::npos);
+        state->edit_text("x");
+        state->save_now();
+        state->tick(after_ms(kAutosaveMs * 4));
+        CHECK(state->request_close());
+        CHECK(read_note(item.name) == item.bytes);
+        CHECK(state->write_count() == 0);
+        remove_note(item.name);
+    }
+}
+
+// D15: yeni notun klasörü iki arayüzde aynı kural (app::new_note_folder): vurgulu klasör satırı, girilen
+// klasör, gösterilen notun klasörü, hiçbiri yoksa config `default_folder` (eskiden GUI kökü seçerdi).
+TEST_CASE_FIXTURE(SaveFixture, "the new note folder falls back to default_folder") {
+    config.default_folder = "inbox";
+    auto state = make_state();
+    REQUIRE_FALSE(state->current_path().has_value());
+    CHECK(state->target_folder() == "inbox");
+    add_note("work/alpha.md", "alpha", 10);
+    state->rescan();
+    REQUIRE(current(*state) == "work/alpha.md");
+    CHECK(state->target_folder() == "work");
+    state->select_folder("work");
+    CHECK(state->target_folder() == "work");
 }

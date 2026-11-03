@@ -16,15 +16,26 @@
 
 namespace noteapp::core::lsp {
 
-inline constexpr std::size_t kMaxHeaderBytes = 4U * 1024U;  // başlık bloğu, son "\r\n\r\n" dahil
-inline constexpr std::size_t kMaxBodyBytes = 16U * 1024U * 1024U;
-inline constexpr std::size_t kMaxDiagnostics = 1000;
-inline constexpr std::size_t kMaxDiagnosticMessageBytes = 512;
-// Popup'ta gösterilebilecekten çok fazlası; sınır ayırmayı ve sıralama süresini tutar.
-inline constexpr std::size_t kMaxCompletionItems = 500;
-// 16 MiB'lik gövde sınırsız değer sayısıyla GiB'larca Json düğümü ayırırdı; büyük bir completion listesi
-// (5000 öğe × ~20 değer) bunun altındadır. Derinlik LSPAny `data` alanlarına yer bırakır.
-inline constexpr JsonLimits kMessageLimits{.max_depth = 64, .max_values = 250000, .max_bytes = kMaxBodyBytes};
+// Sunucu çıktısının sınırları: `limits.lsp.*` (SPEC-tui "Dil sunucusu"); sınırsız SIZE_MAX (derinlik
+// INT_MAX). Üye varsayılanları defaults.toml ile aynıdır, bir test denetler (tek olgu: dosya).
+struct ProtocolLimits {
+    std::size_t header_bytes = std::size_t{4} * 1024U;  // başlık bloğu, son "\r\n\r\n" dahil
+    std::size_t body_bytes = std::size_t{16} * 1024U * 1024U;
+    // 16 MiB'lik gövde sınırsız değer sayısıyla GiB'larca Json düğümü ayırırdı; büyük bir completion listesi
+    // (5000 öğe × ~20 değer) bunun altındadır. Derinlik LSPAny `data` alanlarına yer bırakır; ayrıştırıcı
+    // özyinelemelidir, çok büyük derinlik yığını taşırır.
+    int message_depth = 64;
+    std::size_t message_values = 250000;
+    std::size_t diagnostics = 1000;
+    std::size_t diagnostic_message_bytes = 512;
+    // Popup'ta gösterilebilecekten çok fazlası; sınır ayırmayı ve sıralama süresini tutar.
+    std::size_t completion_items = 500;
+
+    JsonLimits message() const {
+        return {.max_depth = message_depth, .max_values = message_values, .max_bytes = body_bytes};
+    }
+    bool operator==(const ProtocolLimits&) const = default;
+};
 
 enum class FrameError {
     HeaderTooLarge,
@@ -38,11 +49,14 @@ enum class FrameError {
 // hizası kaybolmuştur, çağıran sunucuyu kapatır.
 class FrameReader {
 public:
+    // Yalnız header_bytes ve body_bytes kullanılır.
+    explicit FrameReader(ProtocolLimits limits = {}) : limits_(limits) {}
     void append(std::string_view bytes);
     // Tam bir gövde varsa onu, henüz yoksa nullopt.
     std::expected<std::optional<std::string>, FrameError> next();
 
 private:
+    ProtocolLimits limits_;
     std::string buffer_;
     // Okunmuş önek her çerçevede silinmez (çok küçük çerçevede O(n²) kaydırma); append yarıyı aşınca
     // sıkıştırır.
@@ -52,8 +66,8 @@ private:
 
 // "Content-Length: N\r\n\r\n" + gövde.
 std::string frame(std::string_view body);
-// Gövdeyi kMessageLimits ile ayrıştırır.
-std::optional<Json> parse_message(std::string_view body);
+// Gövdeyi limits.message() ile ayrıştırır.
+std::optional<Json> parse_message(std::string_view body, const ProtocolLimits& limits = {});
 
 struct Position {
     std::uint32_t line = 0;
@@ -91,21 +105,23 @@ std::string exit_notification();
 // aşan bir metin döner: çağıran onu göndermeden sunucuyu durdurmalıdır (öğe yağdıran sunucu GiB ayırtmasın).
 std::optional<std::string> reply_to_server_request(const Json& message,
                                                    const Json& settings = Json{.kind = Json::Kind::Null},
-                                                   std::size_t max_bytes = kMaxBodyBytes);
+                                                   std::size_t max_bytes = ProtocolLimits{}.body_bytes);
 
 enum class DiagnosticSeverity { Unspecified = 0, Error = 1, Warning = 2, Information = 3, Hint = 4 };
 struct Diagnostic {
     Range range;
     DiagnosticSeverity severity = DiagnosticSeverity::Unspecified;
-    std::string message;  // tek satır, en çok kMaxDiagnosticMessageBytes; ham
+    std::string message;  // tek satır, en çok ProtocolLimits::diagnostic_message_bytes; ham
 };
 struct PublishedDiagnostics {
     std::string uri;
     std::optional<std::int64_t> version;
-    std::vector<Diagnostic> diagnostics;  // en çok kMaxDiagnostics; aralığı ya da mesajı bozuk olan atlanır
+    std::vector<Diagnostic>
+        diagnostics;  // en çok ProtocolLimits::diagnostics; aralığı ya da mesajı bozuk olan atlanır
 };
 // `textDocument/publishDiagnostics` bildiriminin `params`ı; uri ya da dizi yoksa nullopt.
-std::optional<PublishedDiagnostics> parse_publish_diagnostics(const Json& params);
+std::optional<PublishedDiagnostics> parse_publish_diagnostics(const Json& params,
+                                                              const ProtocolLimits& limits = {});
 
 struct CompletionItem {
     std::string label;
@@ -113,8 +129,8 @@ struct CompletionItem {
     std::uint32_t kind = 0;   // CompletionItemKind; 0 = yok
 };
 // `textDocument/completion` cevabının `result`ı: CompletionItem[], CompletionList ya da null. En çok
-// kMaxCompletionItems; etiketsiz öğe atlanır.
-std::vector<CompletionItem> parse_completion_result(const Json& result);
+// ProtocolLimits::completion_items; etiketsiz öğe atlanır.
+std::vector<CompletionItem> parse_completion_result(const Json& result, const ProtocolLimits& limits = {});
 
 // Satır içi sütun dönüşümü. Konum bir karakterin ortasına düşerse o karakterin başına, satır sonunu aşarsa
 // satır sonuna iner (LSP 3.17 Position). Geçersiz UTF-8 baytı bir birim sayılır.

@@ -14,6 +14,7 @@
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <toml++/toml.hpp>
 
@@ -175,6 +176,23 @@ public:
             return std::nullopt;
         }
         return value->get();
+    }
+
+    // Sınır: 0 dahil negatif olmayan tam sayı ya da birimli dizge ("64MiB", "5s"); 0 = sınırsız. Yazım
+    // `Limit::text`te korunur.
+    std::optional<Limit> limit_value(std::string_view key, LimitUnit unit) {
+        const toml::node* node = find(key);
+        if (node == nullptr)
+            return std::nullopt;
+        if (const auto* integer = node->as_integer(); integer != nullptr && integer->get() >= 0)
+            return Limit{static_cast<std::uint64_t>(integer->get()), std::to_string(integer->get())};
+        if (const auto* text = node->as_string())
+            if (auto value = parse_limit(text->get(), unit))
+                return Limit{*value, text->get()};
+        invalid(key, unit == LimitUnit::Count   ? "must_be_limit_count"
+                     : unit == LimitUnit::Bytes ? "must_be_limit_size"
+                                                : "must_be_limit_duration");
+        return std::nullopt;
     }
 
     std::optional<double> fraction(std::string_view key) {
@@ -375,8 +393,8 @@ void apply_tuning(Section& s, Tuning& tuning) {
         tuning.min_confidence = *v;
     if (auto v = s.positive_integer("max_scan_bytes"))
         tuning.max_scan_bytes = static_cast<std::size_t>(*v);
-    if (auto v = s.positive_integer("max_note_bytes"))
-        tuning.max_note_bytes = static_cast<std::uintmax_t>(*v);
+    if (auto v = s.limit_value("max_note_bytes", LimitUnit::Bytes))
+        tuning.max_note_bytes = std::move(*v);
     if (auto v = s.positive_integer("rescan_seconds", INT_MAX))
         tuning.rescan_seconds = static_cast<int>(*v);
     if (auto v = s.positive_integer("autosave_ms", INT_MAX))
@@ -389,8 +407,163 @@ void apply_tuning(Section& s, Tuning& tuning) {
         tuning.sync_stale_lock_minutes = static_cast<int>(*v);
     if (auto v = s.positive_integer("sync_timeout_seconds", INT_MAX))
         tuning.sync_timeout_seconds = static_cast<int>(*v);
-    if (auto v = s.positive_integer("graph_batch_ops", static_cast<std::int64_t>(kMaxGraphBatchOps)))
+    // Tavan yok: bütçe bir ayardır; çerçeve sınırı işlemi sınırlamaz (L4b).
+    if (auto v = s.positive_integer("graph_batch_ops",
+                                    static_cast<std::int64_t>(std::min<std::uintmax_t>(SIZE_MAX, INT64_MAX))))
         tuning.graph_batch_ops = static_cast<std::size_t>(*v);
+    if (auto v = s.positive_integer("completion_min_prefix_bytes"))
+        tuning.completion_min_prefix_bytes = static_cast<std::size_t>(*v);
+    s.warn_unknown();
+}
+
+// [limits] şeması: "<modül>.<ad>", birim ve alan. Aynı modülün anahtarları art arda durur (apply_limits modül
+// tablosunu bir kez açar). Yeni anahtar: defaults.toml'a bir satır, Limits'e bir alan, buraya bir satır ve
+// bir test. Okuyanlar (const) Limits'in kopyası üzerinden erişir: alan başına tek erişimci yeter.
+struct LimitKey {
+    std::string_view key;
+    LimitUnit unit{};
+    Limit& (*field)(Limits&){};
+};
+
+constexpr std::string_view kLimitsPrefix = "limits.";
+
+// Kullanıcı sorgusu ve görünüm aynı alan kümesini taşır: alan erişimcisi profil ve alandan üretilir.
+template <QueryLimits Limits::* Profile, Limit QueryLimits::* Field> Limit& query_field(Limits& limits) {
+    return (limits.*Profile).*Field;
+}
+
+constexpr auto kUserQuery = &Limits::query;
+constexpr auto kView = &Limits::view;
+
+// Modül struct'ının alanı: satır başına ayrı lambda yazılmasın.
+template <auto Module, auto Field> Limit& module_field(Limits& limits) {
+    return (limits.*Module).*Field;
+}
+
+// Boyu satırlardan çıkar (std::to_array): anahtar eklerken elle sayı güncellenmez.
+std::span<const LimitKey> limit_keys() {
+    static const auto table = std::to_array<LimitKey>({
+        {"app.recent_commands", LimitUnit::Count, [](Limits& l) -> Limit& { return l.app.recent_commands; }},
+        {"app.trash_undo_steps", LimitUnit::Count,
+         [](Limits& l) -> Limit& { return l.app.trash_undo_steps; }},
+        {"core.folder_path_bytes", LimitUnit::Bytes,
+         [](Limits& l) -> Limit& { return l.core.folder_path_bytes; }},
+        {"search.content_results", LimitUnit::Count,
+         [](Limits& l) -> Limit& { return l.search.content_results; }},
+        {"search.global_results", LimitUnit::Count,
+         [](Limits& l) -> Limit& { return l.search.global_results; }},
+        {"search.content_hits", LimitUnit::Count, [](Limits& l) -> Limit& { return l.search.content_hits; }},
+        {"search.fuzzy_candidate_chars", LimitUnit::Count,
+         [](Limits& l) -> Limit& { return l.search.fuzzy_candidate_chars; }},
+        {"sync.merge_input_bytes", LimitUnit::Bytes,
+         [](Limits& l) -> Limit& { return l.sync.merge_input_bytes; }},
+        {"graph.frame_bytes", LimitUnit::Bytes, [](Limits& l) -> Limit& { return l.graph.frame_bytes; }},
+        {"graph.frame_ops", LimitUnit::Count, [](Limits& l) -> Limit& { return l.graph.frame_ops; }},
+        {"graph.group_bytes", LimitUnit::Bytes, [](Limits& l) -> Limit& { return l.graph.group_bytes; }},
+        {"graph.group_ops", LimitUnit::Count, [](Limits& l) -> Limit& { return l.graph.group_ops; }},
+        {"graph.peers", LimitUnit::Count, [](Limits& l) -> Limit& { return l.graph.peers; }},
+        {"graph.hlc_skew", LimitUnit::Milliseconds, [](Limits& l) -> Limit& { return l.graph.hlc_skew; }},
+        {"graph.ingest_bytes", LimitUnit::Bytes, [](Limits& l) -> Limit& { return l.graph.ingest_bytes; }},
+        {"graph.merge_owners", LimitUnit::Count, [](Limits& l) -> Limit& { return l.graph.merge_owners; }},
+        {"graph.report_entries", LimitUnit::Count,
+         [](Limits& l) -> Limit& { return l.graph.report_entries; }},
+        {"graph.touched_properties", LimitUnit::Count,
+         [](Limits& l) -> Limit& { return l.graph.touched_properties; }},
+        {"graph.set_aside_logs", LimitUnit::Count,
+         [](Limits& l) -> Limit& { return l.graph.set_aside_logs; }},
+        {"graph.import_line_bytes", LimitUnit::Bytes,
+         [](Limits& l) -> Limit& { return l.graph.import_line_bytes; }},
+        {"query.rows", LimitUnit::Count, &query_field<kUserQuery, &QueryLimits::rows>},
+        {"query.expansions", LimitUnit::Count, &query_field<kUserQuery, &QueryLimits::expansions>},
+        {"query.duration", LimitUnit::Milliseconds, &query_field<kUserQuery, &QueryLimits::duration>},
+        {"query.memory", LimitUnit::Bytes, &query_field<kUserQuery, &QueryLimits::memory>},
+        {"query.memo", LimitUnit::Bytes, &query_field<kUserQuery, &QueryLimits::memo>},
+        {"query.memo_value", LimitUnit::Bytes, &query_field<kUserQuery, &QueryLimits::memo_value>},
+        {"query.text", LimitUnit::Bytes, &query_field<kUserQuery, &QueryLimits::text>},
+        {"query.nesting", LimitUnit::Count, &query_field<kUserQuery, &QueryLimits::nesting>},
+        {"query.pattern_elements", LimitUnit::Count,
+         &query_field<kUserQuery, &QueryLimits::pattern_elements>},
+        {"query.clauses", LimitUnit::Count, &query_field<kUserQuery, &QueryLimits::clauses>},
+        {"query.var_length_hops", LimitUnit::Count, &query_field<kUserQuery, &QueryLimits::var_length_hops>},
+        {"query.plan_nodes", LimitUnit::Count, &query_field<kUserQuery, &QueryLimits::plan_nodes>},
+        {"view.rows", LimitUnit::Count, &query_field<kView, &QueryLimits::rows>},
+        {"view.expansions", LimitUnit::Count, &query_field<kView, &QueryLimits::expansions>},
+        {"view.duration", LimitUnit::Milliseconds, &query_field<kView, &QueryLimits::duration>},
+        {"view.memory", LimitUnit::Bytes, &query_field<kView, &QueryLimits::memory>},
+        {"view.memo", LimitUnit::Bytes, &query_field<kView, &QueryLimits::memo>},
+        {"view.memo_value", LimitUnit::Bytes, &query_field<kView, &QueryLimits::memo_value>},
+        {"view.text", LimitUnit::Bytes, &query_field<kView, &QueryLimits::text>},
+        {"view.nesting", LimitUnit::Count, &query_field<kView, &QueryLimits::nesting>},
+        {"view.pattern_elements", LimitUnit::Count, &query_field<kView, &QueryLimits::pattern_elements>},
+        {"view.clauses", LimitUnit::Count, &query_field<kView, &QueryLimits::clauses>},
+        {"view.var_length_hops", LimitUnit::Count, &query_field<kView, &QueryLimits::var_length_hops>},
+        {"view.plan_nodes", LimitUnit::Count, &query_field<kView, &QueryLimits::plan_nodes>},
+        {"tui.view_bytes", LimitUnit::Bytes, &module_field<&Limits::tui, &TuiLimits::view_bytes>},
+        {"tui.view_lines", LimitUnit::Count, &module_field<&Limits::tui, &TuiLimits::view_lines>},
+        {"tui.table_rows", LimitUnit::Count, &module_field<&Limits::tui, &TuiLimits::table_rows>},
+        {"tui.table_columns", LimitUnit::Count, &module_field<&Limits::tui, &TuiLimits::table_columns>},
+        {"tui.highlight_bytes", LimitUnit::Bytes, &module_field<&Limits::tui, &TuiLimits::highlight_bytes>},
+        {"tui.highlight_line_bytes", LimitUnit::Bytes, &module_field<&Limits::tui, &TuiLimits::highlight_line_bytes>},
+        {"tui.spellcheck_line_bytes", LimitUnit::Bytes, &module_field<&Limits::tui, &TuiLimits::spellcheck_line_bytes>},
+        {"tui.completion_window_bytes", LimitUnit::Bytes,
+         &module_field<&Limits::tui, &TuiLimits::completion_window_bytes>},
+        {"tui.completion_word_bytes", LimitUnit::Bytes, &module_field<&Limits::tui, &TuiLimits::completion_word_bytes>},
+        {"tui.completion_table_words", LimitUnit::Count,
+         &module_field<&Limits::tui, &TuiLimits::completion_table_words>},
+        {"tui.completion_candidates", LimitUnit::Count, &module_field<&Limits::tui, &TuiLimits::completion_candidates>},
+        {"tui.completion_note_words", LimitUnit::Count, &module_field<&Limits::tui, &TuiLimits::completion_note_words>},
+        {"tui.completion_note_bytes", LimitUnit::Bytes, &module_field<&Limits::tui, &TuiLimits::completion_note_bytes>},
+        {"tui.completion_table_bytes", LimitUnit::Bytes,
+         &module_field<&Limits::tui, &TuiLimits::completion_table_bytes>},
+        {"tui.paste_bytes", LimitUnit::Bytes, &module_field<&Limits::tui, &TuiLimits::paste_bytes>},
+        {"tui.search_history", LimitUnit::Count, &module_field<&Limits::tui, &TuiLimits::search_history>},
+        {"tui.search_entry_bytes", LimitUnit::Bytes, &module_field<&Limits::tui, &TuiLimits::search_entry_bytes>},
+        {"tui.undo_bytes", LimitUnit::Bytes, &module_field<&Limits::tui, &TuiLimits::undo_bytes>},
+        {"tui.save_suggestions", LimitUnit::Count, &module_field<&Limits::tui, &TuiLimits::save_suggestions>},
+        {"tui.stray_notice_files", LimitUnit::Count, &module_field<&Limits::tui, &TuiLimits::stray_notice_files>},
+        {"tui.stray_notice_bytes", LimitUnit::Bytes, &module_field<&Limits::tui, &TuiLimits::stray_notice_bytes>},
+        {"lsp.note_bytes", LimitUnit::Bytes, &module_field<&Limits::lsp, &LspLimits::note_bytes>},
+        {"lsp.header_bytes", LimitUnit::Bytes, &module_field<&Limits::lsp, &LspLimits::header_bytes>},
+        {"lsp.body_bytes", LimitUnit::Bytes, &module_field<&Limits::lsp, &LspLimits::body_bytes>},
+        {"lsp.message_depth", LimitUnit::Count, &module_field<&Limits::lsp, &LspLimits::message_depth>},
+        {"lsp.message_values", LimitUnit::Count, &module_field<&Limits::lsp, &LspLimits::message_values>},
+        {"lsp.diagnostics", LimitUnit::Count, &module_field<&Limits::lsp, &LspLimits::diagnostics>},
+        {"lsp.diagnostic_message_bytes", LimitUnit::Bytes,
+         &module_field<&Limits::lsp, &LspLimits::diagnostic_message_bytes>},
+        {"lsp.completion_items", LimitUnit::Count, &module_field<&Limits::lsp, &LspLimits::completion_items>},
+        {"lsp.completion_insert_bytes", LimitUnit::Bytes,
+         &module_field<&Limits::lsp, &LspLimits::completion_insert_bytes>},
+        {"lsp.completion_label_bytes", LimitUnit::Bytes,
+         &module_field<&Limits::lsp, &LspLimits::completion_label_bytes>},
+        {"lsp.pending_reply_bytes", LimitUnit::Bytes, &module_field<&Limits::lsp, &LspLimits::pending_reply_bytes>},
+        {"lsp.initialize_timeout", LimitUnit::Milliseconds,
+         &module_field<&Limits::lsp, &LspLimits::initialize_timeout>},
+        {"lsp.write_timeout", LimitUnit::Milliseconds, &module_field<&Limits::lsp, &LspLimits::write_timeout>},
+        {"lsp.shutdown_timeout", LimitUnit::Milliseconds, &module_field<&Limits::lsp, &LspLimits::shutdown_timeout>},
+    });
+    return table;
+}
+
+void apply_limits(Section& s, Limits& limits) {
+    std::string_view module_name;
+    std::optional<Section> group;
+    for (const LimitKey& entry : limit_keys()) {
+        const std::size_t dot = entry.key.find('.');
+        if (const std::string_view name = entry.key.substr(0, dot); name != module_name) {
+            if (group)
+                group->warn_unknown();
+            group.reset();
+            module_name = name;
+            if (auto table = s.subsection(name))
+                group.emplace(std::move(*table));
+        }
+        if (!group)
+            continue;
+        if (auto v = group->limit_value(entry.key.substr(dot + 1), entry.unit))
+            entry.field(limits) = std::move(*v);
+    }
+    if (group)
+        group->warn_unknown();
     s.warn_unknown();
 }
 
@@ -433,6 +606,8 @@ void apply(const toml::table& root, Config& config, std::vector<Error>& warnings
         apply_lsp(*lsp, config.lsp);
     if (auto tuning = top.subsection("tuning"))
         apply_tuning(*tuning, config.tuning);
+    if (auto limits = top.subsection("limits"))
+        apply_limits(*limits, config.limits);
     top.warn_unknown();
 }
 
@@ -513,18 +688,32 @@ struct TuningKey {
     std::string (*text)(const Tuning&){};
 };
 
+// Sınır yazımının TOML düğümü: rakamlardan oluşuyorsa tam sayı, birimliyse dizge.
+std::optional<std::int64_t> plain_integer(std::string_view text) {
+    std::int64_t number = 0;
+    const char* const end = text.data() + text.size();
+    if (const auto parsed = std::from_chars(text.data(), end, number);
+        parsed.ec == std::errc{} && parsed.ptr == end)
+        return number;
+    return std::nullopt;
+}
+
+std::string limit_toml(const std::string& text) {
+    return plain_integer(text) ? text : quote(text);
+}
+
 std::string fraction_text(double value) {
     std::ostringstream out;
     out << toml::value<double>(value);  // gidiş-dönüş hassasiyetini toml++ korur
     return out.str();
 }
 
-const std::array<TuningKey, 11>& tuning_keys() {
-    static const std::array<TuningKey, 11> table = {{
+std::span<const TuningKey> tuning_keys() {
+    static const auto table = std::to_array<TuningKey>({
         {"slug_max_length", [](const Tuning& t) { return std::to_string(t.slug_max_length); }},
         {"min_confidence", [](const Tuning& t) { return fraction_text(t.min_confidence); }},
         {"max_scan_bytes", [](const Tuning& t) { return std::to_string(t.max_scan_bytes); }},
-        {"max_note_bytes", [](const Tuning& t) { return std::to_string(t.max_note_bytes); }},
+        {"max_note_bytes", [](const Tuning& t) { return limit_toml(t.max_note_bytes.text); }},
         {"rescan_seconds", [](const Tuning& t) { return std::to_string(t.rescan_seconds); }},
         {"autosave_ms", [](const Tuning& t) { return std::to_string(t.autosave_ms); }},
         {"exit_timeout_seconds", [](const Tuning& t) { return std::to_string(t.exit_timeout_seconds); }},
@@ -533,20 +722,28 @@ const std::array<TuningKey, 11>& tuning_keys() {
          [](const Tuning& t) { return std::to_string(t.sync_stale_lock_minutes); }},
         {"sync_timeout_seconds", [](const Tuning& t) { return std::to_string(t.sync_timeout_seconds); }},
         {"graph_batch_ops", [](const Tuning& t) { return std::to_string(t.graph_batch_ops); }},
-    }};
+        {"completion_min_prefix_bytes",
+         [](const Tuning& t) { return std::to_string(t.completion_min_prefix_bytes); }},
+    });
     return table;
+}
+
+std::optional<std::string> config_text_on_disk() {
+    std::ifstream in(config_file(), std::ios::binary);
+    if (!in)
+        return std::nullopt;
+    return std::string(std::istreambuf_iterator<char>(in), {});
+}
+
+std::optional<toml::table> table_on_disk(const std::optional<std::string>& text) {
+    Error ignored{Error::Code::ConfigInvalid, "", {}};
+    return text ? parse_table(*text, ignored) : std::nullopt;
 }
 
 // Uygulama [lsp]'yi düzenlemez: kayıt, bölümü dosyada şu an nasılsa öyle (bozuk girdiler dahil) geri yazar.
 // Bellekteki açılış kopyası yazılsaydı uygulama açıkken dosyadan kapatılan LSP ilk ayar kaydında geri
 // açılırdı. Dosya yoksa, okunamıyorsa ya da bölüm yoksa boş: varsayılan geçerli olur.
-std::string lsp_section_on_disk() {
-    std::ifstream in(config_file(), std::ios::binary);
-    if (!in)
-        return {};
-    const std::string text(std::istreambuf_iterator<char>(in), {});
-    Error ignored{Error::Code::ConfigInvalid, "", {}};
-    const auto table = parse_table(text, ignored);
+std::string lsp_section_on_disk(const std::optional<toml::table>& table) {
     const toml::table* lsp = table ? table->get_as<toml::table>("lsp") : nullptr;
     if (lsp == nullptr)
         return {};  // tablo olmayan değer yüklemede zaten yok sayılır; yazılırsa her açılışta uyarı olur
@@ -557,6 +754,45 @@ std::string lsp_section_on_disk() {
     section.insert("lsp", std::move(copy));
     std::ostringstream out;
     out << "\n" << section << "\n";  // toml++ [lsp] ve [lsp.servers] başlıklarını kendisi yazar
+    return out.str();
+}
+
+// [limits] dosyadaki hâliyle (birimli yazım, sonraki sürümün anahtarı, bozuk girdi dahil) geri yazılır;
+// yalnız bellekteki değeri dosyanın verdiğinden farklı anahtar (`note config set limits.…`) üzerine yazılır.
+// Tablo olmayan `limits` değeri, değişen anahtar yoksa yazılmaz ([lsp] ile aynı).
+std::string limits_section(const Limits& limits, const std::optional<std::string>& text,
+                           const std::optional<toml::table>& table) {
+    toml::table section;
+    if (const toml::table* on_disk = table ? table->get_as<toml::table>("limits") : nullptr) {
+        section = *on_disk;
+        section.is_inline(false);
+    }
+    Limits from_file = parse_config(table ? *text : std::string()).config.limits;
+    Limits now = limits;
+    for (const LimitKey& entry : limit_keys()) {
+        const Limit& value = entry.field(now);
+        if (value == entry.field(from_file))
+            continue;
+        const std::size_t dot = entry.key.find('.');
+        const std::string_view module_name = entry.key.substr(0, dot);
+        toml::table* group = section.get_as<toml::table>(module_name);
+        if (group == nullptr)
+            group = section.insert_or_assign(module_name, toml::table{}).first->second.as_table();
+        const std::string_view leaf = entry.key.substr(dot + 1);
+        if (const auto number = plain_integer(value.text))
+            group->insert_or_assign(leaf, *number);
+        else
+            group->insert_or_assign(leaf, value.text);
+    }
+    if (section.empty())
+        return {};
+    toml::table root;
+    root.insert("limits", std::move(section));
+    // Dizgeler dosyanın geri kalanı gibi çift tırnakla ("64MiB"); toml++ varsayılanı tek tırnaktır.
+    std::ostringstream out;
+    out << "\n"
+        << toml::toml_formatter(root, toml::toml_formatter::default_flags & ~toml::format_flags::allow_literal_strings)
+        << "\n";
     return out.str();
 }
 
@@ -577,9 +813,21 @@ std::vector<std::pair<std::string, std::string>> config_entries(const Config& co
     return entries;
 }
 
+std::vector<std::pair<std::string, std::string>> limit_entries(const Config& config) {
+    std::vector<std::pair<std::string, std::string>> entries;
+    Limits limits = config.limits;
+    for (const LimitKey& entry : limit_keys())
+        entries.emplace_back(std::string(kLimitsPrefix) + std::string(entry.key), entry.field(limits).text);
+    return entries;
+}
+
 std::expected<void, Error> set_config_value(Config& config, std::string_view key, std::string_view value) {
     const auto setting = std::ranges::find(settings(), key, &Setting::key);
-    if (setting == settings().end())
+    const std::span<const LimitKey> limits = limit_keys();
+    const bool is_limit = key.starts_with(kLimitsPrefix) &&
+                          std::ranges::find(limits, key.substr(kLimitsPrefix.size()), &LimitKey::key) !=
+                              limits.end();
+    if (setting == settings().end() && !is_limit)
         return std::unexpected(
             Error{Error::Code::ConfigInvalid, "config.unknown_key", {{"key", std::string(key)}}});
     // Dosyanın aksine burada kaydedilecek yeni değer söz konusu: soyup kabul etmek yerine reddedilir ki
@@ -591,14 +839,15 @@ std::expected<void, Error> set_config_value(Config& config, std::string_view key
 
     // Değer, şemadaki türüyle TOML düğümüne çevrilir ve dosya yüklemesiyle AYNI `apply` doğrulamasından
     // geçer. Türe uymayan metin (ör. "abc" tamsayı için) string kalır; apply bunu tür hatası olarak raporlar.
+    // Sınır yazımı tam sayı gibi çevrilir: rakamlar tam sayı, birimli metin dizge olur.
     toml::table root;
     toml::table* target = &root;
     std::string_view leaf = key;
-    if (const auto dot = key.find('.'); dot != std::string_view::npos) {
-        target = root.insert_or_assign(key.substr(0, dot), toml::table{}).first->second.as_table();
-        leaf = key.substr(dot + 1);
+    for (auto dot = leaf.find('.'); dot != std::string_view::npos; dot = leaf.find('.')) {
+        target = target->insert_or_assign(leaf.substr(0, dot), toml::table{}).first->second.as_table();
+        leaf = leaf.substr(dot + 1);
     }
-    switch (setting->kind) {
+    switch (is_limit ? ValueKind::Integer : setting->kind) {
     case ValueKind::Bool:
         if (value == "true" || value == "false")
             target->insert_or_assign(leaf, value == "true");
@@ -704,7 +953,9 @@ std::expected<void, Error> save_config(const Config& config) {
     out << "idle_seconds = " << config.sync.idle_seconds << "\n";
     out << "author_name = " << quote(config.sync.author_name) << "\n";
     out << "author_email = " << quote(config.sync.author_email) << "\n";
-    out << lsp_section_on_disk();
+    const std::optional<std::string> disk_text = config_text_on_disk();
+    const std::optional<toml::table> disk_table = table_on_disk(disk_text);
+    out << lsp_section_on_disk(disk_table);
 
     const Tuning defaults = parse_config("").config.tuning;
     std::string tuning;
@@ -714,6 +965,7 @@ std::expected<void, Error> save_config(const Config& config) {
     }
     if (!tuning.empty())
         out << "\n[tuning]\n" << tuning;
+    out << limits_section(config.limits, disk_text, disk_table);
 
     const fs::path dir = config_dir();
     std::error_code ec;

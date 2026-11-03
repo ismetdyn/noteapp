@@ -4,6 +4,7 @@
 #include "core/config.hpp"
 #include "core/editor.hpp"
 #include "core/file_stat.hpp"
+#include "core/graph_limits.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
 #include "core/migration.hpp"
@@ -27,14 +28,10 @@ namespace graph = noteapp::graph;
 namespace {
 
 constexpr std::size_t kBinarySniffBytes = 8192;  // ilk 8 KB'ta NUL varsa ikili
-constexpr int kMaxNameAttempts = 10000;          // çakışma döngüsünün sonsuza gitmesine karşı sigorta
-// Klasör kopyasında işlem başına gövde: kMaxFrameBytes'in yarısı. Sonraki not aşırıyorsa işlem kapanır, tek
-// büyük not kendi çerçevesine sığar.
 // Önceki sürümün grafında etiket ve sonradan oluşan hedefin kenarı yoktur: açılışta bir kez türetilir, sonra
 // bu dosyalar tekrarı önler.
 constexpr std::string_view kTagsMarker = "tags-indexed";
 constexpr std::string_view kLinksMarker = "links-indexed";
-constexpr std::size_t kCopyBatchBytes = 32U * 1024U * 1024U;
 
 Error not_regular(std::string_view path) {
     return io_error(path, "not a regular file");
@@ -52,7 +49,8 @@ std::expected<void, Error> validate_new_note(const NewNote& note) {
     return {};
 }
 
-// Boş ad arar: canlı not ve klasör yolu doludur. Çöp ayrı ad uzayıdır.
+// Boş ad arar: canlı not ve klasör yolu doludur. Çöp ayrı ad uzayıdır. Deneme tavanı yok: görüntüdeki dolu ad
+// sonludur, en geç onların sayısı + 1'inci denemede boş ad bulunur (ya da ekli ad yol kapısından geçemez).
 std::expected<NotePath, Error> free_note_path(const Snapshot& snapshot, const NewNote& note,
                                               std::chrono::system_clock::time_point now,
                                               std::size_t slug_max_length) {
@@ -60,7 +58,7 @@ std::expected<NotePath, Error> free_note_path(const Snapshot& snapshot, const Ne
                                  ? slugify(note_name_source(note.content, note.type), now, slug_max_length)
                                  : note.name;
     const std::string prefix = note.folder.empty() ? std::string() : note.folder + "/";
-    for (int attempt = 1; attempt <= kMaxNameAttempts; ++attempt) {
+    for (std::size_t attempt = 1;; ++attempt) {
         const std::string stem = attempt == 1 ? base : base + "-" + std::to_string(attempt);
         auto path = NotePath::parse(prefix + stem + "." + note.type);
         if (!path)
@@ -70,11 +68,10 @@ std::expected<NotePath, Error> free_note_path(const Snapshot& snapshot, const Ne
         if (note.exact_name)
             return std::unexpected(already_exists(path->string()));
     }
-    return std::unexpected(already_exists(prefix + base));
 }
 
 std::expected<NotePath, Error> free_restore_path(const Snapshot& snapshot, const NotePath& wanted) {
-    for (int attempt = 1; attempt <= kMaxNameAttempts; ++attempt) {
+    for (std::size_t attempt = 1;; ++attempt) {  // tavan yok: free_note_path gibi
         auto candidate =
             attempt == 1 ? std::expected<NotePath, Error>(wanted) : numbered_path(wanted, attempt);
         if (!candidate)
@@ -82,7 +79,6 @@ std::expected<NotePath, Error> free_restore_path(const Snapshot& snapshot, const
         if (!snapshot.path_taken(candidate->string()))
             return candidate;
     }
-    return std::unexpected(already_exists(wanted.string()));
 }
 
 // Klasör alt ağacı: kendisi ve "folder/" önekli her yol.
@@ -93,13 +89,13 @@ bool in_subtree(std::string_view path, std::string_view folder) {
 // Alt ağacın yolu hedefe göre yeniden türer: sınırı aşan alt klasör, içindekilerle birlikte görünmez olurdu.
 std::expected<void, Error> check_renamed_subtree(const Snapshot& snapshot, std::string_view source,
                                                  const std::string& target) {
-    if (!folder_path_within_limits(target))
+    if (!folder_path_within_limits(target, snapshot.folder_path_bytes))
         return std::unexpected(invalid_path("invalid_folder", target));
     for (const auto& [path, ids] : snapshot.folders) {
         if (!in_subtree(path, source))
             continue;
         const std::string renamed = target + path.substr(source.size());
-        if (!folder_path_within_limits(renamed))
+        if (!folder_path_within_limits(renamed, snapshot.folder_path_bytes))
             return std::unexpected(invalid_path("invalid_folder", renamed));
     }
     return {};
@@ -192,6 +188,9 @@ NoteStore NoteStore::for_config(const Config& config) {
     NoteStore store(data_dir(), config.tuning.slug_max_length);
     store.impl_->legacy_notes_dir = config.notes_dir;
     store.impl_->batch_ops = config.tuning.graph_batch_ops;
+    store.impl_->folder_path_bytes = config.limits.core.folder_path_bytes.cap();
+    store.impl_->graph_limits = graph_limits_of(config.limits.graph);
+    store.impl_->view_limits = query_limits_of(config.limits.view);
     return store;
 }
 
@@ -435,8 +434,8 @@ std::expected<TrashItem, Error> NoteStore::trash(const NotePath& path) {
     if (snapshot)
         for (const NoteRow& row : snapshot->trash)
             if (row.id == *id)
-                return TrashItem{row.info.path, row.trashed_at, row.info.size, row.info.created_at,
-                                 row.info.origin};
+                return TrashItem{row.info.path,       row.trashed_at,  row.info.size,
+                                 row.info.created_at, row.info.origin, id_hex(row.id)};
     return std::unexpected(io_error(key, "trashed note not visible"));
 }
 
@@ -451,8 +450,8 @@ std::expected<std::vector<TrashItem>, Error> NoteStore::list_trash() const {
     }
     items.reserve(snapshot->trash.size());
     for (const NoteRow& row : snapshot->trash)
-        items.push_back(
-            TrashItem{row.info.path, row.trashed_at, row.info.size, row.info.created_at, row.info.origin});
+        items.push_back(TrashItem{row.info.path, row.trashed_at, row.info.size, row.info.created_at,
+                                  row.info.origin, id_hex(row.id)});
     std::ranges::sort(items, [](const TrashItem& a, const TrashItem& b) {
         if (a.trashed_at != b.trashed_at)
             return a.trashed_at > b.trashed_at;
@@ -653,7 +652,7 @@ std::expected<CopyBatch, Error> copy_next_batch(WriteContext& context, const std
     std::size_t bytes_in_batch = 0;
     for (const NoteRow* row : rows) {
         batch.more = context.over_budget() ||
-                     (bytes_in_batch > 0 && bytes_in_batch + row->info.size > kCopyBatchBytes);
+                     (bytes_in_batch > 0 && bytes_in_batch + row->info.size > context.batch_bytes);
         if (batch.more)
             return batch;
         std::string path = row->info.path.string();
@@ -779,9 +778,37 @@ std::expected<void, Error> NoteStore::relink_notes() {
     return impl_->rederive_locked(Impl::Derive::Links);
 }
 
+namespace {
+
+// Bir notun gövdeden türeyen verisi. false: bütçeye sığmadı; not yeni işlemde baştan yinelenir, yapılmış
+// kenarlar atlanır (her işlem en az bir kenar ilerler).
+std::expected<bool, Error> derive_note(WriteContext& context, const graph::NodeId& id,
+                                       const std::string& path, NoteStore::Impl::Derive what) {
+    using Derive = NoteStore::Impl::Derive;
+    auto body = context.txn.property(id, kBody);
+    if (!body)
+        return std::unexpected(from_graph(body.error(), path));
+    const graph::Bytes* bytes = std::get_if<graph::Bytes>(&*body);
+    if (bytes == nullptr)
+        return true;
+    if (what == Derive::Links)
+        NOTEAPP_TRY(context.update_links(id, path, bytes->data));
+    if (what != Derive::MissingLinks)
+        NOTEAPP_TRY(context.update_tags(id, path, bytes->data));
+    if (what == Derive::MissingLinks || what == Derive::TagsAndMissingLinks)
+        NOTEAPP_TRY(context.add_missing_links(id, path, bytes->data, link_index_of(context.snapshot)));
+    // Çağıran döngü yarım notu kendisi sürdürür: write_locked ayrıca izleyen işlem açmaz.
+    const bool finished = context.unfinished.empty() && context.deferred.empty();
+    context.unfinished.clear();
+    context.deferred.clear();
+    return finished;
+}
+
+}  // namespace
+
 // Görüntü her işlemde yeniden kurulur; başka yazar arada not ekleyip silebilir. Sıra konum değil kimliktir:
-// son işlenen kimlikten sonrası sürer, hiçbir not atlanmaz (arada eklenen, kimliği gerideyse kendi yazmasıyla
-// zaten türetilmiştir).
+// son tamamlanan kimlikten sonrası sürer, hiçbir not atlanmaz (arada eklenen, kimliği gerideyse kendi
+// yazmasıyla zaten türetilmiştir). Bütçeye sığmayan not sonraki işlemde kaldığı yerden sürer.
 std::expected<void, Error> NoteStore::Impl::rederive_locked(Derive what) {
     std::optional<graph::NodeId> last;
     bool more = true;
@@ -793,22 +820,12 @@ std::expected<void, Error> NoteStore::Impl::rederive_locked(Derive what) {
                 if (context.over_budget())
                     return true;
                 const NoteRow& row = snapshot.live[it->second];
+                auto done = derive_note(context, row.id, row.info.path.string(), what);
+                if (!done)
+                    return std::unexpected(done.error());
+                if (!*done)
+                    return true;
                 last = row.id;
-                const std::string path = row.info.path.string();
-                auto body = context.txn.property(row.id, kBody);
-                if (!body)
-                    return std::unexpected(from_graph(body.error(), path));
-                const graph::Bytes* bytes = std::get_if<graph::Bytes>(&*body);
-                if (bytes == nullptr)
-                    continue;
-                if (what == Derive::MissingLinks) {
-                    NOTEAPP_TRY(
-                        context.add_missing_links(row.id, path, bytes->data, link_index_of(snapshot)));
-                    continue;
-                }
-                if (what == Derive::Links)
-                    NOTEAPP_TRY(context.update_links(row.id, path, bytes->data));
-                NOTEAPP_TRY(context.update_tags(row.id, path, bytes->data));
             }
             return false;
         });
@@ -830,12 +847,12 @@ void NoteStore::Impl::drop_derived_markers() {
     }
 }
 
-void NoteStore::Impl::derive_follow_up(const std::vector<graph::NodeId>& ids) {
-    if (auto done = derive_notes(ids, false); !done)
-        log_warn("note store: cannot derive deferred links: " + format_error(done.error()));
+void NoteStore::Impl::derive_follow_up(const std::vector<graph::NodeId>& ids, Derive what) {
+    if (auto done = derive_notes(ids, what); !done)
+        log_warn("note store: cannot derive deferred links and tags: " + format_error(done.error()));
 }
 
-std::expected<void, Error> NoteStore::Impl::derive_notes(const std::vector<graph::NodeId>& ids, bool tags) {
+std::expected<void, Error> NoteStore::Impl::derive_notes(const std::vector<graph::NodeId>& ids, Derive what) {
     std::size_t next = 0;
     while (next < ids.size()) {
         if (!follow_up_allowed_now())
@@ -847,16 +864,11 @@ std::expected<void, Error> NoteStore::Impl::derive_notes(const std::vector<graph
                     const auto path = context.path_of(ids[at]);
                     if (!path)
                         continue;
-                    auto body = context.txn.property(ids[at], kBody);
-                    if (!body)
-                        return std::unexpected(from_graph(body.error(), *path));
-                    const graph::Bytes* bytes = std::get_if<graph::Bytes>(&*body);
-                    if (bytes == nullptr)
-                        continue;
-                    if (tags)
-                        NOTEAPP_TRY(context.update_tags(ids[at], *path, bytes->data));
-                    NOTEAPP_TRY(context.add_missing_links(ids[at], *path, bytes->data,
-                                                          link_index_of(context.snapshot)));
+                    auto done = derive_note(context, ids[at], *path, what);
+                    if (!done)
+                        return std::unexpected(done.error());
+                    if (!*done)
+                        return at;  // yarım not yeni işlemde sürer
                 }
                 return at;
             });

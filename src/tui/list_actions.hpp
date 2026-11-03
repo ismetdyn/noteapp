@@ -1,14 +1,18 @@
 #pragma once
 
+#include "app/item_ops.hpp"
+#include "app/trash_ops.hpp"
 #include "core/config.hpp"
 #include "core/note_store.hpp"
-#include "tui/clipboard.hpp"
+#include "edit/clipboard.hpp"
 #include "tui/modals.hpp"
 #include "tui/mouse.hpp"
 #include "tui/save_dialog.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
 
+#include <expected>
+#include <filesystem>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -23,7 +27,7 @@ class EditorSession;
 // Sıralama ve sağ sütun `<state>/tui-state.toml`da kalır; bozuk değer varsayılana döner. Sürüm işareti
 // olmayan eski dosyada `column = "none"` o sürümün varsayılanıdır, seçim sayılmaz: yeni varsayılana taşınır.
 std::string format_list_prefs(const ListPrefs& prefs);
-ListPrefs parse_list_prefs(std::string_view text);
+ListPrefs parse_list_prefs(std::string_view text, const SearchHistoryLimits& history = {});
 void load_list_prefs(TuiState& state);
 
 // Liste ve Önizleme eylemlerinin yan etkileri (pano, çöp, sıralama kalıcılığı). main'in karmaşıklığı artmasın
@@ -53,7 +57,9 @@ struct ListHost {
 
 class ListActions {
 public:
-    explicit ListActions(ListHost host) : host_(std::move(host)) {}
+    explicit ListActions(ListHost host)
+        : host_(std::move(host)),
+          trash_(host_.config ? host_.config->limits.app.trash_undo_steps : core::Limit{}) {}
 
     void run(Intent intent, std::optional<ConfirmState>& confirm);
     // `L` yol girdisi açar: main'e dal eklemeden aynı yoldan yürür.
@@ -90,56 +96,50 @@ private:
     void toggle_trash();
     void begin_delete(std::optional<ConfirmState>& confirm);
     void begin_empty_trash(std::optional<ConfirmState>& confirm);
-    void empty_trash();
+    void delete_note(const core::NotePath& target, const app::Prompts& prompts);
+    void empty_trash(const app::Prompts& prompts);
     void save_prefs();
     void submit_rename(std::optional<RenameState>& rename);
     void submit_move_to(std::optional<RenameState>& rename);
     void submit_link(std::optional<RenameState>& rename);
+    // `P`: GUI gibi `<ad>.pdf` önerir; PDF diskteki baytlardan noteapp_pdf ile üretilir. Var olan dosya ancak
+    // aynı yolda ikinci Enter'la ezilir.
+    void begin_export(std::optional<RenameState>& rename);
+    // REVIEW'da seçili [[bağlantı]]: depo çözer, not açılır; çözülemezse neden alt satırda. Yazma yok:
+    // REVIEW'a editör kapanınca (kayıt ya da vazgeçme sorusundan sonra) dönülür, bekleyen düzenleme olmaz.
+    void follow_wiki_link();
+    void submit_export(std::optional<RenameState>& rename);
+    std::expected<void, core::Error> export_note(const core::NotePath& note,
+                                                 const std::filesystem::path& output) const;
     void begin_unlink(std::optional<ConfirmState>& confirm);
     void finish_unlink();
-    std::optional<core::Error> move_collision(const RenameState& rename, const std::string& dest) const;
-    void forget_trashed(const core::NotePath& item);
     void create_folder_from_row(std::optional<NewRowState>& row);
     void submit_folder_rename(std::optional<RenameState>& rename, const std::string& target);
-    void begin_trash_folder(const std::string& folder, std::optional<ConfirmState>& confirm);
-    void trash_folder(const std::string& folder);
-    void restore_batch();
+    void trash_folder(const std::string& folder, const app::Prompts& prompts);
     void copy_selected();
-    void finish_folder_delete(const std::string& folder);
+    void delete_folder(const std::string& folder, const app::Prompts& prompts);
     // Çoklu seçim: işlem kalanla sürer, öğe öğe sonuç özette.
     struct BatchReport;
-    enum class BatchAction { None, Trash, Delete };
-    struct TrashBatch;
     void begin_trash(std::optional<ConfirmState>& confirm);
     void begin_delete_action(std::optional<ConfirmState>& confirm);
     void restore_action();
-    void trash_marked();
-    void delete_marked();
+    void trash_marked(const app::Prompts& prompts);
+    void delete_marked(const app::Prompts& prompts);
     void restore_marked();
     void paste();
-    void paste_item(const ListItem& item, const std::string& dest, BatchReport& report);
-    void copy_folder_item(const std::string& folder, const std::string& dest, BatchReport& report);
     void publish(BatchReport& report, const char* done_key);
-    std::size_t note_count_of(const std::vector<ListItem>& items) const;
-    std::optional<core::Error> trash_folder_into(TrashBatch& batch, const std::string& folder);
+    void publish(const app::BatchReport& report, const char* done_key);
+    // Onay penceresi modaldır, karar sonra gelir: istem soruyu `confirm`a yazar ve "hayır" der; Evet'te
+    // finish_delete `retry`ı koşar, o da aynı işlemi onaylı istemle yeniden çağırır.
+    app::Prompts ask_later(std::optional<ConfirmState>& confirm, std::function<void()> retry);
 
     ListHost host_;
-    // Çöp not başınadır: klasör silme, notları tek tek atıp klasörü kaldıran bir toplu adımdır. `u` adımın
-    // tamamını geri alır; klasör alanları boş alt klasörleri de geri getirir.
-    struct TrashBatch {
-        std::vector<core::NotePath> notes = {};
-        std::vector<std::string> folders = {};
-        std::string folder = {};  // klasör silmesi: geri alınca seçilecek satır
-    };
-    std::vector<TrashBatch> trashed_;                // bu oturumda; `u` sondan alır
-    BatchAction batch_pending_ = BatchAction::None;  // açık onay çoklu seçim için
-    std::optional<core::NotePath> delete_target_;
+    // Çöp, geri alma yığını ve kalıcı silme kuralı GUI ile ortak (app::TrashOps); yığın bu oturumluktur.
+    app::TrashOps trash_;
+    std::function<void()> pending_;  // açık onayın Evet'i; Vazgeç main'de kalır, bir sonraki run() düşürür
     // Açık onay ilişki için (seçili not, satırdaki not). Vazgeçilirse sonraki run() düşürür.
     std::optional<std::pair<core::NotePath, core::NotePath>> relation_target_;
-    std::optional<std::string> folder_target_;  // açık onay klasör için
-    bool folder_permanent_ = false;             // `D`: kalıcı; `d`: çöpe
-    bool empty_pending_ =
-        false;  // açık onay tüm çöp için; Vazgeç main'de kalır, bir sonraki begin_* sıfırlar
+    std::filesystem::path export_replace_;  // uyarısı gösterilmiş var olan çıktı; sıradaki Enter onu ezer
 };
 
 }  // namespace noteapp::tui

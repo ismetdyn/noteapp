@@ -1,6 +1,7 @@
 // note query: Cypher sorgusu, tablo veya JSON çıktı (SPEC-cli "Graph sorgusu").
 #include "cli/commands.hpp"
 #include "cli/highlight.hpp"
+#include "core/graph_limits.hpp"
 #include "core/i18n.hpp"
 #include "core/json_text.hpp"
 #include "core/paths.hpp"
@@ -326,7 +327,7 @@ std::string to_utf8(const fs::path& path) {
 }
 
 // Uygulamanın deposu: NoteStore'la aynı dosya, ayrı bağlantı (WAL; bağlantı başına tek iş parçacığı).
-std::expected<graph::Graph, int> open_database(bool write) {
+std::expected<graph::Graph, int> open_database(bool write, const core::Config& config) {
     const fs::path path = core::data_dir() / fs::path(kGraphFile);
     std::error_code code;
     if (!write && !fs::exists(path, code)) {
@@ -336,7 +337,7 @@ std::expected<graph::Graph, int> open_database(bool write) {
     }
     if (write)
         code = core::create_private_directories(path.parent_path());
-    auto opened = graph::Graph::open(path);
+    auto opened = graph::Graph::open(path, core::graph_limits_of(config.limits.graph));
     if (!opened)
         return std::unexpected(report(opened.error()));
     return std::move(*opened);
@@ -348,15 +349,16 @@ std::string query_output(const graph::QueryResult& result, bool json) {
     return json ? to_json(result) : to_table(result);
 }
 
-int run_query(const ParsedArgs& args) {
+int run_query(const ParsedArgs& args, const core::Config& config) {
     auto parsed = parse_query_args(args.rest);
     if (!parsed)
         return parsed.error();
-    auto database = open_database(parsed->write);
+    auto database = open_database(parsed->write, config);
     if (!database)
         return database.error();
     const auto mode = parsed->write ? graph::QueryMode::ReadWrite : graph::QueryMode::ReadOnly;
-    const auto result = database->query(parsed->positional.front(), parsed->params, mode);
+    const auto result = database->query(parsed->positional.front(), parsed->params, mode,
+                                        core::query_limits_of(config.limits.query));
     if (!result)
         return report(result.error());
     std::cout << query_output(*result, parsed->json);

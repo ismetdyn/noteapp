@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tui/input_line.hpp"
+#include "edit/input_line.hpp"
 
 #include <ftxui/dom/elements.hpp>
 #include <span>

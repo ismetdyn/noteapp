@@ -54,7 +54,10 @@ using Params = std::map<std::string, QueryValue, std::less<>>;
 // ReadOnly'de yazma işleci plan aşamasında reddedilir, işlem açılmaz.
 enum class QueryMode { ReadOnly, ReadWrite };
 
-// Aşım kesilmiş sonuç değil LimitExceeded'dır (SPEC-graph "Sorgu dili").
+// Aşım kesilmiş sonuç değil LimitExceeded'dır (SPEC-graph "Sorgu dili"). Uygulama değerleri config'ten alır
+// (limits.query.* kullanıcının sorgusu, limits.view.* görünüm); varsayılanlar oradakilerle aynıdır.
+// Sınırsız: SIZE_MAX, süre için milliseconds::max(). Ayrıştırma sınırları güvenilmez metne karşıdır;
+// sınırsız derinlik derin iç içe metinde yığını taşırıp süreci düşürebilir.
 struct QueryLimits {
     std::size_t max_rows = 100'000;                       // sonuç satırı
     std::size_t max_expansions = 1'000'000;               // gezilen kenar
@@ -63,6 +66,18 @@ struct QueryLimits {
     // Sorgu içi komşuluk ve özellik önbelleği. Dolunca yalnız yeni giriş eklenmez: sonuç aynı, sorgu
     // yavaşlar.
     std::size_t max_memo_bytes = 64U * 1024U * 1024U;
+    // Bundan büyük özellik değeri önbelleğe girmez: tek dev gövde önbelleği boşa harcamasın. Sonuç aynıdır.
+    std::size_t max_memo_value_bytes = 4096;
+    std::size_t max_text_bytes = 64U * 1024U;  // sorgu metni
+    // İç içelik: ayrıştırıcı özyinelemesi, ifade ağacı yüksekliği ve liste değerinin derinliği (tek olgu).
+    std::size_t max_nesting = 64;
+    std::size_t max_pattern_elements = 256;
+    std::size_t max_clauses = 64;
+    std::size_t max_var_length_hops = 10;  // `*1..N`'deki N
+    // Plan ifade düğümü: diğer ad açılımı 64 KiB'lik sorguyu çarpabilir.
+    std::size_t max_plan_nodes = 200'000;
+
+    bool operator==(const QueryLimits&) const = default;
 };
 
 }  // namespace noteapp::graph

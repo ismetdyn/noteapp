@@ -2,8 +2,8 @@
 // `view:` tamamlaması; bilinmeyen görünüm diğer bozuk argümanlar gibi kırmızı hatadır.
 #include "core/i18n.hpp"
 #include "core/note_store.hpp"
+#include "edit/input_line.hpp"
 #include "search/query.hpp"
-#include "tui/input_line.hpp"
 #include "tui/tui_state.hpp"
 
 #include <algorithm>

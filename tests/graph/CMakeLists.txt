@@ -6,6 +6,7 @@ noteapp_add_test(graph
     merge_test.cpp
     sync_test.cpp
     sync_security_test.cpp
+    multipart_test.cpp
     graph_test.cpp
     store_test.cpp
     source_scan_test.cpp

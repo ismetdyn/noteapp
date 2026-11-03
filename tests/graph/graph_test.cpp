@@ -255,38 +255,29 @@ TEST_CASE("set_property_rejects_nan_invalid_utf8_and_bad_keys_without_recording"
     CHECK(raw.scalar("SELECT count(*) FROM props") == 0);
 }
 
-TEST_CASE("oversized_value_is_limit_exceeded_and_commits_nothing") {
+// L4b: çerçeve sınırı yalnız dosyadaki kaydı sınırlar; değer ve işlem ona sığmak zorunda değildir.
+TEST_CASE("a value and a transaction larger than one frame commit and read back") {
     TempDir dir;
     const auto path = dir.path() / "graph.db";
-    Graph graph = open_graph(path);
+    GraphLimits small;
+    small.frame_bytes = 64U * 1024U;
+    Graph graph = open_graph(path, small);
     const NodeId id = node_named("n");
+    const std::string big(small.frame_bytes + 1, 'x');
     {
         WriteTxn txn = begin_write(graph);
         GRAPH_OK(txn.put_node(id));
-        const Result<void> set =
-            txn.set_property(id, "big", Bytes{std::string(detail::kMaxFrameBytes + 1, 'x')});
-        REQUIRE_FALSE(set.has_value());
-        CHECK(set.error().code == Error::Code::LimitExceeded);
-    }
-    {
-        // Tek tek sığan değerler çerçeveyi aşınca commit reddedilir: uzak cihazın okuyamayacağı çerçeve
-        // üretilmez.
-        WriteTxn txn = begin_write(graph);
-        GRAPH_OK(txn.put_node(id));
+        GRAPH_OK(txn.set_property(id, "big", Bytes{big}));
         for (int i = 0; i < 3; ++i)
-            GRAPH_OK(
-                txn.set_property(id, "k" + std::to_string(i), Bytes{std::string(30U * 1024U * 1024U, 'x')}));
-        const Result<void> commit = txn.commit();
-        REQUIRE_FALSE(commit.has_value());
-        CHECK(commit.error().code == Error::Code::LimitExceeded);
+            GRAPH_OK(txn.set_property(id, "k" + std::to_string(i), Bytes{std::string(30U * 1024U, 'y')}));
+        GRAPH_OK(txn.commit());
     }
     ReadTxn txn = begin_read(graph);
-    const Result<bool> exists = txn.has_node(id);
-    REQUIRE(exists.has_value());
-    CHECK_FALSE(*exists);
+    const Result<Value> value = txn.property(id, "big");
+    REQUIRE(value.has_value());
+    CHECK(*value == Value{Bytes{big}});
     RawDb raw(path);
-    CHECK(raw.scalar("SELECT count(*) FROM ops") == 0);
-    CHECK(raw.scalar("SELECT count(*) FROM large_values") == 0);
+    CHECK(raw.scalar("SELECT count(*) FROM ops") == 1);
 }
 
 TEST_CASE("rollback_leaves_neither_state_nor_op") {

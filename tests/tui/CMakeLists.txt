@@ -1,14 +1,12 @@
 noteapp_add_test(tui
     tui_state_test.cpp
-    editor_buffer_test.cpp
-    editor_session_test.cpp
     editor_view_test.cpp
     frame_diff_test.cpp
-    syntax_test.cpp
     layout_mouse_test.cpp
     render_test.cpp
     clipboard_test.cpp
     command_palette_test.cpp
+    command_parity_test.cpp
     completion_test.cpp
     input_line_test.cpp
     link_panel_test.cpp
@@ -25,11 +23,7 @@ noteapp_add_test(tui
     sync_indicator_test.cpp
     tags_test.cpp
     views_test.cpp
-    child_process_test.cpp)
-
-# ChildProcess testleri borulu çocuk olarak fake_editor'ı (yankı/taşkın/uyuyan/çıkan kipler) başlatır.
-add_dependencies(tui_tests fake_editor)
-target_compile_definitions(tui_tests PRIVATE NOTEAPP_FAKE_EDITOR="$<TARGET_FILE:fake_editor>")
+    wiki_follow_test.cpp)
 
 # LSP istemcisi gerçek süreçle sınanır: sahte sunucu kabuksuz, her platformda derlenen ayrı bir ikilidir.
 add_executable(fake_lsp_server fake_lsp_server.cpp)

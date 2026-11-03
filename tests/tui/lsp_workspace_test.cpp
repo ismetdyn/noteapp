@@ -1,6 +1,8 @@
+#include "core/config.hpp"
+#include "edit/language_servers.hpp"
+#include "edit/lsp_workspace.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
-#include "tui/lsp_workspace.hpp"
 
 #include <chrono>
 #include <doctest/doctest.h>
@@ -122,6 +124,16 @@ TEST_CASE("lsp language ids come from the note's extension or file name; Env and
     }
 }
 
+TEST_CASE("a note over the old 2 MiB limit is mirrored when limits.lsp.note_bytes is 0") {
+    Workspace ws;
+    REQUIRE(test::seed_note(ws.store, "big.py", std::string(tui::kDefaultLspNoteBytes + 1, '#')));
+    const tui::LspLimits limits =
+        tui::lsp_limits_of(core::parse_config("[limits.lsp]\nnote_bytes = 0\n").config.limits.lsp);
+    WorkspaceMirror mirror(ws.root, {"python"}, {}, tui::kBlockNetworkPaths, limits.note_bytes);
+    mirror.sync(ws.store);
+    CHECK(mirrored(ws.root) == std::set<std::string>{"big.py"});
+}
+
 TEST_CASE("the mirror writes only configured languages as private files and never secrets") {
     Workspace ws;
     REQUIRE(test::seed_note(ws.store, "src/main.py", "import util\n"));
@@ -129,7 +141,7 @@ TEST_CASE("the mirror writes only configured languages as private files and neve
     REQUIRE(test::seed_note(ws.store, "notes/todo.md", "# todo\n"));
     REQUIRE(test::seed_note(ws.store, "app/prod.env", "TOKEN=secret\n"));
     REQUIRE(test::seed_note(ws.store, "app/db.properties", "password=secret\n"));
-    REQUIRE(test::seed_note(ws.store, "big.py", std::string(tui::kMaxLspNoteBytes + 1, '#')));
+    REQUIRE(test::seed_note(ws.store, "big.py", std::string(tui::kDefaultLspNoteBytes + 1, '#')));
 
     // Sır tiplerine sunucu tanımlansa bile (kullanıcının dil kimliği tahmini) yazılmaz.
     auto mirror = ws.mirror({"python", "markdown", "env", "dotenv", "properties", "ini", "plaintext"});

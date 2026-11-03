@@ -1,29 +1,40 @@
 noteapp_add_test(gui
     browser_test.cpp
+    command_parity_test.cpp
     content_search_test.cpp
+    external_copy_test.cpp
     folders_test.cpp
+    global_search_test.cpp
     graph_layout_test.cpp
     icon_font_test.cpp
     info_test.cpp
     layout_test.cpp
     links_test.cpp
+    list_commands_test.cpp
+    list_prefs_test.cpp
     main_window_test.cpp
     map_test.cpp
+    marks_test.cpp
     note_list_model_test.cpp
+    palette_test.cpp
     pdf_test.cpp
     preview_layout_test.cpp
     preview_test.cpp
     row_numbers_test.cpp
     save_test.cpp
     search_args_test.cpp
+    search_line_test.cpp
     settings_test.cpp
+    stray_notice_test.cpp
     tabs_test.cpp
     toolbar_test.cpp
     trash_test.cpp)
 target_link_libraries(gui_tests PRIVATE noteapp_detect)
-# Ayarlar testleri gerçek `note` ikilisiyle arka plan senkronunu uçtan uca koşar.
-add_dependencies(gui_tests note)
-target_compile_definitions(gui_tests PRIVATE NOTEAPP_NOTE_EXE="$<TARGET_FILE:note>")
+# Ayarlar testleri gerçek `note` ikilisiyle arka plan senkronunu uçtan uca koşar; dış editör testleri
+# editör yerine fake_editor çalıştırır.
+add_dependencies(gui_tests note fake_editor)
+target_compile_definitions(gui_tests PRIVATE NOTEAPP_NOTE_EXE="$<TARGET_FILE:note>"
+                                            NOTEAPP_FAKE_EDITOR="$<TARGET_FILE:fake_editor>")
 # Başsız çizim: pencere dummy sürücüde, çizim yazılımsal (plan: Başsız test). Xvfb gerekmez.
 set_property(TEST gui APPEND PROPERTY ENVIRONMENT SDL_VIDEO_DRIVER=dummy SDL_RENDER_DRIVER=software)
 

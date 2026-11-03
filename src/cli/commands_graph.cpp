@@ -8,6 +8,7 @@
 #include "cli/commands.hpp"
 #include "cli/highlight.hpp"
 #include "core/atomic_file.hpp"
+#include "core/graph_limits.hpp"
 #include "core/i18n.hpp"
 #include "core/json_parser.hpp"
 #include "core/json_text.hpp"
@@ -43,9 +44,6 @@ namespace fs = std::filesystem;
 namespace graph = noteapp::graph;
 
 constexpr const char* kFormatTag = "noteapp-graph";
-constexpr std::size_t kMaxLineBytes = 128U * 1024U * 1024U;  // 64 MiB gövde base64'te bu kadara sığar
-constexpr std::size_t kBatchOps = 5000;                      // çerçeve sınırı 65.536 işlem
-constexpr std::size_t kBatchBytes = 32U * 1024U * 1024U;     // çerçeve sınırı 64 MiB
 constexpr std::string_view kRefusedExisting = "exists";
 
 std::string to_utf8(const fs::path& path) {
@@ -304,20 +302,76 @@ int bad_line(std::size_t line, std::string_view reason) {
     return kExitUser;
 }
 
-graph::Result<void> set_props(graph::WriteTxn& txn, const graph::OwnerId& owner,
-                              const std::map<std::string, graph::Value>& props, std::size_t& ops,
-                              std::size_t& bytes) {
+// İçe aktarmanın işlem partisi. Bir satır tek işlemdir (ya hepsi ya hiç): yazmalar yalnız sayılır, işlem
+// bütçeyi ya da bayt payını doldurduysa satır bitince commit edilir. Satır çerçeveden çok işlem ya da büyük
+// değer taşıyabilir (lead kararı 2, L4b): çerçeveleri yazan böler. Yarıda kalan içe aktarma yinelenince
+// yapılmışı atlar; yarım satır kalmaz.
+class ImportBatch {
+public:
+    static graph::Result<ImportBatch> open(graph::Graph& graph, std::size_t max_ops, std::size_t max_bytes) {
+        auto txn = graph.write();
+        if (!txn)
+            return std::unexpected(txn.error());
+        return ImportBatch(graph, std::move(*txn), max_ops, max_bytes);
+    }
+
+    graph::WriteTxn& txn() { return txn_; }
+    // Bir sonraki yazma `bytes` kadar yer tutar; commit satır sonunda (end_line).
+    graph::Result<void> make_room(std::size_t bytes) {
+        ++ops_;
+        bytes_ += bytes;
+        return {};
+    }
+    // Satır bitti: işlem doluysa commit edilir, sonraki satır yeni işlemde başlar.
+    graph::Result<void> end_line() {
+        if (ops_ < max_ops_ && bytes_ < max_bytes_)
+            return {};
+        NOTEAPP_TRY(txn_.commit());
+        auto next = graph_->write();
+        if (!next)
+            return std::unexpected(next.error());
+        txn_ = std::move(*next);
+        ops_ = 0;
+        bytes_ = 0;
+        return {};
+    }
+    graph::Result<void> commit() { return txn_.commit(); }
+
+private:
+    ImportBatch(graph::Graph& graph, graph::WriteTxn txn, std::size_t max_ops, std::size_t max_bytes)
+        : graph_(&graph), txn_(std::move(txn)), max_ops_(std::max<std::size_t>(1, max_ops)),
+          max_bytes_(max_bytes) {}
+
+    graph::Graph* graph_;
+    graph::WriteTxn txn_;
+    std::size_t max_ops_;
+    std::size_t max_bytes_;
+    std::size_t ops_ = 0;
+    std::size_t bytes_ = 0;
+};
+
+// Kodlu işlemin değer dışı payı için üst tahmin: iki kimlik (32 bayt), etiket ve uzunluk alanları.
+constexpr std::size_t kOpOverheadBytes = 64;
+
+std::size_t value_bytes(const graph::Value& value) {
+    if (const auto* text = std::get_if<std::string>(&value))
+        return text->size();
+    if (const auto* blob = std::get_if<graph::Bytes>(&value))
+        return blob->data.size();
+    return sizeof(std::int64_t);
+}
+
+graph::Result<void> set_props(ImportBatch& batch, const graph::OwnerId& owner,
+                              const std::map<std::string, graph::Value>& props) {
     for (const auto& [key, value] : props) {
-        auto current = txn.property(owner, key);
+        auto current = batch.txn().property(owner, key);
         if (!current)
             return std::unexpected(current.error());
         if (*current == value)
             continue;  // tekrar içe aktarma işlem yazmaz
-        if (auto set = txn.set_property(owner, key, value); !set)
+        NOTEAPP_TRY(batch.make_room(kOpOverheadBytes + key.size() + value_bytes(value)));
+        if (auto set = batch.txn().set_property(owner, key, value); !set)
             return set;
-        ++ops;
-        if (const graph::Bytes* blob = std::get_if<graph::Bytes>(&value))
-            bytes += blob->data.size();
     }
     return {};
 }
@@ -340,13 +394,21 @@ graph::Result<bool> props_differ(graph::WriteTxn& txn, const graph::OwnerId& own
     return false;
 }
 
+// Sıralı: çok etiketli satırda (çerçeveyi aşan satır) her etiket için doğrusal arama karesel olurdu.
+graph::Result<std::vector<std::string>> sorted_labels(graph::WriteTxn& txn, const graph::NodeId& id) {
+    auto present = txn.labels(id);
+    if (present)
+        std::ranges::sort(*present);
+    return present;
+}
+
 graph::Result<bool> node_would_change(graph::WriteTxn& txn, const graph::NodeId& id, const Json& labels,
                                       const std::map<std::string, graph::Value>& props) {
-    auto present = txn.labels(id);
+    auto present = sorted_labels(txn, id);
     if (!present)
         return std::unexpected(present.error());
     for (const Json& label : labels.items)
-        if (std::ranges::find(*present, label.text) == present->end())
+        if (!std::ranges::binary_search(*present, label.text))
             return true;
     return props_differ(txn, id, props);
 }
@@ -371,19 +433,18 @@ const std::string* text_field(const Json& line, const char* key) {
                                                                                   : &found->second.text;
 }
 
-graph::Result<void> write_node(graph::WriteTxn& txn, const graph::NodeId& id, const Json& labels,
-                               const std::map<std::string, graph::Value>& props, std::size_t& ops,
-                               std::size_t& bytes) {
-    auto present = txn.labels(id);
+graph::Result<void> write_node(ImportBatch& batch, const graph::NodeId& id, const Json& labels,
+                               const std::map<std::string, graph::Value>& props) {
+    auto present = sorted_labels(batch.txn(), id);
     if (!present)
         return std::unexpected(present.error());
     for (const Json& label : labels.items) {
-        if (std::ranges::find(*present, label.text) != present->end())
+        if (std::ranges::binary_search(*present, label.text))
             continue;
-        NOTEAPP_TRY(txn.add_label(id, label.text));
-        ++ops;
+        NOTEAPP_TRY(batch.make_room(kOpOverheadBytes + label.text.size()));
+        NOTEAPP_TRY(batch.txn().add_label(id, label.text));
     }
-    return set_props(txn, id, props, ops, bytes);
+    return set_props(batch, id, props);
 }
 
 bool labels_are_safe(const Json& labels) {
@@ -392,8 +453,8 @@ bool labels_are_safe(const Json& labels) {
     });
 }
 
-graph::Result<std::optional<std::string>> import_node(graph::WriteTxn& txn, const Json& line, bool overwrite,
-                                                      std::size_t& ops, std::size_t& bytes) {
+graph::Result<std::optional<std::string>> import_node(ImportBatch& batch, const Json& line, bool overwrite) {
+    graph::WriteTxn& txn = batch.txn();
     const std::string* id_text = text_field(line, "id");
     const auto id = id_text == nullptr ? std::nullopt : id_from_hex<graph::NodeId>(*id_text);
     const auto labels = line.fields.find("labels");
@@ -413,10 +474,10 @@ graph::Result<std::optional<std::string>> import_node(graph::WriteTxn& txn, cons
             return std::optional<std::string>(kRefusedExisting);
     }
     if (!*exists) {
-        NOTEAPP_TRY(txn.put_node(*id));
-        ++ops;
+        NOTEAPP_TRY(batch.make_room(kOpOverheadBytes));
+        NOTEAPP_TRY(batch.txn().put_node(*id));
     }
-    NOTEAPP_TRY(write_node(txn, *id, labels->second, *props, ops, bytes));
+    NOTEAPP_TRY(write_node(batch, *id, labels->second, *props));
     return std::optional<std::string>{};
 }
 
@@ -448,8 +509,8 @@ graph::Result<bool> has_both_nodes(graph::WriteTxn& txn, const graph::NodeId& sr
     return txn.has_node(dst);
 }
 
-graph::Result<std::optional<std::string>> import_edge(graph::WriteTxn& txn, const Json& line, bool overwrite,
-                                                      std::size_t& ops, std::size_t& bytes) {
+graph::Result<std::optional<std::string>> import_edge(ImportBatch& batch, const Json& line, bool overwrite) {
+    graph::WriteTxn& txn = batch.txn();
     const std::string* type = text_field(line, "type");
     const auto id = id_field<graph::EdgeId>(line, "id");
     const auto src = id_field<graph::NodeId>(line, "src");
@@ -471,10 +532,10 @@ graph::Result<std::optional<std::string>> import_edge(graph::WriteTxn& txn, cons
     if (*changes)
         return std::optional<std::string>(kRefusedExisting);
     if (!*found) {
-        NOTEAPP_TRY(txn.put_edge(*id, *src, *type, *dst));
-        ++ops;
+        NOTEAPP_TRY(batch.make_room(kOpOverheadBytes + type->size()));
+        NOTEAPP_TRY(batch.txn().put_edge(*id, *src, *type, *dst));
     }
-    NOTEAPP_TRY(set_props(txn, *id, *props, ops, bytes));
+    NOTEAPP_TRY(set_props(batch, *id, *props));
     return std::optional<std::string>{};
 }
 
@@ -495,7 +556,7 @@ std::optional<int> open_export_file(const std::string& path, std::ofstream& file
     return kExitInternal;
 }
 
-int run_graph_export(const std::vector<std::string>& rest) {
+int run_graph_export(const std::vector<std::string>& rest, const core::Config& config) {
     std::optional<std::string> output_path;
     bool jsonl = false;
     for (std::size_t i = 1; i < rest.size(); ++i) {
@@ -519,7 +580,7 @@ int run_graph_export(const std::vector<std::string>& rest) {
         std::cerr << core::tr("cli.query_no_database", {{"path", to_utf8(db)}}) << '\n';
         return kExitUser;
     }
-    auto store = graph::Graph::open(db);
+    auto store = graph::Graph::open(db, core::graph_limits_of(config.limits.graph));
     if (!store)
         return fail_graph(store.error(), db);
     std::ofstream file;
@@ -534,8 +595,9 @@ int run_graph_export(const std::vector<std::string>& rest) {
 
 enum class LineRead { Line, End, TooLong };
 
-// getline önce satırın tamamını belleğe alırdı: sınır okurken uygulanır, fazlası atılmadan durulur.
-LineRead read_bounded_line(std::istream& input, std::string& line) {
+// getline önce satırın tamamını belleğe alırdı: sınır (limits.graph.import_line_bytes) okurken uygulanır,
+// fazlası atılmadan durulur.
+LineRead read_bounded_line(std::istream& input, std::string& line, std::size_t max_bytes) {
     line.clear();
     std::array<char, 65536> chunk{};
     while (true) {
@@ -544,51 +606,49 @@ LineRead read_bounded_line(std::istream& input, std::string& line) {
         const bool complete = !input.fail();  // satır sonu tüketildi; gcount onu sayar
         if (input.eof() || complete) {
             line.append(chunk.data(), complete && !input.eof() ? got - 1 : got);
-            if (line.size() > kMaxLineBytes)
+            if (line.size() > max_bytes)
                 return LineRead::TooLong;
             return input.eof() && line.empty() ? LineRead::End : LineRead::Line;
         }
         line.append(chunk.data(), got);  // parça doldu: failbit
-        if (line.size() > kMaxLineBytes)
+        if (line.size() > max_bytes)
             return LineRead::TooLong;
         input.clear();
     }
 }
 
-// İçe aktarmanın tek işlem partisi; satır satır uygulanır.
+// İçe aktarma satır satır uygulanır; işlemlere ImportBatch satır aralarında böler. Bütçe NoteStore'unkiyle
+// aynıdır ([tuning] graph_batch_ops; çerçeve sınırı işlemi sınırlamaz, L4b); bayt payı etkin kayıt
+// sınırının yarısıdır (Graph::max_frame_bytes: frame_bytes = 0 da depolamanın tek değer sınırına kırpılır).
 class GraphImporter {
 public:
-    GraphImporter(graph::Graph& store, fs::path db, bool overwrite)
-        : store_(store), db_(std::move(db)), overwrite_(overwrite) {}
+    GraphImporter(graph::Graph& store, fs::path db, bool overwrite, const core::Config& config)
+        : store_(store), db_(std::move(db)), overwrite_(overwrite),
+          max_ops_(config.tuning.graph_batch_ops),
+          max_bytes_(store.max_frame_bytes() / 2),
+          max_line_bytes_(config.limits.graph.import_line_bytes.cap()) {}
 
     // Çıkış kodu: dosya sonuna kadar her şey yolundaysa nullopt.
     std::optional<int> run(std::istream& input) {
-        auto txn = store_.write();
-        if (!txn)
-            return fail_graph(txn.error(), db_);
+        auto batch = ImportBatch::open(store_, max_ops_, max_bytes_);
+        if (!batch)
+            return fail_graph(batch.error(), db_);
         std::string line;
         while (true) {
-            const LineRead got = read_bounded_line(input, line);
+            const LineRead got = read_bounded_line(input, line, max_line_bytes_);
             if (got == LineRead::End)
                 break;
             ++line_number_;
             if (got == LineRead::TooLong)
                 return bad_line(line_number_, "too_long");
-            if (const auto stop = apply_line(*txn, line))
+            if (const auto stop = apply_line(*batch, line))
                 return stop;
-            if (ops_ < kBatchOps && bytes_ < kBatchBytes)
-                continue;
-            if (auto committed = txn->commit(); !committed)
-                return fail_graph(committed.error(), db_);
-            txn = store_.write();
-            if (!txn)
-                return fail_graph(txn.error(), db_);
-            ops_ = 0;
-            bytes_ = 0;
+            if (auto ended = batch->end_line(); !ended)
+                return fail_graph(ended.error(), db_);
         }
         if (line_number_ == 0)
             return bad_line(1, "not_a_graph_export");
-        if (auto committed = txn->commit(); !committed)
+        if (auto committed = batch->commit(); !committed)
             return fail_graph(committed.error(), db_);
         return std::nullopt;
     }
@@ -605,7 +665,7 @@ private:
             return bad_line(line_number_, "unknown_version");
         return std::nullopt;
     }
-    std::optional<int> apply_line(graph::WriteTxn& txn, const std::string& line) {
+    std::optional<int> apply_line(ImportBatch& batch, const std::string& line) {
         if (line.empty())
             return std::nullopt;
         const auto parsed = JsonParser(line).parse();
@@ -619,8 +679,8 @@ private:
         if (*kind != "node" && *kind != "edge")
             return bad_line(line_number_, "unknown_kind");
         const bool is_node = *kind == "node";
-        const auto outcome = is_node ? import_node(txn, *parsed, overwrite_, ops_, bytes_)
-                                     : import_edge(txn, *parsed, overwrite_, ops_, bytes_);
+        const auto outcome =
+            is_node ? import_node(batch, *parsed, overwrite_) : import_edge(batch, *parsed, overwrite_);
         if (!outcome)
             return fail_graph(outcome.error(), db_);
         if (*outcome && *outcome == kRefusedExisting) {
@@ -637,15 +697,16 @@ private:
     graph::Graph& store_;
     fs::path db_;
     bool overwrite_;
+    std::size_t max_ops_;
+    std::size_t max_bytes_;
+    std::size_t max_line_bytes_;
     std::size_t refused_ = 0;
     std::size_t line_number_ = 0;
-    std::size_t ops_ = 0;
-    std::size_t bytes_ = 0;
     std::size_t nodes_ = 0;
     std::size_t edges_ = 0;
 };
 
-int run_graph_import(const std::vector<std::string>& rest) {
+int run_graph_import(const std::vector<std::string>& rest, const core::Config& config) {
     const bool overwrite = rest.size() == 3 && rest[1] == "--overwrite";
     if (rest.size() != (overwrite ? 3U : 2U)) {
         std::cerr << core::tr("cli.graph_usage") << '\n';
@@ -661,10 +722,10 @@ int run_graph_import(const std::vector<std::string>& rest) {
         std::cerr << sanitize_for_terminal(
                          core::format_error(core::io_error(to_utf8(db.parent_path()), made.message())))
                   << '\n';
-    auto store = graph::Graph::open(db);
+    auto store = graph::Graph::open(db, core::graph_limits_of(config.limits.graph));
     if (!store)
         return fail_graph(store.error(), db);
-    GraphImporter importer(*store, db, overwrite);
+    GraphImporter importer(*store, db, overwrite, config);
     if (const auto stop = importer.run(input))
         return *stop;
     std::cout << core::tr("cli.graph_imported", {{"nodes", std::to_string(importer.nodes())},
@@ -744,9 +805,10 @@ int run_graph_clear_skipped() {
 constexpr std::size_t kMaxStrayListed = 200;
 
 // Geçişten sonra notes_dir'e düşen dosyalar. Çıktı da sınırlıdır: tek klasör ekranı boğmasın.
-int report_stray_files(const std::filesystem::path& notes_dir) {
-    const core::NoteStore store(core::data_dir());
-    const auto scan = core::find_stray_files(store, notes_dir, core::data_dir());
+// Depo config'le açılır: içe alınamayacak dosyanın kararı limits.core.folder_path_bytes'ı kullanır.
+int report_stray_files(const core::Config& config) {
+    const core::NoteStore store = core::NoteStore::for_config(config);
+    const auto scan = core::find_stray_files(store, config.notes_dir, core::data_dir());
     if (!scan) {
         std::cerr << sanitize_for_terminal(core::format_error(scan.error())) << '\n';
         return kExitInternal;
@@ -778,7 +840,7 @@ int run_graph_status(const core::Config& config, bool ignore_skipped) {
     const RootSkipped skipped = report_skipped_of_root(config.notes_dir, ignore_skipped);
     if (skipped.exit_code == kExitInternal)
         return skipped.exit_code;
-    const int stray = pending ? kExitOk : report_stray_files(config.notes_dir);
+    const int stray = pending ? kExitOk : report_stray_files(config);
     if (skipped.exit_code != kExitOk || stray != kExitOk)
         return std::max(skipped.exit_code, stray);
     if (pending)
@@ -818,7 +880,8 @@ int run_graph_migrate_new(const core::Config& config) {
                   << '\n';
         return kExitUser;
     }
-    const auto report = core::migrate_new_notes(config.notes_dir, core::data_dir());
+    const auto report = core::migrate_new_notes(config.notes_dir, core::data_dir(),
+                                                config.limits.core.folder_path_bytes.cap());
     if (!report) {
         std::cerr << sanitize_for_terminal(core::format_error(report.error())) << '\n';
         return kExitInternal;
@@ -844,7 +907,9 @@ int run_graph_migrate_new(const core::Config& config) {
 }
 
 int run_graph_migrate(const core::Config& config, bool skip_failed) {
-    const auto report = core::migrate_legacy_notes(config.notes_dir, core::data_dir(), {skip_failed});
+    const auto report = core::migrate_legacy_notes(
+        config.notes_dir, core::data_dir(),
+        {.skip_failed = skip_failed, .folder_path_bytes = config.limits.core.folder_path_bytes.cap()});
     if (!report) {
         std::cerr << sanitize_for_terminal(core::format_error(report.error())) << '\n';
         return kExitInternal;
@@ -885,9 +950,9 @@ int run_graph(const ParsedArgs& args, const core::Config& config) {
     if (sub == "status")
         return run_graph_status_command(args.rest, config);
     if (sub == "export")
-        return run_graph_export(args.rest);
+        return run_graph_export(args.rest, config);
     if (sub == "import")
-        return run_graph_import(args.rest);
+        return run_graph_import(args.rest, config);
     std::cerr << core::tr("cli.graph_usage") << '\n';
     return kExitUsage;
 }

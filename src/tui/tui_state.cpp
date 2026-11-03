@@ -1,7 +1,5 @@
 #include "tui/tui_state.hpp"
 
-#include "core/note_views.hpp"
-#include "search/fuzzy.hpp"
 #include "search/query.hpp"
 
 #include <algorithm>
@@ -10,6 +8,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <utility>
 
 namespace noteapp::tui {
 
@@ -48,13 +47,6 @@ int page_direction(Key key) {
     return key == Key::PageUp ? -1 : 1;
 }
 
-bool has_marked_ancestor(const std::set<std::string>& marks, const std::string& path) {
-    for (std::size_t slash = path.find('/'); slash != std::string::npos; slash = path.find('/', slash + 1))
-        if (marks.contains(path.substr(0, slash + 1)))
-            return true;
-    return false;
-}
-
 // Her odakta çalışan uygulama tuşları: hiçbir panelin içeriğine bağlı değiller.
 std::optional<Intent> app_intent(Key key) {
     switch (key) {
@@ -69,11 +61,31 @@ std::optional<Intent> app_intent(Key key) {
     }
 }
 
+// Klasör satırı adını `/` ile gösterir; ağaçtaki not adı son parçadır, düz aramada etiket yok (tam yol).
+Row to_row(app::ListRow&& row) {
+    std::string label = row.is_folder ? row.name + "/" : std::move(row.name);
+    return Row{.path = std::move(row.path),
+               .positions = std::move(row.positions),
+               .hit_count = row.hit_count,
+               .hits = std::move(row.hits),
+               .show_best_line = row.show_best_line,
+               .is_folder = row.is_folder,
+               .label = std::move(label),
+               .depth = row.depth,
+               .number = row.number};
+}
+
+// Argümanlı ya da bozuk sorgu metin değildir. `view:` bakılmadan da argüman sayılır (bozuk ya da süzgeç).
+bool has_arguments(std::string_view query) {
+    const auto parsed = search::parse_query(query);
+    return !parsed || !parsed->filters.empty() || parsed->sort.has_value();
+}
+
 }  // namespace
 
 // Satırın seçim kimliği: not yolu `/` ile bitmez, klasör satırıyla karışmaz.
 std::string TuiState::row_key(const Row& row) {
-    return row.is_folder ? row.path.string() + "/" : row.path.string();
+    return app::mark_key(row.path.string(), row.is_folder);
 }
 
 std::vector<ListItem> TuiState::action_items() const {
@@ -84,23 +96,15 @@ std::vector<ListItem> TuiState::action_items() const {
             items.push_back({row->path, row->is_folder});
         return items;
     }
-    for (const std::string& key : active) {
-        const bool is_folder = key.ends_with('/');
-        const std::string path = is_folder ? key.substr(0, key.size() - 1) : key;
-        if (has_marked_ancestor(active, path))
-            continue;  // seçili klasörle birlikte gider, ikinci kez işlenip hata vermesin
-        if (auto parsed = core::NotePath::parse(path))
-            items.push_back({std::move(*parsed), is_folder});
-    }
-    return items;
+    return app::marked_items(active);
 }
 
 void TuiState::prune_marks() {
     std::erase_if(marks_, [this](const std::string& key) {
         if (key.ends_with('/'))
-            return tree_.find(std::string_view(key).substr(0, key.size() - 1)) == nullptr;
+            return listing_.tree().find(std::string_view(key).substr(0, key.size() - 1)) == nullptr;
         const auto path = core::NotePath::parse(key);
-        return !path || !meta_index_.contains(*path);
+        return !path || !listing_.meta_of(*path);
     });
 }
 
@@ -144,32 +148,6 @@ void TuiState::go_root() {
     go_to_folder({});
 }
 
-bool same_listing(std::span<const core::NoteInfo> a, std::span<const core::NoteInfo> b) {
-    return std::ranges::equal(a, b, [](const core::NoteInfo& x, const core::NoteInfo& y) {
-        return x.path == y.path && x.revision == y.revision && x.mtime == y.mtime && x.size == y.size;
-    });
-}
-
-// Okunamayan görünüm listesi notları gizlemez: liste boş kalır, `view:` hatayı kendisi söyler.
-std::vector<std::string> view_names(const core::NoteStore& store) {
-    std::vector<std::string> names;
-    if (const auto views = core::list_views(store))
-        for (const core::SavedView& view : *views)
-            names.push_back(view.name);
-    return names;
-}
-
-StoreScan scan_store(const core::NoteStore& store) {
-    const auto trash = store.list_trash();
-    return StoreScan{store.list(), trash ? trash->size() : 0, store.folders(), store.data_version(),
-                     view_names(store)};
-}
-
-bool same_scan(const StoreScan& a, const StoreScan& b) {
-    return same_listing(a.notes, b.notes) && a.trash == b.trash && a.folders == b.folders &&
-           a.graph_version == b.graph_version;
-}
-
 bool right_pane_focused(Focus focus) {
     return focus == Focus::Preview || focus == Focus::PreviewFind || focus == Focus::Editor ||
            focus == Focus::Links;
@@ -184,9 +162,9 @@ bool quits_from_modal(Key key, Focus focus) {
 }
 
 void TuiState::set_notes(std::vector<core::NoteInfo> notes) {
-    notes_ = std::move(notes);
-    rebuild_metas();
-    refilter(false);
+    if (listing_.set_notes(std::move(notes)))
+        notes_changed();
+    refilter(false);  // içerik araması aynı listede de yeniden koşar (indeks değişmiş olabilir)
 }
 
 void TuiState::set_views(std::vector<std::string> names) {
@@ -197,50 +175,28 @@ void TuiState::set_views(std::vector<std::string> names) {
 }
 
 void TuiState::set_folders(std::vector<std::string> folders) {
-    if (folders == folders_)
+    if (!listing_.set_folders(std::move(folders)))
         return;
-    folders_ = std::move(folders);
-    rebuild_tree();
+    prune_marks();
     refilter(false);
 }
 
-void TuiState::rebuild_tree() {
-    tree_.rebuild(metas_, folders_);
+// Üst veri yeniden kuruldu: tamamlama kaynakları ve gitmiş öğelerin işaretleri eskidi.
+void TuiState::notes_changed() {
+    input_sources_.reset();
+    relative_sources_.reset();
     prune_marks();
 }
 
-void TuiState::rebuild_metas() {
-    metas_.clear();
-    meta_index_.clear();
-    input_sources_.reset();
-    relative_sources_.reset();
-    metas_.reserve(notes_.size());
-    for (const core::NoteInfo& note : notes_) {
-        core::NoteMeta meta{.path = note.path,
-                            .size = note.size,
-                            .updated_at = note.mtime,
-                            .created_at = note.created_at,
-                            .origin = note.origin,
-                            .local_seq = note.local_seq,
-                            .created_local_seq = note.created_local_seq,
-                            .tags = note.tags};
-        if (const auto found = sync_states_.find(note.path); found != sync_states_.end())
-            meta.sync_status = found->second;
-        meta_index_.emplace(note.path, metas_.size());
-        metas_.push_back(std::move(meta));
-    }
-    rebuild_tree();
-}
-
 void TuiState::set_sync_states(std::map<core::NotePath, core::SyncState> states) {
-    sync_states_ = std::move(states);
-    rebuild_metas();
+    listing_.set_sync_states(std::move(states));
+    notes_changed();
     refilter(false);
 }
 
 const SharedInputSources& TuiState::input_sources() const {
     if (!input_sources_)
-        input_sources_ = build_input_sources(metas_, views_);
+        input_sources_ = build_input_sources(listing_.metas(), views_);
     return input_sources_;
 }
 
@@ -251,7 +207,7 @@ SharedInputSources TuiState::name_input_sources() const {
     if (relative_sources_ && relative_sources_folder_ == base)
         return relative_sources_;
     std::vector<core::NoteMeta> relative;
-    for (const core::NoteMeta& meta : metas_) {
+    for (const core::NoteMeta& meta : listing_.metas()) {
         const std::string path = meta.path.string();
         if (!in_folder(path, base))
             continue;
@@ -266,41 +222,29 @@ SharedInputSources TuiState::name_input_sources() const {
     return relative_sources_;
 }
 
-Row TuiState::folder_row(const FolderNode& node) const {
-    Row row{core::NotePath::parse(node.path).value()};
-    row.is_folder = true;
-    row.label = last_component(node.path) + "/";
-    return row;
-}
-
 // Açık klasörün çocukları kendi satırının altına girer; numara her seviyede yeniden başlar. Liste yalnız
 // değişimde kurulur, gezinme buraya gelmez.
-void TuiState::append_folder_rows(const FolderNode& node, std::size_t depth, std::vector<Row>& rows) const {
-    std::size_t number = 0;
-    for (const FolderNode* folder : search::sorted_subfolders(tree_, node, prefs_.sort)) {
-        Row row = folder_row(*folder);
-        row.depth = depth;
-        row.number = ++number;
-        rows.push_back(std::move(row));
-        if (is_folder_open(folder->path))
-            append_folder_rows(*folder, depth + 1, rows);
-    }
-    std::vector<std::size_t> notes = node.notes;
-    search::sort_notes(notes, prefs_.sort, metas_);
-    for (const std::size_t index : notes) {
-        Row row{metas_[index].path};
-        row.label = last_component(row.path.string());
-        row.depth = depth;
-        row.number = ++number;
-        rows.push_back(std::move(row));
-    }
+std::vector<Row> TuiState::rows_in_folder() {
+    current_folder_ = listing_.tree().nearest_existing(std::move(current_folder_));
+    // Açık küme tercihlerdedir (`tui-state.toml`); liste yalnız kurarken okur.
+    listing_.set_open_folders(prefs_.open_folders);
+    std::vector<Row> rows;
+    for (app::ListRow& row :
+         details_view_ ? listing_.folder_rows(current_folder_) : listing_.tree_rows(current_folder_))
+        rows.push_back(to_row(std::move(row)));
+    return rows;
 }
 
-std::vector<Row> TuiState::rows_in_folder() {
-    current_folder_ = tree_.nearest_existing(std::move(current_folder_));
-    std::vector<Row> rows;
-    append_folder_rows(*tree_.find(current_folder_), 0, rows);
-    return rows;
+void TuiState::set_details_view(bool details) {
+    details_view_ = details;
+    refilter(false);
+}
+
+std::string TuiState::name_prefix_for(std::string_view folder) const {
+    const std::string base = name_base_folder();
+    if (folder.empty() || folder == base || !in_folder(folder, base))
+        return {};
+    return std::string(folder.substr(base.empty() ? 0 : base.size() + 1)) + "/";
 }
 
 void TuiState::enter_folder(std::string folder) {
@@ -367,8 +311,7 @@ const core::NoteMeta* TuiState::meta_of(const core::NotePath& path) const {
         const auto found = std::ranges::find(trash_metas_, path, &core::NoteMeta::path);
         return found == trash_metas_.end() ? nullptr : &*found;
     }
-    const auto found = meta_index_.find(path);
-    return found == meta_index_.end() ? nullptr : &metas_[found->second];
+    return listing_.meta_of(path);
 }
 
 void TuiState::enter_trash(std::vector<core::TrashItem> items) {
@@ -406,8 +349,11 @@ void TuiState::leave_trash() {
     refilter(true);
 }
 
+// Elle düzenlenmiş dosyadaki uzun son komut listesi de sınıra iner.
 void TuiState::set_list_prefs(const ListPrefs& prefs) {
     prefs_ = prefs;
+    if (prefs_.recent_commands.size() > recent_commands_limit_.cap())
+        prefs_.recent_commands.resize(recent_commands_limit_.cap());
     refilter(false);
 }
 
@@ -443,7 +389,8 @@ void TuiState::toggle_tree(std::size_t row) {
 }
 
 void TuiState::prune_open_folders() {
-    std::erase_if(prefs_.open_folders, [this](const std::string& folder) { return !tree_.find(folder); });
+    std::erase_if(prefs_.open_folders,
+                  [this](const std::string& folder) { return !listing_.tree().find(folder); });
 }
 
 void TuiState::toggle_expanded(std::size_t row) {
@@ -539,7 +486,7 @@ Intent TuiState::toggle_row() {
 // Tümü açıksa kapatır, değilse hepsini açar (`I` gibi).
 Intent TuiState::toggle_tree_all() {
     std::set<std::string> all;
-    for (std::string& folder : tree_.folders_under({}))
+    for (std::string& folder : listing_.tree().folders_under({}))
         if (!folder.empty())
             all.insert(std::move(folder));
     const bool all_open = std::ranges::includes(prefs_.open_folders, all);
@@ -570,8 +517,7 @@ Intent TuiState::handle_sort_menu(std::string_view text) {
         const auto* found = std::ranges::find(kFields, text, [](const auto& entry) { return entry.first; });
         if (found == kFields.end())
             return Intent::None;
-        // Ad doğal olarak artan; boyut ve tarihte önce en büyük ve en yeni.
-        prefs_.sort = {found->second, found->second != search::SortField::Name};
+        prefs_.sort = app::sort_for(found->second);
     }
     focus_ = Focus::List;
     refilter(false);
@@ -583,104 +529,28 @@ void TuiState::set_preview_line_count(std::size_t lines) {
     scroll_preview(0);  // yeni sınıra kenetle
 }
 
-// Sorguda açıkça `sort:` verildiyse o sıra; eşitlikte gelen sıra kalır.
-void TuiState::sort_rows(std::vector<Row>& rows, const search::SortSpec& sort) const {
-    std::vector<std::size_t> indices;
-    indices.reserve(rows.size());
-    std::map<std::size_t, Row*> by_meta;
-    for (Row& row : rows)
-        if (const auto found = meta_index_.find(row.path); found != meta_index_.end()) {
-            indices.push_back(found->second);
-            by_meta.emplace(found->second, &row);
-        }
-    search::sort_notes(indices, sort, metas_);
-    std::vector<Row> sorted;
-    sorted.reserve(rows.size());
-    for (const std::size_t index : indices)
-        sorted.push_back(std::move(*by_meta.at(index)));
-    rows = std::move(sorted);
-}
-
-std::vector<Row> TuiState::rows_by_name(const search::ParsedQuery& parsed) const {
+// Çöp kendi listesidir; klasör görünümü ve arama ortak listeleme kuralından gelir. Bozuk argümanda
+// query_error_ dolar, satırlar son geçerli sorgunun bu listedeki sonucudur. Klasör ve çöp görünümü aramayı
+// bitirir: sonraki bozuk sorgu önceki aramanın satırlarına dönmez.
+std::vector<Row> TuiState::filter_rows() {
     std::vector<Row> rows;
-    if (parsed.filters.empty()) {
-        for (auto& ranked : search::rank_notes(parsed.text, notes_))
-            rows.push_back({notes_[ranked.index].path, std::move(ranked.match.positions)});
-        return rows;
-    }
-    std::vector<core::NoteInfo> subset;
-    for (const std::size_t index : search::apply(parsed.filters, std::nullopt, metas_))
-        subset.push_back(notes_[index]);
-    for (auto& ranked : search::rank_notes(parsed.text, subset))
-        rows.push_back({subset[ranked.index].path, std::move(ranked.match.positions)});
-    return rows;
-}
-
-std::vector<Row> TuiState::rows_by_content(const search::ParsedQuery& parsed) {
-    std::vector<Row> rows;
-    if (!content_searcher_)
-        return rows;  // henüz bağlanmadı: çökmek yerine boş liste
-    std::set<core::NotePath> allowed;
-    for (const std::size_t index : search::apply(parsed.filters, std::nullopt, metas_))
-        allowed.insert(metas_[index].path);
-    for (auto& result : content_searcher_(parsed.text))
-        if (parsed.filters.empty() || allowed.contains(result.path))
-            rows.push_back({std::move(result.path), {}, result.hit_count, std::move(result.first_hits)});
-    return rows;
-}
-
-std::vector<Row> TuiState::rows_global() {
-    std::vector<Row> rows;
-    auto hits = global_searcher_(query(), metas_);
-    if (!hits) {
-        query_error_ = std::move(hits.error());
-        return rows;
-    }
-    for (search::GlobalHit& hit : *hits) {
-        Row row{std::move(hit.path), std::move(hit.name_positions), hit.content_hits};
-        if (hit.best_line) {
-            row.hits.push_back(std::move(*hit.best_line));
-            row.show_best_line = true;
-        }
-        rows.push_back(std::move(row));
-    }
-    return rows;
-}
-
-// Düşüş: rows dolar; argüman bozuksa false ve query_error_ dolu.
-bool TuiState::filter_rows(std::vector<Row>& rows) {
     if (trash_view_) {
+        listing_.forget_last_query();
         for (const core::NoteMeta& meta : trash_metas_)
             rows.push_back({meta.path});
-        return true;
+        return rows;
     }
+    listing_.set_sort(prefs_.sort);
     if (in_folder_view()) {
+        listing_.forget_last_query();
         query_error_.reset();
-        query_has_arguments_ = false;
-        rows = rows_in_folder();
-        return true;
+        return rows_in_folder();
     }
-    auto parsed = search::parse_query(query(), view_lookup_);
-    if (!parsed) {
-        query_error_ = std::move(parsed.error());
-        return false;
-    }
-    query_error_.reset();
-    query_has_arguments_ = !parsed->filters.empty() || parsed->sort.has_value();
-    if (parsed->text.empty()) {
-        for (const std::size_t index :
-             search::apply(parsed->filters, parsed->sort.value_or(prefs_.sort), metas_))
-            rows.push_back({metas_[index].path});
-        return true;
-    }
-    if (mode_ == Mode::Global && global_searcher_) {
-        rows = rows_global();  // sıralamayı search_all yapar
-        return !query_error_;
-    }
-    rows = mode_ == Mode::Content ? rows_by_content(*parsed) : rows_by_name(*parsed);
-    if (parsed->sort)
-        sort_rows(rows, *parsed->sort);
-    return true;
+    app::SearchResult result = listing_.search(query(), mode_);
+    query_error_ = std::move(result.error);
+    for (app::ListRow& row : result.rows)
+        rows.push_back(to_row(std::move(row)));
+    return rows;
 }
 
 void TuiState::number_rows() {
@@ -701,10 +571,7 @@ void TuiState::refilter(bool query_changed) {
     if (showing_folders_ && !now_folders)
         saved_spot_ = previous;
 
-    std::vector<Row> rows;
-    if (!filter_rows(rows))
-        return;  // bozuk argüman: metin sayılmaz, liste son geçerli haliyle kalır
-    rows_ = std::move(rows);
+    rows_ = filter_rows();
     number_rows();
     if (!showing_folders_ && now_folders)
         previous = std::exchange(saved_spot_, std::nullopt);
@@ -719,14 +586,15 @@ void TuiState::refilter(bool query_changed) {
     }
     const Row* now = selected_entry();
     const bool same_row = previous && now && row_key(*now) == *previous;
-    if (!same_row || query_changed)
+    // Bozuk argümanda satırlar son geçerli sorgudandır: aynı satırda önizleme kaydırması korunur.
+    if (!same_row || (query_changed && !query_error_))
         scroll_to_source_line(now ? initial_scroll(*now) : 0);
 }
 
 bool TuiState::reveal(const core::NotePath& path) {
     search_line_.clear();
     mode_ = Mode::Name;
-    if (meta_index_.contains(path))
+    if (listing_.meta_of(path))
         current_folder_ = folder_of(path);
     refilter(true);
     const auto it = find_note_row(path);
@@ -743,7 +611,7 @@ bool TuiState::select_note(const core::NotePath& path) {
     if (it == rows_.end() && (!query().empty() || in_folder_view())) {
         search_line_.clear();
         mode_ = Mode::Name;
-        if (meta_index_.contains(path))
+        if (listing_.meta_of(path))
             current_folder_ = folder_of(path);  // panelde düzenlenen not listede de görünsün
         refilter(true);
         it = find_note_row(path);
@@ -818,6 +686,7 @@ void TuiState::set_preview_lines(const std::vector<std::string>* lines, std::siz
     if (generation != preview_generation_) {
         preview_generation_ = generation;
         preview_selection_.reset();  // uçlar eski metne ait
+        wiki_link_.reset();
         preview_find_.recompute(*lines);
     }
 }
@@ -835,7 +704,7 @@ void TuiState::set_links(const core::NoteLinks& links, std::size_t generation,
 }
 
 int TuiState::links_reserved_rows(int pane_rows) const {
-    return trash_view_ || focus_ == Focus::Editor ? 0 : links_.reserved_rows(pane_rows);
+    return trash_view_ || focus_ == Focus::Editor || links_hidden_ ? 0 : links_.reserved_rows(pane_rows);
 }
 
 void TuiState::click_link(std::size_t row) {
@@ -861,11 +730,77 @@ Intent TuiState::jump_to_selected_link() {
     if (!selected)
         return Intent::LinkMissing;
     const core::NotePath target = *selected;
-    if (!select_note(target) && !reveal(target))
-        return Intent::LinkMissing;
+    return open_note_in_review(target) ? Intent::None : Intent::LinkMissing;
+}
+
+bool TuiState::open_note_in_review(const core::NotePath& path) {
+    if (!select_note(path) && !reveal(path))
+        return false;
     focus_ = Focus::Preview;
+    wiki_link_.reset();
     scroll_to_source_line(0);
-    return Intent::None;
+    return true;
+}
+
+std::optional<std::string> TuiState::selected_wiki_target() const {
+    if (!wiki_link_ || !preview_text_ || wiki_link_->line >= preview_text_->size())
+        return std::nullopt;
+    for (const WikiSpan& span : wiki_spans((*preview_text_)[wiki_link_->line]))
+        if (span.begin == wiki_link_->begin)
+            return std::string(span.target);
+    return std::nullopt;
+}
+
+std::optional<ByteRange> TuiState::wiki_selection_on_line(std::size_t line) const {
+    if (!wiki_link_ || wiki_link_->line != line)
+        return std::nullopt;
+    return ByteRange{wiki_link_->begin, wiki_link_->end};
+}
+
+bool TuiState::select_wiki_link_at(std::size_t line, std::size_t offset) {
+    if (!preview_text_ || line >= preview_text_->size())
+        return false;
+    for (const WikiSpan& span : wiki_spans((*preview_text_)[line]))
+        if (offset >= span.begin && offset < span.end) {
+            wiki_link_ = PreviewPoint{line, span.begin, span.end};
+            return true;
+        }
+    return false;
+}
+
+// Seçim yoksa ileri görünen ilk satırdan, geri görünen son satırdan başlar; uçta durur (sarmaz).
+void TuiState::step_wiki_link(int direction) {
+    if (!preview_text_ || preview_text_->empty())
+        return;
+    const std::vector<std::string>& lines = *preview_text_;
+    const std::size_t last_visible = std::min(preview_scroll_ + page_rows(), lines.size()) - 1;
+    std::size_t line = wiki_link_ ? wiki_link_->line : (direction > 0 ? preview_scroll_ : last_visible);
+    if (line >= lines.size())
+        return;
+    const std::size_t from = wiki_link_ ? (direction > 0 ? wiki_link_->end : wiki_link_->begin)
+                                        : (direction > 0 ? 0 : lines[line].size() + 1);
+    std::optional<PreviewPoint> found;
+    for (bool first = true;; first = false) {
+        const std::vector<WikiSpan> spans = wiki_spans(lines[line]);
+        if (direction > 0) {
+            const auto next = std::ranges::find_if(
+                spans, [&](const WikiSpan& span) { return !first || span.begin >= from; });
+            if (next != spans.end())
+                found = PreviewPoint{line, next->begin, next->end};
+        } else {
+            for (const WikiSpan& span : spans)
+                if (!first || span.end <= from)
+                    found = PreviewPoint{line, span.begin, span.end};
+        }
+        if (found || (direction > 0 ? line + 1 >= lines.size() : line == 0))
+            break;
+        line = direction > 0 ? line + 1 : line - 1;
+    }
+    if (!found)
+        return;
+    wiki_link_ = found;
+    if (found->line < preview_scroll_ || found->line >= preview_scroll_ + page_rows())
+        preview_scroll_ = std::min(found->line, max_preview_scroll());
 }
 
 void TuiState::begin_preview_selection(PreviewPoint point, int x, int y) {
@@ -955,6 +890,7 @@ void TuiState::focus_preview() {
 
 void TuiState::leave_preview() {
     preview_find_.clear();
+    wiki_link_.reset();
     focus_ = Focus::List;
 }
 
@@ -1183,8 +1119,15 @@ void TuiState::focus_links() {
     focus_ = Focus::Links;
 }
 
+void TuiState::toggle_links() {
+    links_hidden_ = !links_hidden_;
+    if (links_hidden_ && focus_ == Focus::Links)
+        focus_ = Focus::Preview;
+}
+
 void TuiState::toggle_review_view() {
     review_rendered_ = !review_rendered_;
+    wiki_link_.reset();  // görünüm değişti: satır ve bayt eski metne ait
 }
 
 void TuiState::scroll_preview_top() {
@@ -1267,13 +1210,14 @@ Intent TuiState::search_enter() {
         return query_error_ ? Intent::None : remember_query();
     }
     // Argümanlı sorgu metin değildir: taslağın ilk satırı olamaz.
-    return query().empty() || query_error_ || query_has_arguments_ ? Intent::None : Intent::CreateFromQuery;
+    return query().empty() || query_error_ || has_arguments(query()) ? Intent::None : Intent::CreateFromQuery;
 }
 
 // Enter'la kullanılan arama geçmişe girer; eşleşmesiz sorgu notun ilk satırı olur, oraya girmez.
 Intent TuiState::remember_query() {
-    return remember_search(prefs_.search_history, query(), input_sources().get()) ? Intent::SavePrefs
-                                                                                  : Intent::None;
+    return remember_search(prefs_.search_history, query(), input_sources().get(), search_history_limits_)
+               ? Intent::SavePrefs
+               : Intent::None;
 }
 
 Intent TuiState::handle_search(Key key) {
@@ -1310,14 +1254,23 @@ Intent TuiState::handle_preview(Key key) {
     case Key::Left:
         leave_preview();
         return Intent::None;
+    case Key::Tab:
+    case Key::ShiftTab:
+        step_wiki_link(key == Key::Tab ? 1 : -1);
+        return Intent::None;
     case Key::Escape:
-        // İlk Esc vurguyu temizler, ikincisi Listeye döner: arama yanlışlıkla panelden çıkarmasın.
-        if (preview_find_.query().empty())
+        // İlk Esc seçili bağlantıyı ya da vurguyu temizler, sonraki Listeye döner: arama yanlışlıkla panelden
+        // çıkarmasın.
+        if (wiki_link_)
+            wiki_link_.reset();
+        else if (preview_find_.query().empty())
             leave_preview();
         else
             preview_find_.clear();
         return Intent::None;
     case Key::Enter:
+        if (wiki_link_)
+            return Intent::FollowLink;
         return selected_row() ? Intent::EnterEditor : Intent::None;
     default:
         return Intent::None;

@@ -4,7 +4,7 @@
 > Envanter: 98 özellik — ikisinde aynı 35, farklı 26, yalnız TUI 27, yalnız GUI 8, hiçbirinde 2. 16 yinelenen mantık (D1–D16).
 
 ## Lead kararları (davranış çakışmaları, güvenli olan seçildi)
-1. Klasör silme: iki arayüzde de çöpe (geri alınabilir); kalıcı silme yalnız çöpten.
+1. Klasör silme: iki arayüzde de çöpe (geri alınabilir). Listede onaylı kalıcı silme (`D` / `Shift+Del`, varsayılan Vazgeç) iki arayüzde de kalır (kullanıcının önceki isteği).
 2. Çöp geri alma: iki arayüzde de yığın (çok adım).
 3. Otomatik kayıt: iki arayüzde de (`tuning.autosave_ms`).
 4. Yeni not baytları: korunur (GUI'nin LF normalleştirmesi kalkar).

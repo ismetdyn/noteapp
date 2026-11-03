@@ -11,6 +11,7 @@
 #include <format>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -510,4 +511,27 @@ TEST_CASE("tabs: a remembered cursor is moved back to a code point boundary afte
     REQUIRE(scene.state->editor_selection());
     CHECK(scene.state->editor_selection()->start == 1);
     CHECK(scene.state->editor_selection()->end == 1);
+}
+
+// A5b: klasör yeniden adlandırılınca arka plandaki sekmenin belgesi de yeni yolu izler; yoksa düzenleme eski
+// yola yazılır (Gone -> kaydet diyaloğu ya da o yolda sonradan açılan başka notla çakışma).
+TEST_CASE("tabs: a background tab in a renamed folder saves to the new path") {
+    TabsScene scene;
+    scene.fixture.add_note("f/n.md", "eski\n", 5);
+    scene.state->rescan();
+    scene.open("f/n.md");
+    scene.state->open_in_new_tab(np("b.md"));
+    REQUIRE(active_path(*scene.state) == "b.md");
+    scene.state->deciders.folder_name = [](const std::string&, const std::string&) {
+        return std::optional<std::string>("g");
+    };
+    scene.state->rename_folder("f");
+    REQUIRE(scene.fixture.note_exists("g/n.md"));
+
+    REQUIRE(scene.state->activate_tab(tab_id(*scene.state, "g/n.md")));
+    scene.state->edit_text("yeni\n");
+    scene.state->save_now();
+    CHECK(scene.save_dialogs == 0);
+    CHECK(scene.fixture.read_note("g/n.md") == "yeni\n");
+    CHECK_FALSE(scene.fixture.note_exists("f/n.md"));
 }

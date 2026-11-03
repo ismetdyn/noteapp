@@ -80,14 +80,6 @@ Result<void> require_owner(Store& store, const OwnerId& owner) {
     return require_row(store, StatementId::EdgeGet, std::get<EdgeId>(owner).bytes, "edge");
 }
 
-std::size_t payload_size(const Value& value) {
-    if (const std::string* text = std::get_if<std::string>(&value))
-        return text->size();
-    if (const Bytes* bytes = std::get_if<Bytes>(&value))
-        return bytes->data.size();
-    return 0;
-}
-
 Result<void> collect_incident_edges(Store& store, StatementId statement_id, const NodeId& id,
                                     std::vector<EdgeId>& out) {
     Result<Statement> statement = store.statement(statement_id);
@@ -418,7 +410,7 @@ Result<std::vector<PropertyHead>> ReadTxn::properties_at(const Version& write, O
     std::vector<PropertyHead> found;
     if (!*row)
         return found;
-    Result<detail::Frame> frame = detail::decode_frame(statement->column_blob(0));
+    Result<detail::Frame> frame = detail::decode_frame(statement->column_blob(0), detail::kStoredFrameLimits);
     if (!frame)
         return std::unexpected(corrupt("bad_stored_frame"));
     for (detail::Op& op : frame->ops) {
@@ -454,7 +446,8 @@ Result<bool> ReadTxn::saw(const Version& later, const Version& earlier) {
         return std::unexpected(row.error());
     if (!*row)
         return false;
-    const Result<detail::Frame> frame = detail::decode_frame(statement->column_blob(0));
+    const Result<detail::Frame> frame =
+        detail::decode_frame(statement->column_blob(0), detail::kStoredFrameLimits);
     if (!frame)
         return std::unexpected(corrupt("bad_stored_frame"));
     return std::ranges::any_of(frame->deps, [&](const detail::Dot& dep) {
@@ -550,9 +543,6 @@ Result<void> WriteTxn::set_property(OwnerId owner, std::string_view key, Value v
         return valid;
     if (const Result<void> valid = detail::validate_value(value); !valid)
         return valid;
-    if (payload_size(value) > detail::kMaxFrameBytes)
-        return std::unexpected(
-            Error{Error::Code::LimitExceeded, "graph.limit_exceeded", {{"limit", "value_bytes"}}});
     if (const Result<void> exists = require_owner(*store_, owner); !exists)
         return exists;
     return store_->record(detail::PropSet{owner, std::string(key), std::move(value)});
@@ -580,8 +570,8 @@ Graph::Graph(Graph&&) noexcept = default;
 Graph& Graph::operator=(Graph&&) noexcept = default;
 Graph::~Graph() = default;
 
-Result<Graph> Graph::open(const std::filesystem::path& path) {
-    Result<std::unique_ptr<Store>> store = Store::open(path);
+Result<Graph> Graph::open(const std::filesystem::path& path, const GraphLimits& limits) {
+    Result<std::unique_ptr<Store>> store = Store::open(path, limits);
     if (!store)
         return std::unexpected(store.error());
     return Graph(std::move(*store));
@@ -618,7 +608,7 @@ Result<MergeReport> Graph::ingest_logs(std::span<const std::filesystem::path> lo
     if (store_->has_open_txn())
         return std::unexpected(invalid_argument("txn_already_open"));
     try {
-        return detail::ingest_logs(*store_, logs);
+        return detail::ingest_logs(*store_, logs, detail::ingest_limits_of(store_->limits()));
     } catch (const std::bad_alloc&) {
         return std::unexpected(detail::out_of_memory());
     }
@@ -636,14 +626,23 @@ Result<std::uint64_t> Graph::last_seq() {
     return store_->applied_seq(store_->device());
 }
 
+std::size_t Graph::max_frame_bytes() const {
+    return store_->frame_limits().bytes;
+}
+
+std::size_t Graph::max_stored_bytes() const {
+    return store_->max_blob_bytes();
+}
+
 Result<QueryResult>
 Graph::query(std::string_view cypher, const Params& params, QueryMode mode,
              QueryLimits limits) {  // cppcheck-suppress passedByValue ; küçük, kopyası ucuz
     return detail::cypher::run_query(*this, *store_, cypher, params, mode, limits);
 }
 
-Result<void> check_query(std::string_view cypher, QueryMode mode, const Params& params) {
-    return detail::cypher::check_query(cypher, params, mode);
+Result<void> check_query(std::string_view cypher, QueryMode mode, const Params& params,
+                         const QueryLimits& limits) {
+    return detail::cypher::check_query(cypher, params, mode, limits);
 }
 
 }  // namespace noteapp::graph

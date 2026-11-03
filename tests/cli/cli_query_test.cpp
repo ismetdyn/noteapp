@@ -5,6 +5,7 @@
 
 #include <doctest/doctest.h>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -117,6 +118,34 @@ TEST_CASE("query_exit_codes_follow_spec_cli") {
     // Başarı.
     CHECK(box.run({"query", "RETURN 1"}).exit_code == 0);
     CHECK(box.run({"query", "--", "RETURN 1"}).exit_code == 0);
+}
+
+// L4: kullanıcının kendi sorgusu limits.query.*'tan sınırlanır; 0 = sınırsız. Görünüm profili (limits.view.*)
+// bunu etkilemez.
+TEST_CASE("query_row_limit_comes_from_limits_query_and_zero_is_unlimited") {
+    const Sandbox box("en");
+    write_ok(box, {"CREATE (:N {v: 1}), (:N {v: 2}), (:N {v: 3}), (:N {v: 4}), (:N {v: 5})"});
+    std::string base;
+    {
+        std::ifstream in(box.config_file(), std::ios::binary);
+        base.assign(std::istreambuf_iterator<char>(in), {});
+    }
+    const auto use_limits = [&](std::string_view limits) {
+        std::ofstream config(box.config_file(), std::ios::binary | std::ios::trunc);
+        config << base << limits;
+    };
+
+    use_limits("[limits.query]\nrows = 3\n");
+    const auto capped = box.run({"query", "MATCH (n:N) RETURN n.v"});
+    CHECK(capped.exit_code == 1);
+    CHECK(contains(capped.err, "rows"));
+    CHECK(capped.out.empty());
+
+    use_limits("[limits.query]\nrows = 0\n[limits.view]\nrows = 1\n");
+    const auto open = box.run({"query", "MATCH (n:N) RETURN n.v ORDER BY n.v"});
+    INFO(open.err);
+    CHECK(open.exit_code == 0);
+    CHECK(open.out == "n.v\n1\n2\n3\n4\n5\n");
 }
 
 TEST_CASE("query_foreign_file_is_an_internal_error") {

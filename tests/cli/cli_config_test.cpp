@@ -67,6 +67,23 @@ TEST_CASE("config set and get round-trip scalars, bools, ints and lists") {
     CHECK(list.out.find("sync.idle_seconds = 45\n") != std::string::npos);
 }
 
+TEST_CASE("config list, get and set cover limits keys and 0 means unlimited") {
+    const Sandbox box;
+    CHECK(box.run({"config", "list"}).out.find("limits.search.content_results = 1000\n") !=
+          std::string::npos);
+
+    const auto set = box.run({"config", "set", "limits.search.content_results", "0"});
+    CHECK(set.exit_code == 0);
+    CHECK(set.out == "limits.search.content_results = 0\n");
+    CHECK(box.run({"config", "get", "limits.search.content_results"}).out == "0\n");
+
+    const auto bad = box.run({"config", "set", "limits.search.content_results", "-1"});
+    CHECK(bad.exit_code == 2);
+    CHECK(bad.err.find("limits.search.content_results") != std::string::npos);
+    CHECK(box.run({"config", "get", "limits.search.content_results"}).out == "0\n");
+    CHECK(box.run({"config", "set", "limits.search.nope", "1"}).exit_code == 2);
+}
+
 TEST_CASE("config set with an invalid value or unknown key exits 2 and changes nothing") {
     const Sandbox box;
 

@@ -39,8 +39,9 @@ TEST_CASE("gui row numbers: numbers restart in every folder like the TUI, the ro
     fixture.add_note("iş/d.md", "d\n", 40);
     const auto state = fixture.make_state();
     state->set_expanded("iş", true);
+    // Varsayılan sıra en yeni başta (karar 6): kökte b, a.
     CHECK(numbers(state->browser_rows()) ==
-          Numbers{{"", 0}, {"iş", 1}, {"iş/c.md", 1}, {"iş/d.md", 2}, {"a.md", 2}, {"b.md", 3}});
+          Numbers{{"", 0}, {"iş", 1}, {"iş/c.md", 1}, {"iş/d.md", 2}, {"b.md", 2}, {"a.md", 3}});
     state->set_browser_view(BrowserView::Details);
     state->enter_folder("iş");
     CHECK(numbers(state->browser_rows()) == Numbers{{"iş/c.md", 1}, {"iş/d.md", 2}});

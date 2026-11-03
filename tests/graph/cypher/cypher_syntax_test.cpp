@@ -206,6 +206,56 @@ TEST_CASE("deep_nesting_and_long_chains_are_limit_errors_not_stack_overflows") {
     CHECK(lines(must_query(f.graph, "RETURN " + repeat("(", 60) + "1" + repeat(")", 60))) == Strings{"1"});
 }
 
+// L4: ayrıştırma ve plan sınırları da QueryLimits'tedir (config limits.query.* / limits.view.*); SIZE_MAX
+// sınırsızdır. Varsayılanlar yukarıdaki testlerin bugünkü değerleridir.
+TEST_CASE("parser_and_planner_limits_come_from_query_limits_and_can_be_lifted") {
+    GraphFixture f;
+    const std::string long_text = "RETURN '" + std::string(70000, 'x') + "' AS s";
+    const std::string many_clauses = repeat("WITH 1 AS a ", 100) + "RETURN a";
+    const std::string deep = "RETURN " + repeat("(", 100) + "1" + repeat(")", 100);
+    const std::string long_path = "MATCH (a)-[*1..20]->(b) RETURN count(*)";
+    const std::string many_elements = "MATCH (a)" + repeat("-->()", 300) + " RETURN count(*)";
+    for (const std::string& text : {long_text, many_clauses, deep, long_path, many_elements})
+        check_rejected(f.graph, text, Error::Code::LimitExceeded);
+
+    QueryLimits open;
+    open.max_text_bytes = SIZE_MAX;
+    open.max_clauses = SIZE_MAX;
+    open.max_nesting = SIZE_MAX;
+    open.max_var_length_hops = SIZE_MAX;
+    open.max_pattern_elements = SIZE_MAX;
+    CHECK(std::get<std::string>(
+              must_query(f.graph, long_text, {}, QueryMode::ReadOnly, open).rows.at(0).at(0).v)
+              .size() == 70000);
+    CHECK(lines(must_query(f.graph, many_clauses, {}, QueryMode::ReadOnly, open)) == Strings{"1"});
+    CHECK(lines(must_query(f.graph, deep, {}, QueryMode::ReadOnly, open)) == Strings{"1"});
+    CHECK(lines(must_query(f.graph, long_path, {}, QueryMode::ReadOnly, open)) == Strings{"0"});
+    CHECK(lines(must_query(f.graph, many_elements, {}, QueryMode::ReadOnly, open)) == Strings{"0"});
+
+    QueryLimits tight;
+    tight.max_clauses = 2;
+    const Result<QueryResult> refused =
+        f.graph.query("WITH 1 AS a WITH a AS b RETURN b", {}, QueryMode::ReadOnly, tight);
+    REQUIRE_FALSE(refused.has_value());
+    CHECK(refused.error().code == Error::Code::LimitExceeded);
+}
+
+// Satır sınırı SIZE_MAX'ta kalkar: sınırsız kullanıcı sorgusu bugünkü tavanı aşan sonucu verir.
+TEST_CASE("unlimited_rows_return_more_than_the_old_ceiling") {
+    GraphFixture f;
+    must_write(f.graph, "CREATE (:N), (:N), (:N), (:N), (:N)");
+    QueryLimits capped;
+    capped.max_rows = 3;
+    const Result<QueryResult> refused =
+        f.graph.query("MATCH (n:N) RETURN n", {}, QueryMode::ReadOnly, capped);
+    REQUIRE_FALSE(refused.has_value());
+    CHECK(refused.error().code == Error::Code::LimitExceeded);
+    QueryLimits open;
+    open.max_rows = SIZE_MAX;
+    open.max_duration = std::chrono::milliseconds::max();
+    CHECK(must_query(f.graph, "MATCH (n:N) RETURN n", {}, QueryMode::ReadOnly, open).rows.size() == 5);
+}
+
 TEST_CASE("list_doubling_through_with_chain_is_bounded") {
     GraphFixture f;
     // Sorgu 64 KiB'ten küçük ama değer üstel büyürdü.

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <doctest/doctest.h>
 #include <format>
+#include <functional>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -516,6 +517,52 @@ TEST_CASE("the editor tab bar fits above the editor at every scale, also with ma
                 check_inside_x(rects, active, bar);  // kaydırılan çubukta etkin sekme görünür
                 check_inside_y(rects, active, bar);
             }
+        }
+    }
+}
+
+// G2/G3: palet ve yardım diyaloğu, hızlı ekleme satırı, çöp önizlemesi; en küçük pencerede ve ölçek 2'de.
+TEST_CASE("the palette, the help, the quick add row and the trash preview fit at every scale") {
+    for (const float scale : {1.0F, 2.0F}) {
+        for (const ViewSize size : {ViewSize{1000, 650}, ViewSize{1, 1}}) {
+            CAPTURE(scale);
+            CAPTURE(size.width);
+            LayoutScene scene(size.width, size.height, scale);
+            const View::ItemRect frame = window_frame();
+            const auto check_dialog = [&](const char* first, const char* prefix,
+                                          const std::function<void()>& open) {
+                ItemRects rects;
+                scene.with_dialog(open, [&] { rects = scene.view->item_rects(); });
+                REQUIRE(rects.contains("modal"));
+                check_inside_x(rects, "modal", frame);
+                check_inside_y(rects, "modal", frame);
+                REQUIRE_MESSAGE(rects.contains(first), first);
+                int rows = 0;
+                for (const auto& [name, rect] : rects) {
+                    if (!name.starts_with(prefix))
+                        continue;
+                    ++rows;
+                    check_inside_x(rects, name, rects.at("modal"));  // satırlar kayar: y'de kırpılır
+                }
+                CHECK(rows > 10);
+            };
+            check_dialog("palette_input", "palette:", [&] { scene.state->open_palette(); });
+            check_dialog("dialog_ok", "help:", [&] { scene.state->show_help(); });
+
+            scene.state->begin_quick_add();
+            gui_test::settle(*scene.view);
+            ItemRects rects = scene.view->item_rects();
+            REQUIRE(rects.contains("quick_add"));
+            check_inside_x(rects, "quick_add", rects.at("left_pane"));
+            check_inside_y(rects, "quick_add", frame);
+            scene.state->cancel_quick_add();
+
+            scene.show_trash_view();
+            rects = scene.view->item_rects();
+            REQUIRE(rects.contains("trash_preview"));
+            check_inside_x(rects, "trash_preview", frame);
+            check_inside_y(rects, "trash_preview", frame);
+            check_no_pair_overlaps(rects, {"trash_preview", "left_pane"});
         }
     }
 }

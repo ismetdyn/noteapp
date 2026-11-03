@@ -1,7 +1,7 @@
 #include "tui/input_view.hpp"
 
 #include "core/i18n.hpp"
-#include "tui/display_text.hpp"
+#include "edit/display_text.hpp"
 #include "tui/view.hpp"
 
 #include <algorithm>

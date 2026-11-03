@@ -45,7 +45,7 @@ LogScan scan(const std::string& file) {
     static const noteapp::test::TempDir directory;
     const std::filesystem::path path = directory.path() / "scan.oplog";
     noteapp::graph::test::write_file(path, file);
-    Result<std::optional<LogReader>> opened = LogReader::open(path);
+    Result<std::optional<LogReader>> opened = LogReader::open(path, kDefaultFrameBytes);
     REQUIRE(opened.has_value());
     REQUIRE(opened->has_value());
     LogReader& reader = **opened;
@@ -102,7 +102,9 @@ TEST_CASE("log_header_is_magic_version_device") {
     const std::string header = encode_log_header(kDevice);
     REQUIRE(header.size() == kLogHeaderBytes);
     CHECK(header.substr(0, 4) == "NGOL");
-    CHECK(static_cast<std::uint8_t>(header[4]) == kLogVersion);
+    // Varsayılan v1: bölünmesi gereken çerçeve yoksa eski sürümler de okur.
+    CHECK(static_cast<std::uint8_t>(header[4]) == kLogVersionWhole);
+    CHECK(static_cast<std::uint8_t>(encode_log_header(kDevice, kLogVersionParts)[4]) == kLogVersion);
     CHECK(std::memcmp(header.data() + 5, kDevice.data(), kDevice.size()) == 0);
 }
 
@@ -184,7 +186,7 @@ TEST_CASE("corrupt_frame_stops_the_log_and_keeps_the_prefix") {
 TEST_CASE("oversized_length_is_rejected_before_it_is_read") {
     std::string log = encode_log_header(kDevice) + encode_log_frame("x");
     REQUIRE(log.size() >= kLogHeaderBytes + sizeof(std::uint32_t));
-    const auto over = static_cast<std::uint32_t>(kMaxFrameBytes + 1);
+    const auto over = static_cast<std::uint32_t>(kDefaultFrameBytes + 1);
     put_u32_le(log, kLogHeaderBytes, over);
     const LogScan result = scan(log);
     REQUIRE(result.error.has_value());
@@ -193,7 +195,7 @@ TEST_CASE("oversized_length_is_rejected_before_it_is_read") {
     CHECK(result.payloads.empty());
 
     // Sınırdaki uzunluk bozuk sayılmaz: dosya henüz o kadar gelmemiştir.
-    put_u32_le(log, kLogHeaderBytes, static_cast<std::uint32_t>(kMaxFrameBytes));
+    put_u32_le(log, kLogHeaderBytes, static_cast<std::uint32_t>(kDefaultFrameBytes));
     const LogScan at_limit = scan(log);
     CHECK_FALSE(at_limit.error.has_value());
     CHECK(at_limit.partial_tail);
