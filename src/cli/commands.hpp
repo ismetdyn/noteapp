@@ -8,6 +8,8 @@
 #include <expected>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace noteapp::cli {
 
@@ -40,8 +42,14 @@ int run_query(const ParsedArgs& args, const core::Config& config);
 // `note query`nin stdout biçimi: tablo ya da `--json` (commands_query.cpp).
 std::string query_output(const graph::QueryResult& result, bool json);
 int run_tags(const ParsedArgs& args, const core::Config& config);  // args.rest: [--json]
+// args.rest: YOL... [--folder K] [--type T] [--name AD] [--overwrite] [--json] [--no-sync]
+int run_import(const ParsedArgs& args, const core::Config& config);
 // args.rest: save AD CYPHER [--force] | ls [--json] | run AD [--json] | rm AD | show AD
 int run_view(const ParsedArgs& args, const core::Config& config);
+// args.rest: zsh | bash | fish. Tamamlama betiğini stdout'a yazar (commands_complete.cpp).
+int run_completion(const ParsedArgs& args);
+// args.rest: TÜR [ÖNEK]. Kabuk betiklerinin gizli yardımcısı: adayları satır satır yazar, salt okur.
+int run_complete(const ParsedArgs& args, const core::Config& config);
 // Alt komut dağıtıcısı; gerçeklenmemiş olanlar "henüz kullanılamıyor" (çıkış 2) verir.
 int run_reserved(const ParsedArgs& args, const core::Config& config);
 int run_invalid(const ParsedArgs& args);
@@ -59,6 +67,9 @@ std::expected<core::NoteInfo, int> pick_best_note(const core::NoteStore& store, 
 
 // stdin gerçek bir terminal mi (Windows'ta NUL aygıtı TTY sayılmaz).
 bool stdin_is_tty();
+
+// `note config list` anahtarları: ayar ekranlarınınkiler ve [limits] (yalnız dosya ve CLI).
+std::vector<std::pair<std::string, std::string>> all_entries(const core::Config& config);
 
 // Kaydetmek için config'i diskten yeniden okur. Bozuk (sözdizimi hatalı/okunamayan) dosya varsayılanlarla
 // okunur ve üzerine yazmak elle yazılmış ayarları yok ederdi: hatayı yazar, nullopt döner (çıkış 1).

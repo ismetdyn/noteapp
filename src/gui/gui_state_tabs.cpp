@@ -11,24 +11,6 @@
 
 namespace noteapp::gui {
 
-namespace {
-
-// UTF-8 devam baytı 10xxxxxx'tir.
-constexpr unsigned char kUtf8ContinuationMask = 0xC0;
-constexpr unsigned char kUtf8ContinuationBits = 0x80;
-
-// Ofset metin sonunu geçmez, kod noktasının ortasındaysa başına çekilir: ImGui imleci bayt ofsetidir, ortaya
-// yazılan karakter UTF-8'i bozardı.
-std::size_t code_point_start(const std::string& text, std::size_t offset) {
-    offset = std::min(offset, text.size());
-    while (offset > 0 && offset < text.size() &&
-           (static_cast<unsigned char>(text[offset]) & kUtf8ContinuationMask) == kUtf8ContinuationBits)
-        --offset;
-    return offset;
-}
-
-}  // namespace
-
 GuiState::NoteTab* GuiState::find_tab(std::uint64_t id) {
     const auto found = std::ranges::find(tabs_, id, &NoteTab::id);
     return found == tabs_.end() ? nullptr : &*found;
@@ -60,7 +42,7 @@ std::vector<TabSummary> GuiState::tabs() const {
     for (const NoteTab& tab : tabs_) {
         const bool live = tab.id == active_tab_ && !parked_;
         const bool draft = live ? new_note_ : tab.saved.new_note;
-        const std::string& text = live ? buffer_ : tab.saved.buffer;
+        const std::string& text = live ? editor_.text() : tab.saved.editor.text();
         const auto note = tab_note(tab);
         TabSummary summary;
         summary.id = tab.id;
@@ -79,7 +61,7 @@ bool GuiState::keeps_active_tab() const {
     const NoteTab* tab = find_tab(active_tab_);
     if (tab == nullptr)
         return false;
-    const bool draft_text = !parked_ && new_note_ && !is_blank(buffer_);
+    const bool draft_text = !parked_ && new_note_ && !is_blank(editor_.text());
     if (!parked_ && !shown_ && !draft_text)
         return false;
     return tab->pinned || tab->kept || draft_text;
@@ -125,7 +107,7 @@ void GuiState::stash() {
     if (tab == nullptr || parked_)
         return;
     tab->saved = EditorSnapshot{.shown = shown_,
-                                .buffer = std::exchange(buffer_, {}),
+                                .editor = std::exchange(editor_, {}),
                                 .generation = buffer_generation_,
                                 .draft_folder = draft_folder_,
                                 .doc = std::exchange(doc_, {}),
@@ -149,21 +131,20 @@ void GuiState::restore_tab(std::uint64_t id, bool focus_editor) {
     selected_folder_.reset();
     EditorSnapshot saved = std::exchange(tab->saved, {});
     const bool loaded = std::exchange(tab->loaded, true);
-    const std::optional<TextSelection> cursor = tab->cursor;
     const auto note = saved.shown && !saved.new_note ? std::optional(saved.shown->path) : std::nullopt;
     if (loaded) {
         shown_ = std::move(saved.shown);
-        buffer_ = std::move(saved.buffer);
-        hidden_controls_ = core::count_hidden_controls(buffer_);  // set_editor'dan geçmiyor
+        editor_ = std::move(saved.editor);  // imleç, seçim ve geri alma geçmişi sekmeyle döner
+        hidden_controls_ = core::count_hidden_controls(editor_.text());  // set_editor'dan geçmiyor
         buffer_generation_ = saved.generation;
         draft_folder_ = std::move(saved.draft_folder);
         editable_ = saved.editable;
         dirty_ = saved.dirty;
         new_note_ = saved.new_note;
+        draft_size_ = editor_.text().size();  // taslağın tipi editörle döner; sayaç bu boydan sürer
         doc_ = std::move(saved.doc);
         autosave_.cancel();
         selection_key_.clear();
-        editor_selection_.reset();
     } else {
         clear_live();
         if (note)
@@ -187,13 +168,8 @@ void GuiState::restore_tab(std::uint64_t id, bool focus_editor) {
         show_note(model_.note_at(row));
     }
     reload_links();
-    if (focus_editor) {
-        // Not dışarıda değişip yeniden okunduysa saklı ofset artık kod noktası sınırında olmayabilir.
-        if (cursor)
-            editor_selection_ = TextSelection{code_point_start(buffer_, cursor->start),
-                                              code_point_start(buffer_, cursor->end)};
+    if (focus_editor)
         request_focus(FocusRequest::Editor);
-    }
 }
 
 bool GuiState::switch_tab(std::uint64_t id, bool focus_editor) {
@@ -218,8 +194,8 @@ bool GuiState::activate_tab(std::uint64_t id) {
 
 // Yeni boş sekme en sona eklenir (ImGui de yeni sekmeyi sona koyar; sıralar ayrışmaz) ve etkin olur.
 bool GuiState::push_tab() {
-    if (tabs_.size() >= kMaxTabs) {
-        status_ = core::tr("gui.tab_limit", {{"max", std::to_string(kMaxTabs)}});
+    if (!app::can_add_tab(tabs_.size(), config_.limits.app.tabs)) {
+        status_ = core::tr("gui.tab_limit", {{"max", config_.limits.app.tabs.text}});
         return false;
     }
     if (!leave_tab())
@@ -247,7 +223,7 @@ void GuiState::drop_active_tab() {
         current_row_ = -1;
         return;
     }
-    active_tab_ = tabs_[std::min(index, tabs_.size() - 1)].id;
+    active_tab_ = tabs_[app::neighbour_after_close(index, tabs_.size())].id;
     if (!parked_)  // park edilmişse editör zaten boş: yeni etkin sekme de park edilmiş kalır
         restore_tab(active_tab_, false);
 }
@@ -296,7 +272,7 @@ void GuiState::close_missing_tabs(const std::unordered_set<std::string>& present
 bool GuiState::confirm_close_drafts() {
     std::vector<std::uint64_t> drafts;
     for (const NoteTab& tab : tabs_) {
-        if (!(tab.id == active_tab_ && !parked_) && tab.saved.new_note && !is_blank(tab.saved.buffer))
+        if (!(tab.id == active_tab_ && !parked_) && tab.saved.new_note && !is_blank(tab.saved.editor.text()))
             drafts.push_back(tab.id);
     }
     for (const std::uint64_t id : drafts) {
@@ -306,34 +282,28 @@ bool GuiState::confirm_close_drafts() {
     return true;
 }
 
-bool GuiState::restore_tabs(const std::vector<SavedTab>& saved, std::size_t active_index) {
+bool GuiState::restore_tabs(const app::SavedTabs& saved) {
+    // Silinmiş, taşınmış, yinelenen ya da elle bozulmuş girdi atlanır; sınır limits.app.tabs (TUI ile ortak).
+    const app::RestoredTabs plan = app::restorable_tabs(
+        saved, [this](const core::NotePath& path) { return model_.index_of(path) >= 0; },
+        config_.limits.app.tabs);
+    if (plan.tabs.empty())
+        return false;
     std::vector<NoteTab> restored;
-    std::uint64_t active = 0;
-    for (std::size_t index = 0; index < saved.size() && restored.size() < kMaxTabs; ++index) {
-        const auto path = core::NotePath::parse(saved[index].path);
-        if (!path)
-            continue;
-        const int row = model_.index_of(*path);
-        const bool duplicate =
-            std::ranges::any_of(restored, [&](const NoteTab& tab) { return tab.saved.shown->path == *path; });
-        if (row < 0 || duplicate)  // silinmiş, taşınmış ya da elle bozulmuş girdi
-            continue;
+    restored.reserve(plan.tabs.size());
+    for (const app::RestoredTab& entry : plan.tabs) {
         NoteTab tab;
         tab.id = next_tab_id_++;
-        tab.pinned = saved[index].pinned;
-        tab.kept = saved[index].kept;
+        tab.pinned = entry.pinned;
+        tab.kept = entry.kept;
         tab.loaded = false;
-        tab.saved.shown = model_.note_at(row);
-        if (index == active_index)
-            active = tab.id;
+        tab.saved.shown = model_.note_at(model_.index_of(entry.path));
         restored.push_back(std::move(tab));
     }
-    if (restored.empty())
-        return false;
     // Açılıştaki ilk satır gösterimi bırakılır: henüz düzenlenmedi.
     clear_live();
     tabs_ = std::move(restored);
-    active_tab_ = active != 0 ? active : tabs_.front().id;
+    active_tab_ = tabs_[plan.active].id;
     parked_ = true;
     restore_tab(active_tab_, false);
     return true;
@@ -342,10 +312,9 @@ bool GuiState::restore_tabs(const std::vector<SavedTab>& saved, std::size_t acti
 void GuiState::next_tab(int delta) {
     if (tabs_.empty())
         return;
-    const auto count = static_cast<int>(tabs_.size());
-    const auto index = static_cast<int>(std::ranges::find(tabs_, active_tab_, &NoteTab::id) - tabs_.begin());
-    const int target = (((index + delta) % count) + count) % count;
-    activate_tab(tabs_[static_cast<std::size_t>(target)].id);
+    const auto index =
+        static_cast<std::size_t>(std::ranges::find(tabs_, active_tab_, &NoteTab::id) - tabs_.begin());
+    activate_tab(tabs_[app::cycled_tab(index, delta, tabs_.size())].id);
 }
 
 void GuiState::new_tab() {
@@ -361,7 +330,7 @@ void GuiState::close_tab(std::uint64_t id) {
     if (tab == nullptr)
         return;
     if (id != active_tab_ || parked_) {
-        if (!tab->saved.new_note || is_blank(tab->saved.buffer)) {
+        if (!tab->saved.new_note || is_blank(tab->saved.editor.text())) {
             erase_tab(id);
             return;
         }
@@ -422,13 +391,6 @@ void GuiState::open_in_new_tab(const core::NotePath& path) {
     select_row(model_.index_of(path));
     if (NoteTab* tab = find_tab(id))
         tab->kept = true;
-}
-
-void GuiState::remember_cursor(TextSelection cursor) {
-    if (parked_)
-        return;
-    if (NoteTab* tab = find_tab(active_tab_))
-        tab->cursor = cursor;
 }
 
 }  // namespace noteapp::gui

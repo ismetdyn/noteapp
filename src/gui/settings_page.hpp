@@ -56,7 +56,7 @@ public:
 
     void save();             // Kaydet
     void revert();           // Geri al: alanlar kaydedilmiş değerlere döner
-    void test_connection();  // enable (gerekirse) + tek senkron, işçi iş parçacığında
+    void test_connection();  // app::run_connection_test (enable + tek senkron), işçi iş parçacığında
     void browse_notes_dir();
     void save_token();
     void clear_token();
@@ -84,6 +84,7 @@ private:
     std::map<std::string, Field> fields_;
     std::string global_error_;
     std::string test_result_;
+    std::string token_host_;  // `token`'ın yazıldığı host; değişince token silinir
     bool token_enabled_ = false;
     bool token_stored_ = false;
     bool testing_ = false;

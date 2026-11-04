@@ -338,6 +338,7 @@ void View::draw_toolbar() {
          glyph(core::file_icon(""))},
         {"toolbar_new_folder", "gui.new_folder", "gui.toolbar_new_folder_tip", true,
          &gui_command("folder.new"), glyph(core::folder_icon(false))},
+        {"toolbar_import", "gui.toolbar_import", "gui.toolbar_import_tip", true, &gui_command("import"), {}},
         {"toolbar_rename",
          "gui.rename_folder",
          "gui.toolbar_rename_tip",
@@ -379,11 +380,24 @@ void View::draw_toolbar() {
         }
         first = false;
         ImGui::BeginDisabled(!action.enabled);
-        if (button(action.name, label))
-            queue_command(*action.command);
+        if (button(action.name, label)) {
+            if (action.command == &gui_command("import"))
+                ImGui::OpenPopup("##import_menu");  // dosya mı klasör mü: yerel diyaloglar ayrıdır
+            else
+                queue_command(*action.command);
+        }
         ImGui::SetItemTooltip(
             "%s", core::tr(action.tooltip_key).c_str());  // kapalı düğmede de neden/kısayol görünsün
         ImGui::EndDisabled();
+    }
+    if (ImGui::BeginPopup("##import_menu")) {
+        if (ImGui::MenuItem(core::tr("gui.import_files").c_str()))
+            queue([this] { state_.request_import(GuiState::ImportRequest::Files); });
+        remember_item_center("import:files");
+        if (ImGui::MenuItem(core::tr("gui.import_folder").c_str()))
+            queue([this] { state_.request_import(GuiState::ImportRequest::Folders); });
+        remember_item_center("import:folders");
+        ImGui::EndPopup();
     }
     draw_view_switch(row_start_x, row_width, gap);
     ImGui::PopItemFlag();

@@ -53,6 +53,8 @@ struct ListHost {
     std::function<void()> refresh_notes;
     std::function<void()> notify_changed;
     core::Config* config = nullptr;  // palet `icons.toggle` günceller; yalnız UI iş parçacığı yazar
+    // Not ya da klasör taşındı (F2, `m`, klasör adı): açık sekmeler yeni yolu izler. Listeden önce çağrılır.
+    std::function<void(const std::string& from, const std::string& to)> on_moved = {};
 };
 
 class ListActions {
@@ -75,6 +77,9 @@ public:
     void begin_move_to(std::optional<RenameState>& rename);
     // `L`: boş girdi, Tab not yollarını önerir; Enter NoteStore::add_relation, hata girdide kalır.
     void begin_link(std::optional<RenameState>& rename);
+    // Palet `import`: boş yol girdisi; Enter app::import_paths'le `folder`a alır (GUI ile aynı kural). Hiçbir
+    // şey alınamazsa neden girdide kalır; alınınca özet durum satırında, ilk not REVIEW'da açılır.
+    void begin_import(std::optional<RenameState>& rename, std::string folder);
     // `a` Enter: `/` ile biten ad klasördür, Listede kalır; değilse boş not oluşur ve `open` çağrılır. Ad
     // klasör görünümünde geçerli klasöre göredir. Hata satırda kalır.
     void submit_new_row(std::optional<NewRowState>& row, const NewRowDefaults& defaults,
@@ -99,9 +104,11 @@ private:
     void delete_note(const core::NotePath& target, const app::Prompts& prompts);
     void empty_trash(const app::Prompts& prompts);
     void save_prefs();
+    void moved(const std::string& from, const std::string& to) const;
     void submit_rename(std::optional<RenameState>& rename);
     void submit_move_to(std::optional<RenameState>& rename);
     void submit_link(std::optional<RenameState>& rename);
+    void submit_import(std::optional<RenameState>& rename);
     // `P`: GUI gibi `<ad>.pdf` önerir; PDF diskteki baytlardan noteapp_pdf ile üretilir. Var olan dosya ancak
     // aynı yolda ikinci Enter'la ezilir.
     void begin_export(std::optional<RenameState>& rename);

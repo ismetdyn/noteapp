@@ -165,7 +165,7 @@ void GuiState::link_note() {
         return;
     }
     changed();
-    map_edges_stale_ = true;
+    map_.edges_changed();
     reload_links();
     status_ = core::tr("gui.linked", {{"path", target->string()}});
 }
@@ -182,7 +182,7 @@ void GuiState::unlink_note(const core::NotePath& other) {
         return;
     }
     changed();
-    map_edges_stale_ = true;
+    map_.edges_changed();
     reload_links();
     status_ = core::tr("gui.unlinked", {{"path", other.string()}});
 }

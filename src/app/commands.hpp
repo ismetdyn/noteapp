@@ -41,6 +41,7 @@ inline constexpr CommandSpec kCommandRegistry[] = {
     {"external", "command.external", kInList | kInPreview, CommandNeeds::Note},
     {"save", "command.save", kInEditor, CommandNeeds::Note},
     {"folder.new", "command.folder_new", kInList},
+    {"import", "command.import", kInList},  // dosya/klasör içe alma (app::import_paths)
     // Seçim üzerinde
     {"move", "command.move", kInList | kInPreview | kInEditor, CommandNeeds::Row},
     {"rename", "command.rename", kInList | kInPreview, CommandNeeds::Row},
@@ -112,6 +113,7 @@ inline constexpr CommandSpec kCommandRegistry[] = {
     {"pane.narrow", "command.pane_narrow", kInList | kInPreview | kInTrash},
     {"pane.wide", "command.pane_wide", kInList | kInPreview | kInTrash},
     {"pane.zoom", "command.pane_zoom", kInList | kInPreview | kInTrash},
+    {"tab.open", "command.tab_open", kInList | kInPreview, CommandNeeds::Note},
     {"tab.new", "command.tab_new", kAnywhere},
     {"tab.close", "command.tab_close", kInEditor},
     {"tab.next", "command.tab_next", kAnywhere},

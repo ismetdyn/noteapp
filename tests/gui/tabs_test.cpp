@@ -317,19 +317,34 @@ TEST_CASE(
     CHECK(scene.state->buffer() == "[[b]] alfa\n");
 }
 
-TEST_CASE("tabs: the number of open tabs is capped with a status message") {
+TEST_CASE("tabs: the number of open tabs is capped by limits.app.tabs with a status message") {
     TabsScene scene;
+    constexpr std::size_t kCap = 5;
     constexpr std::size_t kExtra = 4;
-    for (std::size_t i = 0; i < GuiState::kMaxTabs + kExtra; ++i)
+    scene.fixture.config.limits.app.tabs = noteapp::core::Limit{kCap, std::to_string(kCap)};
+    scene.start();
+    for (std::size_t i = 0; i < kCap + kExtra; ++i)
         scene.fixture.add_note(std::format("n{:02}.md", i), "x\n", 50);
     scene.state->rescan();
-    for (std::size_t i = 0; i < GuiState::kMaxTabs + kExtra; ++i)
+    for (std::size_t i = 0; i < kCap + kExtra; ++i)
         scene.state->open_in_new_tab(np(std::format("n{:02}.md", i)));
-    CHECK(scene.state->tabs().size() == GuiState::kMaxTabs);
-    CHECK(scene.state->status().find(std::to_string(GuiState::kMaxTabs)) != std::string::npos);
+    CHECK(scene.state->tabs().size() == kCap);
+    CHECK(scene.state->status().find(std::to_string(kCap)) != std::string::npos);
     scene.state->new_tab();
-    CHECK(scene.state->tabs().size() == GuiState::kMaxTabs);
+    CHECK(scene.state->tabs().size() == kCap);
     CHECK_FALSE(scene.state->is_new_note());
+}
+
+// Sabit tavan yok (kullanıcı kuralı): varsayılan 0, eski 32 sekme sınırı kalktı.
+TEST_CASE("tabs: with the default limit more tabs open than the old fixed cap") {
+    TabsScene scene;
+    constexpr std::size_t kMany = 40;
+    for (std::size_t i = 0; i < kMany; ++i)
+        scene.fixture.add_note(std::format("n{:02}.md", i), "x\n", 50);
+    scene.state->rescan();
+    for (std::size_t i = 0; i < kMany; ++i)
+        scene.state->open_in_new_tab(np(std::format("n{:02}.md", i)));
+    CHECK(scene.state->tabs().size() >= kMany);  // açılışta gösterilen notun sekmesi de durur
 }
 
 TEST_CASE("tabs: each tab keeps its own preview toggle; links, info and the map follow the active tab") {
@@ -366,12 +381,16 @@ TEST_CASE("tabs: the hidden-character warning follows the active tab (T91)") {
     CHECK(scene.state->hidden_controls() == 0);
 }
 
+// İmleç ve seçim sekmenin EditorBuffer'ındadır: sekme dönünce aynen gelir.
 TEST_CASE("tabs: returning to a tab puts the editor cursor back where it was") {
     TabsScene scene;
     scene.open("a.md");
-    scene.state->remember_cursor({3, 5});
+    for (int step = 0; step < 3; ++step)
+        scene.state->editor_key(noteapp::tui::Key::Right);
+    scene.state->editor_key(noteapp::tui::Key::ShiftRight);
+    scene.state->editor_key(noteapp::tui::Key::ShiftRight);
     scene.state->open_in_new_tab(np("c.md"));
-    scene.state->remember_cursor({1, 1});
+    scene.state->editor_key(noteapp::tui::Key::Right);
     REQUIRE(scene.state->activate_tab(tab_id(*scene.state, "a.md")));
     REQUIRE(scene.state->editor_selection());
     CHECK(scene.state->editor_selection()->start == 3);
@@ -498,19 +517,19 @@ TEST_CASE("tabs: closing a missing shown note in the same scan as a folder renam
 }
 
 // İnceleme 4: dışarıda değişen notta saklı imleç kod noktasının ortasına düşmez (yazılan bayt UTF-8'i
-// bozardı).
+// bozardı). Yeniden okuma imleci aynı satır/sütunda tutar (TUI EditorBuffer::reload): sütun 2, "aç"ın sonu.
 TEST_CASE("tabs: a remembered cursor is moved back to a code point boundary after a reload") {
     TabsScene scene;
     scene.open("a.md");
-    scene.state->remember_cursor({2, 2});
+    scene.state->editor_key(noteapp::tui::Key::Right);
+    scene.state->editor_key(noteapp::tui::Key::Right);
     scene.state->open_in_new_tab(np("c.md"));
-    scene.fixture.add_note("a.md", "aç\n");  // ofset 2: 'ç'nin ikinci baytı
+    scene.fixture.add_note("a.md", "aç\n");
     scene.state->rescan();
     REQUIRE(scene.state->activate_tab(tab_id(*scene.state, "a.md")));
     REQUIRE(scene.state->buffer() == "aç\n");
-    REQUIRE(scene.state->editor_selection());
-    CHECK(scene.state->editor_selection()->start == 1);
-    CHECK(scene.state->editor_selection()->end == 1);
+    CHECK_FALSE(scene.state->editor_selection());
+    CHECK(scene.state->editor().buffer().cursor() == 3);
 }
 
 // A5b: klasör yeniden adlandırılınca arka plandaki sekmenin belgesi de yeni yolu izler; yoksa düzenleme eski

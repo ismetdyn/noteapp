@@ -1,4 +1,5 @@
 #include "cli/args.hpp"
+#include "cli/command_table.hpp"
 #include "cli/commands.hpp"
 #include "cli/highlight.hpp"
 #include "core/config.hpp"
@@ -31,10 +32,13 @@ int main(int argc, char** argv) {
     const core::LoadedConfig loaded = core::load_config();
     core::init_i18n(loaded.config.language);
     core::init_log(loaded.config.tuning.log_max_bytes);
-    const cli::ParsedArgs args = cli::parse_args(cli::utf8_arguments(argc, argv));
-    // Arka plan senkronu ayrık süreçtir ve sessiz kalır (uyarıyı ön plandaki komut zaten gösterdi).
-    const bool silent = args.kind == cli::ParsedArgs::Kind::Reserved && args.command == "sync" &&
-                        !args.rest.empty() && args.rest.front() == "--background";
+    const cli::ParsedArgs args = cli::parse_args(core::utf8_arguments(argc, argv));
+    // Arka plan senkronu ayrık süreçtir ve sessiz kalır (uyarıyı ön plandaki komut zaten gösterdi). Kabuk
+    // tamamlaması da sessizdir: stderr her Tab'da istemin ortasına basılırdı.
+    const bool reserved = args.kind == cli::ParsedArgs::Kind::Reserved;
+    const bool silent =
+        reserved && ((args.command == "sync" && !args.rest.empty() && args.rest.front() == "--background") ||
+                     args.command == cli::kCompleteCommand);
     for (const auto& warning : loaded.warnings) {
         const std::string message = core::format_error(warning);
         core::log_warn(message);

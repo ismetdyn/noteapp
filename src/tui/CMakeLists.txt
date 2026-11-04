@@ -7,8 +7,10 @@ add_library(noteapp_tui
     data_view.cpp
     commands.cpp
     link_panel.cpp
+    map_view.cpp
     list_actions.cpp
     input_view.cpp
+    editor_tabs.cpp
     editor_view.cpp
     termination.cpp
     pane_layout.cpp

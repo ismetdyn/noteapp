@@ -427,8 +427,7 @@ TEST_CASE("sync_restart_needed ignores editor and author changes but not sync wi
     CHECK(changed([](core::Config& c) { c.notes_dir /= "alt"; }));
 }
 
-TEST_CASE(
-    "connection test: Enter on its slot asks to test; the form enables, the worker syncs, the result shows") {
+TEST_CASE("connection test: Enter on its slot asks to test; the worker enables and syncs, the result shows") {
     World w;
     auto c = w.config();
     c.notes_dir = w.dir.path() / "fresh";  // World'ün a.md'si eski düzendir; senkron yeni depoda koşar
@@ -444,10 +443,10 @@ TEST_CASE(
     REQUIRE(candidate.has_value());
     CHECK(s.testing());
     CHECK_FALSE(s.begin_test(c).has_value());  // tek test birden
-    // main'in işçisi aynı adayla tek senkron koşar; sonucu forma döner.
-    const auto synced = sync::SyncService(*candidate).sync_now();
-    CHECK(synced.has_value());
-    s.finish_test(synced ? std::expected<void, core::Error>{} : std::unexpected(synced.error()));
+    // main'in işçisi aynı adayla enable + tek senkron koşar; sonucu forma döner.
+    const auto outcome = app::run_connection_test(*candidate, tui::system_sync_enabler());
+    CHECK(outcome.has_value());
+    s.finish_test(outcome);
     CHECK_FALSE(s.testing());
     CHECK(s.test_result() == core::tr("tui.test_ok"));
     const std::string small = screen_text(s, 60, 15);
@@ -461,14 +460,60 @@ TEST_CASE(
     CHECK(s.test_result() == core::tr("tui.test_ok"));
 }
 
+// Sev-3 (T1+T2 review): test kasaya yazmazdı ama TUI yazıyordu; iptal edilen formda token kasada kalıyordu.
+// GUI ile aynı: test kasaya dokunmaz, enable da UI iş parçacığında koşmaz (ağa çıkar, arayüz donardı).
+TEST_CASE("connection test: begin_test writes nothing to the keychain and leaves enable to the worker") {
+    World w;
+    auto c = w.config();
+    c.sync.remote = "https://github.com/me/notes.git";
+    int enables = 0;
+    auto s = w.form(c, [&](const core::Config&, bool) -> std::expected<void, core::Error> {
+        ++enables;
+        return {};
+    });
+    focus_token(s);
+    type(s, kSecret);
+    const std::optional<core::Config> candidate = s.begin_test(c);
+    REQUIRE(candidate.has_value());
+    CHECK(s.testing());
+    CHECK(enables == 0);
+    CHECK(w.vault.calls.empty());
+    CHECK(s.token_length() == kSecret.size());  // yazılan token formda kalır: Kaydet ya da Enter saklar
+}
+
+// Sev-3: yazılmış token yazıldığı host'a aittir; remote başka host'a dönünce Kaydet onu yeni host'a
+// götürürdü.
+TEST_CASE("a typed token is dropped when the remote moves to another host and never reaches it") {
+    World w;
+    auto c = w.config();
+    c.sync.remote = "https://a.example/me/notes.git";
+    auto s = w.form(c, [](const core::Config&, bool) -> std::expected<void, core::Error> { return {}; });
+    focus_token(s);
+    type(s, kSecret);
+    REQUIRE(s.token_length() == kSecret.size());
+    set_remote(s, "https://b.example/me/notes.git");
+    CHECK(s.token_length() == 0);
+    enable_toggle(s);
+    REQUIRE(s.submit(c));
+    CHECK(w.vault.calls.empty());
+    CHECK_FALSE(w.vault.tokens.contains("b.example"));
+}
+
 TEST_CASE("connection test: a failing enable is the result and no sync starts") {
     World w;
     auto c = w.config();
+    c.notes_dir = w.dir.path() / "fresh";
     c.sync.remote = utf8(w.make_remote("remote.git"));
-    auto s = w.form(c, [](const core::Config&, bool) -> std::expected<void, core::Error> {
-        return std::unexpected(core::Error{core::Error::Code::Io, "sync.keychain_unavailable", {}});
-    });
-    CHECK_FALSE(s.begin_test(c).has_value());
+    auto s = w.form(c);
+    const std::optional<core::Config> candidate = s.begin_test(c);
+    REQUIRE(candidate.has_value());
+    const auto outcome = app::run_connection_test(
+        *candidate, [](const core::Config&, bool) -> std::expected<void, core::Error> {
+            return std::unexpected(core::Error{core::Error::Code::Io, "sync.keychain_unavailable", {}});
+        });
+    CHECK_FALSE(outcome.has_value());
+    CHECK_FALSE(fs::exists(c.notes_dir / ".git"));  // enable düştü: senkron başlamadı, depo kurulmadı
+    s.finish_test(outcome);
     CHECK_FALSE(s.testing());
     CHECK(has(s.test_result(), core::tr("sync.keychain_unavailable")));
     // Uzun neden düğmeyi en küçük pencerede de itmez.

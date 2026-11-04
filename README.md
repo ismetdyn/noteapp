@@ -155,6 +155,9 @@ note                                       # metin yok: editör açılır; boş 
 note -e "Başlık"                           # editörü ön içerikle aç
 note ls [SORGU] [-f KLASÖR]                # listele (sorgu: bulanık sıra, yoksa en yeni önce); argüman alır: note ls "plan tag:proje type:md"
 note tags [--json]                         # #etiketler ve not sayıları
+note import rapor.txt                      # dosyayı bayt bayt not yap: rapor.txt (ad doluysa rapor-2.txt)
+note import ~/belgeler --folder arsiv      # klasörü alt klasörleriyle: arsiv/belgeler/...; bağ ve gizli girdi gelmez
+note import x.log --name kayit.md --overwrite   # tek dosyaya ad ver, aynı adlı notun üzerine yaz; --json, --type TİP
 note view save AD 'CYPHER' [--force]       # salt okunur sorguyu adla kaydet; view ls|run AD|show AD|rm AD, --json
 note find bütçe onay                       # içerik araması → yol:satır: kesit
 note show SORGU | note edit SORGU          # en iyi eşleşmeyi yazdır / editörde aç
@@ -167,11 +170,49 @@ note graph status [--ignore-skipped | --clear-skipped]  # geçerli notes_dir'de 
 note graph export --format jsonl [-o DOSYA] | note graph import [--overwrite] DOSYA   # tüm graph'ı taşı
 note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]
 note config path | list | get ANAHTAR | set ANAHTAR DEĞER
+note completion zsh | bash | fish          # kabuk tamamlama betiği (aşağıda)
+note --help | note help KOMUT              # tüm komutlar / tek komutun ayrıntısı
 note -- ls                                 # "ls" metnini not et (alt komut adıyla çakışma)
 ```
 
 `--no-sync` yazan komutlarda arka plan senkronunu atlar. Çıkış kodları: `0` başarı · `1` kullanıcı kaynaklı (iptal,
 bulunamadı) · `2` kullanım hatası · `3` G/Ç/iç hata · `4` senkron hatası.
+
+#### Kabuk tamamlama
+
+`note completion zsh|bash|fish` tamamlama betiğini stdout'a yazar, dosyaya kendisi yazmaz. Tab komutları, fiilleri
+(`sync status`, `view run`...), seçenekleri, not yollarını, klasörleri, tipleri, etiketleri, görünümleri, config
+anahtarlarını ve `ls`/`find` sorgusunda `tag:`, `type:`, `in:`, `view:`... argümanlarını önerir. zsh ve fish menüsünde
+(fzf-tab dahil) açıklamalar arayüz dilindedir. Dinamik değerleri gizli `note __complete` verir: yalnız okur, depo yoksa
+ya da eski notlar geçiş bekliyorsa boş döner. Betik `note` sürümüyle değişir; güncellemeden sonra yeniden üret.
+
+zsh (fzf-tab ve zsh-autosuggestions ile de çalışır):
+
+```zsh
+mkdir -p ~/.local/share/zsh/site-functions
+note completion zsh > ~/.local/share/zsh/site-functions/_note
+# ~/.zshrc içinde compinit'ten (oh-my-zsh'te `source $ZSH/oh-my-zsh.sh`ten) ÖNCE:
+fpath=(~/.local/share/zsh/site-functions $fpath)
+```
+
+Sonra `rm -f ~/.zcompdump*; exec zsh`. Yazılabilir bir fpath dizinin varsa `note completion zsh > "${fpath[1]}/_note"` de olur.
+
+bash (`~/.bashrc`):
+
+```bash
+source <(note completion bash)
+```
+
+fish:
+
+```fish
+note completion fish > ~/.config/fish/completions/note.fish
+```
+
+`scripts/install-local.sh` zsh ve bash dosyalarını kendisi yazar: `~/.local/share/zsh/site-functions/_note` ve
+`~/.local/share/bash-completion/completions/note` (`XDG_DATA_HOME` / `BASH_COMPLETION_USER_DIR` ayarlıysa onların
+altına). bash-completion paketi bash'te dosyayı kendiliğinden bulur; zsh'te yukarıdaki `fpath` satırı yine gerekir.
+Betik yalnız kendi ürettiği dosyanın üzerine yazar, `--uninstall` onları siler.
 
 ### `notes` (TUI)
 
@@ -198,6 +239,7 @@ bulunamadı) · `2` kullanım hatası · `3` G/Ç/iç hata · `4` senkron hatas�
 | `i` / `I` | Seçili satırın (klasör de) / tüm satırların ayrıntısını aç-kapat |
 | `x` `X` `Ctrl+A` | Satırı seç ve aşağı in, seçimi temizle, görünenleri seç; seçim klasör değişince kalır, altta `seçili: 3` |
 | `y` `p` | Seçimi ya da satırı kopya için işaretle, geçerli klasöre yapıştır. Hiçbir şey ezilmez: dolu ad `-2` alır, raporlanır. `Esc` vazgeçer |
+| `:` `import` | Dosya ya da klasör içe al (`note import` kuralı): altta yol girdisi (göreli yol çalışma dizinine göre), hedef `n` ile aynı klasör; özet alt satırda, ilk not REVIEW'da açılır; hiçbir şey alınamazsa neden girdide kalır. Komut satırından: `notes import YOL... [--folder K] [--name AD] [--overwrite]` önce özeti yazar, sonra TUI'yi ilk notla açar (hiçbir şey alınamazsa açmaz, çıkış 1); `notes --help` kısa kullanım |
 | `gg` `gh` `gt` | Baş, kök klasör, çöp (`g` sıradaki tuşu bekler) |
 | `PgUp` `PgDn` `gg` `G` | Listede sayfa sayfa, baş, son; REVIEW'da `↑↓` basılı tutunca hızlanır, `Ctrl+U` `Ctrl+D` yarım sayfa, `J` `K` 5 satır |
 | `Alt+→` `Alt+←` | Satırı aç/kapat: boyut, güncelleme, oluşturma, senkron, kaynak (bilinmiyorsa "bilinmiyor"); birden çok satır açık kalabilir |
@@ -229,11 +271,12 @@ EDIT'te satır numarası sütunu (geçerli satır vurgulu), gerçek terminal iml
 
 ### `notes-gui`
 
-Pencerenin üstünde tek araç çubuğu, dosya yöneticisindeki gibi gruplu: `Yeni not` `Yeni klasör` | `Yeniden adlandır` `Taşı` `Sil` | `Çöp (n)` `PDF'e aktar`, sağda görünüm seçici `Ağaç` / `Ayrıntılar` / `Harita` (seçim `gui-state.toml`'da kalır). Düğmeler seçili satıra uygulanır: klasör satırında klasörü yeniden adlandırır ya da (onayla) siler, not satırında notu; `Yeni not` ve `Yeni klasör` seçili klasörün, not seçiliyse notun klasörünün içine açar. Yapamayacağı işte düğme kapalıdır, ipucu nedenini ve kısayolu söyler.
+Pencerenin üstünde tek araç çubuğu, dosya yöneticisindeki gibi gruplu: `Yeni not` `Yeni klasör` `İçe al` | `Yeniden adlandır` `Taşı` `Sil` | `Çöp (n)` `PDF'e aktar`, sağda görünüm seçici `Ağaç` / `Ayrıntılar` / `Harita` (seçim `gui-state.toml`'da kalır). Düğmeler seçili satıra uygulanır: klasör satırında klasörü yeniden adlandırır ya da (onayla) siler, not satırında notu; `Yeni not` ve `Yeni klasör` seçili klasörün, not seçiliyse notun klasörünün içine açar. Yapamayacağı işte düğme kapalıdır, ipucu nedenini ve kısayolu söyler.
 
 - **Ağaç** (varsayılan): TUI'deki gibi klasörler ve notlar tek panelde, kök `Tümü`; oka ya da çift tıklayınca klasör açılır/kapanır. Açık klasörler `gui-state.toml`'da kalır; seçili not açılışta görünür olur.
 - **Ayrıntılar**: yalnız geçerli klasörün içeriği, sütunlar Ad, Boyut, Değiştirilme, Oluşturulma; önce klasörler. Klasöre çift tıklama ya da `Enter` içine girer; üstte `Yukarı` ve tıklanabilir yol düğmeleri.
 - **Harita**: notlar çizge olarak, editör sağda kalır. Kenarlar `[[bağlantı]]` (oklu) ve ilişki (renkli, oksuz); düğüm rengi not tipinden, gösterilen not halkalı. Üstte `Tüm çizge` (kapalıyken gösterilen notun çevresi), `Derinlik` (varsayılan 2) ve `Etiketler` (etiketler küçük kare). Tıklama notu açar (bekleyen düzenleme önce kendi notuna kaydedilir), çift tıklama açıp Ağaç'a geçer, düğümü sürüklemek onu oraya sabitler. Tekerlek imlecin çevresinde yakınlaştırır; boşluğu sürüklemek ya da orta tuş kaydırır; harita odaktayken oklar kaydırır, `+`/`-` yakınlaştırır, `0` sığdırır. Arama kutusu eşleşen notları vurgular, gerisini soldurur (`tag:` dahil). En çok 2.000 düğüm çizilir, aşılınca üstte uyarı çıkar. Hedefinden önce kaydedilmiş bir notun `[[bağlantı]]`ı, not yeniden kaydedilene dek haritada çizilmez (bağlantı panelinde görünür).
+- **İçe al** (araç çubuğu menüsü `Dosya içe al…` / `Klasör içe al…`, palette `import`, ya da dosya/klasörleri pencereye sürükleyip bırak): yerel diyalogda çoklu seçim; `note import` kuralıyla bayt bayt, `Yeni not`un klasörüne. Özet durum çubuğunda, ilk not sekme kuralıyla açılır: iğnelenmiş, tutulan ya da yazılmış taslak sekmesi yerinde kalır, not yeni sekmede; kaydedilmemiş düzenleme önce kaydedilir. Linux'ta diyalog XDG portal ya da `zenity` ister; yoksa durum çubuğu söyler, sürükle-bırak yine çalışır. `notes-gui --help` kısa kullanım.
 - Klasör satırı seçilince açık notun bekleyen düzenlemesi önce kaydedilir, sağ panelde editör yerine klasör özeti (yol, not ve klasör sayısı) görünür.
 - Arama kutusuna yazınca liste düz sonuca döner (vurgulu, seçili klasörün içinde); çöp görünümü de düz listedir. Yanındaki düğme `Ad` / `İçerik` arasında geçer (`Ctrl+Shift+M`); kutuda `Tab` argümanı, etiketi ya da not adını tamamlar (çok aday varsa liste: yazı süzer, `Enter` ekler, `Esc` kapatır), soluk öneriyi `→` alır, `Ctrl+P` önceki aramalara döner (`Ctrl+N` ileri); argümanlar renklidir, bozuk değer kırmızı. Bulunan aramalar `gui-state.toml`'da hatırlanır (TUI kuralıyla, parola benzeri sorgu yazılmaz); `Ctrl+Shift+F` ad ve içerikte birlikte arar (`Tümü`), içerikte bulunan notun en iyi satırı yolun altında görünür. `Ctrl+Shift+T` etiketleri, `Ctrl+Shift+R` kayıtlı görünümleri listeler; seçilen `tag:` ya da `view:` sorgusu olur. `sync:new` gibi senkron argümanı not başına durumu kullanır (senkron açıkken).
 - **Sırala** düğmesi TUI'nin `o` menüsüdür: ad, güncelleme, oluşturma, boyut ya da ters çevir. Sıra ağaca, Ayrıntılar'a ve metinsiz aramaya uygulanır, varsayılan en yeni başta; seçim `gui-state.toml`'da kalır.

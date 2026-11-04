@@ -76,6 +76,19 @@ std::expected<DraftName, core::Error> parse_draft_name(std::string_view input,
 std::string suggested_stem(std::string_view content, std::string_view type,
                            std::chrono::system_clock::time_point now, std::size_t slug_max_length);
 
+// Kaydedilmemiş taslağın canlı tipi (TUI ve GUI): detect her tuşta değil, son tespitten beri değişen bayt
+// metnin 1/32'sine ulaşınca yeniden koşar. Küçük metinde her tuş, büyük metinde seyrek: toplam maliyet
+// yazılan baytla doğrusal kalır.
+class DraftTypeTracker {
+public:
+    // Bir düzenleme (öncesi/sonrası metin boyu); true: detect yeniden koşmalı, sayaç sıfırlandı.
+    bool edited(std::size_t size_before, std::size_t size_after);
+    void reset() { changes_ = 0; }
+
+private:
+    std::size_t changes_ = 0;  // son detect'ten beri değişen bayt
+};
+
 struct DocumentOptions {
     // classify'ın sınırı; varsayılan sınırsız (Tuning::max_note_bytes = 0 ile aynı).
     std::uintmax_t max_bytes = std::numeric_limits<std::uintmax_t>::max();
@@ -108,6 +121,8 @@ public:
     bool writable() const { return read_only_ == ReadOnly::No; }
     std::string read_only_reason() const { return app::read_only_reason(read_only_, options_.max_bytes); }
     bool has_bom() const { return bom_; }
+    // lf_editor: dosya baştan sona CRLF, editör LF gösteriyor (durum çubuğu yine CRLF der).
+    bool crlf_shown_as_lf() const { return crlf_shown_lf_; }
     const core::Revision& revision() const { return revision_; }
     bool changed_on_disk() const { return changed_on_disk_; }
     bool deleted_on_disk() const { return deleted_on_disk_; }

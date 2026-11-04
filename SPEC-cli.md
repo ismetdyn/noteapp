@@ -28,9 +28,11 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `note tags [--json]` | Canlı notların `#etiket`leri ve not sayıları, `Tag.name` sırasıyla: satır `gösterim<TAB>sayı`; `--json` `[{"name","display","count"}]` (SPEC-graph "Etiketler") |
 | `note view save AD CYPHER [--force]` · `view ls [--json]` · `view run AD [--json]` · `view rm AD` · `view show AD` | Kayıtlı Cypher görünümleri (T81, SPEC-graph "Görünümler"). `save` sorguyu çalıştırmadan denetler: yazan, `$parametre`li ya da bozuk sorgu çıkış 2, hiçbir şey kaydedilmez; var olan ad (`Work` = `work`) `--force` olmadan çıkış 1. `ls` satırı `ad<TAB>sorgu` (sorgunun satır sonu `\n`), `--json` `[{"name","query","created_at","updated_at"}]` (zaman unix ms). `run` çıktısı `note query`yle (`--json` dahil) bayt bayt aynıdır, her zaman salt okunur ve görünüm profiliyle (`limits.view.*`, SPEC-graph "Görünümler") çalışır; yazan görünüm (senkronla ya da `query --write` ile gelmiş) çıkış 2 ile reddedilir, graf değişmez. `show` sorguyu yazar. Bilinmeyen ad çıkış 1. Ad ve sorgu senkronla gelebilir: terminal temizliğinden geçer. `save` ve `rm` notlar gibi arka plan senkronunu başlatır |
 | `note graph migrate [--skip-failed]` | Eski düz dosyaları içe aktar ([SPEC-graph.md](SPEC-graph.md)) |
+| `note import YOL… [--folder KLASÖR] [--type TİP] [--name AD] [--overwrite] [--json] [--no-sync]` | Dosya sisteminden not olarak içe alma; kural `app::import_paths`tedir, TUI ve GUI de onu çağırır (aşağıda "Dosya içe alma") |
 | `note graph export --format jsonl [-o DOSYA]`, `note graph import [--overwrite] DOSYA` | Tüm graph'ı JSON satırları olarak çıkar ya da yükle; satırın JSON kuralları ve sınırları SPEC-graph "Sınırlar" (bilinmeyen alanda `null` kabul). İçe aktarma satır aralarında işlemlere bölünür; bir satır tek işlemdir (ya hepsi ya hiç): çerçeveden (`limits.graph.frame_ops`, `frame_bytes`) büyük satır reddedilmez; yineleme işlem yazmaz |
 | `note export --all DİZİN` | Tüm notları bayt bayt düz dosya olarak çıkar |
-| `note --help` · `note help KOMUT` · `note --version` | Yardım (i18n) |
+| `note --help` · `note help KOMUT` · `note --version` | Yardım (i18n); `--help` her komutu listeler, her komutun `cli.help_<komut>` metni var |
+| `note completion zsh\|bash\|fish` | Kabuk tamamlama betiğini stdout'a yazar (aşağıda "Kabuk tamamlama") |
 
 - Alt komut adıyla aynı metinde not eklemek için: `note -- ls`.
 - "En iyi eşleşme" = tam yol varsa o, yoksa `search::rank_notes` ilk sonucu; seçilen yol stderr'e yazılır.
@@ -84,6 +86,29 @@ tipler düz metin (eş aralıklı). Yalnız soldan sağa yazı: Arapça/İbranic
 Gömülü DejaVu'da olmayan glifler (CJK vb.) için PDF çıktısı doğrulanmadı; BMP dışı kod noktaları (emoji) `U+FFFD` olur. Görseller alt
 metne (yoksa `pdf.image_placeholder`) iner; hiçbir görsel/bağlantı hedefine istek yapılmaz.
 
+## Dosya içe alma
+
+`note import YOL…` her yolu sırayla not yapar; biri düşerse kalanlar sürer. Kural `src/app/import_files.*`'tadır
+(TUI `notes import YOL…` ve GUI "Dosya içe al" aynı kodu çağırır); özgün dosyalar okunur, hiç değiştirilmez.
+- **Dosya:** baytlar aynen (BOM, CRLF, ikili; ikili not salt okunurdur, `note show` yazdırmaz). Ad dosya adından
+  (`core::split_typed_name`: `a.tar.gz` -> `a.tar` + `gz`); tip uzantıdan, `--type` onun yerine geçer, uzantı yoksa içerik
+  tespiti (yeni not gibi). `--name AD` yalnız tek YOL'la: dosyada not adıdır (yazılan uzantı tipi verir), klasörde hedefteki
+  klasörün adı. `created_at` dosyanın doğum zamanı (yoksa ya da mtime'dan yeniyse mtime), `updated_at` mtime: `note graph
+  migrate` kuralı (`core::file_created_time`).
+- **Klasör:** kendi adıyla `--folder` altına, alt klasörleri ve boş klasörleriyle; hedefte aynı ad varsa birleşir.
+- **Ad doluysa** deponun `-2`, `-3`… adı (tavan yok); `--overwrite` bunun yerine o yoldaki notun baytlarını yazar. Asla
+  sessiz ezme yok.
+- **Atlananlar:** sembolik bağ/junction izlenmez (`reason.import_link`), aygıt/boru/soket (`reason.import_not_file`).
+  Klasör içindeki `.` ile başlayan girdi dışarıda kalır ve sayılır (eksik sayılmaz); açıkça verilen gizli yol denenir
+  (`.` ile başlayan not adı geçersizdir, `--name` ile alınır).
+- **Sınır:** boyut ve sayı tavanı yok; depolamanın tek değer sınırını aşan dosya öğe hatasıdır. `tuning.max_note_bytes`
+  içe almayı engellemez, yalnız notu salt okunur açtırır. Her not kendi yazma işlemindedir.
+- **Hedef:** `--folder` yoksa `default_folder`. Geçersiz `--folder`/`--type` çıkış 2, hiçbir şey yazılmaz.
+- **Çıktı:** her not stdout'ta `kaynak -> yol`, atlanan/alınamayan stderr'de, sonda özet. `--json`:
+  `{"imported":[{"source","note","renamed","overwritten"}],"skipped":[{"source","reason"}],"failed":[{"source","error"}],"hidden":N}`.
+- **Çıkış:** `0` hepsi alındı · `1` atlanan ya da alınamayan var (var olmayan yol dahil) · `2` kullanım. Yazdıysa arka plan
+  senkronu başlar (`--no-sync` atlar).
+
 ## Graph sorgusu
 
 `note query` uygulamanın deposu `<veri dizini>/graph.db` üzerinde çalışır. Dosya yoksa çıkış 1; yalnız
@@ -121,13 +146,28 @@ Argüman ayrıştırma elle yazılır (ek kütüphane yok). Windows'ta UTF-8 arg
 10. ~~`notes-gui` yokken `note export --pdf` anlaşılır hata ve çıkış 3 verir.~~ **EMEKLİ (2026-10-31):** `note` artık
     `notes-gui` çağırmaz. Karşılığı: `note export --pdf` eşleşmesiz sorguda çıkış 1, `--pdf`'siz kullanım hatası,
     yazılamayan çıktıda çıkış 3 ve artık dosya yok (`tests/cli/cli_export_test.cpp`).
+11. `note import` CRLF+BOM'lu dosyayı `note show`da bayt bayt verir; klasör iç içe gelir, gizli girdi gelmez; dolu ad
+    `-2` alır, `--overwrite` ezer; var olmayan yol çıkış 1, `--name` ile iki YOL çıkış 2 (`tests/cli/cli_import_test.cpp`,
+    kural testleri `tests/app/import_files_test.cpp`: bağ atlanır, ikili salt okunur, zamanlar dosyadan).
 
 **Elle:** Windows Terminal ve Fedora'da `edit`/`micro`/`nano`/`vim` ile editör akışı; Türkçe karakterli argümanlar.
 
+## Kabuk tamamlama
+- Tek kaynak `src/cli/command_table.hpp`: komutlar, fiiller, seçenekler, değer türleri ve i18n açıklama anahtarları.
+  Ayrılmış sözcükler ve üç betik buradan türer; yeni komut/seçenek önce tabloya girer.
+- Dinamik değerler gizli `note __complete TÜR [ÖNEK]` ile gelir (yardımda ve tamamlamada görünmez, ayrılmış sözcük):
+  `note`, `folder`, `type` (config `types`), `tag`, `view`, `config-key` (`limits.*` dahil, `sync.token` yok), `query`
+  (iki noktasız son sözcükte anahtar adları `search::query_key_names`, `tag:` `type:` `in:` `view:` sonrasında değerler;
+  önceki sözcükler aynen kalır). Satır başına bir aday; denetim karakteri, satır sonu, bozuk UTF-8 taşıyan aday yazılmaz.
+  Salt okur: depo yoksa kurulmaz, eski notlar geçiş bekliyorsa açılmaz, türetilmiş dizin onarımı atlanır; açılamayan
+  depo boş çıktı ve çıkış 0. stderr'e hiçbir şey yazmaz. Bilinmeyen tür çıkış 2.
+- Dosya yolları (`import`, `-o`, `graph import`) kabuğun kendi tamamlamasıdır.
+
 ## Kapsam dışı
 - `note font install`: gerekmiyor; GUI kendi ikon fontunu taşır, terminalde font kullanıcınındır (SPEC-tui "Dosya ikonları").
+- PowerShell tamamlaması (bash/zsh/fish var).
 
-Kabuk tamamlama (bash/zsh/PowerShell), etkileşimli seçici (fzf benzeri seçim TUI'nin işi), `mkdir/rmdir` komutları
+Etkileşimli seçici (fzf benzeri seçim TUI'nin işi), `mkdir/rmdir` komutları
 (klasör `-f`/`mv` ile örtük oluşur; klasör silme TUI/GUI'de).
 
 ## Değişiklik 2026-10-31
@@ -137,3 +177,8 @@ Kabuk tamamlama (bash/zsh/PowerShell), etkileşimli seçici (fzf benzeri seçim 
 - **REMOVED** Kabul 10 (`notes-gui` yokken çıkış 3): emekli, numara korundu; karşılığı kabul 10 satırında.
 - **MODIFIED** PDF içeriği: yalnız soldan sağa basit metin; Markdown kapsamı yukarıda (davranış 6). Çıktı artık Qt yerine libharu + md4c ile üretilir.
 
+
+## Değişiklik 2026-11-04
+- **ADDED** Kabuk tamamlama (`note completion zsh|bash|fish`, gizli `note __complete`); önceki "Kapsam dışı" maddesinden
+  çıktı. Neden: kullanıcı isteği (zsh + fzf-tab). `completion` ve `__complete` artık ayrılmış sözcük: o metni not etmek
+  için `note -- completion`.

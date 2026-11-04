@@ -329,7 +329,7 @@ std::size_t stem_end(std::string_view path) {
 
 RenameState::RenameState(core::NotePath from, SharedInputSources sources, std::string base, bool is_folder)
     : from_(std::move(from)), base_(std::move(base)), is_folder_(is_folder) {
-    std::string path = from_.string();
+    std::string path = from_.value().string();
     if (in_folder(path, base_) && !base_.empty())
         path.erase(0, base_.size() + 1);
     const std::size_t cursor = is_folder_ ? path.size() : stem_end(path);
@@ -353,6 +353,8 @@ RenameState::RenameState(ExportTarget, core::NotePath from, std::string file_nam
     const std::size_t cursor = stem_end(file_name);
     line_.set_text(std::move(file_name), cursor);
 }
+
+RenameState::RenameState(ImportSource, std::string folder) : base_(std::move(folder)), is_import_(true) {}
 
 std::string RenameState::target() const {
     std::string_view typed = line_.text();

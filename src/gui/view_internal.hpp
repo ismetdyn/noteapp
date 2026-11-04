@@ -14,10 +14,12 @@
 
 #include <SDL3/SDL.h>
 #include <cstddef>
+#include <filesystem>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlrenderer3.h>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -27,6 +29,8 @@ namespace noteapp::gui {
 
 // Boşta en fazla bu aralıkla uyanılır (kırpma imleci, zamanlayıcı); kare yalnız iş varsa üretilir.
 inline constexpr int kIdleWaitMs = 500;
+// Dil sunucusu değişikliği beklerken uyanma aralığı (LanguageServers::kChangeIdle'ın beşte biri).
+inline constexpr int kLspPollMs = 50;
 // ImGui bir etkileşimi birkaç karede tamamlar (fare üzerinde, odak, açılır kutu).
 inline constexpr int kFramesAfterEvent = 3;
 inline constexpr float kFormWidth = 420.0F;
@@ -103,6 +107,13 @@ struct View::PreviewCache {
     app::TableLimits data_limits;
     std::optional<app::CsvTable> csv;
     std::optional<std::vector<app::JsonLine>> json;
+};
+
+// İçe alma diyaloğunun sonucu (SDL geri çağrısı yazar, View kare dışında boşaltır).
+struct ImportInbox {
+    std::mutex mutex;
+    std::vector<std::filesystem::path> paths;
+    std::string error;  // SDL_GetError: diyalog açılamadı (portal/zenity yok)
 };
 
 void wake_event_loop();

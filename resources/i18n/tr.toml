@@ -87,6 +87,8 @@ exists = "orada zaten bir dosya var"
 invalid_folder = "klasör adı geçersiz ya da klasör yolu çok uzun"
 too_many_collisions = "bu adı çok fazla not paylaşıyor"
 new_file = "veritabanında yok: geçişten sonra eklenmiş ya da değişmiş"
+import_link = "bir bağ (sembolik bağ ya da junction); bağlar izlenmez"
+import_not_file = "normal dosya ya da klasör değil (aygıt, boru ya da soket)"
 
 [config]
 unknown_key = "Bilinmeyen ayar '{key}' yok sayıldı"
@@ -97,6 +99,15 @@ defaults_unusable = "Yerleşik varsayılanlar kullanılamıyor"
 remote_credentials_stripped = "'{key}' içindeki kullanıcı adı ya da token yok sayıldı; dosyadan silin, token için 'note sync login' kullanın"
 
 [tui]
+usage = """
+Kullanım:
+  notes                                                      Notları terminalde açar
+  notes import YOL... [--folder KLASÖR] [--name AD] [--overwrite]
+                                                             Dosyaları ya da klasörleri not olarak alır, ilkini açar
+  notes --help                                               Bu yardımı gösterir
+
+İçe alma 'note import' kuralıyla çalışır ('note help import'). Çıkış kodları: 0 tamam, 1 hiçbir şey alınmadı, 2 kullanım hatası.
+"""
 stray_notice = "Not klasöründe veritabanında olmayan {count} dosya var: note graph status"
 mode_name = "[ad]"
 mode_content = "[içerik]"
@@ -154,6 +165,14 @@ editor_deleted_on_disk = "Diskte silindi: ^S yeni not olarak kaydeder"
 editor_changed_on_disk = "Diskte değişti: ^S ne yapılacağını sorar"
 editor_hidden_char = "Gizli karakter {code} {name}"
 editor_untitled = "yeni not"
+tab_limit = "En çok {max} sekme açılabilir; önce birini kapatın"
+tab_closed_missing = "Sekme kapandı: '{path}' artık yok"
+map_whole = "bütün çizge"
+map_depth = "derinlik {depth}"
+map_tags = " · etiketler"
+map_status = "{scope}{tags}  Tab seç  Enter aç  oklar + - 0  w bütün  t etiket  1-6 derinlik"
+map_capped = "{total} düğümden {shown}"
+map_empty = "Haritada gösterilecek not yok"
 editor_leave_title = "Kaydedilmemiş değişiklik"
 editor_leave_question = "'{path}' kaydedilsin mi?"
 editor_choice_save = "Kaydet"
@@ -318,6 +337,19 @@ Shift+ok seç  Home End
 wl-copy, xclip/xsel, pbcopy, Win32;
 kopyada yedek OSC 52 (75 KB).
 Terminalden yapıştırma yazar gibi gelir.
+Harita (palet view.map; view.tree döner)
+← → ↑ ↓       kaydır  + -  yakınlaş  0 sığdır
+Tab ⇧Tab      not seç, Enter açar
+w t           bütün çizge, etiket  1-6 derinlik
+/             arama eşleşen notları yakar
+Sekmeler (sağ panelin üst kenarında)
+^T            yeni sekmede boş not
+^W            sekmeyi kapat (değişiklikte sorar)
+Alt+N ^PgDn   sonraki sekme
+Alt+P ^PgUp   önceki sekme
+^K            editörde: sekme açık kalır, ara
+^Q            sekmeyi kapatıp listeye dön
+: sağ tık     "Yeni sekmede aç": seçili not
 Fare
 Bölücüyü sürükle: panel genişliği
 Tekerlek: işaretçinin altını kaydırır
@@ -417,6 +449,7 @@ move_to_label = "Taşı:"
 moved_to = "Taşındı: {to}"
 rename_hints = "Enter kaydet  Esc vazgeç  Tab tamamla"
 export_label = "PDF yolu:"
+import_label = "İçe alınacak dosya ya da klasör:"
 export_exists = "'{path}' var; yeniden Enter üzerine yazar"
 export_binary = "İkili not dışa aktarılamaz: {path}"
 exported = "Dışa aktarıldı: {path}"
@@ -475,6 +508,18 @@ paste_binary = "Yapıştırılmadı: panoda ikili veri var"
 paste_too_large = "Yapıştırılmadı: pano {limit} sınırından büyük (limits.tui.paste_bytes; 0 = sınırsız)"
 
 [gui]
+usage = """
+Kullanım:
+  notes-gui           Not penceresini açar
+  notes-gui --help    Bu yardımı gösterir
+
+Dosya içe almak için araç çubuğundaki Dosya içe al… / Klasör içe al…, komut paleti ya da pencereye sürükleyip bırakma.
+"""
+import_files = "Dosya içe al…"
+import_folder = "Klasör içe al…"
+toolbar_import = "İçe al"
+toolbar_import_tip = "Dosyaları ya da klasörleri geçerli klasöre not olarak alır (pencereye sürükleyip de bırakabilirsiniz)"
+import_dialog_failed = "Dosya diyaloğu açılamadı: {detail}"
 tab_notes = "Notlar"
 links_title = "Bağlantılar ({count})"
 links_hint = "Ctrl+L aç ya da kapat"
@@ -693,6 +738,7 @@ open_in_new_tab = "Yeni sekmede aç"
 hidden_controls = "{count} gizli bidi/sıfır genişlikli karakter"
 hidden_controls_one = "1 gizli bidi/sıfır genişlikli karakter"
 hidden_controls_tip = "Bu karakterler metni saklandığından farklı gösterebilir. \uFFFD olarak gösterilir, dosyada aynen kalır."
+find_hints = "Enter/F3 sonraki  Shift+F3 önceki  Esc kapat  Tab tamamla"
 details_sync = "Senkron"
 details_origin = "Kaynak"
 columns_hint = "Sütunları seçmek için başlığa sağ tıklayın (C sırayla değiştirir)"
@@ -762,6 +808,14 @@ no_match = "'{query}' ile eşleşen not yok"
 binary_note = "İkili not gösterilemez: {path}"
 ls_usage = "Kullanım: note ls [SORGU] [-f KLASÖR]"
 tags_usage = "Kullanım: note tags [--json]"
+import_usage = "Kullanım: note import YOL... [--folder KLASÖR] [--type TİP] [--name AD (yalnız tek YOL)] [--overwrite] [--json]"
+import_done = "İçe alındı: {source} -> {path}"
+import_renamed = "İçe alındı: {source} -> {path} (ad doluydu)"
+import_overwritten = "Üzerine yazıldı: {path} <- {source}"
+import_skipped = "Atlandı: {source} ({reason})"
+import_failed = "İçe ALINMADI: {source}: {error}"
+import_hidden = "{count} gizli girdi ('.' ile başlayan) dışarıda bırakıldı; gizli bir yolu almak için adıyla verin"
+import_summary = "İçe alınan: {imported}, atlanan: {skipped}, alınamayan: {failed}"
 view_usage = "Kullanım: note view save AD CYPHER [--force] | ls [--json] | run AD [--json] | rm AD | show AD"
 view_saved = "Görünüm kaydedildi: {name}"
 view_removed = "Görünüm silindi: {name}"
@@ -780,6 +834,7 @@ token_not_config = "Token'lar yapılandırmada saklanmaz; kimlik kasasına yazma
 unknown_command = "Bilinmeyen komut: {command}"
 help_ls = "note ls [SORGU] [-f KLASÖR]   Notları listeler: sorguyla fuzzy sırada, sorgusuz en yeniden eskiye; -f klasörle sınırlar. Sorgu arama argümanlarını alır (tag:AD, type:, in:, size:, updated:, created:, origin:, sync:, sort:)"
 help_tags = "note tags [--json]   Canlı notların #etiketlerini not sayılarıyla listeler (AD<TAB>SAYI); --json ad, gösterim ve sayı yazar"
+help_import = "note import YOL... [--folder KLASÖR] [--type TİP] [--name AD] [--overwrite] [--json]   Dosyaları bayt bayt not olarak içe alır (BOM, CRLF ve ikili korunur; ikili not salt okunurdur). Klasör kendi adıyla, alt klasörleriyle gelir. Ad dosya adından, tip uzantıdan gelir (--type yerine geçer; uzantı yoksa içerikten tespit). Dolu ad -2, -3 alır; --overwrite bunun yerine o notun üzerine yazar. --name tek YOL'u adlandırır. Bağlar izlenmez, klasör içindeki gizli girdiler dışarıda kalır, özgün dosyalar hiç değişmez. Atlanan ya da alınamayan varsa çıkış 1"
 help_view = "note view save AD CYPHER [--force] | ls [--json] | run AD [--json] | rm AD | show AD   Kayıtlı Cypher görünümleri: salt okunur sorguyu adla kaydet (--force değiştirir), listele (AD<TAB>SORGU), note query çıktısıyla çalıştır, sil ya da yazdır. Görünümler notlar gibi senkronlanır; yazan sorgu kayıtta da çalıştırmada da reddedilir. Aramada view:AD notları görünümün döndürdüklerine süzer"
 help_find = "note find TERİM...   Not içeriklerinde arar (tüm terimler geçmeli); yol:satır: kesit yazar; --limit N gösterilen not sayısını sınırlar"
 help_show = "note show SORGU   En iyi eşleşmeyi yazdırır (tam yol önceliklidir; seçilen yol stderr'e yazılır)"
@@ -811,7 +866,10 @@ Kullanım:
   note config path | list | get ANAHTAR | set ANAHTAR DEĞER Ayarları yönetir
   note query [--write] [--json] [--param ANAHTAR=DEĞER]... CYPHER Graph veritabanında Cypher sorgusu çalıştırır
   note tags [--json]                                        #etiketleri not sayılarıyla listeler
+  note import YOL... [--folder KLASÖR] [--overwrite]        Dosyaları ya da klasörleri not olarak içe alır
   note view save|ls|run|rm|show                             Kayıtlı salt okunur Cypher görünümleri
+  note graph migrate|status|export|import                   Graph'ı geçirir, denetler, döker ya da yükler
+  note completion zsh|bash|fish                             Kabuk tamamlama betiğini yazdırır
   note --help | help KOMUT | --version                      Yardımı veya sürümü gösterir
 
 Komut adıyla aynı metni not etmek için: 'note -- ls'.
@@ -871,6 +929,70 @@ migrate_remove_plain = "Eski dosyalar SİLİNMEDİ. Notlarınızı denetleyin (n
 export_all_done = "{count} not {path} dizinine çıkarıldı"
 export_all_refused = "Çıkarılmadı: {path} ({reason})"
 help_graph = "note graph migrate [--new] | status [--ignore-skipped | --clear-skipped] | export --format jsonl [-o DOSYA] | import DOSYA   Eski düz dosya notları içe aktar (--new: yalnız geçişten sonra not klasörüne düşen dosyalar); tüm graph'ı JSON satırları olarak çıkar ya da yükle. status geçerli notes_dir'i denetler, veritabanında olmayan dosyaları listeler; --clear-skipped dışarıda kalan dosya listesini tüm notes_dir'ler için yazıp unutur, eski dosyalara asla dokunmaz"
+desc_ls = "Notları listele"
+desc_find = "Not içeriklerinde ara"
+desc_show = "En iyi eşleşmeyi yazdır"
+desc_edit = "En iyi eşleşmeyi editörde aç"
+desc_rm = "Notu sil"
+desc_mv = "Notu taşı ya da yeniden adlandır"
+desc_export = "Notu PDF'e ya da tüm notları bir klasöre aktar"
+desc_sync = "Hemen senkronla ya da senkronu yönet"
+desc_config = "Ayarları göster ya da değiştir"
+desc_query = "Graph'ta Cypher sorgusu çalıştır"
+desc_graph = "Graph'ı geçir, denetle, dök ya da yükle"
+desc_tags = "#etiketleri not sayılarıyla listele"
+desc_view = "Kayıtlı salt okunur Cypher görünümleri"
+desc_import = "Dosyaları ya da klasörleri not olarak içe al"
+desc_completion = "Kabuk tamamlama betiğini yazdır"
+desc_help = "Bir komutun yardımını göster"
+desc_sync_status = "Senkron durumunu göster"
+desc_sync_on = "Senkronu aç"
+desc_sync_off = "Senkronu kapat"
+desc_sync_init = "Senkronu bir uzak depoyla kur"
+desc_sync_login = "Erişim token'ını anahtar kasasına kaydet"
+desc_sync_logout = "Kayıtlı erişim token'ını sil"
+desc_config_path = "Config dosyasının yolunu yazdır"
+desc_config_list = "Tüm ayarları listele"
+desc_config_get = "Bir ayarı yazdır"
+desc_config_set = "Bir ayarı değiştir"
+desc_graph_migrate = "Eski düz dosya notları içe aktar"
+desc_graph_status = "Veritabanında olmayan dosyaları listele"
+desc_graph_export = "Graph'ı JSON satırları olarak dök"
+desc_graph_import = "JSON satırları dökümünü yükle"
+desc_view_save = "Sorguyu bir adla kaydet"
+desc_view_ls = "Kayıtlı görünümleri listele"
+desc_view_run = "Kayıtlı görünümü çalıştır"
+desc_view_rm = "Kayıtlı görünümü sil"
+desc_view_show = "Kayıtlı görünümün sorgusunu yazdır"
+desc_completion_zsh = "zsh betiği"
+desc_completion_bash = "bash betiği"
+desc_completion_fish = "fish betiği"
+opt_no_sync = "Bu değişiklikten sonra senkronlama"
+opt_json = "JSON yazdır"
+opt_output = "Bu dosyaya yaz"
+opt_type = "Not tipi (uzantı)"
+opt_folder = "Notları bu klasöre koy"
+opt_in_folder = "Yalnız bu klasördeki notlar"
+opt_name = "Not adı"
+opt_editor = "Editörü her durumda aç"
+opt_help = "Yardımı göster"
+opt_version = "Sürümü göster"
+opt_limit = "En çok bu kadar not göster"
+opt_yes = "Sormadan sil"
+opt_pdf = "PDF olarak aktar"
+opt_all = "Tüm notları bu klasöre aktar"
+opt_ignore_skipped = "Dışarıda kalan dosya olsa da 0 ile çık"
+opt_write = "Sorgunun veriyi değiştirmesine izin ver"
+opt_param = "Sorgu parametresi ANAHTAR=DEĞER"
+opt_overwrite = "Var olanın yerine yaz"
+opt_replace = "Geçerli uzak depoyu değiştir"
+opt_new = "Yalnız geçişten sonra eklenen dosyalar"
+opt_skip_failed = "Geçirilemeyen dosyaları atlayıp sürdür"
+opt_clear_skipped = "Dışarıda kalan dosyalar listesini unut"
+opt_format = "Döküm biçimi (jsonl)"
+opt_force = "Aynı adlı görünümün yerine yaz"
+completion_usage = "Kullanım: note completion zsh | bash | fish"
+help_completion = "note completion zsh | bash | fish   Kabuğun için tamamlama betiğini yazdırır: Tab sonra komutları, seçenekleri, not yollarını, klasörleri, tipleri, etiketleri, görünümleri ve config anahtarlarını senin dilindeki açıklamalarla önerir. zsh: note completion zsh > ~/.local/share/zsh/site-functions/_note (bu dizin compinit'ten önce fpath'te olmalı); bash: ~/.bashrc'ye source <(note completion bash); fish: note completion fish > ~/.config/fish/completions/note.fish"
 migrate_backup_hint = "Yedek {path} altında (özel). Gerekmediğinde kendiniz silin: rm -r {path}"
 export_all_unreachable = "Çıkarılmadı, güvenli yolu yok: {name} (kimlik {id}, {reason}). Baytları şurada: note graph export --format jsonl"
 
@@ -1006,11 +1128,13 @@ help = "Yardım"
 quit = "Çık"
 save = "Kaydet"
 folder_new = "Yeni klasör"
+import = "Dosya içe al…"
 export_pdf = "PDF'e aktar"
 view_tree = "Ağaç görünümü"
 view_details = "Ayrıntılar görünümü"
 view_map = "Harita görünümü"
 links_toggle = "Bağlantıları göster ya da gizle"
+tab_open = "Yeni sekmede aç"
 tab_new = "Yeni sekme"
 tab_close = "Sekmeyi kapat"
 tab_next = "Sonraki sekme"

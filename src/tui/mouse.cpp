@@ -59,12 +59,10 @@ void handle_wheel(const MouseInput& input, TuiState& state, EditorSession& edito
         state.move_selection(direction);
 }
 
-// Editör açıksa kapatmayı dener; false: kaydedilmemiş değişiklik soruluyor, tıklama burada biter.
-bool leave_editor(TuiState& state, EditorSession& editor) {
-    if (state.focus() != Focus::Editor)
-        return true;
-    editor.handle(Key::CtrlQ);
-    return state.focus() != Focus::Editor;
+// Editör açıksa sekmesi açık kalır (GUI ve Ctrl+K gibi): bekleyen düzenleme notuna yazılır, odağı tıklanan
+// yer alır. false: kayıt olmadı ya da soru açık, tıklama burada biter. Kapatmak Ctrl+Q / Ctrl+W'dir.
+bool leave_editor(const TuiState& state, EditorSession& editor) {
+    return state.focus() != Focus::Editor || editor.park();
 }
 
 MouseResult click_list(const MouseInput& input, TuiState& state, EditorSession& editor) {

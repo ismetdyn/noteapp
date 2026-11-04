@@ -1,25 +1,12 @@
 #include "cli/args.hpp"
 
-#include <algorithm>
-#include <array>
+#include "cli/command_table.hpp"
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-// clang-format off
-#include <shellapi.h>  // CommandLineToArgvW; windows.h'tan sonra gelmeli
-// clang-format on
-#endif
+#include <algorithm>
 
 namespace noteapp::cli {
 
 namespace {
-
-constexpr std::array<std::string_view, 13> kReserved = {
-    "ls", "find", "show", "edit", "rm", "mv", "export", "sync", "config", "query", "graph", "tags", "view"};
 
 ParsedArgs invalid(std::string key, std::vector<std::pair<std::string, std::string>> args) {
     ParsedArgs parsed;
@@ -32,7 +19,7 @@ ParsedArgs invalid(std::string key, std::vector<std::pair<std::string, std::stri
 }  // namespace
 
 bool is_reserved_command(std::string_view word) {
-    return word == "help" || std::ranges::find(kReserved, word) != kReserved.end();
+    return word == kCompleteCommand || std::ranges::contains(kCommands, word, &CommandSpec::name);
 }
 
 ParsedArgs parse_args(const std::vector<std::string>& args) {
@@ -81,29 +68,6 @@ ParsedArgs parse_args(const std::vector<std::string>& args) {
         }
     }
     return parsed;
-}
-
-std::vector<std::string> utf8_arguments(int argc, char** argv) {
-#ifdef _WIN32
-    (void)argc;
-    (void)argv;
-    std::vector<std::string> out;
-    int wide_argc = 0;
-    wchar_t** wide = CommandLineToArgvW(GetCommandLineW(), &wide_argc);
-    if (wide == nullptr)
-        return out;
-    for (int i = 1; i < wide_argc; ++i) {
-        const int size = WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, nullptr, 0, nullptr, nullptr);
-        std::string utf8(size > 0 ? static_cast<std::size_t>(size - 1) : 0, '\0');
-        if (size > 1)
-            WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, utf8.data(), size, nullptr, nullptr);
-        out.push_back(std::move(utf8));
-    }
-    LocalFree(wide);
-    return out;
-#else
-    return std::vector<std::string>(argv + 1, argv + argc);
-#endif
 }
 
 }  // namespace noteapp::cli

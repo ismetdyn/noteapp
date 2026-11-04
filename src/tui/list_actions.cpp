@@ -1,5 +1,6 @@
 #include "tui/list_actions.hpp"
 
+#include "app/import_files.hpp"
 #include "core/atomic_file.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
@@ -17,6 +18,7 @@
 #include <iterator>
 #include <memory>
 #include <ranges>
+#include <span>
 #include <utility>
 
 namespace noteapp::tui {
@@ -130,11 +132,13 @@ std::string format_list_prefs(const ListPrefs& prefs) {
                                  : "open_folders = " + format_search_history(open_folders) + "\n") +
            (prefs.recent_commands.empty()
                 ? std::string{}
-                : "recent_commands = " + format_search_history(prefs.recent_commands) + "\n");
+                : "recent_commands = " + format_search_history(prefs.recent_commands) + "\n") +
+           app::format_saved_tabs(prefs.tabs);  // `[[tabs]]` tabloları: TOML'da en sonda
 }
 
 ListPrefs parse_list_prefs(std::string_view text, const SearchHistoryLimits& history) {
     ListPrefs prefs;
+    prefs.tabs = app::parse_saved_tabs(text);  // satırları aşağıdaki döngü bilinmeyen anahtar sayar
     bool versioned = false;
     while (!text.empty()) {
         const std::size_t end = text.find('\n');
@@ -648,6 +652,39 @@ void ListActions::begin_link(std::optional<RenameState>& rename) {
         rename.emplace(RenameState::LinkTarget{}, row->path, host_.state.input_sources());
 }
 
+void ListActions::begin_import(std::optional<RenameState>& rename, std::string folder) {
+    rename.emplace(RenameState::ImportSource{}, std::move(folder));
+}
+
+void ListActions::submit_import(std::optional<RenameState>& rename) {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
+    RenameState& input = *rename;
+    const std::string& typed = input.text();
+    if (typed.empty())
+        return;
+    const std::filesystem::path source(std::u8string(typed.begin(), typed.end()));
+    const core::Config defaults;
+    const app::ImportReport report = [&] {
+        const std::scoped_lock lock(host_.store_mutex);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+        return app::import_paths(
+            *host_.store, std::span(&source, 1),
+            app::import_options(host_.config ? *host_.config : defaults, input.import_folder()));
+    }();
+    if (report.wrote) {  // hiçbir not alınmasa da klasör kurulmuş olabilir
+        host_.refresh_notes();
+        host_.notify_changed();
+    }
+    const std::string status = terminal_safe(app::import_status(report));
+    if (report.imported.empty()) {  // girdi açık kalır: yol düzeltilebilsin
+        input.set_error(status);
+        return;
+    }
+    rename.reset();
+    host_.state.open_note_in_review(report.imported.front().note);
+    host_.status.message = status;
+}
+
 void ListActions::submit_link(std::optional<RenameState>& rename) {
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
     RenameState& input = *rename;
@@ -708,7 +745,8 @@ void ListActions::submit_export(std::optional<RenameState>& rename) {
     const std::string shown_path = terminal_safe(std::string(shown.begin(), shown.end()));
     // Uyarı satırda durdukça (düzenleme onu siler) aynı yola ikinci Enter onaydır.
     const bool warned = !input.error().empty() && export_replace_ == output;
-    if (std::filesystem::exists(output, ec) && !warned) {
+    // symlink_status: kırık bağ da var olan addır (exists bağı izler, onu "yok" sayıp sormadan yazardı).
+    if (std::filesystem::exists(std::filesystem::symlink_status(output, ec)) && !warned) {
         export_replace_ = output;
         input.set_error(core::tr("tui.export_exists", {{"path", shown_path}}));
         return;
@@ -826,6 +864,15 @@ void ListActions::submit_move_to(std::optional<RenameState>& rename) {
         return app::move_items(*host_.store, host_.state.listing(), items, dest);
     }();
     if (result.moved > 0) {
+        // Yerinde kalan öğe taşınmaz; kalanlar sırayla yürür, ilk `moved` tanesi gitti.
+        std::size_t followed = 0;
+        for (const ListItem& item : items) {
+            const std::string to = join_folder(dest, last_component(item.path.string()));
+            if (to == item.path.string() || followed == result.moved)
+                continue;
+            ++followed;
+            moved(item.path.string(), to);
+        }
         host_.refresh_notes();
         host_.notify_changed();
     }
@@ -928,6 +975,7 @@ void ListActions::submit_folder_rename(std::optional<RenameState>& rename, const
         return;
     }
     rename.reset();
+    this->moved(from, target);
     host_.refresh_notes();
     host_.state.select_folder(target);
     host_.status.message =
@@ -966,6 +1014,11 @@ void ListActions::submit_rename(std::optional<RenameState>& rename) {
         return;
     }
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
+    if (rename->is_import()) {
+        submit_import(rename);
+        return;
+    }
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
     const core::NotePath from = rename->from();
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
     const std::string target = rename->target();
@@ -994,11 +1047,17 @@ void ListActions::submit_rename(std::optional<RenameState>& rename) {
         return;
     }
     rename.reset();
+    this->moved(from.string(), moved->string());
     host_.refresh_notes();
     host_.state.select_note(*moved);
     host_.status.message = core::tr(
         "tui.moved", {{"from", terminal_safe(from.string())}, {"to", terminal_safe(moved->string())}});
     host_.notify_changed();
+}
+
+void ListActions::moved(const std::string& from, const std::string& to) const {
+    if (host_.on_moved)
+        host_.on_moved(from, to);
 }
 
 void ListActions::save_prefs_if_changed() {

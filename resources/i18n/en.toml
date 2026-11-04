@@ -87,6 +87,8 @@ exists = "a file is already there"
 invalid_folder = "its folder name is invalid or its folder path is too long"
 too_many_collisions = "too many notes share this name"
 new_file = "not in the database: new or changed since the migration"
+import_link = "it is a link (symbolic link or junction); links are not followed"
+import_not_file = "not a regular file or folder (device, pipe or socket)"
 
 [config]
 unknown_key = "Unknown setting '{key}' ignored"
@@ -97,6 +99,15 @@ defaults_unusable = "Built-in defaults are unusable"
 remote_credentials_stripped = "The user name or token in '{key}' was ignored; remove it from the config file and use 'note sync login' for the token"
 
 [tui]
+usage = """
+Usage:
+  notes                                                      Open the notes in the terminal
+  notes import PATH... [--folder FOLDER] [--name NAME] [--overwrite]
+                                                             Import files or folders as notes, then open the first one
+  notes --help                                               Show this help
+
+The import follows 'note import' (see 'note help import'). Exit codes: 0 ok, 1 nothing imported, 2 usage error.
+"""
 stray_notice = "{count} files in the notes folder are not in the database: note graph status"
 mode_name = "[name]"
 mode_content = "[content]"
@@ -154,6 +165,14 @@ editor_deleted_on_disk = "Deleted on disk: ^S saves it as a new note"
 editor_changed_on_disk = "Changed on disk: ^S asks what to do"
 editor_hidden_char = "Hidden character {code} {name}"
 editor_untitled = "new note"
+tab_limit = "At most {max} tabs can be open; close one first"
+tab_closed_missing = "Tab closed: '{path}' no longer exists"
+map_whole = "whole graph"
+map_depth = "depth {depth}"
+map_tags = " · tags"
+map_status = "{scope}{tags}  Tab select  Enter open  arrows + - 0  w whole  t tags  1-6 depth"
+map_capped = "{shown} of {total} nodes"
+map_empty = "No notes to show on the map"
 editor_leave_title = "Unsaved changes"
 editor_leave_question = "Save changes to '{path}'?"
 editor_choice_save = "Save"
@@ -318,6 +337,19 @@ Shift+arrows select  Home End
 wl-copy, xclip/xsel, pbcopy, Win32;
 copy falls back to OSC 52 (75 KB).
 Terminal paste arrives as typing.
+Map (palette view.map; view.tree returns)
+← → ↑ ↓       pan  + -  zoom  0 fit
+Tab ⇧Tab      select a note, Enter opens it
+w t           whole graph, tags  1-6 depth
+/             search lights matching notes
+Tabs (on the right pane's top border)
+^T            new tab with an empty note
+^W            close the tab (asks if unsaved)
+Alt+N ^PgDn   next tab
+Alt+P ^PgUp   previous tab
+^K            in the editor: keep the tab, search
+^Q            close the tab, back to the list
+: right click "Open in new tab": selected note
 Mouse
 Drag the divider  Wheel scrolls under pointer
 Click a row or a pane
@@ -416,6 +448,7 @@ move_to_label = "Move to:"
 moved_to = "Moved to: {to}"
 rename_hints = "Enter save  Esc cancel  Tab complete"
 export_label = "PDF to:"
+import_label = "Import file or folder:"
 export_exists = "'{path}' exists; Enter again replaces it"
 export_binary = "Binary note cannot be exported: {path}"
 exported = "Exported: {path}"
@@ -474,6 +507,18 @@ paste_binary = "Not pasted: the clipboard holds binary data"
 paste_too_large = "Not pasted: the clipboard is larger than {limit} (limits.tui.paste_bytes; 0 = unlimited)"
 
 [gui]
+usage = """
+Usage:
+  notes-gui           Open the notes window
+  notes-gui --help    Show this help
+
+To import files, use Import files… / Import folder… in the toolbar, the command palette, or drag them onto the window.
+"""
+import_files = "Import files…"
+import_folder = "Import folder…"
+toolbar_import = "Import"
+toolbar_import_tip = "Import files or folders as notes into the current folder (you can also drop them on the window)"
+import_dialog_failed = "The file dialog could not be opened: {detail}"
 tab_notes = "Notes"
 links_title = "Links ({count})"
 links_hint = "Ctrl+L open or close"
@@ -692,6 +737,7 @@ open_in_new_tab = "Open in new tab"
 hidden_controls = "{count} hidden bidi/zero-width characters"
 hidden_controls_one = "1 hidden bidi/zero-width character"
 hidden_controls_tip = "These characters can make the text look different from what is stored. They are shown as \uFFFD and kept in the file."
+find_hints = "Enter/F3 next  Shift+F3 previous  Esc close  Tab complete"
 details_sync = "Sync"
 details_origin = "Origin"
 columns_hint = "Right-click the header to choose the columns (C cycles them)"
@@ -761,6 +807,14 @@ no_match = "No note matches '{query}'"
 binary_note = "Binary note cannot be shown: {path}"
 ls_usage = "Usage: note ls [QUERY] [-f FOLDER]"
 tags_usage = "Usage: note tags [--json]"
+import_usage = "Usage: note import PATH... [--folder FOLDER] [--type TYPE] [--name NAME (one PATH only)] [--overwrite] [--json]"
+import_done = "Imported: {source} -> {path}"
+import_renamed = "Imported: {source} -> {path} (the name was taken)"
+import_overwritten = "Overwritten: {path} <- {source}"
+import_skipped = "Skipped: {source} ({reason})"
+import_failed = "NOT imported: {source}: {error}"
+import_hidden = "Left out {count} hidden entries (names starting with '.'); give a hidden path by name to import it"
+import_summary = "Imported: {imported}, skipped: {skipped}, not imported: {failed}"
 view_usage = "Usage: note view save NAME CYPHER [--force] | ls [--json] | run NAME [--json] | rm NAME | show NAME"
 view_saved = "Saved view: {name}"
 view_removed = "Removed view: {name}"
@@ -779,6 +833,7 @@ token_not_config = "Tokens are not stored in the configuration; use 'note sync l
 unknown_command = "Unknown command: {command}"
 help_ls = "note ls [QUERY] [-f FOLDER]   List notes: fuzzy order with a query, newest first without; -f limits to a folder. The query takes the search arguments (tag:NAME, type:, in:, size:, updated:, created:, origin:, sync:, sort:)"
 help_tags = "note tags [--json]   List the #tags of live notes with their note counts (NAME<TAB>COUNT); --json prints name, display and count"
+help_import = "note import PATH... [--folder FOLDER] [--type TYPE] [--name NAME] [--overwrite] [--json]   Import files as notes, byte for byte (BOM, CRLF and binary kept; a binary note is read-only). A folder comes in under its own name with its subfolders. The name comes from the file name, the type from the extension (--type replaces it; no extension: detected from the content). A taken name gets -2, -3; --overwrite replaces that note instead. --name names a single PATH. Links are not followed, hidden entries inside folders are left out, the original files are never changed. Exit 1 if anything was skipped or not imported"
 help_view = "note view save NAME CYPHER [--force] | ls [--json] | run NAME [--json] | rm NAME | show NAME   Saved Cypher views: save a read-only query under a name (--force replaces), list them (NAME<TAB>QUERY), run one with the note query output, remove or print one. Views sync like notes; a query that writes is refused on save and on run. view:NAME in a search filters notes to the ones the view returns"
 help_find = "note find TERM...   Search note contents (all terms must appear); prints path:line: snippet; --limit N caps the notes shown"
 help_show = "note show QUERY   Print the best match (an exact path wins; the chosen path goes to stderr)"
@@ -810,7 +865,10 @@ Usage:
   note config path | list | get KEY | set KEY VALUE           Manage the configuration
   note query [--write] [--json] [--param KEY=VALUE]... CYPHER Run a Cypher query on the graph database
   note tags [--json]                                          List #tags with their note counts
+  note import PATH... [--folder FOLDER] [--overwrite]         Import files or folders as notes
   note view save|ls|run|rm|show                               Saved read-only Cypher views
+  note graph migrate|status|export|import                     Migrate, check, dump or load the graph
+  note completion zsh|bash|fish                               Print a shell completion script
   note --help | help COMMAND | --version                      Show help or the version
 
 Use 'note -- ls' to add a note whose text is a command name.
@@ -870,6 +928,70 @@ migrate_remove_plain = "Old files were NOT deleted. Check your notes (note expor
 export_all_done = "Exported {count} notes to {path}"
 export_all_refused = "Not exported: {path} ({reason})"
 help_graph = "note graph migrate [--new] | status [--ignore-skipped | --clear-skipped] | export --format jsonl [-o FILE] | import FILE   Import old plain-file notes (--new: only files dropped in the notes folder after the migration); dump or load the whole graph as JSON lines. status checks the current notes_dir and lists files that are not in the database; --clear-skipped forgets the list of left-out files for every notes_dir after printing it, old files are never touched"
+desc_ls = "List notes"
+desc_find = "Search note contents"
+desc_show = "Print the best match"
+desc_edit = "Open the best match in your editor"
+desc_rm = "Delete a note"
+desc_mv = "Move or rename a note"
+desc_export = "Export a note as PDF, or every note into a folder"
+desc_sync = "Sync now or manage synchronization"
+desc_config = "Show or change settings"
+desc_query = "Run a Cypher query on the graph"
+desc_graph = "Migrate, check, dump or load the graph"
+desc_tags = "List #tags with their note counts"
+desc_view = "Saved read-only Cypher views"
+desc_import = "Import files or folders as notes"
+desc_completion = "Print a shell completion script"
+desc_help = "Show help for a command"
+desc_sync_status = "Show the sync state"
+desc_sync_on = "Turn sync on"
+desc_sync_off = "Turn sync off"
+desc_sync_init = "Set up sync with a remote"
+desc_sync_login = "Save an access token in the keychain"
+desc_sync_logout = "Remove the saved access token"
+desc_config_path = "Print the config file path"
+desc_config_list = "List every setting"
+desc_config_get = "Print one setting"
+desc_config_set = "Change one setting"
+desc_graph_migrate = "Import old plain-file notes"
+desc_graph_status = "List files that are not in the database"
+desc_graph_export = "Dump the graph as JSON lines"
+desc_graph_import = "Load a JSON lines dump"
+desc_view_save = "Save a query under a name"
+desc_view_ls = "List saved views"
+desc_view_run = "Run a saved view"
+desc_view_rm = "Remove a saved view"
+desc_view_show = "Print a saved view's query"
+desc_completion_zsh = "Script for zsh"
+desc_completion_bash = "Script for bash"
+desc_completion_fish = "Script for fish"
+opt_no_sync = "Do not sync after this change"
+opt_json = "Print JSON"
+opt_output = "Write to this file"
+opt_type = "Note type (extension)"
+opt_folder = "Put the notes in this folder"
+opt_in_folder = "Only notes in this folder"
+opt_name = "Note name"
+opt_editor = "Always open the editor"
+opt_help = "Show help"
+opt_version = "Show the version"
+opt_limit = "Show at most this many notes"
+opt_yes = "Delete without asking"
+opt_pdf = "Export as PDF"
+opt_all = "Export every note into this folder"
+opt_ignore_skipped = "Exit 0 even if files were left out"
+opt_write = "Allow the query to change data"
+opt_param = "Query parameter KEY=VALUE"
+opt_overwrite = "Replace what already exists"
+opt_replace = "Replace the current remote"
+opt_new = "Only files added after the migration"
+opt_skip_failed = "Go on past files that cannot be migrated"
+opt_clear_skipped = "Forget the list of left-out files"
+opt_format = "Dump format (jsonl)"
+opt_force = "Replace a view with the same name"
+completion_usage = "Usage: note completion zsh | bash | fish"
+help_completion = "note completion zsh | bash | fish   Print a completion script for your shell: Tab then offers commands, options, note paths, folders, types, tags, views and config keys, with descriptions in your language. zsh: note completion zsh > ~/.local/share/zsh/site-functions/_note (that directory must be in fpath before compinit); bash: source <(note completion bash) in ~/.bashrc; fish: note completion fish > ~/.config/fish/completions/note.fish"
 migrate_backup_hint = "Backup kept at {path} (private). When you no longer need it, delete it yourself: rm -r {path}"
 export_all_unreachable = "Not exported, no safe path: {name} (id {id}, {reason}). Its bytes are in: note graph export --format jsonl"
 
@@ -1005,11 +1127,13 @@ help = "Help"
 quit = "Quit"
 save = "Save"
 folder_new = "New folder"
+import = "Import files…"
 export_pdf = "Export PDF"
 view_tree = "Tree view"
 view_details = "Details view"
 view_map = "Map view"
 links_toggle = "Show or hide the links"
+tab_open = "Open in new tab"
 tab_new = "New tab"
 tab_close = "Close tab"
 tab_next = "Next tab"

@@ -3,7 +3,6 @@
 #include "core/i18n.hpp"
 #include "core/paths.hpp"
 #include "sync/auth.hpp"
-#include "sync/sync_service.hpp"
 
 #include <algorithm>
 #include <array>
@@ -76,12 +75,6 @@ bool user_config_broken() {
     return false;
 }
 
-SyncEnabler system_sync_enabler() {
-    return [](const core::Config& next, bool replace_origin) {
-        return sync::SyncService(next).enable(next.sync.remote, replace_origin);
-    };
-}
-
 SettingsState::SettingsState(const core::Config& config, SettingsServices services)
     : services_(std::move(services)) {
     // Sıra, config_entries'in (şema) sırasıdır ve zaten istenen insan sırasıdır.
@@ -148,12 +141,14 @@ SettingsState::Row SettingsState::token_row() const {
             core::tr(stored_ ? "tui.token_stored" : "tui.token_none")};
 }
 
-// Kasa göstergesi yalnız host değişince yeniden sorulur (her tuşta/çizimde OS kasasına gidilmez).
+// Kasa göstergesi yalnız host değişince yeniden sorulur (her tuşta/çizimde OS kasasına gidilmez). Yazılmış
+// token yazıldığı host'a aittir: host değişince silinir, Kaydet onu başka sunucuya götürmez.
 void SettingsState::refresh_stored() {
     const std::string host = https_host().value_or("");
     if (host == stored_host_)
         return;
     stored_host_ = host;
+    token_.clear();
     stored_ = !host.empty() && services_.tokens.has(host);
 }
 
@@ -376,12 +371,6 @@ std::optional<core::Config> SettingsState::begin_test(const core::Config& base) 
     auto next = build(base);
     if (!next)
         return std::nullopt;
-    if (token_visible() && !token_.empty() && !store_token())
-        return std::nullopt;
-    if (const auto enabled = services_.enable(*next, false); !enabled) {
-        test_result_ = core::tr("tui.test_failed", {{"detail", core::format_error(enabled.error())}});
-        return std::nullopt;
-    }
     testing_ = true;
     test_result_ = core::tr("tui.test_running");
     return next;

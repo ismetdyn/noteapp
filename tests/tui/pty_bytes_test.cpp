@@ -3,6 +3,7 @@
 // hızından bağımsızdır.
 #include "core/migration.hpp"
 #include "support/note_seed.hpp"
+#include "support/run_process.hpp"
 #include "support/test_support.hpp"
 
 #include <array>
@@ -21,6 +22,7 @@
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <vector>
 
 namespace {
 
@@ -32,7 +34,12 @@ constexpr int kReadTimeoutMs = 10000;  // yalnız asılmaya karşı; başarı bu
 
 class PtyApp {
 public:
-    explicit PtyApp(const std::string& program) {
+    explicit PtyApp(const std::string& program, std::vector<std::string> args = {}) {
+        args.insert(args.begin(), program);
+        std::vector<char*> argv;
+        for (std::string& arg : args)
+            argv.push_back(arg.data());
+        argv.push_back(nullptr);
         winsize size{};
         size.ws_row = kRows;
         size.ws_col = kColumns;
@@ -40,7 +47,7 @@ public:
         REQUIRE(pid_ >= 0);
         if (pid_ == 0) {
             setenv("TERM", "xterm-256color", 1);
-            execl(program.c_str(), program.c_str(), static_cast<char*>(nullptr));
+            execv(program.c_str(), argv.data());
             _exit(127);
         }
     }
@@ -184,4 +191,62 @@ TEST_CASE("the exit note after the full screen never sends a raw bidi or C1 char
     CHECK(after.find("gpj") != std::string::npos);  // not gerçekten yazıldı
     CHECK(after.find(rlo) == std::string::npos);
     CHECK(after.find(csi) == std::string::npos);
+}
+
+namespace {
+
+// `timeout`: argümanı tanımayan eski ikili TUI açıp beklerdi; test asılmasın.
+noteapp::test::RunResult run_notes(const std::vector<std::string>& args) {
+    std::vector<std::string> command{"20", NOTEAPP_NOTES_EXE};
+    command.insert(command.end(), args.begin(), args.end());
+    return noteapp::test::run_process("/usr/bin/timeout", command);
+}
+
+void english_config(const std::filesystem::path& home) {
+    std::filesystem::create_directories(home / "config");
+    std::ofstream(home / "config" / "config.toml") << "language = \"en\"\n";
+}
+
+}  // namespace
+
+TEST_CASE("notes --help prints the short usage and exits 0; an unknown argument exits 2") {
+    noteapp::test::TempDir home;
+    noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
+    english_config(home.path());
+    const auto help = run_notes({"--help"});
+    CHECK(help.exit_code == 0);
+    CHECK(help.out.find("notes import") != std::string::npos);
+    const auto bad = run_notes({"--bogus"});
+    CHECK(bad.exit_code == 2);
+    CHECK(bad.err.find("--bogus") != std::string::npos);
+}
+
+TEST_CASE("notes import prints the summary, then opens the TUI on the imported note") {
+    noteapp::test::TempDir home;
+    noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
+    english_config(home.path());
+    const noteapp::test::TempDir files;
+    const std::filesystem::path file = files.path() / "rapor.txt";
+    std::ofstream(file, std::ios::binary) << "kuzey yildizi\r\n";
+
+    const PtyApp app(NOTEAPP_NOTES_EXE, {"import", noteapp::test::utf8(file), "--folder", "inbox"});
+    constexpr int kMaxOpeningFrames = 20;
+    std::string seen;
+    for (int frame = 0; frame < kMaxOpeningFrames && seen.find("yildizi") == std::string::npos; ++frame)
+        seen += app.read_frame_text();
+    CHECK(seen.find("Imported: 1") != std::string::npos);
+    // Kare boşlukları imleç hareketiyle yazar: tek sözcük aranır. Önizleme notu gösteriyor.
+    CHECK(seen.find("yildizi") != std::string::npos);
+    CHECK(noteapp::test::note_body(home.path() / "data", "inbox/rapor.txt") == "kuzey yildizi\r\n");
+}
+
+TEST_CASE("notes import with nothing imported exits 1 without opening the TUI") {
+    noteapp::test::TempDir home;
+    noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
+    english_config(home.path());
+    const auto missing = run_notes({"import", noteapp::test::utf8(home.path() / "yok.md")});
+    CHECK(missing.exit_code == 1);
+    CHECK(missing.err.find("yok.md") != std::string::npos);
+    CHECK(run_notes({"import"}).exit_code == 2);
+    CHECK(run_notes({"import", "a", "--folder", "../dis"}).exit_code == 2);
 }

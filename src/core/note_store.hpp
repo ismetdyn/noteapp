@@ -98,6 +98,8 @@ struct NewNote {
     std::string type;    // uzantı, başında nokta olmadan
     std::string content;
     bool exact_name = false;  // ad doluysa `-2` aranmaz, AlreadyExists döner
+    // Dolu: Note.created_at bu andır (dosyadan içe almada dosyanın doğumu); boş: oluşturma anı (`now`).
+    std::optional<std::chrono::system_clock::time_point> created_at = std::nullopt;
 };
 
 // Okuma anındaki revizyon, sonraki write'ın beklediği değerdir (dışarıdan değişiklik tespiti).

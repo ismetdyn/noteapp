@@ -28,8 +28,6 @@ void GuiState::new_note(const std::string& first_line) {
     if (keeps_active_tab() ? !push_tab() : !flush())
         return;
     claim_active_tab();
-    if (NoteTab* tab = find_tab(active_tab_))
-        tab->cursor.reset();
     close_trash();
     selected_folder_.reset();
     draft_folder_ = std::move(folder);
@@ -42,13 +40,13 @@ void GuiState::new_note(const std::string& first_line) {
     if (!first_line.empty())
         clear_query();  // new_note_ açıkken süzgeç yeniden seçim yapmaz
     set_editor(initial, true);
-    editor_selection_ = TextSelection{buffer_.size(), buffer_.size()};
+    editor_.move_to_end();
     request_focus(FocusRequest::Editor);
 }
 
 bool GuiState::flush() {
     if (new_note_) {
-        if (is_blank(buffer_)) {  // boş taslakta kaybedilecek bir şey yok
+        if (is_blank(editor_.text())) {  // boş taslakta kaybedilecek bir şey yok
             new_note_ = false;
             return true;
         }
@@ -66,7 +64,7 @@ void GuiState::save_now() {
 
 std::expected<app::Document::Saved, core::Error> GuiState::try_write() {
     autosave_.cancel();
-    const auto saved = doc_.save(store_, buffer_);
+    const auto saved = doc_.save(store_, editor_.text());
     if (saved == app::Document::Saved::Written)
         wrote();
     return saved;
@@ -77,6 +75,7 @@ void GuiState::wrote() {
     ++writes_;
     changed();
     dirty_ = false;
+    editor_.mark_saved();
     status_.clear();
     // ponytail: her otomatik kayıtta tam yeniden tarama (>= 1 sn boşta sonrası, 5.000 notta ~20 ms) kabul
     // edilebilir; yükseltme yolu: write()'ın döndürdüğü mtime ile yalnız ilgili model satırını güncellemek.
@@ -140,7 +139,7 @@ bool GuiState::resolve_conflict() {
     }
     case ConflictChoice::Overwrite:
         // Diskteki güncel revizyon alınır; kullanıcı bilerek ezdi.
-        if (const auto written = doc_.overwrite(store_, buffer_); !written) {
+        if (const auto written = doc_.overwrite(store_, editor_.text()); !written) {
             report(written.error());
             return false;
         }
@@ -155,7 +154,7 @@ bool GuiState::resolve_conflict() {
 }
 
 bool GuiState::save_copy() {
-    const auto created = doc_.create_beside(store_, buffer_, app::kCopySuffix);
+    const auto created = doc_.create_beside(store_, editor_.text(), app::kCopySuffix);
     if (!created) {
         report(created.error());
         return false;
@@ -169,7 +168,7 @@ bool GuiState::save_copy() {
 
 bool GuiState::save_new() {
     autosave_.cancel();
-    const std::string& content = buffer_;
+    const std::string& content = editor_.text();
     const detect::Options options{config_.default_type, config_.tuning.min_confidence,
                                   config_.tuning.max_scan_bytes};
     const detect::Suggestion suggestion = detect::suggest(content, options);
@@ -192,7 +191,7 @@ bool GuiState::save_new() {
 
     // Baytlar editördeki gibi (BOM ve CRLF dahil): create_exact, LF'ye çevirmez.
     const auto created =
-        doc_.create(store_, core::NewNote{chosen->folder, chosen->name, chosen->type, {}}, buffer_);
+        doc_.create(store_, core::NewNote{chosen->folder, chosen->name, chosen->type, {}}, editor_.text());
     if (!created) {
         report(created.error());
         return false;
@@ -211,6 +210,7 @@ bool GuiState::adopt_saved(const core::NotePath& path) {
     shown_ = core::NoteInfo{path, content->mtime, content->text.size(), content->revision};
     new_note_ = false;
     dirty_ = false;
+    editor_.mark_saved();
     autosave_.cancel();
     status_.clear();
     // Liste tazelenirken seçim süzgeçteki başka nota kayıp editörü ezmesin: kaydedilen not gösterilir.
@@ -226,7 +226,7 @@ bool GuiState::adopt_saved(const core::NotePath& path) {
 
 bool GuiState::confirm_close() {
     if (new_note_) {
-        if (is_blank(buffer_))
+        if (is_blank(editor_.text()))
             return true;
         switch (deciders.close_unsaved()) {
         case CloseChoice::Save:
@@ -409,7 +409,7 @@ void GuiState::export_pdf() {
 bool GuiState::can_export() const {
     // Boş taslakta export_pdf taslağı atar ve sessizce çıkar; ikili notu reddeder.
     if (new_note_)
-        return !is_blank(buffer_);
+        return !is_blank(editor_.text());
     return shown_.has_value() && !binary();
 }
 

@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <expected>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -173,10 +174,14 @@ public:
     // çalışma dizinine göredir (CLI `note export --pdf` gibi).
     struct ExportTarget {};
     RenameState(ExportTarget, core::NotePath from, std::string file_name);
+    // Palet `import`: içe alınacak dosya ya da klasörün yolu (göreli yol çalışma dizinine göre); girdi boş
+    // başlar, `folder` hedeftir. `from()` yoktur.
+    struct ImportSource {};
+    RenameState(ImportSource, std::string folder);
 
     Outcome handle(Key key, std::string_view text = {});
 
-    const core::NotePath& from() const { return from_; }
+    const core::NotePath& from() const { return from_.value(); }  // içe almada yok: çağrılmaz
     const std::string& text() const { return line_.text(); }
     // Girdinin tam yolu: `base` + yazılan; klasörde sondaki `/` düşer.
     std::string target() const;
@@ -184,6 +189,8 @@ public:
     bool is_move_to() const { return !items_.empty(); }
     bool is_link() const { return is_link_; }
     bool is_export() const { return is_export_; }
+    bool is_import() const { return is_import_; }
+    const std::string& import_folder() const { return base_; }
     const std::vector<ListItem>& items() const { return items_; }
     void set_items(std::vector<ListItem> items) { items_ = std::move(items); }
     std::size_t cursor() const { return line_.cursor(); }  // bayt ofseti, kod noktası başında
@@ -193,11 +200,12 @@ public:
     void set_error(std::string error) { error_ = std::move(error); }
 
 private:
-    core::NotePath from_;
+    std::optional<core::NotePath> from_;
     std::string base_;
     bool is_folder_ = false;
     bool is_link_ = false;
     bool is_export_ = false;
+    bool is_import_ = false;
     std::vector<ListItem> items_;
     InputLine line_;
     std::string error_;

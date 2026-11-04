@@ -65,6 +65,10 @@ struct QueryError {
 // `view:` yalnız ad kuralından geçer (girdi boyama), süzgeci hiçbir notu geçirmez. Biçimler için SPEC-search.
 std::expected<ParsedQuery, QueryError> parse_query(std::string_view query, const ViewLookup& views = {});
 
+// Bilinen anahtar adları (iki noktasız), parse_query'nin tanıdığı sırayla; kabuk tamamlama (`note __complete
+// query`) aynı listeyi önerir.
+std::vector<std::string_view> query_key_names();
+
 // indices'i verilen alana göre kararlı sıralar (eşitlikte gelen sıra kalır); bilinmeyen created her iki yönde
 // sonda.
 void sort_notes(std::vector<std::size_t>& indices, const SortSpec& sort,

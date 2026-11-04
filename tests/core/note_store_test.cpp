@@ -93,6 +93,20 @@ TEST_CASE("create rejects invalid folder, name and type") {
     CHECK(store.list().empty());
 }
 
+TEST_CASE("create refuses a type with a path separator or a character a file name cannot hold") {
+    TempDir tmp;
+    NoteStore store(tmp.path());
+    for (const char* type : {"a/b", "md/../x", "/md", "m\\d", "md:", "md ", "m\td"}) {
+        CAPTURE(type);
+        auto created = store.create({"", "plan", type, ""}, kNow);
+        REQUIRE_FALSE(created.has_value());
+        CHECK(created.error().code == Error::Code::InvalidPath);
+        CHECK(arg(created.error(), "reason") == "invalid_type");
+    }
+    CHECK(store.list().empty());
+    CHECK(store.folders().empty());
+}
+
 TEST_CASE("create derives the name from the first non-empty line") {
     TempDir tmp;
     NoteStore store(tmp.path());

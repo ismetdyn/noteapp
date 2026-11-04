@@ -43,6 +43,8 @@ struct Limit {
 struct AppLimits {
     Limit recent_commands;   // komut paletinde hatırlanan son kullanılan komut (TUI ve GUI)
     Limit trash_undo_steps;  // oturumluk çöp geri alma yığınının derinliği (TUI ve GUI)
+    Limit tabs;              // aynı anda açık editör sekmesi (TUI ve GUI)
+    Limit map_nodes;         // haritada çizilen en çok düğüm (TUI ve GUI); aşan kısım uyarıyla düşer
 
     bool operator==(const AppLimits&) const = default;
 };
@@ -90,6 +92,7 @@ struct GraphLimits {
     Limit touched_properties;  // çakışma raporu için izlenen özellik
     Limit set_aside_logs;      // tutulan kenara alınmış yerel günlük kopyası
     Limit import_line_bytes;   // `note graph import` satırı
+    Limit import_line_values;  // aynı satırın JSON değeri (ayrıştırılmış belleği sınırlar)
 
     bool operator==(const GraphLimits&) const = default;
 };

@@ -2,11 +2,14 @@
 //   SDL_VIDEO_DRIVER=dummy SDL_RENDER_DRIVER=software NOTEAPP_SHOT_DIR=/yol gui_layout_shots
 #include "layout_scenes.hpp"
 
+#include <chrono>
 #include <cstdlib>
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <string>
+#include <thread>
 #include <tuple>
 
 namespace {
@@ -444,5 +447,138 @@ TEST_CASE("renders every layout scene to PNG") {
                 MESSAGE(std::string(size_name), " s", scale, " window ", actual_width, "x", actual_height);
             }
         }
+    }
+}
+
+// G5: EditorBuffer üstündeki editör: satır numaraları, geçerli satır, durum çubuğu, gizli karakter, not içi
+// bul.
+TEST_CASE("renders the G5 editor to PNG") {
+    const char* directory = std::getenv("NOTEAPP_SHOT_DIR");
+    REQUIRE(directory != nullptr);
+    std::filesystem::create_directories(directory);
+    for (const bool dark : {false, true}) {
+        LayoutScene scene(1000, 650, 1.0F);
+        if (dark)
+            apply_dark_theme();
+        scene.fixture.add_note("kod/örnek.md",
+                               "\xEF\xBB\xBF# Başlık\r\n\r\nİstanbul'da *toplantı* var.\r\nGizli: a\xE2\x80\xAE"
+                               "b\r\n\r\n```\r\nkod satırı\r\n```\r\nistanbul ISTANBUL İstanbul\r\n",
+                               1);
+        scene.state->rescan();
+        const auto file = [&](const std::string& what) {
+            return std::filesystem::path(directory) /
+                   std::format("{}-1000x650-s1.00-{}.png", what, dark ? "dark" : "light");
+        };
+        scene.state->open_note(*noteapp::core::NotePath::parse("kod/örnek.md"));
+        scene.state->request_focus(noteapp::gui::FocusRequest::Editor);
+        gui_test::settle(*scene.view);
+        gui_test::press(*scene.view, ImGuiKey_DownArrow);
+        gui_test::press(*scene.view, ImGuiKey_DownArrow);
+        gui_test::press(*scene.view, ImGuiKey_End);
+        gui_test::settle(*scene.view);
+        save_png(file("g5-editor"));
+        gui_test::press(*scene.view, ImGuiMod_Ctrl | ImGuiKey_F);
+        gui_test::type_text(*scene.view, "istanbul");
+        gui_test::press(*scene.view, ImGuiKey_F3);
+        gui_test::settle(*scene.view);
+        save_png(file("g5-find"));
+        gui_test::press(*scene.view, ImGuiKey_Escape);
+    }
+}
+
+// G5b: sözdizimi renkleri, yazım alt çizgisi (sahte hunspell: `kotu` ile başlayan sözcük yanlış), gölge öneri
+// ve Ctrl+Space listesi.
+TEST_CASE("renders the G5 editor features to PNG") {
+    const char* directory = std::getenv("NOTEAPP_SHOT_DIR");
+    REQUIRE(directory != nullptr);
+    std::filesystem::create_directories(directory);
+    const noteapp::test::TempDir tools;
+    const noteapp::test::ScopedEnv path("PATH", noteapp::test::utf8(tools.path()));
+    {
+        std::ofstream out(tools.path() / "hunspell");
+        out << "#!/bin/sh\necho '@(#) International Ispell Version 3.2.06 (but really Hunspell 1.7.2)'\n"
+               "while IFS= read -r line; do\n  for word in $line; do\n    word=\"${word#^}\"\n"
+               "    case \"$word\" in kotu*) echo \"& $word 1 0: iyi\" ;; *) echo \"*\" ;; esac\n  done\n"
+               "  echo\ndone\n";
+    }
+    std::filesystem::permissions(tools.path() / "hunspell", std::filesystem::perms::owner_all);
+    for (const bool dark : {false, true}) {
+        LayoutScene scene(1000, 650, 1.0F);
+        if (dark)
+            apply_dark_theme();
+        scene.fixture.add_note("kod/örnek.py",
+                               "# Örnek betik\nimport os\n\n\ndef topla(a: int, b: int) -> int:\n"
+                               "    \"\"\"İki sayıyı toplar.\"\"\"\n    return a + b  # sonuç\n\n\n"
+                               "class Kayıt:\n    sayı = 42\n    ad = 'kayıt'\n",
+                               1);
+        scene.fixture.add_note("yazı.md", "# Günlük\n\nBugün kotu bir hava var, kotuluk yok.\nalpine alpaca\n", 2);
+        scene.state->rescan();
+        const auto file = [&](const std::string& what) {
+            return std::filesystem::path(directory) /
+                   std::format("{}-1000x650-s1.00-{}.png", what, dark ? "dark" : "light");
+        };
+        scene.state->open_note(*noteapp::core::NotePath::parse("kod/örnek.py"));
+        gui_test::settle(*scene.view);
+        save_png(file("g5-syntax"));
+
+        scene.state->open_note(*noteapp::core::NotePath::parse("yazı.md"));
+        scene.state->request_focus(noteapp::gui::FocusRequest::Editor);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!scene.view->item_rects().contains("editor_spell:3:7") && std::chrono::steady_clock::now() < deadline) {
+            scene.state->tick(std::chrono::steady_clock::now());
+            scene.view->draw_frame();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        REQUIRE(scene.view->item_rects().contains("editor_spell:3:7"));
+        save_png(file("g5-spell"));
+
+        gui_test::press(*scene.view, ImGuiMod_Ctrl | ImGuiKey_End);
+        gui_test::press(*scene.view, ImGuiKey_Enter);
+        gui_test::type_text(*scene.view, "al");
+        gui_test::settle(*scene.view);
+        save_png(file("g5-ghost"));
+        gui_test::press(*scene.view, ImGuiMod_Ctrl | ImGuiKey_Space);
+        gui_test::settle(*scene.view);
+        REQUIRE(scene.view->item_rects().contains("editor_completion"));
+        save_png(file("g5-completion"));
+        gui_test::press(*scene.view, ImGuiKey_Escape);
+        gui_test::press(*scene.view, ImGuiMod_Ctrl | ImGuiKey_Z);
+    }
+}
+
+// G5c: dil sunucusu tanısı (alt çizgi ve imleçteki ileti); sunucu tests/tui/fake_lsp_server.
+TEST_CASE("renders the G5 language server diagnostic to PNG") {
+    const char* directory = std::getenv("NOTEAPP_SHOT_DIR");
+    REQUIRE(directory != nullptr);
+    std::filesystem::create_directories(directory);
+    for (const bool dark : {false, true}) {
+        LayoutScene scene(1000, 650, 1.0F);
+        scene.view.reset();
+        scene.state.reset();
+        scene.fixture.config.lsp.enabled = true;
+        scene.fixture.config.lsp.servers.clear();
+        scene.fixture.config.lsp.servers["python"] = {
+            {std::filesystem::absolute(NOTEAPP_FAKE_LSP_SERVER).string(), "normal"}};
+        scene.fixture.add_note("kod/hata.py", "import os, sys\n\n\ndef topla(a, b):\n    return a + b\n", 1);
+        scene.state = scene.fixture.make_state();
+        scene.state->layout().width = 1000;
+        scene.state->layout().height = 650;
+        scene.view = gui_test::make_view(*scene.state);
+        scene.view->install_deciders();
+        if (dark)
+            apply_dark_theme();
+        scene.state->open_note(*noteapp::core::NotePath::parse("kod/hata.py"));
+        scene.state->request_focus(noteapp::gui::FocusRequest::Editor);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!scene.view->item_rects().contains("editor_diagnostic:1:0") &&
+               std::chrono::steady_clock::now() < deadline) {
+            scene.state->tick(std::chrono::steady_clock::now());
+            scene.view->draw_frame();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        REQUIRE(scene.view->item_rects().contains("editor_diagnostic:1:0"));
+        gui_test::settle(*scene.view);
+        save_png(std::filesystem::path(directory) /
+                 std::format("g5-lsp-diagnostic-1000x650-s1.00-{}.png", dark ? "dark" : "light"));
     }
 }

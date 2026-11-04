@@ -393,6 +393,51 @@ TEST_CASE_FIXTURE(SettingsFixture,
     CHECK(page.test_result().starts_with(kWarningSign));
 }
 
+// Sev-3 (T1+T2 review): enable ağa çıkar; UI iş parçacığında (bekleme imleciyle) koşunca pencere donuyordu.
+// TUI ile aynı akış: enable ve senkron işçide, uyuşmazlık sorulmaz (sonuçta yazar, Kaydet sorar), kasaya
+// yazılmaz.
+TEST_CASE_FIXTURE(SettingsFixture, "the connection test runs enable off the UI thread and asks nothing") {
+    add_note("a.md", "# a\n");
+    const fs::path first = make_bare("first.git");
+    const fs::path second = make_bare("second.git");
+    auto state = make_state_wired();
+    auto view = make_view(*state);
+    SettingsPage& page = state->settings();
+    show_settings(*state, *view);
+    int busy = 0;
+    state->deciders.while_busy = [&busy](const std::function<void()>& work) {
+        ++busy;
+        work();
+    };
+    enable_form(page, first);
+    page.save();
+    REQUIRE(page.field_error("sync.remote").empty());
+    busy = 0;
+
+    page.set_field("sync.remote", utf8(second));  // origin farklı: test sormaz, nedeni sonuçta yazar
+    page.test_connection();
+    CHECK(busy == 0);
+    CHECK(replace_asked == 0);
+    CHECK(wait_for(*state, [&] { return !page.testing(); }));
+    CHECK(page.test_result().starts_with(kWarningSign));
+    CHECK(replace_asked == 0);
+    CHECK(stored_hosts.empty());
+}
+
+// Sev-3: yazılmış token yazıldığı host'a aittir; remote başka host'a dönünce kayıt onu yeni host'a götürürdü.
+TEST_CASE_FIXTURE(SettingsFixture, "a typed token is dropped when the remote moves to another host") {
+    auto state = make_state_wired();
+    SettingsPage& page = state->settings();
+    page.set_field("sync.remote", "https://a.example/me/notes.git");
+    page.token = std::string(kSecretToken);
+    page.set_field("sync.remote", "https://a.example/me/other.git");  // aynı host: kalır
+    CHECK(page.token == kSecretToken);
+    page.set_field("sync.remote", "https://b.example/me/notes.git");
+    CHECK(page.token.empty());
+    page.save_token();
+    CHECK(std::ranges::find(stored_tokens, std::string(kSecretToken)) == stored_tokens.end());
+}
+
 TEST_CASE_FIXTURE(SettingsFixture, "the status label shows off, running, last success and last error") {
     auto state = make_state_wired();
     noteapp::sync::SyncStatus status;

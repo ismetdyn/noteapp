@@ -236,21 +236,25 @@ TEST_CASE("mouse: a click on the right pane focuses Preview") {
     CHECK(f.state.focus() == Focus::Preview);
 }
 
-TEST_CASE("mouse: clicking the list from a clean editor leaves it, from a dirty one it asks first") {
+// GUI ve Ctrl+K gibi: tıklama editörü kapatmaz, soru da sormaz; kirli tampon notuna yazılır.
+TEST_CASE("mouse: clicking the list keeps the editor open and focuses the list, a dirty buffer is saved") {
     Fixture f;
     f.open_editor();
+    const core::NotePath opened = f.state.selected_row()->path;
     f.mouse(5, kRowY + 1, MouseButton::Left);
-    CHECK_FALSE(f.editor.is_open());
+    CHECK(f.editor.is_open());
     CHECK(f.state.focus() == Focus::List);
     CHECK(f.state.selected() == 1);
 
-    f.open_editor();
+    f.state.enter_editor();
     f.editor.handle(Key::Char, "x");
     f.mouse(5, kRowY, MouseButton::Left);
     CHECK(f.editor.is_open());
-    CHECK(f.editor.mode() == tui::EditorSession::Mode::LeavePrompt);
-    CHECK(f.state.selected() == 1);
-    CHECK(f.editor.buffer()->text() == "xmetin\n");
+    CHECK(f.editor.mode() == tui::EditorSession::Mode::Editing);
+    CHECK_FALSE(f.editor.dirty());
+    CHECK(f.state.focus() == Focus::List);
+    CHECK(f.state.selected() == 0);
+    CHECK(f.store.read(opened)->text == "xmetin\n");
 }
 
 TEST_CASE("mouse: an open prompt or input ignores the pointer") {
@@ -323,7 +327,7 @@ TEST_CASE("mouse: right click on a note row opens the GUI's note menu for that r
     REQUIRE(f.state.palette_open());
     CHECK(f.state.selected() == 1);
     CHECK(f.state.focus() == Focus::List);
-    CHECK(menu_ids(f.state) == std::set<std::string_view>{"move", "trash", "delete"});
+    CHECK(menu_ids(f.state) == std::set<std::string_view>{"tab.open", "move", "trash", "delete"});
     while (f.state.palette_selected()->id != "trash")
         f.state.handle(Key::Down);
     CHECK(f.state.handle(Key::Enter) == tui::Intent::TrashSelected);

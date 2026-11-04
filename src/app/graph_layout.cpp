@@ -1,4 +1,4 @@
-#include "gui/graph_layout.hpp"
+#include "app/graph_layout.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <utility>
 
-namespace noteapp::gui {
+namespace noteapp::app {
 
 namespace {
 
@@ -207,4 +207,4 @@ double GraphLayout::energy() const {
     return total;
 }
 
-}  // namespace noteapp::gui
+}  // namespace noteapp::app

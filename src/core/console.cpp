@@ -1,14 +1,43 @@
 #include "core/console.hpp"
 
+#include <cstddef>
+#include <utility>
+
 #ifdef _WIN32
 #ifndef NOMINMAX  // MinGW'nin libstdc++'ı zaten tanımlar; MSVC tanımlamaz.
 #define NOMINMAX
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+// clang-format off
+#include <shellapi.h>  // CommandLineToArgvW; windows.h'tan sonra gelmeli
+// clang-format on
 #endif
 
 namespace noteapp::core {
+
+std::vector<std::string> utf8_arguments(int argc, char** argv) {
+#ifdef _WIN32
+    (void)argc;
+    (void)argv;
+    std::vector<std::string> out;
+    int wide_argc = 0;
+    wchar_t** wide = CommandLineToArgvW(GetCommandLineW(), &wide_argc);
+    if (wide == nullptr)
+        return out;
+    for (int i = 1; i < wide_argc; ++i) {
+        const int size = WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, nullptr, 0, nullptr, nullptr);
+        std::string utf8(size > 0 ? static_cast<std::size_t>(size - 1) : 0, '\0');
+        if (size > 1)
+            WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, utf8.data(), size, nullptr, nullptr);
+        out.push_back(std::move(utf8));
+    }
+    LocalFree(wide);
+    return out;
+#else
+    return std::vector<std::string>(argv + 1, argv + argc);
+#endif
+}
 
 #ifdef _WIN32
 ConsoleUtf8Scope::ConsoleUtf8Scope() : input_cp_(GetConsoleCP()), output_cp_(GetConsoleOutputCP()) {

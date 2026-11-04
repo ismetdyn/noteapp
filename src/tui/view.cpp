@@ -253,15 +253,20 @@ PaneMode editor_mode(const EditorSession& editor) {
 
 // Odaklı panel kalın ve renkli çerçeve alır; renksiz terminalde de kalınlık farkı ve etiket görünür. Etiket
 // çerçevenin üzerine ayrı katmandır: `color` süsleyicisi içeriğe uygulanırsa sözdizimi renklerini ezerdi.
-ftxui::Element framed_pane(ftxui::Element content, const std::optional<PaneMode>& mode) {
+// Sekme satırı da kenardadır (`tabs`): panel içeriği kaymaz, editör imleci ve fare eşlemesi değişmez.
+ftxui::Element framed_pane(ftxui::Element content, const std::optional<PaneMode>& mode,
+                           const std::string& tabs = {}) {
     using namespace ftxui;
-    if (!mode)
+    if (!mode && tabs.empty())
         return std::move(content) | borderStyled(LIGHT);
+    Elements label = {emptyElement() | size(WIDTH, EQUAL, kFrameLabelOffset)};
+    if (mode)
+        label.push_back(text(" " + mode->label + " ") | bold | color(mode->color));
+    if (!tabs.empty())
+        label.push_back(text(tabs));
     // Dolgu şart: katman tüm panel boyunu alırsa `color` kutusu etiketin altındaki sütunları da boyar.
-    return dbox({std::move(content) | borderStyled(HEAVY, mode->color),
-                 vbox({hbox({emptyElement() | size(WIDTH, EQUAL, kFrameLabelOffset),
-                             text(" " + mode->label + " ") | bold | color(mode->color)}),
-                       filler()})});
+    return dbox({std::move(content) | (mode ? borderStyled(HEAVY, mode->color) : borderStyled(LIGHT)),
+                 vbox({hbox(std::move(label)), filler()})});
 }
 
 std::string sync_state_text(core::SyncState state) {
@@ -314,6 +319,8 @@ int row_prefix_cells(const ListCells& cells) {
     return kFixedPrefixCells + cells.digits + cells.icon_cells;
 }
 
+}  // namespace
+
 ftxui::Color icon_color(core::IconColor color) {
     switch (color) {
     case core::IconColor::Blue:
@@ -333,6 +340,8 @@ ftxui::Color icon_color(core::IconColor color) {
     }
     return ftxui::Color::Default;
 }
+
+namespace {
 
 // Glif tek hücre sayılır; ardındaki boş hücreye Mono olmayan Nerd Font (MesloLGS: genişlik 1,45 hücre) taşar
 // ve tam boyutunda çizilir. Boyutu terminal fontu belirler, bu yalnız ezilmesini önler.
@@ -910,6 +919,7 @@ ftxui::Element rename_bar(const RenameState& rename, int width) {
     const char* label = rename.is_link()      ? "tui.link_label"
                         : rename.is_move_to() ? "tui.move_to_label"
                         : rename.is_export()  ? "tui.export_label"
+                        : rename.is_import()  ? "tui.import_label"
                                               : "tui.rename_label";
     return input_line_bar(core::tr(label), rename.line(), {}, rename.ghost(), core::tr("tui.rename_hints"),
                           width);
@@ -1227,22 +1237,32 @@ std::optional<PaneMode> right_mode(const TuiState& state, const Preview& preview
 // Yakınlaştırmada yalnız odaklı panel çizilir.
 ftxui::Element panes(const TuiState& state, const Preview& preview, const EditorSession* editing,
                      const NewRowState* new_row, ftxui::Dimensions window, int height, bool show_cursor,
-                     SpellChecker* spell) {
+                     SpellChecker* spell, std::span<const TabLabel> tabs) {
     using namespace ftxui;
     const PaneGeometry geometry = state.layout().geometry(window.dimx, right_pane_focused(state.focus()));
     Elements cells;
-    if (geometry.list_visible)
-        cells.push_back(
-            framed_pane(note_list(state, height, geometry.list_width, new_row) | flex,
-                        state.focus() == Focus::List ? std::optional(list_mode()) : std::nullopt) |
-            size(WIDTH, EQUAL, geometry.list_width));
-    if (geometry.right_visible)
+    if (geometry.list_visible) {
+        // Harita listenin yerinde (SPEC-tui "Harita"); ad satırı açıkken liste görünür kalır.
+        Element content = state.map_view() && !new_row
+                              ? map_pane(state, geometry.list_width - kFrameCells, height)
+                              : note_list(state, height, geometry.list_width, new_row);
+        cells.push_back(framed_pane(std::move(content) | flex, state.focus() == Focus::List
+                                                                   ? std::optional(list_mode())
+                                                                   : std::nullopt) |
+                        size(WIDTH, EQUAL, geometry.list_width));
+    }
+    if (geometry.right_visible) {
+        const std::optional<PaneMode> mode = right_mode(state, preview, editing);
+        // Kenarın iki köşesi, etiket payı ve etiketin iki boşluğu.
+        constexpr int kLabelChrome = 2 + kFrameLabelOffset + 2;
+        const int room = geometry.right_width - kLabelChrome - (mode ? ftxui::string_width(mode->label) : 0);
         cells.push_back(
             framed_pane(right_pane(state, preview, editing, height,
                                    editor_viewport(window, state.layout()).columns, show_cursor, spell) |
                             flex,
-                        right_mode(state, preview, editing)) |
+                        mode, tab_strip_text(tabs, room)) |
             flex);
+    }
     return hbox(std::move(cells));
 }
 
@@ -1520,6 +1540,56 @@ std::string fit_hints(std::string_view hints, int width) {
     return fitted;
 }
 
+std::string tab_strip_text(std::span<const TabLabel> tabs, int width) {
+    constexpr std::string_view kSeparator = " │ ";
+    constexpr std::string_view kMore = "…";
+    if (tabs.empty() || width <= 0)
+        return {};
+    std::vector<std::string> cells;
+    cells.reserve(tabs.size());
+    std::size_t active = 0;
+    for (std::size_t i = 0; i < tabs.size(); ++i) {
+        const TabLabel& tab = tabs[i];
+        // Ad güvenilmez (senkron): denetim baytı ve bidi terminale gitmez.
+        std::string title = terminal_safe(tab.title) + (tab.dirty ? std::string(kDirtyMark).substr(1) : "");
+        cells.push_back(tab.active ? "[" + title + "]" : title);
+        if (tab.active)
+            active = i;
+    }
+    const auto separator = static_cast<int>(ftxui::string_width(std::string(kSeparator)));
+    const auto more = static_cast<int>(ftxui::string_width(std::string(kMore)));
+    const auto cells_of = [&](std::size_t first, std::size_t last) {
+        int used = 2;  // baştaki ve sondaki boşluk
+        for (std::size_t i = first; i <= last; ++i)
+            used += ftxui::string_width(cells[i]) + (i > first ? separator : 0);
+        return used + (first > 0 ? more + separator : 0) + (last + 1 < cells.size() ? more + separator : 0);
+    };
+    // Etkin sekmeden iki yana büyür: önce sağa, sonra sola.
+    std::size_t first = active;
+    std::size_t last = active;
+    for (bool grew = true; grew;) {
+        grew = false;
+        if (last + 1 < cells.size() && cells_of(first, last + 1) <= width) {
+            ++last;
+            grew = true;
+        }
+        if (first > 0 && cells_of(first - 1, last) <= width) {
+            --first;
+            grew = true;
+        }
+    }
+    std::string line = " ";
+    if (first > 0)
+        line += std::string(kMore) + std::string(kSeparator);
+    for (std::size_t i = first; i <= last; ++i)
+        line += (i > first ? std::string(kSeparator) : std::string{}) + cells[i];
+    if (last + 1 < cells.size())
+        line += std::string(kSeparator) + std::string(kMore);
+    line += " ";
+    // Tek sekme de sığmıyorsa sonu kısalır.
+    return ftxui::string_width(line) <= width ? line : tail_cells(line, static_cast<std::size_t>(width));
+}
+
 EditorViewport editor_viewport(ftxui::Dimensions window, const PaneLayout& layout) {
     const PaneGeometry geometry = layout.geometry(window.dimx, true);
     return {std::max(geometry.right_width - kFrameCells, 1),
@@ -1529,7 +1599,8 @@ EditorViewport editor_viewport(ftxui::Dimensions window, const PaneLayout& layou
 ftxui::Element render(const TuiState& state, const Preview& preview, const StatusLine& status,
                       ftxui::Dimensions window, const SaveDialogState* dialog, const ConfirmState* confirm,
                       const HelpState* help, const SettingsState* settings, const NewRowState* new_row,
-                      const EditorSession* editor, SpellChecker* spell, const RenameState* rename) {
+                      const EditorSession* editor, SpellChecker* spell, const RenameState* rename,
+                      std::span<const TabLabel> tabs) {
     using namespace ftxui;
     if (window.dimx < kMinWidth || window.dimy < kMinHeight)
         return text(core::tr("tui.too_small")) | center | flex;
@@ -1541,9 +1612,9 @@ ftxui::Element render(const TuiState& state, const Preview& preview, const Statu
     const int panel_height = window.dimy - TuiState::kChromeLines - (input_error ? 1 : 0);
     Element modal = open_modal(state, help, confirm, dialog, settings, window.dimy);
     const bool modal_open = modal != nullptr;
-    Elements lines = {editing && state.new_note_view() ? new_note_header(*editing) : top_bar(state, status),
-                      panes(state, preview, editing, new_row, window, panel_height, !modal_open, spell) |
-                          flex};
+    Elements lines = {
+        editing && state.new_note_view() ? new_note_header(*editing) : top_bar(state, status),
+        panes(state, preview, editing, new_row, window, panel_height, !modal_open, spell, tabs) | flex};
     // Biçimli görünüm olmadıysa neden burada: içerik satırlarını kaydırmaz, fare ve arama eşlemesi bozulmaz.
     const std::string note = preview.note.empty() ? std::string{} : preview.note + "  ";
     // cppcheck-suppress nullPointerRedundantCheck ; editor_open, editing dolu demektir

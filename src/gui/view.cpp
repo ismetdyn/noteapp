@@ -19,6 +19,7 @@
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlrenderer3.h>
 #include <imgui_internal.h>  // Ctrl+Tab pencere geçişi (GImGui)
+#include <string_view>
 #include <utility>
 
 namespace noteapp::gui {
@@ -143,7 +144,7 @@ std::expected<std::unique_ptr<View>, std::string> View::create(GuiState& state) 
 
 View::View(GuiState& state, std::unique_ptr<Platform> platform)
     : state_(state), platform_(std::move(platform)), preview_(std::make_unique<PreviewCache>()),
-      frames_left_(kFramesAfterEvent) {
+      frames_left_(kFramesAfterEvent), import_inbox_(std::make_shared<ImportInbox>()) {
     state_.set_wake(wake_event_loop);
 }
 
@@ -218,6 +219,12 @@ void View::pump_events() {
         case SDL_EVENT_KEY_DOWN:
             map_zoom_keys_ += map_zoom_step(event.key.key);
             break;
+        case SDL_EVENT_DROP_FILE:  // dosya ya da klasör, bırakılan her öğe için bir olay (UTF-8)
+            if (event.drop.data != nullptr) {
+                const std::string_view dropped(event.drop.data);
+                dropped_.emplace_back(std::u8string(dropped.begin(), dropped.end()));
+            }
+            break;
         default:
             break;
         }
@@ -226,6 +233,8 @@ void View::pump_events() {
 
 void View::render(const std::function<void()>& overlay) {
     pump_events();
+    // TUI gibi her kareden önce: tanılar ve öneriler bu karede çizilsin.
+    lsp_waiting_ = state_.update_language_servers(std::chrono::steady_clock::now());
     item_rects_.clear();  // yalnız bu karede çizilenler kalır: gizli sekmenin eski konumu test edilmesin
     // Harita bu karede çizilmezse yerleşim de beklemez.
     map_animating_ = false;
@@ -273,6 +282,7 @@ void View::run_intents() {
         intent();
     if (!intents.empty())
         frames_left_ = kFramesAfterEvent;
+    import_pending();
     if (state_.take_quit_request())  // `quit`: pencere kapatmayla aynı yol (kaydedilmemiş iş sorulur)
         close_requested_ = true;
     // Kare dışında: Ayrıntılar'da konum değişimi listeyi süzer, kare içinde çizilen satırlar bozulmasın.
@@ -282,11 +292,12 @@ void View::run_intents() {
 int View::idle_timeout_ms() const {
     if (frames_left_ > 0 || map_animating_)
         return 0;
-    int timeout = kIdleWaitMs;
+    // Dil sunucusuna gidecek değişiklik boşta bekliyor: süre dolunca gönderilsin diye sık uyanılır.
+    int timeout = lsp_waiting_ ? kLspPollMs : kIdleWaitMs;
     if (const auto deadline = state_.next_deadline()) {
         const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
             *deadline - std::chrono::steady_clock::now());
-        timeout = std::clamp(static_cast<int>(left.count()), 0, kIdleWaitMs);
+        timeout = std::clamp(static_cast<int>(left.count()), 0, timeout);
     }
     return timeout;
 }
@@ -325,7 +336,11 @@ void View::handle_shortcuts() {
         return;
     // Arama kutusunda Ctrl+P geçmiştir, Ctrl+N geçmişte gezerken öyle (TUI girdi satırı): draw_search_row
     // alır.
+    // Editörün bul satırında Ctrl+P/Ctrl+N önceki/sonraki eşleşmedir (TUI): editor_keys alır.
     const auto search_line_key = [this](ImGuiKeyChord chord) {
+        const bool previous_next = chord == (ImGuiMod_Ctrl | ImGuiKey_P) || chord == (ImGuiMod_Ctrl | ImGuiKey_N);
+        if (editor_active_ && state_.editor().mode() != NoteEditor::Mode::Editing)
+            return previous_next;
         return search_active_ && (chord == (ImGuiMod_Ctrl | ImGuiKey_P) ||
                                   (chord == (ImGuiMod_Ctrl | ImGuiKey_N) && state_.search_walking()));
     };

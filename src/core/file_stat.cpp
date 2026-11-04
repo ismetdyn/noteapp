@@ -199,4 +199,14 @@ std::optional<fs::file_time_type> file_birth_time(const fs::path& path) {
 #endif
 }
 
+std::chrono::system_clock::time_point to_system_time(fs::file_time_type when) {
+    return std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        std::chrono::file_clock::to_sys(when));
+}
+
+std::chrono::system_clock::time_point file_created_time(const fs::path& file, fs::file_time_type mtime) {
+    const auto birth = file_birth_time(file);
+    return to_system_time(birth && *birth < mtime ? *birth : mtime);
+}
+
 }  // namespace noteapp::core

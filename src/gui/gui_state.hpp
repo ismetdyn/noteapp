@@ -5,7 +5,9 @@
 #include "app/document.hpp"
 #include "app/item_ops.hpp"
 #include "app/listing.hpp"
+#include "app/note_map.hpp"
 #include "app/sync_status_worker.hpp"
+#include "app/tabs.hpp"
 #include "app/trash_ops.hpp"
 #include "core/config.hpp"
 #include "core/error.hpp"
@@ -13,11 +15,13 @@
 #include "core/folder_tree.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
+#include "edit/completion.hpp"
 #include "edit/input_line.hpp"
+#include "edit/language_servers.hpp"
+#include "edit/spellcheck.hpp"
 #include "gui/browser_rows.hpp"
-#include "gui/graph_layout.hpp"
 #include "gui/note_list_model.hpp"
-#include "gui/note_map.hpp"
+#include "gui/note_editor.hpp"
 #include "gui/save_dialog.hpp"
 #include "gui/settings_page.hpp"
 #include "sync/auto_sync.hpp"
@@ -34,6 +38,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -42,6 +47,16 @@
 #include <vector>
 
 namespace noteapp::gui {
+
+// Haritanın modeli ve yerleşimi arayüzden bağımsızdır (src/app, TUI ile ortak); çizim view_map'tedir.
+using app::GraphLayout;
+using app::LayoutPoint;
+using app::MapEdge;
+using app::MapEdgeKind;
+using app::MapNode;
+using app::MapNodeKind;
+using app::MapOptions;
+using app::NoteMap;
 
 // Kullanıcı kararları tek yerden geçer: üretimde view gerçek diyalogları kurar, testler değiştirir.
 // Varsayılan hep "vazgeç": kurulmamış karar veri kaybettirmez.
@@ -78,6 +93,8 @@ struct Deciders {
     };
     // Sistem panosuna metin (TUI `c`); false = yazılamadı. Üretimde SDL panosu.
     std::function<bool(const std::string& text)> copy_text = [](const std::string&) { return false; };
+    // Sistem panosundaki metin (editörde Ctrl+V); nullopt = pano boş ya da okunamadı: iç pano yapıştırılır.
+    std::function<std::optional<std::string>()> paste_text = [] { return std::nullopt; };
     // Arayüzü tutan iş (AutoSync durdurma, enable): üretimde bekleme imleciyle.
     std::function<void(const std::function<void()>& work)> while_busy =
         [](const std::function<void()>& work) { work(); };
@@ -114,7 +131,7 @@ struct PickerItem {
     std::string label;  // listede görünen
 };
 
-// Editör imlecine programatik seçim (bayt ofseti): [start, end).
+// Editör seçimi (bayt ofseti): [start, end).
 struct TextSelection {
     std::size_t start;
     std::size_t end;
@@ -307,6 +324,16 @@ public:
     // Yank'i hedef klasöre kopyalar (app::paste_items): ad doluysa `-2`; kaynak yerinde kalır.
     void paste();
 
+    // --- Dosya içe alma (`import`: dosya/klasör diyaloğu, sürükle-bırak; TUI paleti ve CLI aynı kural) ---
+    // Yollar target_folder()'a app::import_paths'le alınır; özet durum çubuğunda, ilk not sekme kuralıyla
+    // açılır (tutulan ya da kirli sekme kalır, not yeni sekmede).
+    void import_files(std::span<const std::filesystem::path> sources);
+    void import_dialog_failed(const std::string& detail);  // SDL diyaloğu açamadı (SDL_GetError)
+    // Komut ve menü yalnız ister; yerel diyaloğu View açar (SDL), seçilenler post ile import_files'a gelir.
+    enum class ImportRequest { None, Files, Folders };
+    void request_import(ImportRequest request) { import_request_ = request; }
+    ImportRequest take_import_request() { return std::exchange(import_request_, ImportRequest::None); }
+
     // --- Hızlı ekleme (TUI `a`): listenin başında ad satırı; `/` ile biten ad klasör açar ---
     void begin_quick_add();
     bool quick_add_open() const { return quick_add_open_; }
@@ -316,7 +343,7 @@ public:
     void cancel_quick_add();  // Esc
 
     // --- Not haritası (Harita görünümü, SPEC-gui "Harita") ---
-    const MapOptions& map_options() const { return map_options_; }
+    const MapOptions& map_options() const { return map_.options(); }
     void set_map_options(const MapOptions& options);
     // Görünür harita ve yerleşimi; gerekirse kurulur. Depo yalnız taramada değişiklik görülünce okunur
     // (kenarlar tek okumada); kare başına okunmaz.
@@ -326,19 +353,41 @@ public:
     // sığdırır.
     std::size_t map_generation() {
         ensure_map();
-        return map_generation_;
+        return map_.generation();
     }
     // Düğüm başına arama kutusunun süzgeci (listeyle aynı ayrıştırıcı, `tag:` dahil); sorgu boşken hepsi 1.
     const std::vector<char>& map_matches();
     // Düğüme tıklama: bekleyen düzenleme önce kendi notuna yazılır (flush_for), sonra not açılır (open_link).
     void open_map_note(const core::NotePath& path);
-    std::size_t map_reads() const { return map_reads_; }  // test kancası: NoteStore::edges çağrısı
+    std::size_t map_reads() const { return map_.reads(); }  // test kancası: NoteStore::edges çağrısı
 
     // --- Editör ---
-    const std::string& buffer() const { return buffer_; }
-    std::string& buffer_for_edit() { return buffer_; }  // ImGui doğrudan yazar; ardından buffer_edited()
-    void buffer_edited();
-    void edit_text(std::string text);  // buffer_for_edit + buffer_edited
+    // Etkin sekmenin editörü (EditorBuffer üstünde, TUI ile aynı düzenleme kuralları). Metni değiştiren her
+    // şey aşağıdaki editor_* yollarından geçer: kirli durum, otomatik kayıt ve sekme koruması orada yürür.
+    const NoteEditor& editor() const { return editor_; }
+    const std::string& buffer() const { return editor_.text(); }
+    // TUI tuş sözlüğüyle editör tuşu: hareket, düzenleme, geri al/yinele, bul; Ctrl+C/X/V panodan
+    // (deciders.copy_text / paste_text, yedek iç pano).
+    void editor_key(tui::Key key, std::string_view text = {});
+    // Çizimden önce: metin alanının hücre ölçüsü (numara sütunu hariç); imleç görünür kalır.
+    void editor_layout(int columns, int rows) { editor_.layout(columns, rows); }
+    void editor_click(std::size_t visible_row, int cell, bool extend) { editor_.click(visible_row, cell, extend); }
+    void editor_wheel(int rows) { editor_.wheel(rows); }
+    void find_in_note();          // Ctrl+F
+    void find_step(int delta);    // F3 / Shift+F3
+    // Durum çubuğunun alanları (TUI bilgi satırıyla aynı): tip, kodlama, satır sonu, BOM, satır:sütun, satır
+    // sayısı.
+    std::string editor_fields() const;
+    // Yazım denetimi (TUI ile aynı `hunspell -a`, yalnız md ve txt): satır içi yanlış sözcük aralıkları. Tuşu
+    // bekletmez: bilinmeyen satır boş döner, sonuç gelince kare istenir. hunspell yoksa hep boş.
+    std::vector<tui::ByteRange> misspelled(std::string_view line);
+    // Dil sunucuları (TUI ile aynı tui::LanguageServers: varsayılan açık sunucular, sıkılaştırma, uzak dosya
+    // başvurusu kuralı): her kareden önce. Belgeyi açar/kapatır, boşta değişikliği gönderir, tanıları ve
+    // önerileri editöre koyar. true = boşta bekleyen değişiklik var, kısa süre sonra yeni kare gerekir.
+    bool update_language_servers(std::chrono::steady_clock::time_point now);
+    // Editörün tek seferlik iletisi (dil sunucusu durdu, bulunamadı); sonraki editör tuşu siler (TUI).
+    const std::string& editor_notice() const { return editor_notice_; }
+    void edit_text(std::string_view text);  // tüm metin, tek geri alma adımı (testler ve programatik yazım)
     std::size_t buffer_generation() const { return buffer_generation_; }
     bool editable() const { return editable_; }
     bool dirty() const { return dirty_; }
@@ -348,12 +397,14 @@ public:
     // değişince güncellenir, kare başına taranmaz. Etiket başlıktaki uyarıdır, sayı 0 iken boş.
     std::size_t hidden_controls() const { return hidden_controls_; }
     std::string hidden_controls_label() const;
+    // Notun uzantısı; kaydedilmemiş taslakta canlı detect (TUI ile aynı): renk, yazım ve durum çubuğu ilk
+    // kayıttan önce de çalışır.
     std::string current_type() const;
     std::vector<std::string> type_choices() const;
     bool type_enabled() const { return shown_.has_value() && !new_note_; }
-    // Editör etkinleşene dek bekleyen seçim (ImGui yalnız etkin alana seçim uygular); içerik değişince düşer.
-    const std::optional<TextSelection>& editor_selection() const { return editor_selection_; }
-    std::optional<TextSelection> take_editor_selection();
+    // Editördeki seçim; içerik araması ilk eşleşmeyi buraya koyar, düzenleme kaldırır.
+    std::optional<TextSelection> editor_selection() const;
+    std::optional<TextSelection> take_editor_selection();  // seçimi kaldırır (imleç yerinde)
 
     // --- Bağlantılar (editör altı panel) ---
     const core::NoteLinks& links() const { return links_; }
@@ -391,8 +442,8 @@ public:
     // --- Editör sekmeleri (SPEC-gui "Sekmeler") ---
     // Etkin sekmenin içeriği editör üyelerindedir (shown_, buffer_ ...); diğerleri kendi anlık görüntüsünü
     // tutar. Ağaçtan/aramadan/haritadan açılan not etkin sekmenin yerine geçer; sekme iğnelenmiş, korunuyor
-    // (kept) ya da kaydedilmemiş taslaksa yeni sekmede açılır. Açık not yinelenmez, sekmesi öne gelir.
-    static constexpr std::size_t kMaxTabs = 32;
+    // (kept) ya da kaydedilmemiş taslaksa yeni sekmede açılır. Açık not yinelenmez, sekmesi öne gelir. Sekme
+    // sayısı limits.app.tabs ile sınırlıdır (0 = sınırsız; kural app/tabs, TUI ile ortak).
     std::vector<TabSummary> tabs() const;
     std::uint64_t active_tab() const { return active_tab_; }  // 0 = sekme yok
     // Sekmeden ayrılırken bekleyen düzenleme kendi notuna yazılır, taslak sekmesinde kalır. Kayıt olmazsa
@@ -407,8 +458,6 @@ public:
     void reorder_tabs(const std::vector<std::uint64_t>& order);
     // Orta tık / Ctrl+tık / Ctrl+Enter. Not etkin sekmedeyse sekme korunur (sonraki açılış yeni sekmeye).
     void open_in_new_tab(const core::NotePath& path);
-    // Editör imleci: sekmeye dönüldüğünde geri konur.
-    void remember_cursor(TextSelection cursor);
 
     // --- Eylemler (kısayollar) ---
     void focus_search();       // Ctrl+K / Ctrl+P
@@ -523,10 +572,12 @@ public:
     std::size_t sync_restarts() const { return sync_restarts_; }
 
 private:
+    // Diğer notların sözcükleri (gölge öneri, Ctrl+Space, bul tamamlaması); ilk editör kullanımında kurulur.
+    std::shared_ptr<const tui::WordTable> word_table();
     // Etkin olmayan sekmenin editör durumu; etkin sekmede boştur (canlı değerler üyelerdedir).
     struct EditorSnapshot {
         std::optional<core::NoteInfo> shown;
-        std::string buffer;
+        NoteEditor editor;  // metin, geri alma geçmişi, imleç ve seçim sekmeyle saklanır
         std::size_t generation = 0;
         std::string draft_folder;
         app::Document doc;
@@ -540,7 +591,6 @@ private:
         bool pinned = false;
         bool kept = false;
         bool loaded = true;  // false: gui-state'ten geri yüklendi, içerik ilk etkinleşmede okunur
-        std::optional<TextSelection> cursor;
         EditorSnapshot saved;
     };
 
@@ -577,6 +627,12 @@ private:
     void set_document_text(std::string text);
     bool binary() const { return doc_.read_only() == app::ReadOnly::Binary; }
     void set_editor(std::string content, bool editable);
+    EditorLimits editor_limits() const;
+    void editor_changed(std::uint64_t edits_before);            // editor_key ve edit_text'in ortak sonu
+    std::string detected_type(std::string_view content) const;  // config'in detect ayarlarıyla
+    void refresh_draft_type();                                  // taslak düzenlendi (app::DraftTypeTracker)
+    void copy_from_editor(std::string text);
+    void paste_into_editor();
     void ensure_visible(const core::NotePath& path);
     void restore_selection();
     void clear_query();
@@ -646,12 +702,7 @@ private:
     void clear_live();
     void close_missing_tabs(const std::unordered_set<std::string>& present);
     bool confirm_close_drafts();
-    struct SavedTab {  // gui-state.toml'daki [[tabs]] girdisi
-        std::string path;
-        bool pinned = false;
-        bool kept = false;
-    };
-    bool restore_tabs(const std::vector<SavedTab>& saved, std::size_t active_index);
+    bool restore_tabs(const app::SavedTabs& saved);  // gui-state.toml'daki [[tabs]] ve active_tab
 
     core::Config config_;
     core::NoteStore store_;
@@ -660,24 +711,16 @@ private:
     std::string current_folder_;
     std::optional<std::string> selected_folder_;  // doluyken gösterilen not ve taslak yoktur
     std::string draft_folder_;                    // yeni notun kayıt diyaloğunda önerilen klasör
+    app::DraftTypeTracker draft_type_;            // taslağın tipi editörde (NoteEditor::type) durur
+    std::size_t draft_size_ = 0;                  // son düzenlemedeki taslak metninin boyu
     std::vector<BrowserRow> browser_rows_;
     std::string built_folder_;        // Ayrıntılar satırlarının kurulduğu konum
     std::string revealed_note_;  // son açığa çıkarılan not: kullanıcının kapattığı klasör yeniden açılmaz
     // Harita: depodan okunan kenarlar (taramada değişiklik görülünce bayatlar) ve onlardan kurulan görünür
-    // harita (seçenek ya da merkez değişince). Konumlar GraphLayout'ta anahtarla korunur.
-    MapOptions map_options_;
-    std::vector<core::NoteEdge> map_edges_;
-    NoteMap map_;
-    GraphLayout map_layout_;
-    std::optional<core::NotePath> map_center_;
-    std::vector<char> map_matches_;
-    std::size_t map_matches_resets_ = 0;  // eşleşmelerin kurulduğu model_.resets()
+    // harita (seçenek ya da merkez değişince). Konumlar GraphLayout'ta anahtarla korunur. Model TUI ile
+    // ortak.
+    app::MapModel map_{config_.limits.app.map_nodes};  // config_ önce kurulur (bildirim sırası)
     std::uint64_t data_version_ = 0;
-    bool map_edges_stale_ = true;
-    bool map_stale_ = true;
-    bool map_matches_stale_ = true;
-    std::size_t map_reads_ = 0;
-    std::size_t map_generation_ = 0;
     bool rows_stale_ = true;
     std::size_t browser_rebuilds_ = 0;
     std::size_t max_row_number_ = 0;
@@ -717,7 +760,8 @@ private:
     // (doc_).
     std::optional<core::NoteInfo> shown_;
     app::Document doc_;  // etkin sekmenin belgesi: BOM, satır sonu, salt-okunur neden, revizyon
-    std::string buffer_;
+    NoteEditor editor_;
+    std::string clipboard_;  // iç pano: sistem panosu okunamazsa Ctrl+V bunu yapıştırır (TUI ile aynı)
     std::size_t buffer_generation_ = 0;
     std::size_t hidden_controls_ = 0;
     core::NoteLinks links_;
@@ -747,8 +791,8 @@ private:
     std::string sync_label_;
     Tab tab_ = Tab::Notes;
     FocusRequest focus_request_ = FocusRequest::None;
-    std::optional<TextSelection> editor_selection_;
     std::string status_;
+    ImportRequest import_request_ = ImportRequest::None;
     GuiLayout layout_;
 
     std::mutex posted_mutex_;
@@ -763,6 +807,24 @@ private:
     // kapanmasını bekler: request_close editör açıkken kapanmaz.
     std::jthread external_;
     std::jthread stray_probe_;  // açılıştaki geçiş dışı dosya taraması (app::count_stray_files)
+    // Kendi depo bağlantısıyla arka planda okur; post çağırmaz, yine de UI üyelerinden önce yıkılır.
+    static constexpr std::chrono::seconds kWordTableIdle{1};  // TUI ile aynı tempo
+    tui::WordTableBuilder word_tables_{
+        kWordTableIdle, tui::completion_limits_of(config_.limits.tui, config_.tuning.completion_min_prefix_bytes)};
+    bool word_tables_enabled_ = false;
+    // Sonuç gelince post eder (kare): posted_ ve wake_'ten önce yıkılmalı, bu yüzden en sonda.
+    std::unique_ptr<tui::SpellChecker> spell_;
+    std::string spell_dictionary_;
+    std::string editor_notice_;
+    // İstemcilerin işçileri yeniden çizim için post eder: en son kurulur, ilk yıkılır.
+    tui::LanguageServers language_servers_{config_.lsp,
+                                           tui::lsp_workspace_dir(),
+                                           store_,
+                                           [this] { post([] {}); },
+                                           tui::LanguageServers::kChangeIdle,
+                                           tui::LanguageServers::kMirrorIdle,
+                                           tui::kBlockNetworkPaths,
+                                           tui::lsp_limits_of(config_.limits.lsp)};
 };
 
 }  // namespace noteapp::gui

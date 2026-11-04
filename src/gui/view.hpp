@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
@@ -45,6 +46,8 @@ struct MapLineBatch {
 // İnce çizim katmanı: her karede GuiState'i çizer, kullanıcı niyetini kuyruğa alır ve kare bittikten sonra
 // iletir. Sıra önemlidir: niyet bir karar (diyalog) açabilir ve diyalog kendi karelerini üretir; ImGui karesi
 // iç içe açılamaz.
+struct ImportInbox;  // view_internal.hpp
+
 class View {
 public:
     // Pencere, çizici ve ImGui kurulur. Hata: stderr'e yazılabilecek açıklama.
@@ -167,6 +170,12 @@ private:
     void queue_open_selected_in_new_tab();
     void draw_header_row();
     void draw_editor(float reserved_height);
+    void draw_editor_text();
+    std::optional<ImVec2> draw_editor_rows(ImVec2 origin, float text_x, float width, float cell, float row_height);
+    void editor_keys();  // odaktaki editörün tuşları ve yazılan karakterler (SDL metin olayları)
+    void draw_completion_popup(ImVec2 cursor, float row_height);
+    void draw_find_bar();
+    void draw_editor_status();
     void draw_preview(float reserved_height);
     void draw_markdown_preview();
     void draw_data_preview();  // csv ve json: TUI REVIEW'un ayrıştırması (app::parse_csv, app::pretty_json)
@@ -215,6 +224,8 @@ private:
     // (plan Riskler: Linux dosya diyaloğu).
     std::optional<std::string> ask_path(const std::string& title, const std::string& initial, PathKind kind);
     std::optional<std::string> ask_export_path(const std::string& suggested);
+    // Kare dışında: istenen içe alma diyaloğunu açar, diyalogdan ve sürükle-bıraktan gelen yolları içe alır.
+    void import_pending();
 
     GuiState& state_;
     std::unique_ptr<Platform> platform_;
@@ -250,9 +261,9 @@ private:
     bool search_popup_hovered_ = false;  // fare tamamlama listesinde: kutu odağı bıraksa da liste kalır
     bool picker_shown_ = false;  // seçici açılır pencereyi geçen karede çizdi: kapanışı kullanıcı yaptı mı
     bool editor_active_ = false;
+    bool lsp_waiting_ = false;  // dil sunucusu değişikliği boşta bekliyor (LanguageServers::Update)
     bool list_focused_ = false;
     bool refocus_editor_ = false;
-    std::size_t drawn_buffer_generation_ = 0;
     int scrolled_row_ = -1;
     std::string scrolled_item_;  // gezginde en son kaydırılan seçili satır (ad: yol, sıra değil)
     bool follow_selection_ = false;
@@ -269,6 +280,10 @@ private:
     bool note_tab_pending_ = false;
     FocusRequest pending_focus_ = FocusRequest::None;
     std::map<std::string, ItemRect> item_rects_;
+    // İçe alma: diyalog geri çağrısı başka iş parçacığından, View kapandıktan sonra da gelebilir (paylaşılan
+    // kutu); bırakılan dosyalar kare dışında içe alınır (diyalog açıkken gelenler de beklemez, kaybolmaz).
+    std::shared_ptr<ImportInbox> import_inbox_;
+    std::vector<std::filesystem::path> dropped_;
 };
 
 }  // namespace noteapp::gui

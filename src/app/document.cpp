@@ -138,6 +138,16 @@ std::string suggested_stem(std::string_view content, std::string_view type,
     return core::slugify(core::note_name_source(content, type), now, slug_max_length);
 }
 
+bool DraftTypeTracker::edited(std::size_t size_before, std::size_t size_after) {
+    constexpr unsigned kRedetectShift = 5;  // metnin 1/32'si
+    changes_ += std::max<std::size_t>(
+        size_after > size_before ? size_after - size_before : size_before - size_after, 1);
+    if (changes_ < std::max<std::size_t>(size_after >> kRedetectShift, 1))
+        return false;
+    changes_ = 0;
+    return true;
+}
+
 std::expected<std::string, core::Error> Document::open(const core::NoteStore& store,
                                                        const core::NotePath& path) {
     auto content = store.read(path);

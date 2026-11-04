@@ -116,6 +116,8 @@ public:
     void select_range(ByteRange range);
     void clear_selection() { begin_motion(false); }
     void move_to_cell(const VisualRow& row, int cell);  // fare: hücre satırın ötesindeyse satır sonu
+    // Fareyle sürükleme ya da Shift+tık: çapa yerinde kalır, imleç hücreye gider (seçim yönü korunur).
+    void extend_to_cell(const VisualRow& row, int cell);
     // Pencerenin ilk satırını koyar: Önizlemede görünen satırdan düzenlemeye geçerken ekran oynamasın.
     void set_scroll_line(std::size_t line);
 

@@ -60,7 +60,7 @@ TEST_CASE("map perf: 2,000 nodes and 5,000 edges draw at 30 fps or more, with th
     state->set_map_options(MapOptions{.whole_graph = true});
     view->draw_frame();
     const auto& map = state->note_map();
-    CHECK(map.nodes.size() == noteapp::gui::kMaxMapNodes);
+    CHECK(map.nodes.size() == fixture.config.limits.app.map_nodes.cap());
     CHECK(map.total == static_cast<std::size_t>(kPerfNotes));
     CHECK(map.edges.size() >= 4900);
     CHECK(view->item_rects().contains("map_capped"));

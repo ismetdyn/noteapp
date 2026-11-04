@@ -81,10 +81,6 @@ int choice_delta(Key key) {
     }
 }
 
-// Taslakta detect yeniden çalışmadan önce değişmesi gereken pay (metnin 1/32'si). Küçük metinde her tuş,
-// büyük metinde seyrek: toplam maliyet yazılan baytla doğrusal kalır.
-constexpr unsigned kRedetectShift = 5;
-
 constexpr std::size_t kCompletionRows = 8;
 constexpr int kLeaveChoices = 3;
 constexpr int kConflictChoices = 4;
@@ -120,7 +116,7 @@ void EditorSession::start_draft(DraftName name) {
 }
 
 void EditorSession::refresh_type() {
-    draft_changes_ = 0;
+    draft_type_.reset();
     std::string type = note_type();
     if (type == shown_type_)
         return;
@@ -129,12 +125,21 @@ void EditorSession::refresh_type() {
     syntax_cache_.clear();
 }
 
+bool EditorSession::park() {
+    if (!is_open())
+        return true;
+    if (mode_ != Mode::Editing)
+        return false;  // soru ya da girdi açık: önce o bitsin
+    if (!dirty() || is_draft())
+        return true;
+    handle(Key::CtrlS);  // çakışmada soru açılır, hata iletide kalır
+    return is_open() && !dirty() && mode_ == Mode::Editing;
+}
+
 void EditorSession::note_draft_edit(std::size_t size_before) {
     if (!draft_ || !draft_->type.empty())
         return;
-    const std::size_t size = open_buffer().text().size();
-    draft_changes_ += std::max<std::size_t>(size > size_before ? size - size_before : size_before - size, 1);
-    if (draft_changes_ >= std::max<std::size_t>(size >> kRedetectShift, 1))
+    if (draft_type_.edited(size_before, open_buffer().text().size()))
         refresh_type();
 }
 

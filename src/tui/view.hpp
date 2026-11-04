@@ -4,6 +4,7 @@
 #include "core/note_store.hpp"
 #include "edit/spellcheck.hpp"
 #include "edit/syntax.hpp"
+#include "tui/editor_tabs.hpp"
 #include "tui/markdown_view.hpp"
 #include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
@@ -17,6 +18,7 @@
 #include <ftxui/screen/terminal.hpp>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -137,7 +139,14 @@ ftxui::Element render(const TuiState& state, const Preview& preview, const Statu
                       const ConfirmState* confirm = nullptr, const HelpState* help = nullptr,
                       const SettingsState* settings = nullptr, const NewRowState* new_row = nullptr,
                       const EditorSession* editor = nullptr, SpellChecker* spell = nullptr,
-                      const RenameState* rename = nullptr);
+                      const RenameState* rename = nullptr, std::span<const TabLabel> tabs = {});
+// Dosya ikonunun terminal rengi (liste ve harita aynı rengi kullanır).
+ftxui::Color icon_color(core::IconColor color);
+// Harita (`view.map`, SPEC-tui "Harita"): kapsam satırı ve braille tuvali, `columns` x `rows` hücre.
+ftxui::Element map_pane(const TuiState& state, int columns, int rows);
+// Sekme satırı (sağ panelin üst kenarı): ` a.md │ [b.md*] │ c.md `. Etkin sekme köşeli parantezde; sığmayan
+// sekmeler etkin sekme görünür kalacak şekilde düşer, yerlerinde `…`. En çok `width` hücre.
+std::string tab_strip_text(std::span<const TabLabel> tabs, int width);
 
 // Satırın ok hücresinin ekran sütunu (klasörde `▸` `▾`): kenar, seçim işareti, girinti, numara, boşluk.
 int row_marker_column(const TuiState& state, std::size_t row = 0);

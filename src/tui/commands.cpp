@@ -10,9 +10,9 @@ namespace {
 constexpr int kBigScrollLines = 5;  // REVIEW `J` `K`
 constexpr int kPageLines = static_cast<int>(TuiState::kPreviewPageLines);
 constexpr std::string_view kSpaceLabel = "Space";
-// GUI'nin satır menüleri (gui/view_browser.cpp): not ve klasör. "Yeni sekmede aç" sekmelerle (T3) gelir;
-// GUI'nin klasör silmesi çöpe atar (karar 1), TUI'de `trash`.
-constexpr std::string_view kNoteMenu[] = {"move", "trash", "delete"};
+// GUI'nin satır menüleri (gui/view_browser.cpp): not ve klasör. GUI'nin klasör silmesi çöpe atar (karar 1),
+// TUI'de `trash`.
+constexpr std::string_view kNoteMenu[] = {"tab.open", "move", "trash", "delete"};
 constexpr std::string_view kFolderMenu[] = {"folder.new", "rename", "trash"};
 
 template <Intent kIntent> Intent emit(TuiState&) {
@@ -41,10 +41,21 @@ std::span<const Command> TuiState::commands() {
         {"new", "n", kInList, emit<Intent::NewNote>},
         {"quick.add", "a", kInList, emit<Intent::NewRow>},
         {"folder.new", "", kInList, emit<Intent::NewFolderRow>},
+        {"import", "", kInList, emit<Intent::ImportFiles>},
         {"edit", "e", kInList, ask<&TuiState::enter_selected>, Row},
         {"edit", "e", kInReview, emit<Intent::EnterEditor>, Note},
         {"external", "E", kInBrowse, emit<Intent::OpenSelected>, Note},
         {"save", "^S", kInEditor, emit<Intent::EditorKey>, Nothing, Key::CtrlS},
+        // Sekmeler: T(ab), W(indow) kapat, N(ext), P(revious); terminal Ctrl+PgDn/PgUp'ı geçirirse onlar da.
+        // Aramada Ctrl+T ad ↔ içerik modudur (arama girdisi bu tabloya düşmez).
+        {"tab.open", "", kInBrowse, emit<Intent::TabOpenSelected>, Note},
+        {"tab.new", "^T", kInBrowse | kInEditor, emit<Intent::TabNew>, Nothing, Key::CtrlT},
+        {"tab.close", "^W", kInEditor, emit<Intent::TabClose>, Nothing, Key::CtrlW},
+        {"tab.next", "Alt+N", kInBrowse | kInEditor, emit<Intent::TabNext>, Nothing, Key::AltN},
+        {"tab.next", "^PgDn", kInBrowse | kInEditor, emit<Intent::TabNext>, Nothing, Key::CtrlPageDown},
+        {"tab.previous", "Alt+P", kInBrowse | kInEditor, emit<Intent::TabPrevious>, Nothing, Key::AltP},
+        {"tab.previous", "^PgUp", kInBrowse | kInEditor, emit<Intent::TabPrevious>, Nothing, Key::CtrlPageUp},
+        {"search", "^K", kInEditor, emit<Intent::ParkEditor>, Nothing, Key::CtrlK},
         // Seçim üzerinde
         {"move", "m", kInList, emit<Intent::MoveTo>, Row},
         {"rename", "F2", kInBrowse, emit<Intent::RenameSelected>, Row, Key::F2},
@@ -87,6 +98,7 @@ std::span<const Command> TuiState::commands() {
         {"details.all", "I", kInListing, act<&TuiState::toggle_all_expanded>},
         {"view.tree", "", kInList, act<&TuiState::set_details_view, false>},
         {"view.details", "", kInList, act<&TuiState::set_details_view, true>},
+        {"view.map", "", kInList, act<&TuiState::set_map_view, true>},
         // Arama ve gitme
         {"search", "/", kInList, act<&TuiState::begin_search, Mode::Name>},
         {"search.global", "f", kInList, act<&TuiState::begin_search, Mode::Global>},

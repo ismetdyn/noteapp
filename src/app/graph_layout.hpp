@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-namespace noteapp::gui {
+namespace noteapp::app {
 
 struct LayoutPoint {
     float x = 0.0F;
@@ -61,4 +61,4 @@ private:
     std::size_t iterations_done_ = 0;
 };
 
-}  // namespace noteapp::gui
+}  // namespace noteapp::app

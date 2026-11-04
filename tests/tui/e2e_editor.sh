@@ -1672,5 +1672,67 @@ sleep 0.3
 keys q
 wait_exit >/dev/null
 
+# T3: sekmeler gerçek terminalde. Düzenlenen sekme korunur, Ctrl+K onu yazıp aramaya geçer, sonraki not yeni
+# sekmede açılır; Alt+P geçer, Ctrl+W kapatır, açık sekme yeniden açılışta kalır.
+clear_notes
+printf 'alfa\n' | put_note a.md
+printf 'beta\n' | put_note b.md
+start_app
+keys /
+literal a.md
+keys Enter
+sleep 0.2
+keys Enter
+wait_screen "Ctrl+S save"
+literal 'A'
+keys C-k
+sleep 0.3
+check_bytes "Ctrl+K writes the pending edit to its own note" "$notes/a.md" 'Aalfa\n'
+check "the tab line shows the parked tab" screen_has "[a.md]"
+clear_prompt 4  # arama girdisi `/` gibi önceki sorguyla açılır
+literal b.md
+keys Enter
+sleep 0.2
+keys Enter
+wait_screen "Ctrl+S save"
+check "the edited tab is kept, the next note opens in a new tab" screen_has "a.md │ [b.md]"
+keys M-p
+sleep 0.3
+check "Alt+P goes to the previous tab" screen_has "[a.md] │ b.md"
+check "the tab kept its text" screen_has "Aalfa"
+keys C-w
+sleep 0.3
+check "Ctrl+W closes the clean tab and the neighbour comes forward" screen_has "[b.md]"
+check "the closed tab is gone" screen_lacks "a.md │"
+check "the neighbour is open in the editor" screen_has "Ctrl+S save"
+check_bytes "closing wrote nothing else" "$notes/b.md" 'beta\n'
+
+# T4: harita. `view.map` sol panelde çizgeyi çizer; Tab not seçer, Enter sekme kuralıyla açar.
+keys C-k
+sleep 0.3
+keys Escape
+sleep 0.2
+literal ':'
+wait_screen "Commands"
+literal 'view.map'
+wait_screen "view.map — "
+keys Enter
+wait_screen "depth 2"
+check "the map shows its scope line" screen_has "Tab select"
+check "the current note is on the map" screen_has "b.md"
+keys Tab Enter
+wait_screen "Ctrl+S save"
+check "Enter on the map opens the selected note" screen_has "[b.md]"
+keys C-k
+sleep 0.3
+keys Escape
+sleep 0.2
+keys q
+wait_exit >/dev/null
+start_app
+check "open tabs come back after a restart" screen_has "[b.md]"
+keys q
+wait_exit >/dev/null
+
 echo "passed=$passed failed=$failed"
 [[ "$failed" -eq 0 ]]

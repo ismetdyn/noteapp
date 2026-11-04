@@ -37,8 +37,8 @@ constexpr const char* kDigestFile = "migrated-digests";  // içe alınan dosyala
 constexpr const char* kTrashDir = ".trash";
 constexpr const char* kKeepFile = ".keep";
 constexpr const char* kOplogDir = "graph";
-// Notun içe alındığı işlemde gövdeden başka yazılanlar (ad, zamanlar, etiket ve bağlantı hedefleri) için pay:
-// bağlantı hedefleri en çok 1024 x 4 KiB'tır.
+// Notun içe alındığı işlemde gövdeden başka yazılanlar (ad, zamanlar, etiket ve bağlantı hedefleri) için pay.
+// Kapasite sınırı değildir: gövdenin üst değeri depolamanın tek değer sınırı (SQLite, ~1 GB) eksi bu paydır.
 constexpr std::uintmax_t kNoteTxnHeadroomBytes = 16U * 1024U * 1024U;
 
 // <32 küçük hex>.oplog ya da kenara alınmış <..>.oplog.aside-*: taşıyıcıdır, not değildir.
@@ -120,18 +120,6 @@ std::expected<std::string, Error> slurp_file(const fs::path& file) {
     if (in.bad())
         return std::unexpected(io_error(path_utf8(file), "read failed"));
     return text;
-}
-
-std::chrono::system_clock::time_point to_system(fs::file_time_type when) {
-    return std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-        std::chrono::file_clock::to_sys(when));
-}
-
-// Bu dosyanın created_at'ı: doğum zamanı, yoksa mtime; asla geçiş anı. Son değişiklikten sonra olamaz:
-// kopyalanmış ya da geri yüklenmiş dosyanın doğumu kopya anıdır, mtime ondan eskidir.
-std::chrono::system_clock::time_point created_time(const fs::path& file, fs::file_time_type mtime) {
-    const auto birth = file_birth_time(file);
-    return to_system(birth && *birth < mtime ? *birth : mtime);
 }
 
 // Eski ağacın bağ izlemeyen listesi. Gizli girdiler (.git, .noteapp) atlanır; .trash ayrı kökten gezilir.
@@ -351,9 +339,9 @@ std::expected<void, Error> import_tree(NoteStore& store, const std::vector<Legac
             if (auto flushed = flush(); !flushed)
                 return flushed;
         batch_bytes += bytes->size();
-        const auto when = to_system(file.stat.mtime);
+        const auto when = to_system_time(file.stat.mtime);
         batch.push_back(ImportedNote{std::move(*parsed), std::move(*bytes), when,
-                                     created_time(file.absolute, file.stat.mtime),
+                                     file_created_time(file.absolute, file.stat.mtime),
                                      trashed ? std::optional(when) : std::nullopt});
     }
     return flush();
@@ -397,7 +385,7 @@ std::expected<void, Error> verify_tree(const NoteStore& store, const std::vector
         auto bytes = slurp_file(file.absolute);
         if (!bytes)
             continue;
-        const auto when = to_system(file.stat.mtime);
+        const auto when = to_system_time(file.stat.mtime);
         const ImportedNote note{NotePath::parse(file.relative).value(), std::move(*bytes), when, when,
                                 trashed ? std::optional(when) : std::nullopt};
         auto verified = store.verify_imported(note);
@@ -643,7 +631,7 @@ std::expected<bool, Error> file_in_graph(const NoteStore& store, const DigestLed
                                          const LegacyTree::File& file, std::string bytes, bool trashed) {
     if (ledger.contains({report_path(file, trashed), digest_hex(bytes)}))
         return true;
-    const auto when = to_system(file.stat.mtime);
+    const auto when = to_system_time(file.stat.mtime);
     const ImportedNote note{NotePath::parse(file.relative).value(), std::move(bytes), when, when,
                             trashed ? std::optional(when) : std::nullopt};
     auto verified = store.verify_imported(note);

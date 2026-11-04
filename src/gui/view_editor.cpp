@@ -8,8 +8,7 @@
 #include <algorithm>
 #include <climits>
 #include <imgui.h>
-#include <imgui_internal.h>  // editör imleci (ImGuiInputTextState), IMGUI_TABLE_MAX_COLUMNS
-#include <imgui_stdlib.h>
+#include <imgui_internal.h>  // IMGUI_TABLE_MAX_COLUMNS
 #include <string_view>
 
 namespace noteapp::gui {
@@ -21,18 +20,6 @@ namespace {
 constexpr std::size_t kPanelMaxRows = 8;
 constexpr float kPanelMaxShare = 0.4F;
 constexpr float kInfoPairGapEms = 1.5F;  // bilgi panelinde yan yana iki alan çifti arası
-
-// Tek seferlik imleç/seçim: ImGui bunu yalnız etkin InputText'in kendi geri çağrısından kabul eder.
-int editor_selection_callback(ImGuiInputTextCallbackData* data) {
-    auto* pending = static_cast<std::optional<TextSelection>*>(data->UserData);
-    if (*pending) {
-        const int start = std::min(static_cast<int>((*pending)->start), data->BufTextLen);
-        const int end = std::min(static_cast<int>((*pending)->end), data->BufTextLen);
-        data->SetSelection(start, end);
-        pending->reset();
-    }
-    return 0;
-}
 
 }  // namespace
 
@@ -276,62 +263,6 @@ void View::draw_header_row() {
         }
         ImGui::EndCombo();
     }
-}
-
-void View::draw_editor(float reserved_height) {
-    const std::size_t generation = state_.buffer_generation();
-    // Program içinden gelen yeni içerikte ImGui'nin iç kopyası atılmalı (kimlik değişir), yoksa eski metni
-    // tampona geri yazardı. Odaktaysa kimlik değişimi odağı düşürmesin.
-    if (generation != drawn_buffer_generation_) {
-        if (editor_active_ && pending_focus_ == FocusRequest::None)
-            pending_focus_ = FocusRequest::Editor;
-        drawn_buffer_generation_ = generation;
-    }
-    if (refocus_editor_) {
-        refocus_editor_ = false;
-        pending_focus_ = FocusRequest::Editor;
-    }
-    // Sekme başına kimlik: ImGui editörün kaydırmasını kimlikle tutar, sekmeye dönünce yerinde bulunur.
-    ImGui::PushID(static_cast<int>(state_.active_tab()));
-    ImGui::PushID(static_cast<int>(generation));
-    if (pending_focus_ == FocusRequest::Editor) {
-        ImGui::SetKeyboardFocusHere();
-        pending_focus_ = FocusRequest::None;
-    }
-    ImGuiInputTextFlags flags = ImGuiInputTextFlags_AllowTabInput;  // Tab odak gezmez, karakter ekler
-    if (!state_.editable())
-        flags |= ImGuiInputTextFlags_ReadOnly;
-    // Geri çağrı yalnız gerektiğinde: ImGui her çağrıda tüm metni yedekler, 1 MB notta kare başına kopya
-    // olurdu.
-    ImGuiInputTextCallback callback = nullptr;
-    std::optional<TextSelection> selection = state_.editor_selection();
-    if (selection) {
-        flags |= ImGuiInputTextFlags_CallbackAlways;
-        callback = editor_selection_callback;
-    }
-    ImGui::PushFont(platform_->mono_font, 0.0F);
-    ImVec2 size = ImGui::GetContentRegionAvail();
-    size.y -= reserved_height;
-    const bool edited =
-        ImGui::InputTextMultiline("##editor", &state_.buffer_for_edit(), size, flags, callback, &selection);
-    remember_item_center("editor");
-    ImGui::PopFont();
-    editor_active_ = ImGui::IsItemActive();
-    if (const ImGuiInputTextState* input = ImGui::GetInputTextState(ImGui::GetItemID())) {
-        int start = input->GetCursorPos();
-        int end = start;
-        if (input->HasSelection()) {
-            start = std::min(input->GetSelectionStart(), input->GetSelectionEnd());
-            end = std::max(input->GetSelectionStart(), input->GetSelectionEnd());
-        }
-        state_.remember_cursor(TextSelection{static_cast<std::size_t>(start), static_cast<std::size_t>(end)});
-    }
-    if (state_.editor_selection() && !selection)  // geri çağrı uyguladı
-        state_.take_editor_selection();
-    if (edited)
-        state_.buffer_edited();
-    ImGui::PopID();
-    ImGui::PopID();
 }
 
 void View::draw_preview(float reserved_height) {

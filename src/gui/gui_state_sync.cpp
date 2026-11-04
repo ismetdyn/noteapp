@@ -26,6 +26,8 @@ std::string local_hh_mm(std::chrono::system_clock::time_point when) {
 
 void GuiState::changed() {
     ++changes_;
+    word_tables_.request();  // yazılan not sözcük tablosuna girsin
+    language_servers_.notes_changed();  // çalışma alanı yansıtması boşta tazelenir
     if (auto_sync_)
         auto_sync_->notify_changed();
 }
@@ -97,6 +99,8 @@ void GuiState::apply_settings(const core::Config& before, const core::Config& af
     if (before.notes_dir != after.notes_dir) {
         // SettingsPage kaydetmeden önce flush ettirdi: tampon temiz, eski dizinin notu bırakılır.
         store_ = core::NoteStore::for_config(config_);
+        word_tables_.set_store(store_);
+        language_servers_.set_store(store_);
         content_index_.reset();
         // Eski dizinin notlarının sekmeleri kapanır; taslaklar dizine bağlı değildir, kalır.
         std::erase_if(tabs_, [](const NoteTab& tab) { return !tab.saved.new_note; });

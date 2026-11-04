@@ -1,5 +1,6 @@
 #include "cli/commands.hpp"
 
+#include "cli/command_table.hpp"
 #include "cli/confirm.hpp"
 #include "cli/highlight.hpp"
 #include "core/editor.hpp"
@@ -283,8 +284,8 @@ int run_help(const ParsedArgs& args) {
         std::cout << core::tr("cli.help");
         return kExitOk;
     }
-    // Komut başına metin katalogda `cli.help_<komut>` anahtarıdır; yalnız bilinen komut adları aranır.
-    if (!is_reserved_command(args.command)) {
+    // Komut başına metin katalogda `cli.help_<komut>` anahtarıdır; yalnız tablodaki komut adları aranır.
+    if (!std::ranges::contains(kCommands, args.command, &CommandSpec::name)) {
         std::cerr << core::tr("cli.unknown_command", {{"command", args.command}}) << '\n';
         return kExitUsage;
     }
@@ -299,14 +300,13 @@ bool is_token_key(std::string_view key) {
     return key == "sync.token";
 }
 
-// Ayar ekranlarının anahtarları ve [limits] (yalnız dosya ve CLI).
+}  // namespace
+
 std::vector<std::pair<std::string, std::string>> all_entries(const core::Config& config) {
     auto entries = core::config_entries(config);
     std::ranges::move(core::limit_entries(config), std::back_inserter(entries));
     return entries;
 }
-
-}  // namespace
 
 std::optional<core::Config> load_config_for_update() {
     core::LoadedConfig fresh = core::load_config();
@@ -666,6 +666,12 @@ int run_reserved(const ParsedArgs& args, const core::Config& config) {
         return run_tags(args, config);
     if (args.command == "view")
         return run_view(args, config);
+    if (args.command == "import")
+        return run_import(args, config);
+    if (args.command == "completion")
+        return run_completion(args);
+    if (args.command == kCompleteCommand)
+        return run_complete(args, config);
     std::cerr << core::tr("cli.not_implemented", {{"command", args.command}}) << '\n';
     return kExitUsage;
 }

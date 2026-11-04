@@ -26,7 +26,7 @@ class NoteStore {                     // kök: config.notes_dir
     std::vector<std::string> folders() const;                 // tüm klasörler (göreli)
     std::expected<NoteContent, Error> read(const NotePath&) const;
     std::expected<path, Error> absolute_path(const NotePath&) const;  // read() ile aynı kapı; dosyayı kendisi açanlar için
-    std::expected<NotePath, Error> create(const NewNote&, system_clock::time_point now = now());  // ad boşsa içerikten slug
+    std::expected<NotePath, Error> create(const NewNote&, system_clock::time_point now = now());  // ad boşsa içerikten slug; tip boş, `.`/`/`/`\` içeren ya da ad kuralının reddettiği tip → InvalidPath `invalid_type`
     std::expected<file_time_type, Error> write(const NotePath&, std::string_view content, file_time_type expected_mtime);  // yeni mtime döner
     std::expected<NotePath, Error> move(const NotePath& from, const NotePath& to);  // uzantı değişimi = tip değişimi
     std::expected<void, Error> remove(const NotePath&);
@@ -217,7 +217,7 @@ config'tedir.
   `std::to_array` ile satırlardan çıkar, elle sayı yoktur); (4) bir test
   (varsayılan, `0`, geçersiz → uyarı). Okuyan kod `config.limits.<modül>.<ad>`'ı kullanır, kopya sabit tutmaz.
 - **Graf ve sorgu (L4):** `[limits.graph]` motorun sınırları (çerçeve, cihaz, ingest, rapor, kenara alınan günlük,
-  `note graph import` satırı); `[limits.query]` kullanıcının kendi sorgusu (`note query`), `[limits.view]` görünüm
+  `note graph import` satırının baytı ve JSON değeri); `[limits.query]` kullanıcının kendi sorgusu (`note query`), `[limits.view]` görünüm
   (`view:`, `note view run`, kayıt denetimi) — iki profil aynı 12 anahtarı taşır, varsayılanları aynıdır. Motor
   config okumaz: `core::graph_limits_of` / `core::query_limits_of` (`core/graph_limits.hpp`) çevirir, `0` →
   `SIZE_MAX` (süre `milliseconds::max()`); `NoteStore::for_config` ve CLI motoru bu değerlerle açar. Bir test

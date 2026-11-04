@@ -578,6 +578,39 @@ TEST_CASE("graph import: oversized line, huge array, bad base64, edge without a 
     CHECK(refused.err.find("Line ") != std::string::npos);
 }
 
+// L6: satır başına JSON değer sınırı kullanıcının kendi dışa aktarımını reddedebilir (çok özellikli düğüm);
+// sınır limits.graph.import_line_values'tadır, 0 = sınırsız.
+TEST_CASE("graph import: limits.graph.import_line_values caps the JSON values per line and 0 lifts the cap") {
+    const auto line_with_labels = [](int count) {
+        std::string line = "{\"k\":\"node\",\"id\":\"00000000000000000000000000000001\",\"labels\":[";
+        for (int i = 0; i < count; ++i)
+            line += (i == 0 ? "\"L" : ",\"L") + std::to_string(i) + "\"";
+        return "{\"k\":\"noteapp-graph\",\"v\":1}\n" + line + "],\"props\":{}}\n";
+    };
+    const TempDir out;
+    const fs::path dump = out.path() / "d.jsonl";
+
+    SUBCASE("a small cap refuses a line over it") {
+        const Sandbox box("en");
+        std::ofstream(box.config_file(), std::ios::app) << "[limits.graph]\nimport_line_values = 10\n";
+        write_plain(dump, line_with_labels(20));
+        const auto refused = box.run({"graph", "import", utf8(dump)});
+        CHECK(refused.err.find("config") == std::string::npos);  // anahtar tanınır, uyarı yok
+        CHECK(refused.exit_code == 1);
+        CHECK(refused.err.find("Line ") != std::string::npos);
+    }
+    SUBCASE("0 takes a line over the default of 100000 values") {
+        const Sandbox box("en");
+        std::ofstream(box.config_file(), std::ios::app) << "[limits.graph]\nimport_line_values = 0\n";
+        constexpr int kOverDefault = 110000;
+        write_plain(dump, line_with_labels(kOverDefault));
+        const auto imported = box.run({"graph", "import", utf8(dump)});
+        INFO(imported.err);
+        CHECK(imported.exit_code == 0);
+        CHECK(box.run({"query", "MATCH (n:L109999) RETURN count(n)"}).out == "count(n)\n1\n");
+    }
+}
+
 // Lead kararı 2 (tasks/plan-limits.md): tek satır çerçeve tavanından (65.536 işlem) çok işlem üretse de
 // reddedilmez. L4b: satır tek işlemdir (ya hepsi ya hiç), çerçeveleri yazan böler; yeniden içe aktarma işlem
 // yazmaz (idempotent).

@@ -62,8 +62,13 @@ void SettingsPage::clear_errors() {
     global_error_.clear();
 }
 
+// Yazılmış token yazıldığı host'a aittir: host değişince silinir, kayıt onu başka sunucuya götürmez (TUI ile
+// aynı kural).
 void SettingsPage::refresh_token_row() {
     const std::string host = https_host(field("sync.remote"));
+    if (host != token_host_)
+        token.clear();
+    token_host_ = host;
     token_enabled_ = !host.empty();
     token_stored_ = token_enabled_ && tokens.has(host);
 }
@@ -103,8 +108,8 @@ bool SettingsPage::apply_form(core::Config& target) {
     return valid;
 }
 
-// ponytail: enable ağa çıkabilir ve UI iş parçacığında koşar (bekleme imleci); yavaş uzaklarda pencere
-// donarsa işçi iş parçacığına alınır. Karar penceresi (uyuşmazlık) zaten UI iş parçacığı ister.
+// ponytail: Kaydet'te enable ağa çıkabilir ve UI iş parçacığında koşar (bekleme imleci); karar penceresi
+// (uyuşmazlık) UI iş parçacığı ister. Yavaş uzaklarda pencere donarsa bağlantı testi gibi işçiye alınır.
 std::string SettingsPage::enable_sync(const core::Config& candidate) {
     sync::SyncService service(candidate);
     std::expected<void, core::Error> result;
@@ -186,16 +191,13 @@ void SettingsPage::test_connection() {
     core::Config candidate = applied_;
     if (!apply_form(candidate))
         return;
-    if (const std::string error = enable_sync(candidate); !error.empty()) {
-        test_result_ = core::tr("gui.test_failed", {{"detail", error}});
-        return;
-    }
     testing_ = true;
     if (worker_.joinable())
         worker_.join();  // önceki iş bitti (testing_ false iken yalnız birikmiş iş parçacığı)
-    // Ağ senkronu UI'yi dondurmasın diye işçide; sonuç kuyruktan UI iş parçacığına döner.
+    // enable ve senkron ağa çıkar: UI'yi dondurmasın diye işçide (TUI ile aynı akış); sonuç kuyruktan UI iş
+    // parçacığına döner.
     worker_ = std::thread([this, candidate = std::move(candidate)] {
-        auto outcome = sync::SyncService(candidate).sync_now();
+        auto outcome = app::run_connection_test(candidate, app::system_sync_enabler());
         host_.post([this, outcome = std::move(outcome)] {
             testing_ = false;
             test_result_ =

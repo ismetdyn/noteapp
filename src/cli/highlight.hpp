@@ -45,6 +45,14 @@ inline std::string sanitize_for_terminal(std::string_view text) {
     return out;
 }
 
+// Kabuk tamamlamasının adayı (`note __complete`): kabuk satır başına bir aday okur. Satır sonu, sekme, \r ya da
+// terminalde temizlenecek bir şey (denetim karakteri, C1, bozuk UTF-8, gizli bidi) taşıyan ad doğru
+// tamamlanamaz ve menüde kaçış dizisi olarak çalışabilir: böyle aday hiç yazılmaz.
+inline bool is_completion_safe(std::string_view text) {
+    return !text.empty() && text.find_first_of("\t\n") == std::string_view::npos &&
+           sanitize_for_terminal(text) == text;
+}
+
 // `ranges`, `text` içindeki [başlangıç, bitiş) bayt aralıklarıdır (search::Hit::ranges). Terminalde vurgu
 // için aralıkları kalın + sarı ANSI koduna sarar; her parça sanitize_for_terminal'dan geçer (yalnız TTY'de
 // çağrılır). Bozuk aralık (taşan, boş, öncekiyle çakışan) çıktıyı bozmasın diye kırpılır/atlanır.

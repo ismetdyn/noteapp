@@ -640,6 +640,39 @@ TEST_CASE("a click on an expanded line selects its row") {
     CHECK(f.state.selected() == 0);
 }
 
+// Eşitlik (GUI): editör açıkken liste satırına tıklamak sekmeyi kapatmıyordu ama TUI Ctrl+Q akışıyla
+// kapatıyordu. Artık Ctrl+K gibi: bekleyen düzenleme notuna yazılır, sekme açık kalır, odak listeye geçer.
+TEST_CASE("a click on a list row while the editor is open keeps the editor tab and focuses the list") {
+    StoreFixture f;
+    f.put("a.md", "a\n");
+    f.put("b.md", "b\n");
+    f.load();
+    tui::EditorSession editor(
+        tui::EditorHost{*f.store, f.mutex, f.internal, plain_width, 1024, core::kDefaultSlugMaxLength,
+                        [](std::string_view) { return std::string("md"); }, [](const core::NotePath&) {},
+                        [&f] { f.state.enter_editor(); },
+                        [&f](std::optional<std::size_t> line) { f.state.leave_editor(line); },
+                        [](const core::Error&) {}, [] {}});
+    const core::NotePath a = core::NotePath::parse("a.md").value();
+    editor.open(a);
+    REQUIRE(editor.is_open());
+    REQUIRE(f.state.focus() == Focus::Editor);
+    editor.handle(Key::Char, "x");
+    REQUIRE(editor.dirty());
+
+    // İlk satır y=2; sıra tarihe bağlı olabilir: b.md'nin satırı aranır.
+    REQUIRE(f.state.rows().size() == 2);
+    const int b_row = f.state.rows()[0].path.string() == "b.md" ? 0 : 1;
+    tui::route_mouse({1, 2 + b_row, tui::MouseButton::Left, tui::MouseMotion::Press}, f.state, editor);
+    CHECK(editor.is_open());
+    CHECK(editor.path() == a);
+    CHECK(f.state.focus() == Focus::List);
+    REQUIRE(f.state.selected_row() != nullptr);
+    CHECK(f.state.selected_row()->path.string() == "b.md");
+    CHECK_FALSE(editor.dirty());
+    CHECK(f.store->read(a)->text == "xa\n");
+}
+
 TEST_CASE("v cycles the right column; o opens the sort menu; both are saved") {
     core::init_i18n("en");
     tui::TuiState s;

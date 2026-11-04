@@ -6,12 +6,20 @@ add_library(noteapp_app
     commands.cpp
     data_preview.cpp
     document.cpp
+    graph_layout.cpp
+    import_files.cpp
+    ui_args.cpp
     item_ops.cpp
     listing.cpp
+    note_map.cpp
     settings.cpp
     stray_notice.cpp
     sync_status_worker.cpp
+    tabs.cpp
     trash_ops.cpp)
 target_include_directories(noteapp_app PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(noteapp_app PUBLIC noteapp_core noteapp_search noteapp_sync noteapp_detect)
+target_link_libraries(noteapp_app PUBLIC noteapp_core noteapp_search noteapp_sync noteapp_detect
+    PRIVATE tomlplusplus::tomlplusplus)
+# Sekmelerin `[[tabs]]` bloğu (tabs.cpp): ayrıştırma hatası parse_result ile döner (config.cpp ile aynı mod).
+target_compile_definitions(noteapp_app PRIVATE TOML_EXCEPTIONS=0)
 noteapp_target_defaults(noteapp_app)

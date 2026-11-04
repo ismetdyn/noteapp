@@ -15,12 +15,13 @@
 
 namespace noteapp::core {
 
+// Biçim sabiti, kapasite değil: graf dışa aktarma satırı en çok üç düzey iç içedir (satır > props > değer);
+// daha derini bozuk satırdır. Başka çağıran (LSP, gömülü JSON) kendi derinliğini verir.
 inline constexpr int kMaxJsonDepth = 6;
-// Satır başına değer sayısı. Sınır olmasa 128 MiB'lik "[1,1,…]" yaklaşık 7 GiB ayırırdı. Bir düğümün gerçek
-// satırı (etiketler + özellikler) bunun çok altındadır.
+// Değer sayısının varsayılanı. Sınır olmasa 128 MiB'lik "[1,1,…]" yaklaşık 7 GiB ayırırdı. Import değeri
+// config'ten verir (limits.graph.import_line_values); LSP kendi sınırını (limits.lsp.message_values).
 inline constexpr std::size_t kMaxJsonValues = 100000;
 
-// Varsayılanlar import'unkidir; başka çağıran kendi sınırını verir.
 struct JsonLimits {
     int max_depth = kMaxJsonDepth;  // kök 0
     std::size_t max_values = kMaxJsonValues;

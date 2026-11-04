@@ -70,10 +70,10 @@ void GuiState::follow_moved(const std::string& from, const std::string& to) {
         }
     }
     for (NoteTab& tab : tabs_) {  // arka plandaki sekmeler yeni yolu izler; gösterilen not yukarıda
-        if (!tab.saved.shown ||
-            renamed_path(tab.saved.shown->path.string()) == tab.saved.shown->path.string())
+        if (!tab.saved.shown)
             continue;
-        if (const auto moved = core::NotePath::parse(renamed_path(tab.saved.shown->path.string()))) {
+        // Kural TUI sekmeleriyle ortak (app::moved_path).
+        if (const auto moved = app::moved_path(tab.saved.shown->path, from, to)) {
             tab.saved.shown->path = *moved;
             // Belge de yeni yolu izler: yoksa kayıt eski yola gider (Gone ya da orada sonradan açılan nota
             // çakışma). Taşıma gövde revizyonunu değiştirmez. Henüz yüklenmemiş sekmenin belgesi yoktur.

@@ -38,7 +38,10 @@ Error not_regular(std::string_view path) {
 }
 
 std::expected<void, Error> validate_new_note(const NewNote& note) {
-    if (note.type.empty() || note.type.find('.') != std::string::npos)
+    // Tip adın uzantısıdır, tek yol bileşeninin parçası: ayırıcı notu başka klasöre, ad kuralının reddettiği
+    // karakter (":", sondaki boşluk…) bozuk ada götürürdü. Kural NotePath'inkidir, neden tipe yazılır.
+    if (note.type.empty() || note.type.find_first_of("./\\") != std::string::npos ||
+        !NotePath::parse("x." + note.type))
         return std::unexpected(invalid_path("invalid_type", note.type));
     if (note.name.find_first_of("/\\") != std::string::npos)
         return std::unexpected(invalid_path("invalid_name", note.name));
@@ -296,7 +299,7 @@ std::expected<CreatedNote, Error> NoteStore::create_exact(const NewNote& note,
         auto path = free_note_path(context.snapshot, note, now, impl_->slug_max_length);
         if (!path)
             return std::unexpected(path.error());
-        auto id = context.create_note(*path, note.content, now, kOrigin);
+        auto id = context.create_note(*path, note.content, now, kOrigin, note.created_at.value_or(now));
         if (!id)
             return std::unexpected(id.error());
         auto revision = context.body_revision(*id, path->string());
@@ -623,7 +626,7 @@ std::expected<void, Error> copy_note_body(WriteContext& context, const NoteRow& 
     auto copy = NotePath::parse(copy_path);
     if (!copy)
         return std::unexpected(copy.error());
-    if (auto made = context.create_note(*copy, content, now, kOrigin); !made)
+    if (auto made = context.create_note(*copy, content, now, kOrigin, now); !made)
         return std::unexpected(made.error());
     bytes_in_batch += content.size();
     return {};

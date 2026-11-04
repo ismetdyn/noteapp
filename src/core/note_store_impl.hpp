@@ -168,9 +168,11 @@ class WriteContext {
 public:
     WriteContext(graph::WriteTxn& txn_in, const Snapshot& snapshot_in) : txn(txn_in), snapshot(snapshot_in) {}
 
+    // `created`: Note.created_at; updated_at `now`dır.
     std::expected<graph::NodeId, Error> create_note(const NotePath& path, std::string_view bytes,
                                                     std::chrono::system_clock::time_point now,
-                                                    std::string_view origin);
+                                                    std::string_view origin,
+                                                    std::chrono::system_clock::time_point created);
     std::expected<Revision, Error> body_revision(const graph::NodeId& id, std::string_view path);
     std::expected<Revision, Error> write_body(const NoteRow& note, std::string_view content,
                                               std::chrono::system_clock::time_point now);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
@@ -28,6 +29,14 @@ std::expected<FileStat, std::error_code> stat_file(const std::filesystem::path& 
 // Dosyanın doğum zamanı (Linux statx btime, Windows oluşturma zamanı, macOS st_birthtime); bağı izlemez.
 // Dosya sistemi vermiyorsa boş.
 std::optional<std::filesystem::file_time_type> file_birth_time(const std::filesystem::path& path);
+
+// Dosya saatinden not saatine (Note.updated_at, created_at).
+std::chrono::system_clock::time_point to_system_time(std::filesystem::file_time_type when);
+
+// Dosyadan gelen notun created_at'ı: doğum zamanı, yoksa mtime; asla içe alma anı. Son değişiklikten sonra
+// olamaz: kopyalanmış ya da geri yüklenmiş dosyanın doğumu kopya anıdır, mtime ondan eskidir.
+std::chrono::system_clock::time_point file_created_time(const std::filesystem::path& file,
+                                                        std::filesystem::file_time_type mtime);
 
 struct ScannedFile {
     std::string relative;  // köke göre, '/' ayırıcılı UTF-8

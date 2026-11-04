@@ -67,17 +67,18 @@ std::vector<Token> tokenize(std::string_view query) {
     return tokens;
 }
 
+constexpr std::array<std::pair<std::string_view, Key>, 10> kKeys{{{"sort", Key::Sort},
+                                                                  {"type", Key::Type},
+                                                                  {"in", Key::In},
+                                                                  {"size", Key::Size},
+                                                                  {"updated", Key::Updated},
+                                                                  {"created", Key::Created},
+                                                                  {"origin", Key::Origin},
+                                                                  {"sync", Key::Sync},
+                                                                  {"tag", Key::Tag},
+                                                                  {"view", Key::View}}};
+
 std::optional<Key> known_key(std::string_view name) {
-    static constexpr std::array<std::pair<std::string_view, Key>, 10> kKeys{{{"sort", Key::Sort},
-                                                                             {"type", Key::Type},
-                                                                             {"in", Key::In},
-                                                                             {"size", Key::Size},
-                                                                             {"updated", Key::Updated},
-                                                                             {"created", Key::Created},
-                                                                             {"origin", Key::Origin},
-                                                                             {"sync", Key::Sync},
-                                                                             {"tag", Key::Tag},
-                                                                             {"view", Key::View}}};
     const std::string folded = fold_to_utf8(name);
     const auto* found =
         std::ranges::find(kKeys, std::string_view(folded), &std::pair<std::string_view, Key>::first);
@@ -382,6 +383,13 @@ std::expected<Filter, QueryError> view_filter(std::string_view name, Token range
 }
 
 }  // namespace
+
+std::vector<std::string_view> query_key_names() {
+    std::vector<std::string_view> names;
+    for (const auto& [name, key] : kKeys)
+        names.push_back(name);
+    return names;
+}
 
 std::expected<ParsedQuery, QueryError> parse_query(std::string_view query, const ViewLookup& views) {
     ParsedQuery out;

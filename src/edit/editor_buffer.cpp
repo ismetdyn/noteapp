@@ -425,6 +425,11 @@ void EditorBuffer::move_to_cell(const VisualRow& row, int cell) {
     cursor_ = offset_at_cell(row, cell, 0);
 }
 
+void EditorBuffer::extend_to_cell(const VisualRow& row, int cell) {
+    begin_motion(true);
+    cursor_ = offset_at_cell(row, cell, 0);
+}
+
 void EditorBuffer::select_range(ByteRange range) {
     begin_motion(false);
     std::size_t begin = std::min(range.begin, text_.size());

@@ -1,4 +1,7 @@
-#include "gui/note_map.hpp"
+#include "app/note_map.hpp"
+
+#include "core/i18n.hpp"
+#include "core/log.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -7,7 +10,7 @@
 #include <string_view>
 #include <unordered_map>
 
-namespace noteapp::gui {
+namespace noteapp::app {
 
 namespace {
 
@@ -109,4 +112,74 @@ NoteMap build_note_map(std::span<const core::NoteMeta> notes, std::span<const co
     return map;
 }
 
-}  // namespace noteapp::gui
+void MapModel::set_options(const MapOptions& options) {
+    MapOptions clamped = options;
+    clamped.depth = std::clamp(options.depth, MapOptions::kMinDepth, MapOptions::kMaxDepth);
+    if (clamped == options_)
+        return;
+    options_ = clamped;
+    stale_ = true;
+}
+
+void MapModel::set_node_limit(core::Limit limit) {
+    if (limit == node_limit_)
+        return;
+    node_limit_ = std::move(limit);
+    stale_ = true;
+}
+
+void MapModel::update(const EdgeReader& read, std::span<const core::NoteMeta> notes,
+                      const std::optional<core::NotePath>& center) {
+    if (edges_stale_) {
+        ++reads_;
+        if (auto edges = read()) {
+            edges_ = std::move(*edges);
+        } else {
+            edges_.clear();
+            core::log_warn("event=map_edges_failed detail=" + core::format_error(edges.error()));
+        }
+        edges_stale_ = false;
+        stale_ = true;
+    }
+    if (center != center_) {
+        center_ = center;
+        if (!options_.whole_graph)  // bütün çizgede merkez yalnız vurgudur
+            stale_ = true;
+    }
+    if (!stale_)
+        return;
+    stale_ = false;
+    map_ = build_note_map(notes, edges_, center_, options_, node_limit_.cap());
+    std::vector<std::string> keys;
+    keys.reserve(map_.nodes.size());
+    for (const MapNode& node : map_.nodes)  // önek: "#x.md" adlı not, x.md etiketiyle karışmasın
+        keys.push_back((node.kind == MapNodeKind::Tag ? "t:" : "n:") + node.key);
+    std::vector<GraphLayout::Edge> edges;
+    edges.reserve(map_.edges.size());
+    for (const MapEdge& edge : map_.edges)
+        edges.push_back({edge.from, edge.to});
+    if (layout_.set_graph(std::move(keys), std::move(edges)))
+        ++generation_;
+    matched_.reset();
+}
+
+const std::vector<char>&
+MapModel::refresh_matches(bool filtering, std::size_t version,
+                          const std::function<std::unordered_set<std::string>()>& listed) {
+    if (matched_ == std::pair(filtering, version))
+        return matches_;
+    matched_ = std::pair(filtering, version);
+    matches_.assign(map_.nodes.size(), filtering ? 0 : 1);
+    if (!filtering)
+        return matches_;
+    const std::unordered_set<std::string> shown = listed();
+    for (std::size_t i = 0; i < map_.nodes.size(); ++i)
+        matches_[i] = map_.nodes[i].kind == MapNodeKind::Note && shown.contains(map_.nodes[i].key) ? 1 : 0;
+    for (const MapEdge& edge : map_.edges) {  // etiket, eşleşen bir notunda yanar
+        if (edge.kind == MapEdgeKind::Tag && matches_[edge.from] != 0)
+            matches_[edge.to] = 1;
+    }
+    return matches_;
+}
+
+}  // namespace noteapp::app

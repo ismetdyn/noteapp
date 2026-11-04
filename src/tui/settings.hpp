@@ -18,17 +18,13 @@ namespace noteapp::tui {
 // Tek tanımlar src/app'tedir; bu adlar mevcut çağıranlar ve testler için kalır.
 using app::config_warnings_message;
 using app::sync_restart_needed;
+using app::SyncEnabler;
+using app::system_sync_enabler;
 using app::TokenStore;
 
 // Kullanıcının config.toml'u okunamıyorsa save_config onu varsayılanlarla ezerdi (note config set ile aynı
 // kural).
 bool user_config_broken();
-
-// "Senkron açıldı" akışı: depoyu kurar (SyncService::enable). `replace_origin` yalnız kullanıcı onayından
-// sonra.
-using SyncEnabler =
-    std::function<std::expected<void, core::Error>(const core::Config& next, bool replace_origin)>;
-SyncEnabler system_sync_enabler();
 
 struct SettingsServices {
     TokenStore tokens = app::system_token_store();
@@ -68,10 +64,10 @@ public:
     // Outcome::Replace çıkar ve çağıran `replace=true` ile yeniden dener.
     std::optional<core::Config> submit(const core::Config& base, bool replace = false);
 
-    // Bağlantı testi (GUI ile aynı akış): formdaki değerler `base`'e uygulanır, yazılmış token kasaya gider,
-    // `enable` depoyu kurar; config.toml yazılmaz. Çağıran dönen adayla tek senkronu (SyncService::sync_now)
-    // işçide koşar, sonucu finish_test'e verir. Test sürüyorsa ya da bir adım düştüyse nullopt; hata
-    // test_result()'tadır. Uzak adres uyuşmazlığı burada sorulmaz: neden sonuçta yazar, Kaydet sorar.
+    // Bağlantı testi (GUI ile aynı akış): formdaki değerler `base`'e uygulanır; config.toml'a ve kasaya
+    // yazılmaz (yazılmış token Kaydet ya da token satırında Enter ile saklanır). Çağıran dönen adayla
+    // app::run_connection_test'i (enable + tek senkron, ağa çıkar) işçide koşar, sonucu finish_test'e verir.
+    // Test sürüyorsa ya da form geçersizse nullopt; hata satırda ya da formdadır.
     std::optional<core::Config> begin_test(const core::Config& base);
     // Süren test yoksa (form yeniden açıldı) yok sayılır.
     void finish_test(const std::expected<void, core::Error>& outcome);

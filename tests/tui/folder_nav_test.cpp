@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace noteapp;
@@ -115,8 +116,10 @@ struct StoreFixture {
     std::optional<tui::ConfirmState> confirm;
     std::optional<tui::NewRowState> row;
     std::optional<tui::RenameState> rename;
-    tui::ListActions actions{tui::ListHost{store, mutex, internal, system, state, preview, status,
-                                           [this] { load(); }, [this] { ++changes; }}};
+    std::vector<std::pair<std::string, std::string>> moves;  // açık sekmelere giden taşımalar (T3)
+    tui::ListActions actions{tui::ListHost{
+        store, mutex, internal, system, state, preview, status, [this] { load(); }, [this] { ++changes; },
+        nullptr, [this](const std::string& from, const std::string& to) { moves.emplace_back(from, to); }}};
 
     StoreFixture() {
         core::init_i18n("en");
@@ -581,6 +584,32 @@ TEST_CASE("F2 on a note is relative to the current folder and a path with a slas
     f.submit_rename();
     CHECK(f.exists("work/sub/z.md"));
     CHECK(f.state.current_folder() == "work/sub");
+}
+
+// T3: açık sekmeler taşımayı izler; çağrı listeden önce, yalnız başarılı taşımada.
+TEST_CASE("F2 tells the open tabs about a renamed folder or note, not about a refused one") {
+    StoreFixture f;
+    f.put("work/sub/a.md");
+    f.put("work/b.md");
+    f.load();
+    f.state.handle(Key::Enter);
+    REQUIRE(f.state.selected_folder_row()->path.string() == "work/sub");
+    f.begin_rename("renamed");
+    f.submit_rename();
+    REQUIRE(f.moves.size() == 1);
+    CHECK(f.moves[0] == std::pair<std::string, std::string>{"work/sub", "work/renamed"});
+    REQUIRE(f.state.select_note(core::NotePath::parse("work/b.md").value()));
+    f.begin_rename("c.md");
+    f.submit_rename();
+    REQUIRE(f.moves.size() == 2);
+    CHECK(f.moves[1] == std::pair<std::string, std::string>{"work/b.md", "work/c.md"});
+    REQUIRE(f.state.select_folder("work/renamed"));
+    f.put("work/taken/x.md");
+    f.load();
+    REQUIRE(f.state.select_folder("work/renamed"));
+    f.begin_rename("taken");
+    f.submit_rename();
+    CHECK(f.moves.size() == 2);
 }
 
 TEST_CASE("F2 refused by the store keeps the input open with the error") {

@@ -7,7 +7,9 @@
 #include <filesystem>
 #include <imgui.h>
 #include <imgui_stdlib.h>
+#include <iterator>
 #include <mutex>
+#include <string_view>
 #include <utility>
 
 namespace noteapp::gui {
@@ -30,6 +32,23 @@ void SDLCALL native_dialog_done(void* userdata, const char* const* files, int /*
     } else if (files[0] != nullptr) {
         const std::scoped_lock lock((*result)->mutex);
         (*result)->path = files[0];
+    }
+    wake_event_loop();
+}
+
+// Çoklu seçim: her yol kutuya; boş liste vazgeçmedir. Kutu paylaşılır: View kapanmış olsa da yazılabilir.
+void SDLCALL import_dialog_done(void* userdata, const char* const* files, int /*filter*/) {
+    const std::unique_ptr<std::shared_ptr<ImportInbox>> inbox(
+        static_cast<std::shared_ptr<ImportInbox>*>(userdata));
+    {
+        const std::scoped_lock lock((*inbox)->mutex);
+        if (files == nullptr)
+            (*inbox)->error = SDL_GetError();
+        else
+            for (; *files != nullptr; ++files) {
+                const std::string_view path(*files);
+                (*inbox)->paths.emplace_back(std::u8string(path.begin(), path.end()));
+            }
     }
     wake_event_loop();
 }
@@ -108,6 +127,14 @@ void View::install_deciders() {
         work();
     };
     state_.deciders.copy_text = [](const std::string& text) { return SDL_SetClipboardText(text.c_str()); };
+    state_.deciders.paste_text = []() -> std::optional<std::string> {
+        if (!SDL_HasClipboardText())
+            return std::nullopt;
+        const std::unique_ptr<char, decltype(&SDL_free)> text(SDL_GetClipboardText(), &SDL_free);
+        if (!text || *text == '\0')  // SDL boş panoda da "" döner
+            return std::nullopt;
+        return std::string(text.get());
+    };
 }
 
 void View::run_modal(const std::string& title, const std::function<bool()>& body) {
@@ -232,16 +259,47 @@ std::optional<std::string> View::ask_path(const std::string& title, const std::s
     return result;
 }
 
+void View::import_pending() {
+    const GuiState::ImportRequest request = state_.take_import_request();
+    if (request != GuiState::ImportRequest::None) {
+        // release: sahiplik SDL üzerinden import_dialog_done'a geçer, geri çağrı her durumda çalışır.
+        auto userdata = std::make_unique<std::shared_ptr<ImportInbox>>(import_inbox_);
+        SDL_Window* window = platform_->window.get();
+        if (request == GuiState::ImportRequest::Folders)
+            SDL_ShowOpenFolderDialog(import_dialog_done, userdata.release(), window, nullptr, true);
+        else
+            SDL_ShowOpenFileDialog(import_dialog_done, userdata.release(), window, nullptr, 0, nullptr, true);
+    }
+    std::vector<std::filesystem::path> paths = std::exchange(dropped_, {});
+    std::string error;
+    {
+        const std::scoped_lock lock(import_inbox_->mutex);
+        std::ranges::move(import_inbox_->paths, std::back_inserter(paths));
+        import_inbox_->paths.clear();
+        error = std::exchange(import_inbox_->error, {});
+    }
+    if (!error.empty()) {
+        core::log_warn("event=import_dialog_failed detail=" + error);
+        state_.import_dialog_failed(error);
+        frames_left_ = kFramesAfterEvent;
+    }
+    if (paths.empty())
+        return;
+    state_.import_files(paths);
+    frames_left_ = kFramesAfterEvent;
+}
+
 std::optional<std::string> View::ask_export_path(const std::string& suggested) {
     const char* documents = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);  // SDL sonda ayırıcıyı kendi koyar
     const std::string initial = documents != nullptr ? std::string(documents) + suggested : suggested;
     auto chosen = ask_path(core::tr("gui.export_dialog_title"), initial, PathKind::SaveFile);
     if (!chosen)
         return chosen;
-    // Elle yazılan yol da var olan dosyayı sormadan ezmesin (yerel diyalog kendisi de sorar).
+    // Elle yazılan yol da var olan dosyayı sormadan ezmesin (yerel diyalog kendisi de sorar). symlink_status:
+    // kırık bağ da var olan addır (TUI ile aynı kural).
     std::error_code ignored;
-    if (!std::filesystem::exists(std::filesystem::path(std::u8string(chosen->begin(), chosen->end())),
-                                 ignored))
+    if (!std::filesystem::exists(std::filesystem::symlink_status(
+            std::filesystem::path(std::u8string(chosen->begin(), chosen->end())), ignored)))
         return chosen;
     const bool replace =
         ask_choice(ChoiceBox<bool>{core::tr("gui.export_dialog_title"),

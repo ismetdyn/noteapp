@@ -41,10 +41,10 @@ yer açılınca kayıtlı boyuta dönülür.
   - **Sıralama (R3, karar 6):** Sırala düğmesi TUI `o` menüsünün komutlarını (`sort.name`, `sort.updated`, `sort.created`, `sort.size`, `sort.reverse`) listeler; işaret geçerli alanda ve sıra ters çevrilmişse `Sırayı ters çevir`de. Ad artan, öbürleri en büyük/en yeni başta seçilir (`app::sort_for`). Sıra ağaca, Ayrıntılar'a ve metinsiz aramaya uygulanır; sorgudaki `sort:` onu ezer. Varsayılan TUI ile aynı: en yeni başta. Seçim hemen `gui-state.toml` `sort` / `sort_descending` anahtarlarına yazılır (TUI adlarıyla); bilinmeyen değer varsayılana düşer.
   - Klasör satırı seçilince açık notun bekleyen düzenlemesi önce kaydedilir; sağ panel editör yerine klasör özetini gösterir (yol, alt ağaçtaki not ve klasör sayısı, ipucu).
 - **Çöp görünümü (`Çöp (n)`):** liste paneli çöpü gösterir, üstünde başlık ve Geri getir, Kalıcı sil, Boşalt (ikisi onaylı, varsayılan Vazgeç), Geri düğmeleri. `↑↓` çöp satırlarını gezer; `Del` ve `Shift+Del` onaylı kalıcı siler. Arama yazmak, klasör seçmek ya da yeni not çöpten çıkarır. Sağ panel açık notta kalır; çöp önizlemesi ve satır ayrıntısı GUI kapsamı dışında.
-- Sağ: başlık şeridi (yol, kaydedildi/değişti göstergesi, notun `#etiket`leri, `md`/`markdown`/`csv`/`json` notunda **Önizleme/Düzenle** düğmesi, **tip açılır kutusu**) → `InputTextMultiline` (gömülü DejaVu Sans Mono) ya da önizleme → bilgi paneli → bağlantı paneli. Etiketler (T80) `NoteLinks::tags`tan, bağlantılarla aynı okumada gelir: kayıtta ve yeniden taramada tazelenir, yazarken değil. **Gizli karakterler (T91):** tüm GUI fontları `core::hidden_controls` kod noktalarını (SPEC-tui "Karakter": bidi denetimleri, sıfır genişlikliler, U+2061–U+2064, Hangul dolguları, U+180E; ZWNJ/ZWJ hariç) `U+FFFD` glifine yönlendirir (`ImFont::AddRemapCodepoint`): editörde, önizlemede ve adlarda yerinde görünürler, InputText imleç ölçüsü tutarlı kalır, baytlar değişmez. Tampon böyle karakter taşıyorsa başlıkta kırmızı uyarı `3 gizli bidi/sıfır genişlikli karakter` durur (yol kısalır, uyarı kısalmaz; ipucu nedenini söyler); sayı içerik değişince yeniden sayılır.
+- Sağ: başlık şeridi (yol, kaydedildi/değişti göstergesi, notun `#etiket`leri, `md`/`markdown`/`csv`/`json` notunda **Önizleme/Düzenle** düğmesi, **tip açılır kutusu**) → editör (gömülü DejaVu Sans Mono, bkz. "Değişiklik 2026-11-03 (G5a)") ya da önizleme → bilgi paneli → bağlantı paneli. Etiketler (T80) `NoteLinks::tags`tan, bağlantılarla aynı okumada gelir: kayıtta ve yeniden taramada tazelenir, yazarken değil. **Gizli karakterler (T91):** tüm GUI fontları `core::hidden_controls` kod noktalarını (SPEC-tui "Karakter": bidi denetimleri, sıfır genişlikliler, U+2061–U+2064, Hangul dolguları, U+180E; ZWNJ/ZWJ hariç) `U+FFFD` glifine yönlendirir (`ImFont::AddRemapCodepoint`): önizlemede ve adlarda yerinde görünürler; editörde EditorBuffer işareti (kırmızı zeminli `U+FFFD`) çizilir, baytlar değişmez. Tampon böyle karakter taşıyorsa başlıkta kırmızı uyarı `3 gizli bidi/sıfır genişlikli karakter` durur (yol kısalır, uyarı kısalmaz; ipucu nedenini söyler); sayı içerik değişince yeniden sayılır.
 - **Bağlantı paneli:** editörün altında katlanır başlık `Bağlantılar (5)`; içinde `Gelen`, `Giden`, `İlişkili`, `Eksik` grupları (`NoteStore::links`, SPEC-graph "Bağlantılar"). Bağlantısız notta panel yoktur, editör tam boydur. Yükseklik en çok 8 satır ve sağ alanın %40'ı, kalanı kaydırılır, binlerce satırda `ImGuiListClipper` yalnız görüneni çizer. Satıra tıklamak o notu açar: tampon kaydedilir, hedefi gizleyen süzgeç gevşer (`GuiState::open_link`). Eksik `[[ad]]` soluk ve tıklanmaz; adı değişen hedef burada görünür, metin yeniden yazılmaz. Ad güvenilmezdir: `##` ve `%` yorumlanmaz, denetim baytı `U+FFFD` olur. Katlanma oturumluktur. Veri not gösterilince, kayıtta ve yeniden taramada okunur. İlişki kurma GUI'de yok: `L` TUI'dedir (SPEC-tui "Bağlantı bölümü").
 - **Bilgi paneli (T82):** editörün altında, bağlantı panelinin üstünde katlanır başlık `Bilgi` (`Ctrl+I`); TUI'nin satır ayrıntısıyla aynı alanlar (boyut, güncelleme, oluşturma, senkron, kaynak cihaz) ve tip, etiketler. `created` ve `origin` boşken "bilinmiyor", etiket ve tip yoksa "yok". Senkron durumu `sync::fill_sync_status` ile yalnız gösterilen not için doldurulur (senkron kapalıyken `senkron kapalı`). Değerler bağlantılarla aynı anlarda tazelenir (gösterim, kayıt, yeniden tarama); boyut ve zaman listedeki kayıttan gelir. Sığarsa iki alan çifti yan yana (yedi alan dört satır), yoksa tek sütun; yükseklik bağlantı paneliyle aynı kuralla sınırlı (en çok 8 satır, kalan alanın %40'ı), kalanı kaydırılır. Kapalı başlar, katlanma oturumluktur. Taslakta ve klasör seçiliyken panel yoktur. Kaynak cihaz adı güvenilmez: denetim baytı `U+FFFD` olur.
-- **Önizleme (T82, G4):** yalnız gösterilen kayıtlı `md`, `markdown`, `csv` ya da `json` notunda (TUI REVIEW ile aynı kural, tek sahibi `app::preview_kind_for`), düzenlenebilir metinde (geçerli UTF-8, NUL yok) ve `limits.tui.view_bytes` (256 KiB; TUI biçimli görünümüyle aynı anahtar, `0` sınırsız) altında; aksi hâlde düğme kapalıdır, nedeni ipucunda. `Ctrl+Shift+V` ya da başlıktaki düğme önizleme ↔ düzenleme; seçim oturum boyunca tüm önizlenen notlarda geçerlidir (TUI `R`), önizlenemeyen notta editör görünür. Düzenlemeye dönüş odağı editöre verir; editör aynı ImGui kimliğiyle çizilir, kaydırma ve imleç ImGui durumundan gelir (gözle doğrulanmadı); önizleme konumu kaynağa eşlenmez. Önizleme salt okunurdur ve tamponu (kaydedilmemiş düzenleme dahil) gösterir.
+- **Önizleme (T82, G4):** yalnız gösterilen kayıtlı `md`, `markdown`, `csv` ya da `json` notunda (TUI REVIEW ile aynı kural, tek sahibi `app::preview_kind_for`), düzenlenebilir metinde (geçerli UTF-8, NUL yok) ve `limits.tui.view_bytes` (256 KiB; TUI biçimli görünümüyle aynı anahtar, `0` sınırsız) altında; aksi hâlde düğme kapalıdır, nedeni ipucunda. `Ctrl+Shift+V` ya da başlıktaki düğme önizleme ↔ düzenleme; seçim oturum boyunca tüm önizlenen notlarda geçerlidir (TUI `R`), önizlenemeyen notta editör görünür. Düzenlemeye dönüş odağı editöre verir; imleç ve kaydırma sekmenin EditorBuffer'ında kalır; önizleme konumu kaynağa eşlenmez. Önizleme salt okunurdur ve tamponu (kaydedilmemiş düzenleme dahil) gösterir.
   - **Ayrıştırma:** PDF dışa aktarmanın md4c yürüyüşü (`pdf::parse_markdown`, `MarkdownOptions::links`): aynı bayraklar ve `MD_FLAG_NOHTML`; önizleme ayrıca bağlantı hedeflerini ve `[[wiki]]` bağlantılarını (`MD_FLAG_WIKILINKS`) ister, PDF istemez (çıktısı değişmez). TUI'nin `render_markdown`'ı terminal hücresine sarılmış satır ürettiği için kullanılmaz.
   - **Çizim** (`src/gui/markdown_preview.*`): başlıklar gömülü DejaVu Sans Bold ile 1,6 / 1,4 / 1,2 / 1,1 em; vurgu Oblique / Bold / BoldOblique; listeler asılı imle (`•`, `1.`, `[x]`) derinlik başına girintili; kod bloğu DejaVu Sans Mono, zeminli, boşluklar korunur, sarılmaz; satır içi kod `ImGuiCol_TableBorderLight` zeminli (açık ve koyu temada pencere zeminine karşı ≥ 1,5, metne karşı ≥ 4,5 karşıtlık); alıntı solda çubuk; yatay çizgi; tablo tek satırlık hücreler, başlık kalın, ızgara çizgili. Metin boşlukta sarılır, satırdan geniş sözcük bölünür; kod ve geniş tablo yatay kaydırılır. Görsel yerine alt metni (yoksa `pdf.image_placeholder`), HTML düz metin. Ayrıştırma metin değişince, yerleşim genişlik ya da yazı boyu değişince yeniden kurulur; karede yalnız görünen koşular çizilir.
   - **Bağlantılar:** `[[hedef]]` metni (takma adda takma ad) bağlantı renginde ve altı çizili. Tıklama `GuiState::open_wiki_link`: bekleyen düzenleme önce kendi notuna yazılır (`flush_for`), hedef sonra `NoteStore::resolve_link` ile yazmanın kuralıyla (yol, uzantısız yol, dosya adı, yalın ad; `|takma ad` ve `#başlık` atılır) çözülür ve `open_link` ile açılır; çözülmezse durum çubuğunda `bulunamadı` iletisi, not değişmez. Çözülmeyen hedef bağlantı panelindeki `Eksik` gibi soluk ve üstü çizilidir, tıklanmaz (`GuiState::resolves_link`); hedef sonradan oluşursa (kayıt, senkron) yeniden taramada eksik listesi değişir, yerleşim yeniden kurulur ve bağlantı canlanır. Dış bağlantı (`[metin](url)`) açılmaz: adres yalnız ipucunda gösterilir (not güvenilmez).
@@ -60,12 +60,12 @@ Görünüm seçicideki **Harita** sol bölmede notları çizge olarak gösterir;
   yoktur; böyle bağlantı kaynak yeniden kaydedilene dek haritada çizilmez, bağlantı panelinde görünür (gövde not başına okunmaz).
 - **Okuma:** kenarlar yalnız taramada değişiklik görülünce okunur (listeleme değişti ya da `NoteStore::data_version`: başka bağlantının yalnız ilişki
   değiştiren yazması); harita görünür değilken hiç okunmaz. Kare başına depo çağrısı yoktur. Görünür harita seçenek ya da çevre merkezi değişince
-  bellekten kurulur (`build_note_map`, `src/gui/note_map.*`, saf).
+  bellekten kurulur (`app::MapModel`, `build_note_map`, `src/app/note_map.*`, saf; TUI ile ortak).
 - **Kapsam:** `Tüm çizge` kapalıyken (varsayılan) gösterilen notun çevresi: bağlantı ve ilişki kenarlarıyla yönsüz en çok `Derinlik` adım (1–6, varsayılan 2).
   Gösterilen not yoksa bütün çizge. `Etiketler` gösterilen notların etiketlerini küçük kare düğüm olarak ekler; etiket üzerinden gezilmez. Seçenekler oturumluktur.
-- **Sınır:** en çok `kMaxMapNodes` = 2.000 düğüm çizilir (notlar önce: çevrede yakın, bütün çizgede en yeni; etiket kalan yere). Aşılınca denetimlerin
+- **Sınır:** en çok `limits.app.map_nodes` (varsayılan 2.000, 0 = sınırsız; TUI ile ortak) düğüm çizilir (notlar önce: çevrede yakın, bütün çizgede en yeni; etiket kalan yere). Aşılınca denetimlerin
   altında `{total} düğümden {shown} tanesi gösteriliyor` uyarısı çıkar.
-- **Yerleşim** (`src/gui/graph_layout.*`, saf): Fruchterman–Reingold'un ızgara sürümü (itme yalnız 2k yarıçapında) ve zayıf merkez çekimi. Başlangıç konumu
+- **Yerleşim** (`src/app/graph_layout.*`, saf, TUI ile ortak): Fruchterman–Reingold'un ızgara sürümü (itme yalnız 2k yarıçapında) ve zayıf merkez çekimi. Başlangıç konumu
   anahtarın FNV-1a özetinden (tohum sabit, sıra bağımsız); yeni not eski komşusunun yanında doğar. Kare başına `View::kMapIterationsPerFrame` (1) adım,
   sıcaklık her adımda soğur, eşiğin altında durur: boşta kare üretilmez. Yeniden taramada duran notun konumu ve iğnesi korunur; çizge aynıysa yerleşim uyanmaz.
 - **Çizim:** düğüm rengi tip renginden (`core::file_icon`, Ağaç'taki ikon rengi), gösterilen not halkalı; komşular yeterince açıkken tüm adlar, değilse yalnız
@@ -94,7 +94,7 @@ kaydırmasını ve önizleme düğmesini tutar; bilgi ve bağlantı panelleri il
   kapanır; yalnız depo `NotFound` dediğinde (okunamayan liste sekme kapatmaz). Gösterilen kirli not mevcut akışta kalır (kayıtta taslağa döner). Klasör yeniden
   adlandırılınca sekmelerin yolu izler; çöpe atılan ya da silinen gösterilen notun sekmesi kapanır, komşu sekme öne gelir (sekme kalmadıysa en yakın not açılır).
 - **Klasör seçimi:** sağda klasör özeti görünür, etkin sekme notunu tutar; sekmeye tıklamak notu geri getirir.
-- **Sınır:** en çok `GuiState::kMaxTabs` = 32 sekme; aşılınca `En çok 32 sekme açılabilir` iletisi.
+- **Sınır:** `limits.app.tabs` (0 = sınırsız, varsayılan; TUI ile ortak, kural `app/tabs`); dolunca `En çok N sekme açılabilir` iletisi. Satır menüsündeki **Yeni sekmede aç** paletteki `tab.open`'dır.
 - **Kalıcılık:** `gui-state.toml` `[[tabs]]` (`path`, `pinned`, `kept`) sırayla ve `active_tab` (kayıtlı sekmeler içindeki sıra). Taslak yazılmaz. Açılışta
   artık olmayan ya da yinelenen yol atlanır; içerik sekme ilk öne geldiğinde okunur. Hiç sekme kalmazsa `last_note` geçerlidir.
 
@@ -116,6 +116,9 @@ kaydırmasını ve önizleme düğmesini tutar; bilgi ve bağlantı panelleri il
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Sonraki / önceki sekme (`Ctrl+PageDown` / `Ctrl+PageUp` de; editörde sekme karakteri yazmaz, ImGui'nin pencere geçişi kapalı) |
 | `Ctrl+Enter` | Listede ya da arama kutusunda: seçili not yeni sekmede |
 | `Ctrl+Shift+F` / `Ctrl+Shift+T` / `Ctrl+Shift+R` | Genel arama (ad ve içerik) / etiket seçici / kayıtlı görünüm seçici |
+| `Ctrl+F` / `F3` / `Shift+F3` | Not içi bul (bul satırı editörün altında) / sonraki / önceki eşleşme (`find`, `find.next`, `find.previous`) |
+| `Ctrl+Z` / `Ctrl+Y` · `Ctrl+C` `Ctrl+X` `Ctrl+V` | Editörde geri al / yinele (EditorBuffer geçmişi) · kopyala (seçim yoksa satır), kes, yapıştır (SDL panosu, yoksa iç pano) |
+| `Ctrl+Space` · `Tab`/`→` | Tamamlama listesi (yazı süzer, `↑↓` `Ctrl+P` `Ctrl+N`, `Enter` ekler, `Esc` kapatır) · satır sonundaki gölge öneriyi al |
 
 Eşleşme yokken arama kutusunda `Enter` → sorgu ilk satır olacak şekilde yeni not (nvALT, TUI ile aynı); argümanlı ya da bozuk sorguda yeni not açılmaz.
 
@@ -137,18 +140,16 @@ Eşleşme yokken arama kutusunda `Enter` → sorgu ilk satır olacak şekilde ye
   başlıkta görünür, büyük notun başı gösterilir, hiçbir yol yazmaz. Yeni not boş (yalnız boşluk) ise
   geçişte/kapanışta sorulmadan atılır.
 - **Bayt koruma (karar 4):** baştan sona CRLF olan not editörde LF görünür ve CRLF yazılır; karışık satır sonlu not
-  olduğu gibi kalır (CR görünmez). Yeni not, çakışma kopyası ve silinmiş notun yeniden kaydı editördeki baytlarla
+  olduğu gibi kalır (CRLF tek adımdır, TUI EditorBuffer kuralı). Yeni not, çakışma kopyası ve silinmiş notun yeniden kaydı editördeki baytlarla
   yazılır (`create_exact`, BOM ve CRLF dahil); eskiden `create()` LF'ye çeviriyordu.
 - **Yeni notun klasörü:** vurgulu klasör satırı, girilen klasör (Ayrıntılar konumu), gösterilen notun klasörü,
   yoksa `default_folder` (TUI ile ortak, `app::new_note_folder`).
 - **Veri koruma (ImGui geçişi):**
-  - **Escape:** ImGui varsayılanı, odaklanıldığından beri yapılan düzenlemeyi geri alır; bu sessiz veri kaybı olurdu. Tuş
-    editörde işlenmez ve not metni korunur (`handle_shortcuts`).
+  - **Escape:** editörde yalnız seçimi kaldırır, bul satırını ve tamamlama listesini kapatır (TUI); metne dokunmaz.
   - **Geç NUL:** `looks_binary` yalnız ilk 8 KB'a bakar; ImGui C dizgisi işlediğinden NUL'dan sonrası kesilirdi. Metinde
     NUL varsa not salt-okunurdur.
   - **BOM:** editör tamponunda görünmez; kayıtta ve çakışma kopyasında geri yazılır.
-  - **Çok büyük not:** ImGui uzunluğu `int` tutar ve salt-okunur görünümde geçersiz bayt 3 bayta büyür; `max_note_bytes = 0`
-    iken de en çok `INT_MAX / 3` bayt açılır, üstü salt-okunurdur (başı gösterilir). TUI'de bu ek sınır yoktur.
+  - **Çok büyük not:** tek sınır `tuning.max_note_bytes` (TUI ile aynı); ImGui metin kutusunun `INT_MAX / 3` tavanı G5a'da kalktı.
 
 ## Klasörler
 Ağaç bağlam menüsü: Yeni klasör, Yeniden adlandır, Sil (çöpe; doluysa not sayısıyla onay).
@@ -159,8 +160,8 @@ Not taşıma `Ctrl+M` diyaloğuyla (sürükle-bırak v1'de yok).
   silinmez. Onaydaki sayı listedeki not sayısıdır; notsuz klasör sorulmaz. Gösterilen not etkilenen klasördeyse onaydan sonra `flush()`, vazgeçilirse hiçbir şey
   kaydedilmez. `Ctrl+M` yalnız klasörü seçtirir (ad/tip kilitli). Arama modu düğmesi mevcut modu gösterir; `Ctrl+Shift+M`
   modu çevirir (G4'ten beri kutuda `Tab` tamamlar). İçerik modunda boş sorgu tüm notları listeler. **Editör vurgusu (değişti):**
-  `InputTextMultiline` metin renklendirmez; içerik aramasında nota geçince yalnız **ilk eşleşmeye** gidilir ve seçilir,
-  diğer eşleşmeler boyanmaz. Seçim yalnız editör odaktayken görünür ve kayar. Seçim düzenlemede, sorgu/mod değişiminde
+  içerik aramasında nota geçince yalnız **ilk eşleşmeye** gidilir ve seçilir, diğer eşleşmeler boyanmaz (not içi bul
+  `Ctrl+F` hepsini boyar). Seçim editörün EditorBuffer'ındadır, pencere imleci izler. Seçim düzenlemede, sorgu/mod değişiminde
   silinir ve aynı (not, sorgu) için yedek taramada yeniden kaydırılmaz.
 
 ## Dosya izleme
@@ -194,7 +195,8 @@ dal, boşta bekleme, yazar adı, yazar e-postası, token, bağlantı testi) ve s
   hiçbir şey yazılmaz); bozuk `config.toml` (söz dizimi/okunamıyor) varken CLI `config set` gibi reddeder. `notes_dir`
   değişiminde önce açık not kaydedilir, sonra liste yeni dizine bağlanır. Senkron açma/`remote` değişimi `enable`
   akışını (uyuşmazlıkta onay: `deciders.confirm_replace_origin`) başarıyla bitirmeden config yazılmaz. "Bağlantıyı test
-  et": `enable` UI iş parçacığında, tek `sync_now` işçide. Durum çubuğu: `senkron kapalı` / `⟳` / `✓ SS:DD` / `⚠ hata`;
+  et": TUI ile aynı akış, `app::run_connection_test` (`enable` + tek `sync_now`) işçide; uyuşmazlık sorulmaz (neden
+  sonuçta, Kaydet sorar), kasaya yazılmaz. Yazılmış token remote başka host'a dönünce silinir. Durum çubuğu: `senkron kapalı` / `⟳` / `✓ SS:DD` / `⚠ hata`;
   `F5` `request_now`; ayar kaydı AutoSync'i yalnız `sync.enabled/remote/branch/idle_seconds` ya da `notes_dir` değişince
   yeniden kurar (editör/yazar değişimi çalışan senkronu öldürmez), yeniden kurmadan önce bekleme imleciyle
   `stop(exit_timeout)` çağrılır (T36); her yazma/taşıma/silme/oluşturma `notify_changed`; kapanışta (kayıt akışından sonra) `stop(exit_timeout)`.
@@ -267,7 +269,7 @@ Windows'ta temiz makinede açılış (MinGW çalışma zamanı DLL'leri kopyalan
 `SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED` (dummy sürücüde ölçek hep 1; olay ve ölçekler elle verilerek sınandı).
 
 ## Kapsam dışı
-WYSIWYG düzenleme, önizlemede görsel, HTML ve dış bağlantı açma, editörde sözdizimi renklendirme (G5), sürükle-bırak, çoklu pencere/sekme, anlık dil değişimi, sistem tepsisi,
+WYSIWYG düzenleme, önizlemede görsel, HTML ve dış bağlantı açma, sürükle-bırak, çoklu pencere/sekme, anlık dil değişimi, sistem tepsisi,
 ekran okuyucu desteği, dizin izleyici (OS bildirimi).
 
 ## Değişiklik 2026-10-31
@@ -368,3 +370,35 @@ Ortak belge modeli (plan-parity A5, `src/app/document.hpp`).
 - **ADDED** Arama kutusu TUI girdi satırı (bkz. "Girdi satırı"): geçmiş, `Tab` tamamlama ve listesi, gölge öneri, renkli argümanlar.
 - **MODIFIED** Arama modu `Tab` yerine `Ctrl+Shift+M` (kutuda `Tab` artık tamamlar, TUI gibi). Kutuda `Ctrl+P` geçmiştir (odak zaten kutuda), `Ctrl+N` yalnız geçmişte gezerken.
 - **ADDED** Durum çubuğunda işaret sayısı (`seçili: 3`, TUI `x` sayacı). Toplu silme gösterilen notu götürünce onu tek notluk silme gibi bırakır: sekmesi kapanır, imleç aynı sıradaki nota iner (önceden tarama seçimi listenin başına düşürüyordu).
+
+## Değişiklik 2026-11-03 (G5a)
+
+Editör ImGui metin kutusu değil, TUI ile ortak `tui::EditorBuffer` üstünde çizilen kendi alanı (plan-parity G5a).
+
+- **MODIFIED** Editör: tampon, geri alma (yazım koşusu tek adım, `limits.tui.undo_bytes`), imleç, seçim ve satır sarma TUI ile aynı `EditorBuffer`'dır; model `gui::NoteEditor` (ImGui'siz) TUI `EditorSession`'ın düzenleme ve bul tuş eşlemesini taşır. Yalnız görünen satırlar çizilir. Satır numaraları, geçerli satır zemini; altında durum çubuğu: tip, `UTF-8`, `LF`/`CRLF`, `BOM`, `satır:sütun`, satır sayısı (TUI bilgi satırı). İmlecin üstündeki görünmez karakterin adı (`Gizli karakter U+202E …`) durum çubuğunun solunda. Fare: tık imleç, sürükleme ve `Shift+tık` seçim, tekerlek imleci üç satır taşır (TUI). Hücre ölçüsü Unicode'dan (`gui::cell_width`: birleşen işaret 0, Doğu Asya ve emoji 2).
+- **ADDED** Not içi bul (`Ctrl+F`, `F3`, `Shift+F3`; TUI ile aynı katlama `find_folded`, `3/12` sayacı, `Tab` nottaki sözcükleri tamamlar, `Enter`/`↓` sonraki, `↑` önceki, `Esc` kapatır, eşleşme seçili kalır). Eşitlik bekçisinin GUI eksik listesinden `find`, `find.next`, `find.previous` çıktı.
+- **MODIFIED** Kirli durum TUI kuralıyla: geri alıp kayıtlı metne dönmek temizdir, bekleyen otomatik kayıt düşer.
+- **MODIFIED** Sekmeler kendi editörünü (metin, geri alma geçmişi, imleç, seçim) saklar; `remember_cursor` kalktı. Dışarıda değişen temiz not yeniden okununca imleç aynı satır/sütunda kalır (TUI `reload`).
+- **ADDED** Metin girişi SDL metin olaylarından (IME, Türkçe klavye): odaktaki editör `PlatformImeData` ile metin ister.
+- **REMOVED** ImGui metin kutusunun `INT_MAX / 3` bayt tavanı (`kImGuiMaxBytes`); tek sınır `tuning.max_note_bytes`.
+
+## Değişiklik 2026-11-04 (G5b)
+
+Editörde sözdizimi, yazım denetimi ve tamamlama; TUI ile aynı modüller ve sınırlar (plan-parity G5b).
+
+- **ADDED** Kaydedilmemiş taslakta tip canlı `detect`'tir (TUI ile aynı kural, `app::DraftTypeTracker`: metnin 1/32'si değişince yeniden): renk, yazım ve durum çubuğu ilk kayıttan önce çalışır.
+- **ADDED** Sözdizimi renkleri: `tui::highlight_line` (TUI'nin dilleri, satır giriş durumu önbelleği), renkler `token_color` (TUI'nin 16 renk ailesinin tonları, JSON önizlemesiyle aynı). `limits.tui.highlight_bytes` üstündeki not ve `highlight_line_bytes` üstündeki satır düz çizilir.
+- **ADDED** Yazım denetimi: `tui::SpellChecker` (`hunspell -a`, yalnız `md` ve `txt`, sözlük arayüz dilinden, `limits.tui.spellcheck_line_bytes`); yanlış sözcük kırmızı alt çizgili. Tuşu bekletmez, sonuç gelince kare çizilir; `hunspell` yoksa oturum boyunca kapalı.
+- **ADDED** Tamamlama: satır sonunda gölge öneri (`Tab`/`→` alır), `Ctrl+Space` listesi imlecin altında (yazı listeyi süzer, metne yazılmaz; `Enter` imleçteki öneki seçilenle değiştirir). Diğer notların sözcükleri `tui::WordTableBuilder` (ilk editör kullanımında kurulur, kayıtta tazelenir; env/properties/ini/toml/yaml notlarından yalnız anahtarlar). Sınırlar `limits.tui.completion_*`, `tuning.completion_min_prefix_bytes`. Liste açıkken `Ctrl+P`/`Ctrl+N` genel arama ve yeni not değil, listede gezinmedir (TUI).
+
+## Değişiklik 2026-11-04 (G5c)
+
+Editörde dil sunucusu; TUI ile aynı `tui::LanguageServers` (plan-parity G5c).
+
+- **ADDED** Dil sunucusu (`[lsp]`, varsayılan açık sunucular, sunucu başına sıkılaştırma, `[lsp.settings.<dil>]`, `limits.lsp.*`, uzak dosya başvurusu kuralı ve çalışma alanı yansıtması TUI ile aynı yerden). Her kareden önce belge açılır/kapanır, değişiklik boşta (`kChangeIdle`) gönderilir. Tanılar önem rengiyle alt çizgili (hata kırmızı, uyarı sarı, bilgi mavi, ipucu soluk); imlecin üstündeki tanının iletisi editörün durum çubuğunda (sunucu metni güvenilmez: denetim karakteri `U+FFFD`). `Ctrl+Space` listesine sunucu önerileri eklenir (tek satırlık, denetim karaktersiz ekleme metni kullanılır, değilse etiket). Taslak, salt-okunur not ve `limits.lsp.note_bytes` üstü not sunucuya gitmez. Durum iletileri (sunucu bulunamadı, durdu, uzak başvuru) editör durum çubuğunda, sonraki editör tuşuna dek.
+- **MODIFIED** `tui::LanguageServers::update` editörü `tui::LspEditor` arayüzünden görür; TUI `EditorSession` aşırı yüklemesi aynen kalır (davranış değişmez, `lsp_client` testleri).
+
+## Değişiklik 2026-11-04 (dosya içe alma)
+
+- **ADDED** `import`: araç çubuğunda `İçe al` menüsü (`Dosya içe al…`, `Klasör içe al…`; SDL yerel diyalogları, çoklu seçim), palette `import` (dosya diyaloğu) ve pencereye sürükle-bırak (`SDL_EVENT_DROP_FILE`, dosya ve klasör). Hepsi `GuiState::import_files` → `app::import_paths` (`note import` kuralı); hedef `target_folder()` (`app::new_note_folder`), özet durum çubuğunda, ilk not sekme kuralıyla açılır. Diyalog geri çağrısı başka iş parçacığından gelir: yollar paylaşılan kutuya yazılır, kare dışında içe alınır. Diyalog açılamazsa (portal/zenity yok) neden durum çubuğunda.
+- **ADDED** `notes-gui --help` pencere açmadan kısa kullanım; tanınmayan argüman çıkış 2. Argümansız açılış değişmedi.

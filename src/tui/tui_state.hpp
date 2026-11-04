@@ -2,6 +2,8 @@
 
 #include "app/item_ops.hpp"
 #include "app/listing.hpp"
+#include "app/note_map.hpp"
+#include "app/tabs.hpp"
 #include "core/file_icons.hpp"
 #include "core/folder_tree.hpp"
 #include "core/limits.hpp"
@@ -17,6 +19,7 @@
 #include "search/query.hpp"
 #include "tui/commands.hpp"
 #include "tui/link_panel.hpp"
+#include "tui/map_view.hpp"
 #include "tui/pane_layout.hpp"
 
 #include <chrono>
@@ -74,6 +77,15 @@ enum class Intent {
     ToggleIcons,      // palet: `icons` ayarını çevirir, config.toml'a yazar
     ExportPdf,        // REVIEW `P`: altta çıktı yolu girdisi
     FollowLink,       // REVIEW'da seçili [[bağlantı]]: depo çözer, hedef not açılır
+    // Sekmeler (SPEC-tui "Sekmeler"): yürütme main'de, sekmeler EditorTabs'tadır.
+    TabNew,           // Ctrl+T: yeni sekmede boş taslak
+    TabClose,         // Ctrl+W (editör): etkin sekme kaydedilmemiş akışıyla kapanır
+    TabNext,          // Alt+N, Ctrl+PgDn
+    TabPrevious,      // Alt+P, Ctrl+PgUp
+    TabOpenSelected,  // satır menüsü / palet: seçili not yeni sekmede
+    ParkEditor,       // Ctrl+K (editör): sekme açık kalır, arama girdisine geçilir
+    OpenMapNode,      // haritada Tab ile seçilen not açılır (map_selected)
+    ImportFiles,      // palet `import`: altta dosya sistemi yolu girdisi, hedef app::new_note_folder
 };
 
 // Çoklu seçimin ya da yank'in bir öğesi (GUI ile ortak: app/item_ops.hpp).
@@ -100,6 +112,7 @@ struct ListPrefs {
     std::vector<std::string> search_history = {};   // en yeni başta; yalnız yerel, senkrona girmez
     std::set<std::string> open_folders = {};        // ağaçta yerinde açık klasörler
     std::vector<std::string> recent_commands = {};  // palet: en yeni başta; bilinmeyen ad yok sayılır
+    app::SavedTabs tabs = {};  // açık editör sekmeleri (GUI gui-state.toml ile aynı anahtarlar)
 };
 
 // Listedeki bir satır. Ad modunda `positions` (yol içindeki bayt ofsetleri) vurgu içindir; içerik modunda
@@ -183,6 +196,30 @@ public:
     // ağaca döner. Oturumluktur.
     bool details_view() const { return details_view_; }
     void set_details_view(bool details);
+
+    // --- Harita (`view.map`, SPEC-tui "Harita") ---
+    // Liste paneli notları çizge olarak gösterir; aramada kalır (eşleşmeyen söner), çöpte liste görünür.
+    // Model ve yerleşim GUI ile ortaktır (app::MapModel). Oturumluktur.
+    bool map_view() const { return map_view_ && !trash_view_; }
+    void set_map_view(bool map);
+    const app::MapModel& map_model() const { return map_; }
+    // limits.app.map_nodes: uygulama config'ten verir; verilmezse 0 = sınırsız.
+    void set_map_node_limit(core::Limit limit) { map_.set_node_limit(std::move(limit)); }
+    // Taramada değişiklik görüldü (yalnız ilişki değişse de): kenarlar sonraki çizimde okunur.
+    void map_edges_changed() { map_.edges_changed(); }
+    // Çizimden önce: kenarlar yalnız eskiyince okunur (taramada değişiklik), harita görünür değilken hiç.
+    // `center` çevre kapsamının merkezi: etkin sekmenin notu, yoksa seçili not.
+    void update_map(const app::MapModel::EdgeReader& read, const std::optional<core::NotePath>& center);
+    // Yerleşimin kare başına adımı; hâlâ hareket ediyorsa true (çağıran kare ister). Durunca iş yapmaz.
+    bool step_map();
+    static constexpr int kMapIterationsPerFrame = 1;
+    // Kamera: kaydırılmadıysa harita panele sığdırılmış (`0`).
+    MapCamera map_camera() const;
+    // Haritanın hücre boyu: liste panelinin içi, ilk satır kapsam satırıdır.
+    std::pair<int, int> map_cells() const;
+    // Tab ile seçilen not; yoksa ya da haritadan çıktıysa nullopt.
+    std::optional<core::NotePath> map_selected() const;
+    const std::string& map_selected_key() const { return map_selected_; }
     void enter_folder(std::string folder);
     // Ata klasöre dönüşte çıkılan yolun çocuğu seçili kalır; kök üstü yoktur.
     void go_to_folder(std::string folder);
@@ -257,6 +294,10 @@ public:
     bool select_note(const core::NotePath& path);
 
     void enter_editor() { focus_ = Focus::Editor; }
+    // Ctrl+K: editör sekmesi açık kalır, odak arama girdisine geçer (GUI Ctrl+K gibi).
+    void search_from_editor() { begin_search(Mode::Name); }
+    // Açık sekmeler değişti: tercihlerle birlikte yazılır (take_prefs_changed).
+    void set_saved_tabs(app::SavedTabs tabs);
     // `n`: boş editör tüm terminali alır (panel yakınlaştırması); liste ve üst çubuk gizlenir. Editör
     // kapanınca normal iki panele Liste odağıyla dönülür.
     void open_new_note_view();
@@ -408,6 +449,10 @@ private:
         std::span<const std::string_view> only = {};  // boş: tüm komutlar; dolu: bağlam menüsü
     };
     std::optional<Intent> handle_command_key(Key key, std::string_view text);
+    std::optional<Intent> handle_map_key(Key key, std::string_view text);
+    void pan_map(float dx, float dy);
+    void zoom_map(float factor);
+    void step_map_selection(int delta);
     std::optional<unsigned> command_context() const;
     const char* needs_block(CommandNeeds needs) const;
     const Command* bound_command(unsigned context, Key key, std::string_view text) const;
@@ -510,6 +555,11 @@ private:
     std::string current_folder_;
     bool showing_folders_ = true;
     bool details_view_ = false;
+    bool map_view_ = false;
+    app::MapModel map_;
+    std::optional<MapCamera> map_camera_;  // boş: sığdırılmış; kaydırma ya da yakınlaştırma doldurur
+    std::size_t map_fitted_generation_ = 0;
+    std::string map_selected_;               // Tab ile seçilen notun yolu
     std::optional<std::string> saved_spot_;  // düz listeye geçerken klasördeki seçim; dönüşte geri gelir
     mutable SharedInputSources relative_sources_;
     mutable std::string relative_sources_folder_;

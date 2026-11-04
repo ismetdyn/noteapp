@@ -8,6 +8,7 @@
 #include "core/note_views.hpp"
 #include "core/paths.hpp"
 #include "core/text.hpp"
+#include "detect/detect.hpp"
 #include "search/fold.hpp"
 #include "search/query.hpp"
 #include "sync/note_status.hpp"
@@ -29,13 +30,9 @@ namespace noteapp::gui {
 
 namespace {
 
-// ImGui metin uzunluğunu int tutar; salt-okunur görünümde her geçersiz bayt 3 baytlık U+FFFD olur. Bu
-// sınırın üstündeki not (yalnız max_note_bytes = 0 iken) salt-okunur açılır, başı gösterilir.
-constexpr std::uintmax_t kImGuiMaxBytes = INT_MAX / 3;
-
+// Editör EditorBuffer'dır (ImGui metin kutusu değil): uzunluğun int tavanı yok, sınır yalnız max_note_bytes.
 app::DocumentOptions document_options(const core::Config& config) {
-    return {.max_bytes = std::min<std::uintmax_t>(config.tuning.max_note_bytes.cap(), kImGuiMaxBytes),
-            .lf_editor = true};
+    return {.max_bytes = config.tuning.max_note_bytes.cap(), .lf_editor = true};
 }
 const char kStateFileName[] = "gui-state.toml";
 constexpr const char* kViewTree = "tree";
@@ -141,6 +138,7 @@ GuiState::GuiState(core::Config config)
                              .post = [this](std::function<void()> work) { post(std::move(work)); }}) {
     // cppcheck-suppress useInitializationList ; tek seferlik kurulum; üye sırasına bağlanmasın
     sync_note_exe = sync::note_executable_beside_self();
+    word_tables_.set_store(store_);
     const search::ViewLookup views = [this](std::string_view name) { return core::view_notes(store_, name); };
     model_.set_view_lookup(views);
     model_.listing().set_fuzzy_candidate_chars(config_.limits.search.fuzzy_candidate_chars.cap());
@@ -246,17 +244,18 @@ void GuiState::load_gui_state() {
 
     // Açık sekmeler (SPEC-gui "Sekmeler"); yoksa ya da hiçbiri kalmadıysa son seçili not.
     if (const toml::array* saved = table["tabs"].as_array()) {
-        std::vector<SavedTab> entries;
+        app::SavedTabs entries;
         for (const toml::node& node : *saved) {
             const toml::table* entry = node.as_table();
             if (entry == nullptr)
                 continue;
             if (auto path = (*entry)["path"].value<std::string>())
-                entries.push_back(
+                entries.tabs.push_back(
                     {std::move(*path), (*entry)["pinned"].value_or(false), (*entry)["kept"].value_or(false)});
         }
         const auto active = table["active_tab"].value_or(std::int64_t{0});
-        if (restore_tabs(entries, active < 0 ? 0 : static_cast<std::size_t>(active)))
+        entries.active = active < 0 ? 0 : static_cast<std::size_t>(active);
+        if (restore_tabs(entries))
             return;
     }
     // Son seçili not (SPEC-gui "Diğer"): listede hâlâ varsa seçilir. Değer dosyadan gelir, NotePath doğrular.
@@ -502,7 +501,7 @@ void GuiState::update_editor_selection() {
     if (search_mode_ == app::SearchMode::Name || query_.empty() || !shown_ || new_note_ || binary()) {
         if (!selection_key_.empty()) {
             selection_key_.clear();
-            editor_selection_.reset();
+            editor_.clear_selection();
         }
         return;
     }
@@ -510,7 +509,8 @@ void GuiState::update_editor_selection() {
     if (key == selection_key_)
         return;
     selection_key_ = std::move(key);
-    editor_selection_ = first_match(buffer_, search_text(query_));
+    if (const auto match = first_match(editor_.text(), search_text(query_)))
+        editor_.select({match->start, match->end});
 }
 
 void GuiState::set_query(std::string query) {
@@ -645,8 +645,10 @@ void GuiState::rescan() {
     const auto selected = current_path();
     model_.set_folder(current_folder_);
     if (model_.set_notes(std::move(notes))) {
+        word_tables_.request();
+        language_servers_.notes_changed();
         rows_stale_ = true;
-        map_edges_stale_ = true;
+        map_.edges_changed();
         input_sources_.reset();  // tamamlama adayları (adlar, etiketler) sonraki istekte
         request_sync_states();
     }
@@ -659,7 +661,7 @@ void GuiState::rescan() {
     // tazelenir.
     if (const std::uint64_t version = store_.data_version(); version != data_version_) {
         data_version_ = version;
-        map_edges_stale_ = true;
+        map_.edges_changed();
     }
     reload_links();  // kayıt ya da senkron başka notun bağlantısını değiştirmiş olabilir
 }
@@ -753,6 +755,7 @@ void GuiState::reload_links() {
 // olmayabilir.
 void GuiState::reload_info() {
     note_info_.clear();
+    editor_.set_type(current_type());  // kayıt ya da taşıma tipi değiştirmiş olabilir (bul önerileri)
     if (!shown_)
         return;
     // Kendi kaydımız shown_'ın boyutunu ve zamanını tazelemez (yalnız revizyon); listedeki kayıt taramadan gelir.
@@ -786,7 +789,7 @@ app::PreviewKind GuiState::preview_kind() const {
 
 // Düzenlenemeyen metin (geçersiz UTF-8, NUL) ayrıştırılmaz: md4c ve tablo görünümü geçerli UTF-8 bekler.
 bool GuiState::can_preview() const {
-    return previewable_type() && !binary() && editable_ && view_limits().view_bytes.allows(buffer_.size());
+    return previewable_type() && !binary() && editable_ && view_limits().view_bytes.allows(editor_.text().size());
 }
 
 void GuiState::toggle_preview() {
@@ -842,14 +845,15 @@ void GuiState::show_note(core::NoteInfo info) {  // cppcheck-suppress passedByVa
         }
     }
     claim_active_tab();
-    if (!(shown_ && shown_->path == info.path)) {
-        if (NoteTab* tab = find_tab(active_tab_))
-            tab->cursor.reset();  // başka notun imleci
-    }
+    // Aynı notun diskten yenilenmesi imleci aynı satır/sütunda tutar (TUI EditorBuffer::reload ile aynı).
+    const std::optional<tui::TextPosition> kept =
+        shown_ && shown_->path == info.path ? std::optional(editor_.buffer().position()) : std::nullopt;
     shown_ = info;
     if (const auto loaded = load_text(info); !loaded) {
         doc_.reset_draft();  // okunamayan notun belgesi yok: hiçbir yol yazmaz
         set_editor(core::tr("gui.read_failed", {{"detail", core::format_error(loaded.error())}}), false);
+    } else if (kept) {
+        editor_.move_to(*kept);
     }
     reload_links();
 }
@@ -858,16 +862,22 @@ void GuiState::show_note(core::NoteInfo info) {  // cppcheck-suppress passedByVa
 void GuiState::set_editor(std::string content, bool editable) {
     autosave_.cancel();
     selection_key_.clear();
-    editor_selection_.reset();  // eski metnin ofsetleri yeni içerikte anlamsız
-    buffer_ = std::move(content);
-    hidden_controls_ = core::count_hidden_controls(buffer_);
+    hidden_controls_ = core::count_hidden_controls(content);
+    std::string type = current_type();
+    if (new_note_ && !shown_) {  // taslak: tip içerikten (gösterilen notun tipi uzantısıdır)
+        type = detected_type(content);
+        draft_type_.reset();
+        draft_size_ = content.size();
+    }
+    editor_ = NoteEditor(std::move(content), editable, std::move(type), editor_limits());
     buffer_generation_ = ++editor_generations_;
     editable_ = editable;
     dirty_ = false;
 }
 
 // Salt-okunur kuralı TUI ile ortaktır (app::classify): ikili, NUL, geçersiz UTF-8 ve max_note_bytes üstü.
-// ImGui CR'yi düzenleyemez: baştan sona CRLF olan not LF gösterilir, kayıtta CRLF yazılır (app::Document).
+// Baştan sona CRLF olan not LF gösterilir, kayıtta CRLF yazılır (app::Document lf_editor); karışık satır sonu
+// EditorBuffer'da olduğu gibi kalır.
 std::expected<void, core::Error> GuiState::load_text(const core::NoteInfo& info) {
     app::Document doc(document_options(config_));  // ayar değişmiş olabilir: her açılış güncel sınırla
     auto text = doc.open(store_, info.path);
@@ -922,7 +932,21 @@ std::string GuiState::hidden_controls_label() const {
 }
 
 std::string GuiState::current_type() const {
+    if (new_note_ && !shown_)
+        return editor_.type();
     return shown_ ? core::split_note_path(shown_->path.string()).type : std::string{};
+}
+
+std::string GuiState::detected_type(std::string_view content) const {
+    return detect::suggest(
+               content, {config_.default_type, config_.tuning.min_confidence, config_.tuning.max_scan_bytes})
+        .type;
+}
+
+void GuiState::refresh_draft_type() {
+    const std::size_t size = editor_.text().size();
+    if (draft_type_.edited(std::exchange(draft_size_, size), size))
+        editor_.set_type(detected_type(editor_.text()));
 }
 
 std::vector<std::string> GuiState::type_choices() const {
@@ -932,34 +956,190 @@ std::vector<std::string> GuiState::type_choices() const {
     return choices;
 }
 
+std::optional<TextSelection> GuiState::editor_selection() const {
+    const auto range = editor_.buffer().selection();
+    return range ? std::optional(TextSelection{range->begin, range->end}) : std::nullopt;
+}
+
 std::optional<TextSelection> GuiState::take_editor_selection() {
-    return std::exchange(editor_selection_, std::nullopt);
+    auto selection = editor_selection();
+    editor_.clear_selection();
+    return selection;
 }
 
 FocusRequest GuiState::take_focus_request() {
     return std::exchange(focus_request_, FocusRequest::None);
 }
 
-void GuiState::buffer_edited() {
-    hidden_controls_ = core::count_hidden_controls(buffer_);
+// Metin değiştiyse (edit_count) kirli durum TUI kuralıyla: kayıtlı metinden farklıysa kirli, geri alıp aynı
+// metne dönmek temizdir. Otomatik kayıt her düzenlemede yeniden başlar, temize dönen tampon beklemez.
+void GuiState::editor_changed(std::uint64_t edits_before) {
+    if (editor_.buffer().edit_count() == edits_before)
+        return;
+    hidden_controls_ = core::count_hidden_controls(editor_.text());
     if (!editable_ || !(shown_ || new_note_))
         return;
-    dirty_ = true;
+    dirty_ = editor_.dirty();
     if (NoteTab* tab = find_tab(active_tab_))
-        tab->kept = true;       // düzenlenen sekme, sonra açılan notla değişmez
-    editor_selection_.reset();  // düzenleme ofsetleri kaydırır
+        tab->kept = true;  // düzenlenen sekme, sonra açılan notla değişmez
+    if (new_note_ && !shown_)
+        refresh_draft_type();
     // Yeni not ilk kayıtta diyalog ister; dışarıda değişen ya da silinen not açık kaydı bekler.
     if (new_note_ || !doc_.autosaves())
         return;
-    // Her tuşta yeniden başlar: ardışık düzenlemeler tek yazmaya birleşir.
-    autosave_.edited(app::Autosave::Clock::now());
+    if (dirty_)
+        autosave_.edited(app::Autosave::Clock::now());  // ardışık düzenlemeler tek yazmaya birleşir
+    else
+        autosave_.cancel();
 }
 
-void GuiState::edit_text(std::string text) {
-    if (!editable_)
+void GuiState::edit_text(std::string_view text) {
+    const std::uint64_t edits = editor_.buffer().edit_count();
+    editor_.replace_all(text);
+    editor_changed(edits);
+}
+
+void GuiState::editor_key(tui::Key key, std::string_view text) {
+    editor_notice_.clear();
+    const std::uint64_t edits = editor_.buffer().edit_count();
+    const std::shared_ptr<const tui::WordTable> words = word_table();
+    if (editor_.mode() == NoteEditor::Mode::Editing) {
+        switch (key) {
+        case tui::Key::CtrlC:
+            copy_from_editor(editor_.copy());
+            return;
+        case tui::Key::CtrlX:
+            if (!editor_.writable())  // TUI: salt-okunurda kesme yok, kopya Ctrl+C'dir
+                return;
+            copy_from_editor(editor_.cut());
+            editor_changed(edits);
+            return;
+        case tui::Key::CtrlV:
+            paste_into_editor();
+            editor_changed(edits);
+            return;
+        default:
+            break;
+        }
+    }
+    editor_.handle(key, text, words.get());
+    editor_changed(edits);
+}
+
+namespace {
+
+// GUI editörünün dil sunucusu yüzü: yol yalnız kayıtlı ve gösterilen notta, kuşak GuiState'in tampon kuşağı.
+class GuiLspEditor final : public tui::LspEditor {
+public:
+    GuiLspEditor(NoteEditor& editor, std::optional<core::NotePath> path, bool writable, std::uint64_t generation)
+        : editor_(editor), path_(std::move(path)), writable_(writable), generation_(generation) {}
+    const tui::EditorBuffer* buffer() const override { return &editor_.buffer(); }
+    const std::optional<core::NotePath>& path() const override { return path_; }
+    bool writable() const override { return writable_; }
+    std::uint64_t buffer_generation() const override { return generation_; }
+    bool completing() const override { return editor_.mode() == NoteEditor::Mode::Complete; }
+    std::uint64_t completion_generation() const override { return editor_.completion_generation(); }
+    void add_completion_items(std::uint64_t generation,
+                              std::span<const core::lsp::CompletionItem> items) override {
+        editor_.add_completion_items(generation, items);
+    }
+    void set_diagnostics(std::vector<tui::DiagnosticMark> marks) override {
+        editor_.set_diagnostics(std::move(marks));
+    }
+
+private:
+    NoteEditor& editor_;
+    std::optional<core::NotePath> path_;
+    bool writable_;
+    std::uint64_t generation_;
+};
+
+}  // namespace
+
+bool GuiState::update_language_servers(std::chrono::steady_clock::time_point now) {
+    // Taslak, klasör özeti (park) ve salt-okunur not sunucuya gitmez.
+    std::optional<core::NotePath> path =
+        shown_ && !new_note_ && !parked_ ? std::optional(shown_->path) : std::nullopt;
+    GuiLspEditor editor(editor_, std::move(path), editable_ && doc_.writable(), buffer_generation_);
+    const tui::LanguageServers::Update update = language_servers_.update(editor, now);
+    if (!update.status.empty())
+        editor_notice_ = update.status;
+    return update.wants_frame;
+}
+
+std::shared_ptr<const tui::WordTable> GuiState::word_table() {
+    if (!std::exchange(word_tables_enabled_, true))
+        word_tables_.enable();  // düzenlemeyen kullanıcı bedel ödemez (TUI ile aynı)
+    return word_tables_.latest();
+}
+
+std::vector<tui::ByteRange> GuiState::misspelled(std::string_view line) {
+    if (!tui::spellcheck_applies_to(current_type()))
+        return {};
+    // Dil Ayarlar'dan değişebilir: sözlük değişince denetleyici yeniden kurulur (TUI ayar uygulaması gibi).
+    if (std::string dictionary = tui::dictionary_for_language(config_.language);
+        !spell_ || dictionary != spell_dictionary_) {
+        spell_dictionary_ = dictionary;
+        spell_ = std::make_unique<tui::SpellChecker>(
+            std::move(dictionary), [this] { post([] {}); }, tui::SpellChecker::kDefaultIdle,
+            tui::SpellChecker::kDefaultTimeout, config_.limits.tui.spellcheck_line_bytes.cap());
+    }
+    return spell_->misspelled(line);
+}
+
+void GuiState::copy_from_editor(std::string text) {
+    if (text.empty())
         return;
-    buffer_ = std::move(text);
-    buffer_edited();
+    clipboard_ = std::move(text);
+    deciders.copy_text(clipboard_);
+}
+
+// Sistem panosu önce (başka uygulamadan gelen metin); okunamazsa iç pano. Sınır TUI ile aynı anahtar:
+// limits.tui.paste_bytes.
+void GuiState::paste_into_editor() {
+    if (!editor_.writable())
+        return;
+    std::string text = deciders.paste_text().value_or(clipboard_);
+    if (!config_.limits.tui.paste_bytes.allows(text.size())) {
+        status_ = core::tr("tui.paste_too_large", {{"limit", core::human_size(config_.limits.tui.paste_bytes.cap())}});
+        return;
+    }
+    editor_.paste(text);
+}
+
+void GuiState::find_in_note() {
+    if (!(shown_ || new_note_))
+        return;
+    editor_.open_find(word_table().get());
+    request_focus(FocusRequest::Editor);
+}
+
+void GuiState::find_step(int delta) {
+    editor_.step_find(delta);
+}
+
+EditorLimits GuiState::editor_limits() const {
+    const core::TuiLimits& limits = config_.limits.tui;
+    return {.undo_bytes = limits.undo_bytes.cap(),
+            .syntax = {.note_bytes = limits.highlight_bytes.cap(), .line_bytes = limits.highlight_line_bytes.cap()},
+            .completion = tui::completion_limits_of(limits, config_.tuning.completion_min_prefix_bytes)};
+}
+
+std::string GuiState::editor_fields() const {
+    constexpr std::string_view kGap = "  ";
+    constexpr std::string_view kEncoding = "UTF-8";  // tampon her zaman UTF-8; geçersiz not salt-okunur açılır
+    const tui::EditorBuffer& buffer = editor_.buffer();
+    const tui::TextPosition position = buffer.position();
+    std::string fields;
+    if (const std::string type = current_type(); !type.empty())
+        fields += type + std::string(kGap);
+    fields += std::string(kEncoding) + std::string(kGap) +
+              (doc_.crlf_shown_as_lf() || buffer.uses_crlf() ? "CRLF" : "LF");
+    if (doc_.has_bom())
+        fields += std::string(kGap) + "BOM";
+    fields += std::string(kGap) + std::to_string(position.line + 1) + ":" + std::to_string(position.column + 1) +
+              std::string(kGap) + core::tr("tui.status_lines", {{"count", std::to_string(buffer.line_count())}});
+    return fields;
 }
 
 void GuiState::focus_search() {

@@ -510,10 +510,10 @@ std::expected<void, Error> WriteContext::init_note(const NodeId& id, const NoteP
 
 std::expected<NodeId, Error> WriteContext::create_note(const NotePath& path, std::string_view bytes,
                                                        std::chrono::system_clock::time_point now,
-                                                       std::string_view origin) {
+                                                       std::string_view origin,
+                                                       std::chrono::system_clock::time_point created) {
     const NodeId id = graph::new_node_id();
-    const std::int64_t at = to_ms(now);
-    if (auto made = init_note(id, path, bytes, at, at, origin); !made)
+    if (auto made = init_note(id, path, bytes, to_ms(created), to_ms(now), origin); !made)
         return std::unexpected(made.error());
     if (auto linked = update_links(id, path.string(), bytes); !linked)
         return std::unexpected(linked.error());

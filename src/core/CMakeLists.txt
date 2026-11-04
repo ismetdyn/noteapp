@@ -31,6 +31,9 @@ target_link_libraries(noteapp_core PRIVATE tomlplusplus::tomlplusplus)
 # Notlar graph.db'dedir; başlıkta yalnız note_store_impl.hpp, note_sync.hpp ve graph_limits.hpp motor türü
 # taşır, SQLite görünmez.
 target_link_libraries(noteapp_core PUBLIC noteapp_graph)
+if(WIN32)
+    target_link_libraries(noteapp_core PRIVATE shell32)  # CommandLineToArgvW (utf8_arguments)
+endif()
 target_compile_definitions(noteapp_core PRIVATE TOML_EXCEPTIONS=0)
 noteapp_embed_resources(noteapp_core defaults.toml i18n/en.toml i18n/tr.toml)
 noteapp_target_defaults(noteapp_core)

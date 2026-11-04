@@ -327,7 +327,8 @@ TEST_CASE_FIXTURE(ContentFixture, "Enter from the search box lands on the first 
     press(*view, ImGuiKey_Enter);
     settle(*view);
     REQUIRE(view->editor_active());
-    CHECK_FALSE(state->editor_selection().has_value());  // uygulandı
+    REQUIRE(state->editor_selection().has_value());  // editörde seçili
+    CHECK(selected_text(*state) == "İstanbul");
 
     type_text(*view,
               "X");  // seçili eşleşme yazılanla değişir: seçimin gerçekten ilk eşleşmede olduğunun kanıtı

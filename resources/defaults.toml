@@ -69,6 +69,10 @@ completion_min_prefix_bytes = 2   # TUI editöründe gölge öneri için yazılm
 [limits.app]
 recent_commands = 20          # komut paletinde (TUI, GUI) hatırlanan son kullanılan komut
 trash_undo_steps = 0          # çöp geri alma yığını (TUI `u`, GUI Geri al); dolunca en eski adım düşer
+tabs = 0                      # aynı anda açık editör sekmesi (TUI, GUI); dolunca yeni sekme açılmaz, iletiyle
+# Haritada çizilen düğüm (TUI, GUI): aşan kısım çizilmez, uyarı çıkar. 0'da büyük çizge kareyi yavaşlatır
+# (GUI yazılımsal çizicide 2.000 düğüm ~20 ms/kare; SPEC-gui "Harita").
+map_nodes = 2000
 
 # Not deposu. Görüntü her klasörün tam yolunu tutar: 0'da senkronla gelen N düzeylik klasör zinciri ~N² bayt
 # bellek ister (100.000 düzey ~10 GB). Aşan klasörün notları açılmaz, unreachable listesinde raporlanır.
@@ -110,6 +114,9 @@ report_entries = 4096         # senkron raporundaki bozuk çerçeve ve çakışm
 touched_properties = 1048576  # çakışma raporu için izlenen özellik
 set_aside_logs = 3            # tutulan kenara alınmış yerel günlük kopyası (en yenisi dahil)
 import_line_bytes = "128MiB"  # `note graph import` satırı; okunurken sınırlanır
+# Aynı satırın JSON değeri (etiket, özellik…); aşan satır reddedilir, satır numarasıyla. Ayrıştırılmış değer
+# ~100 bayt: 0'da 128 MiB'lık "[1,1,…]" satırı ~7 GiB bellek ister.
+import_line_values = 100000
 
 # Terminal arayüzü. Değerler tuş bütçesini (50 ms) korur; aşan iş reddedilmez: biçimli görünüm ham metne,
 # renklendirme düz metne düşer, kesilen tablo soluk satırla söylenir. 0'da büyük not o işi uzatır (ör. 10 MiB'lık

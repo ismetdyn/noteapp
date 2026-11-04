@@ -41,7 +41,29 @@ struct LspLimits {
 // Config'teki değerler; 0 (sınırsız) SIZE_MAX, süre milliseconds::max() olur.
 LspLimits lsp_limits_of(const core::LspLimits& limits);
 
-// TUI'nin dil sunucusu tarafı; yalnız UI iş parçacığından kullanılır. Ayar kapalıysa ya da sunucu yoksa
+// Dil sunucusunun gördüğü editör: TUI'de EditorSession (update'in o aşırı yüklemesi uyarlar), GUI'de
+// GuiState'in editörü. Yalnız update süresince yaşar.
+class LspEditor {
+public:
+    virtual const EditorBuffer* buffer() const = 0;  // açık tampon yoksa nullptr
+    virtual const std::optional<core::NotePath>& path() const = 0;  // taslakta boş
+    virtual bool writable() const = 0;  // salt-okunur not sunucuya gitmez
+    // Her yeni tamponda artar: aynı yolun yeni tamponu belgeyi yeniden açtırır (edit_count 0'dan sayar).
+    virtual std::uint64_t buffer_generation() const = 0;
+    virtual bool completing() const = 0;  // tamamlama listesi açık
+    virtual std::uint64_t completion_generation() const = 0;
+    virtual void add_completion_items(std::uint64_t generation,
+                                      std::span<const core::lsp::CompletionItem> items) = 0;
+    virtual void set_diagnostics(std::vector<DiagnosticMark> marks) = 0;
+
+protected:
+    LspEditor() = default;
+    ~LspEditor() = default;
+    LspEditor(const LspEditor&) = default;
+    LspEditor& operator=(const LspEditor&) = default;
+};
+
+// İki arayüzün dil sunucusu tarafı; yalnız UI iş parçacığından kullanılır. Ayar kapalıysa ya da sunucu yoksa
 // hiçbir şey yapmaz: süreç başlamaz, çalışma alanı dizini oluşmaz. Programlar kurulurken bir kez PATH'in
 // mutlak girdilerinde aranır: bulunamayan sunucu denenmez, hiçbir sunucusu bulunmayan dilin notu yansıtılmaz,
 // dilin ilk notunda tek bir ileti çıkar. Bulunan diller için çalışma alanını arka planda yansıtır, editör bir
@@ -75,6 +97,7 @@ public:
     // Her çizimden önce: belgeyi açar/kapatır, boşta değişikliği gönderir, öneri ister/ekler, tanıları
     // editöre koyar.
     Update update(EditorSession& editor, std::chrono::steady_clock::time_point now);
+    Update update(LspEditor& editor, std::chrono::steady_clock::time_point now);
 
     std::size_t started_clients() const {
         return static_cast<std::size_t>(
@@ -103,7 +126,7 @@ private:
     LspClient* client_for(const ServerKey& key);
     // Belgenin dilinin durmamış istemcileri, sırayla.
     std::vector<std::pair<std::size_t, LspClient*>> live_clients(const std::string& language);
-    void open_document(const EditorSession& editor, Update& out);
+    void open_document(const LspEditor& editor, Update& out);
     void report_missing(const std::string& language, Update& out);
     // Metin uzak dosya başvurusu taşıyorsa true; not o hâliyle ilk kez engellenince iletiyi koyar. Sonuç yol,
     // tampon kuşağı ve edit_count başına bir kez hesaplanır: açılamayan not her karede 2 MiB taranmasın.
@@ -112,7 +135,7 @@ private:
     bool blocked_by_remote_reference(const core::NotePath& path, std::uint64_t buffer_generation,
                                      const EditorBuffer& buffer, Update& out);
     void close_document();
-    void sync_document(EditorSession& editor, std::chrono::steady_clock::time_point now, Update& out);
+    void sync_document(LspEditor& editor, std::chrono::steady_clock::time_point now, Update& out);
     void report_stops(Update& out);
     void notify();
 

@@ -15,12 +15,15 @@ noteapp_add_test(tui
     list_batch_test.cpp
     list_tree_test.cpp
     folder_nav_test.cpp
+    import_test.cpp
+    map_test.cpp
     markdown_view_test.cpp
     save_dialog_test.cpp
     modals_test.cpp
     settings_test.cpp
     settings_sync_test.cpp
     sync_indicator_test.cpp
+    tabs_test.cpp
     tags_test.cpp
     views_test.cpp
     wiki_follow_test.cpp)

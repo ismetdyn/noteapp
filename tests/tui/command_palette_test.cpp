@@ -746,6 +746,36 @@ TEST_CASE(
     CHECK(test::slurp(target).starts_with("%PDF"));
 }
 
+// Sev-3 (T1+T2 review): exists() bağı izler; kırık bağ "yok" sayılıyor, PDF sormadan bağın yerine
+// yazılıyordu.
+TEST_CASE("export.pdf asks before replacing a dangling symlink, the first Enter writes nothing") {
+    StoreFixture fixture;
+    const test::TempDir out;
+    const std::filesystem::path target = out.path() / "a.pdf";
+    std::error_code ec;
+    std::filesystem::create_symlink(out.path() / "missing.pdf", target, ec);
+    if (ec) {
+        MESSAGE("dosya bağı oluşturulamadı (Windows'ta yetki), kırık bağ denetimi atlandı");
+        return;
+    }
+    REQUIRE(std::filesystem::is_symlink(std::filesystem::symlink_status(target)));
+    REQUIRE(fixture.state.select_note(np("a.md")));
+    fixture.state.focus_preview();
+    fixture.actions.run(fixture.state.handle(Key::Char, "P"), fixture.confirm, fixture.rename);
+    REQUIRE(fixture.rename.has_value());
+    fixture.actions.handle_rename_key(fixture.rename, Key::End, {});
+    while (!fixture.rename->text().empty())
+        fixture.actions.handle_rename_key(fixture.rename, Key::Backspace, {});
+    const std::string typed = test::utf8(target);
+    for (std::size_t i = 0; i < typed.size(); ++i)
+        fixture.actions.handle_rename_key(fixture.rename, Key::Char, std::string_view(typed).substr(i, 1));
+    fixture.actions.handle_rename_key(fixture.rename, Key::Enter, {});
+    REQUIRE(fixture.rename.has_value());
+    CHECK_FALSE(fixture.rename->error().empty());
+    CHECK(std::filesystem::is_symlink(std::filesystem::symlink_status(target)));
+    CHECK_FALSE(std::filesystem::exists(out.path() / "missing.pdf"));
+}
+
 TEST_CASE("icons.toggle flips the setting, writes config.toml and takes effect at once") {
     StoreFixture f;
     f.config.icons = "nerd";

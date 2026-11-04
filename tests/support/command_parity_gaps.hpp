@@ -5,6 +5,7 @@
 // yönde düşer: listede olmayan eksik ve listede kaldığı hâlde artık bağlı olan komut (bayat satır). Liste
 // yalnız kısalır.
 #include <algorithm>
+#include <array>
 #include <string_view>
 
 namespace noteapp::test {
@@ -17,18 +18,9 @@ struct CommandGap {
     std::string_view owner;  // plan-parity görevi
 };
 
-inline constexpr CommandGap kCommandGaps[] = {
-    // ---- TUI'de yok ----
-    {CommandUi::Tui, "view.map", "P-T4"},      // harita
-    {CommandUi::Tui, "tab.new", "P-T3"},       // sekmeler
-    {CommandUi::Tui, "tab.close", "P-T3"},
-    {CommandUi::Tui, "tab.next", "P-T3"},
-    {CommandUi::Tui, "tab.previous", "P-T3"},
-    // ---- GUI'de yok ----
-    {CommandUi::Gui, "find", "P-G5"},      // not içi bul (G5a)
-    {CommandUi::Gui, "find.next", "P-G5"},
-    {CommandUi::Gui, "find.previous", "P-G5"},
-};
+// T3, T4 ve G5'ten sonra iki arayüz de kaydın tamamını bağlar: liste boştur. Satır gerekirse dizinin boyu
+// satır sayısıdır (`std::array<CommandGap, N>`); bayat satırı bekçi yakalar.
+inline constexpr std::array<CommandGap, 0> kCommandGaps{};
 
 // Bekçinin kararı: uyumluysa nullptr, değilse ne yapılacağı.
 constexpr const char* parity_problem(CommandUi ui, std::string_view id, bool bound) {

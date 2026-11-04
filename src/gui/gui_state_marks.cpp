@@ -1,3 +1,4 @@
+#include "app/import_files.hpp"
 #include "app/item_ops.hpp"
 #include "core/i18n.hpp"
 #include "gui/gui_state.hpp"
@@ -236,6 +237,25 @@ void GuiState::paste() {
     rescan();
     set_expanded(dest, true);  // kopyalar ağaçta görünsün
     publish(report, "gui.paste_done");
+}
+
+// ---- İçe alma ----
+
+void GuiState::import_files(std::span<const std::filesystem::path> sources) {
+    if (sources.empty())
+        return;
+    const std::string dest = target_folder();
+    const app::ImportReport report = app::import_paths(store_, sources, app::import_options(config_, dest));
+    if (report.wrote)
+        changed();
+    rescan();
+    if (!report.imported.empty())
+        open_note(report.imported.front().note);  // sekme kuralı: tutulan ya da kirli sekme yerinde kalır
+    status_ = app::import_status(report);         // açılış durum yazabilir: özet en son
+}
+
+void GuiState::import_dialog_failed(const std::string& detail) {
+    status_ = core::tr("gui.import_dialog_failed", {{"detail", detail}});
 }
 
 // ---- Taşıma ----

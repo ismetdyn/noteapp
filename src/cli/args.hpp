@@ -7,7 +7,7 @@
 
 namespace noteapp::cli {
 
-// SPEC-cli'deki tüm alt komut adları; sonraki görevler gövdeleri doldurur, adlar şimdiden ayrılır.
+// command_table.hpp'deki komut adları (help dahil) ve gizli `__complete`.
 bool is_reserved_command(std::string_view word);
 
 struct ParsedArgs {
@@ -40,9 +40,5 @@ struct ParsedArgs {
 
 // `args` argv[0] olmadan, UTF-8. Saf fonksiyon: G/Ç yok.
 ParsedArgs parse_args(const std::vector<std::string>& args);
-
-// Komut satırını UTF-8 olarak verir (argv[0] hariç). Windows'ta ANSI argv yerine geniş komut satırı
-// kullanılır; Türkçe argümanlar kod sayfasına bağlı bozulmaz.
-std::vector<std::string> utf8_arguments(int argc, char** argv);
 
 }  // namespace noteapp::cli

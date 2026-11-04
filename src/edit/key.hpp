@@ -52,6 +52,14 @@ enum class Key {
     CtrlU,
     CtrlT,
     CtrlA,  // Liste: görünen tüm satırları seçer
+    // Sekmeler (SPEC-tui "Sekmeler"): Ctrl+T yeni, Ctrl+W kapat, Alt+N / Alt+P (Ctrl+PgDn / Ctrl+PgUp)
+    // sonraki / önceki; Ctrl+K editörden sekmeyi açık bırakıp aramaya geçer.
+    CtrlW,
+    CtrlK,
+    AltN,
+    AltP,
+    CtrlPageDown,
+    CtrlPageUp,
 };
 
 }  // namespace noteapp::tui

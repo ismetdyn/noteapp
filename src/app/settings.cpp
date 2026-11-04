@@ -2,6 +2,7 @@
 
 #include "core/i18n.hpp"
 #include "sync/auth.hpp"
+#include "sync/sync_service.hpp"
 
 namespace noteapp::app {
 
@@ -9,6 +10,21 @@ TokenStore system_token_store() {
     return {[](std::string_view host) { return sync::has_token(host); },
             [](std::string_view host, std::string_view token) { return sync::store_token(host, token); },
             [](std::string_view host) { return sync::clear_token(host); }};
+}
+
+SyncEnabler system_sync_enabler() {
+    return [](const core::Config& next, bool replace_origin) {
+        return sync::SyncService(next).enable(next.sync.remote, replace_origin);
+    };
+}
+
+std::expected<void, core::Error> run_connection_test(const core::Config& candidate,
+                                                     const SyncEnabler& enable) {
+    if (auto enabled = enable(candidate, false); !enabled)
+        return enabled;
+    if (auto synced = sync::SyncService(candidate).sync_now(); !synced)
+        return std::unexpected(std::move(synced.error()));
+    return {};
 }
 
 std::string config_warnings_message(const std::vector<core::Error>& warnings) {

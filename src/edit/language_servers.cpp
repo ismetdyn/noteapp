@@ -155,8 +155,36 @@ void LanguageServers::notify() {
         redraw_();
 }
 
+namespace {
+
+// TUI oturumunun dil sunucusu yüzü: davranış uyarlamadan önceki update(EditorSession&) ile aynı.
+class SessionEditor final : public LspEditor {
+public:
+    explicit SessionEditor(EditorSession& session) : session_(session) {}
+    const EditorBuffer* buffer() const override { return session_.buffer(); }
+    const std::optional<core::NotePath>& path() const override { return session_.path(); }
+    bool writable() const override { return session_.read_only() == EditorSession::ReadOnly::No; }
+    std::uint64_t buffer_generation() const override { return session_.buffer_generation(); }
+    bool completing() const override { return session_.mode() == EditorSession::Mode::Complete; }
+    std::uint64_t completion_generation() const override { return session_.completion_generation(); }
+    void add_completion_items(std::uint64_t generation, std::span<const lsp::CompletionItem> items) override {
+        session_.add_completion_items(generation, items);
+    }
+    void set_diagnostics(std::vector<DiagnosticMark> marks) override { session_.set_diagnostics(std::move(marks)); }
+
+private:
+    EditorSession& session_;
+};
+
+}  // namespace
+
 LanguageServers::Update LanguageServers::update(EditorSession& editor,
                                                 std::chrono::steady_clock::time_point now) {
+    SessionEditor session(editor);
+    return update(static_cast<LspEditor&>(session), now);
+}
+
+LanguageServers::Update LanguageServers::update(LspEditor& editor, std::chrono::steady_clock::time_point now) {
     // Önce indirilir: bundan sonra gelen bildirim yeni bir çizim ister.
     redraw_pending_.store(false);
     Update out;
@@ -243,7 +271,7 @@ void LanguageServers::report_missing(const std::string& language, Update& out) {
                           {{"server", program_name(missing->second.front())}, {"language", language}});
 }
 
-void LanguageServers::open_document(const EditorSession& editor, Update& out) {
+void LanguageServers::open_document(const LspEditor& editor, Update& out) {
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- sync_document yolu ve tamponu denetler
     const core::NotePath& path = *editor.path();
     const std::string language(lsp_language_for(path));
@@ -301,11 +329,11 @@ void LanguageServers::close_document() {
     document_.reset();
 }
 
-void LanguageServers::sync_document(EditorSession& editor, std::chrono::steady_clock::time_point now,
+void LanguageServers::sync_document(LspEditor& editor, std::chrono::steady_clock::time_point now,
                                     Update& out) {
     const EditorBuffer* buffer = editor.buffer();
     // Taslak (yolu yok), salt-okunur ve sınırı aşan not sunucuya gitmez.
-    if (buffer == nullptr || !editor.path() || editor.read_only() != EditorSession::ReadOnly::No ||
+    if (buffer == nullptr || !editor.path() || !editor.writable() ||
         buffer->text().size() > limits_.note_bytes) {
         close_document();
         editor.set_diagnostics({});
@@ -332,8 +360,8 @@ void LanguageServers::sync_document(EditorSession& editor, std::chrono::steady_c
         document.changed_at = now;
     }
     // Liste açıldıysa öneri güncel metne göre istenir: boşta beklemeden gönderilir.
-    const bool completion_asked = editor.mode() == EditorSession::Mode::Complete &&
-                                  editor.completion_generation() != document.completion_generation;
+    const bool completion_asked =
+        editor.completing() && editor.completion_generation() != document.completion_generation;
     if (document.seen_edits != document.sent_edits) {
         if (completion_asked || now - document.changed_at >= change_idle_) {
             // Yeni metin uzak dosya başvurusu taşıyorsa hiç gönderilmez, belge kapanır.
@@ -361,8 +389,7 @@ void LanguageServers::sync_document(EditorSession& editor, std::chrono::steady_c
             if (auto ticket = client->request_completion(document.uri, document.version, position))
                 document.completions.emplace(index, *ticket);
     }
-    if (editor.mode() == EditorSession::Mode::Complete &&
-        editor.completion_generation() == document.completion_generation) {
+    if (editor.completing() && editor.completion_generation() == document.completion_generation) {
         // Her sunucunun cevabı geldikçe aynı listeye eklenir; aynı etiket bir kez görünür.
         for (const auto& [index, client] : clients) {
             const auto ticket = document.completions.find(index);

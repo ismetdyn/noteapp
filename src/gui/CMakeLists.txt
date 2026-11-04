@@ -1,6 +1,5 @@
 add_library(noteapp_gui
     browser_rows.cpp
-    graph_layout.cpp
     gui_state.cpp
     gui_state_commands.cpp
     gui_state_browser.cpp
@@ -13,8 +12,8 @@ add_library(noteapp_gui
     gui_state_trash.cpp
     icon_font.cpp
     markdown_preview.cpp
+    note_editor.cpp
     note_list_model.cpp
-    note_map.cpp
     save_dialog.cpp
     settings_page.cpp
     view.cpp
@@ -22,6 +21,7 @@ add_library(noteapp_gui
     view_dialogs.cpp
     view_editor.cpp
     view_map.cpp
+    view_note_editor.cpp
     view_palette.cpp
     view_settings.cpp
     view_tabs.cpp

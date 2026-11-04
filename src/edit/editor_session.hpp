@@ -102,6 +102,13 @@ public:
     void layout(int columns, int rows);
     // Yeniden tarama sonucu: temiz tampon yenilenir, kirli tampona asla dokunulmaz.
     void on_listing(std::span<const core::NoteInfo> notes);
+    // Notu ya da klasörü taşındı (TUI sekmeleri, liste eylemi): belge yeni yolu izler, sonraki kayıt oraya
+    // gider (eski yola giden kayıt Gone olurdu ya da orada sonradan açılan nota çakışırdı). Taşıma gövde
+    // revizyonunu değiştirmez. Taslakta etkisiz.
+    void follow_move(const core::NotePath& to) {
+        if (doc_.path())
+            doc_.moved(to, doc_.revision());
+    }
     // Uygulama kapanırken: kirli metin normal yoldan yazılır, olmazsa kopyaya ya da geçici dosyaya.
     // Kullanıcıya söylenecek metni döner; yapılacak bir şey yoksa boş.
     std::string flush_on_exit();
@@ -124,6 +131,10 @@ public:
     std::uint64_t buffer_generation() const { return buffer_generation_; }
     const std::optional<core::NotePath>& path() const { return doc_.path(); }
     bool is_draft() const { return draft_.has_value(); }
+    // Editörden kapatmadan ayrılmak (sekme değişimi, Ctrl+K): bekleyen düzenleme kendi notuna yazılır (GUI
+    // flush_for), taslak kaydedilmeden kalır. Kayıt olmadıysa (çakışma sorusu, hata) ya da soru/girdi açıksa
+    // false: ayrılma yok.
+    bool park();
     // Sorularda gösterilen ad: notun yolu, taslakta verilen ad, adsız taslakta katalog metni.
     std::string display_name() const;
     const std::string& name_input() const { return name_line_.text(); }
@@ -267,7 +278,7 @@ private:
     std::string shown_type_;
     SyntaxLanguage language_ = SyntaxLanguage::Plain;
     mutable SyntaxStateCache syntax_cache_;  // çizimde tembel dolar, tampon gibi görünmez önbellek
-    std::size_t draft_changes_ = 0;          // son detect'ten beri değişen bayt
+    app::DraftTypeTracker draft_type_;       // taslağın canlı detect'i ne zaman yeniden koşar
     int columns_ = 80;
     int rows_ = 24;
 };

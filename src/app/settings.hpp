@@ -19,6 +19,17 @@ struct TokenStore {
 };
 TokenStore system_token_store();
 
+// "Senkron açıldı" akışı: depoyu kurar (SyncService::enable). `replace_origin` yalnız kullanıcı onayından
+// sonra.
+using SyncEnabler =
+    std::function<std::expected<void, core::Error>(const core::Config& next, bool replace_origin)>;
+SyncEnabler system_sync_enabler();
+
+// Bağlantı testi (TUI ve GUI aynı akış): depoyu kurar ve tek senkron koşar. Ağa çıkar: işçi iş parçacığında
+// çağrılır. origin değiştirilmez (uyuşmazlık sonuçtur, Kaydet sorar); config.toml'a ve kasaya yazmaz.
+std::expected<void, core::Error> run_connection_test(const core::Config& candidate,
+                                                     const SyncEnabler& enable);
+
 // Açılışta gösterilecek config uyarıları: her biri format_error ile çevrilir, "; " ile birleşir; uyarı yoksa
 // boş. Bozuk config.toml sessizce varsayılan dizine düşmesin diye kullanıcıya gösterilir.
 std::string config_warnings_message(const std::vector<core::Error>& warnings);

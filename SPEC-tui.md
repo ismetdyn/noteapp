@@ -26,7 +26,7 @@ Enter düzenle  → önizle  / ara  n yeni  a ekle  d sil  ? yardım  ...
 - **Sağ sütun (`v`):** varsayılan boyut + tarih (`2.0 KiB  12:03`, bugün değilse yalnız tarih). Dar panelde önce tarih, sonra boyut düşer, değer yarım kesilmez; yol en az 16 hücre tutar. `created` ve `origin` boşken "bilinmiyor".
 - **Üst satır:** çöp doluysa en solda `çöp: 3`, tıklayınca çöp görünümü açılır; boşsa yok. Yalnız metin: simge karakterinin genişliği terminale göre değişir, satır kayardı. Çöp görünümünde aynı yerde `ÇÖP KUTUSU` başlığı.
 - **Boyut:** Liste ve Önizlemede `<` `>` sol paneli 5 sütun değiştirir (sol en az 16, sağ en az 24 sütun; 60 sütunda da geçerli), `z` odaklı paneli tam ekran yapar ve geri alır (F11 değil: Konsole'un). Fareyle bölücü sürüklenir. Genişlik ve yakınlaştırma oturumluktur, config'e yazılmaz. Yakınlaştırmada odak değişirse gösterilen panel de değişir.
-- **Fare:** bölücü sürükleme, tekerlek işaretçinin altındaki paneli kaydırır (liste seçimi / önizleme / editörde imleç), satıra tıklama seçer, panele tıklama odaklar; Editörde tıklama imleci o hücreye koyar (numara sütunu metin değildir, üstüne tıklama satır başıdır). Listeye tıklamak editörden `Ctrl+Q` ile aynı kapıdan çıkar (kirliyse sorar). Açık soru, girdi ya da modal fareyi yok sayar. REVIEW'da sürükleme metin seçer (bkz. "Pano"); fare yakalandığı için terminalin kendi seçimi `Shift`+sürükle ile yapılır (yardımda yazar).
+- **Fare:** bölücü sürükleme, tekerlek işaretçinin altındaki paneli kaydırır (liste seçimi / önizleme / editörde imleç), satıra tıklama seçer, panele tıklama odaklar; Editörde tıklama imleci o hücreye koyar (numara sütunu metin değildir, üstüne tıklama satır başıdır). Listeye tıklamak editörü kapatmaz (GUI ve `Ctrl+K` gibi): bekleyen düzenleme notuna yazılır, sekme açık kalır, odak listeye geçer; kayıt olmazsa (çakışma sorusu, hata) tıklama yok sayılır. Kapatmak `Ctrl+Q` / `Ctrl+W`'dir. Açık soru, girdi ya da modal fareyi yok sayar. REVIEW'da sürükleme metin seçer (bkz. "Pano"); fare yakalandığı için terminalin kendi seçimi `Shift`+sürükle ile yapılır (yardımda yazar).
 
 ## Tuşlar
 
@@ -245,6 +245,27 @@ Tampon `EditorBuffer` (saf, FTXUI bilmez), tuş ve kayıt kararları `EditorSess
 - **Dış değişiklik:** yeniden tarama ve senkron kirli tampona dokunmaz, durum çubuğu uyarır. Temiz tampon yenilenir, imleç aynı satır/sütunda kalır. Not silinmişse temiz tampon kapanır; kirli tamponda metin kalır, `Ctrl+S` aynı adla yeni not yazar.
 - **Çıkış:** editörden `q` ve `Ctrl-C` ile çıkılamaz. SIGTERM, SIGHUP ve dışarıdan SIGINT'te kirli metin normal yoldan yazılır (taslak oluşturulur, çakışmada kopya, olmazsa geçici dosya; sonuç stderr'e), süreç 128+N ile biter. SIGKILL ve kilitlenme kapsam dışıdır (takas dosyası yok).
 - **Yapıştırma:** FTXUI 7.0.3 bracketed paste sunmaz. Terminalden yapıştırma (`Ctrl+Shift+V`) tuş olayı olarak gelir: editörde metne girer, Listede harfler kısayol olarak çalışır (bilinen sınır). `Ctrl+V` sistem panosunu okur (bkz. "Pano").
+
+## Sekmeler
+
+Çok belgeli editör (plan-parity T3, karar 8): her sekme kendi `EditorSession`'ını (tampon, imleç, kaydırma, geri alma, salt okunur nedeni) taşır (`tui::EditorTabs`). Kurallar GUI sekmeleriyle aynıdır (SPEC-gui "Sekmeler"); sıra, sınır, kalıcılık, komşu ve taşıma kararı ortak `app/tabs`'tadır.
+- **Sekme satırı** sağ panelin üst kenarında, kip etiketinden sonra (`EDIT │ a.md │ [b.md*] │ c.md`): etkin sekme köşeli parantezde, kirli sekmede `*`; sığmayanlar etkin sekme görünür kalacak şekilde `…` olur. Kenarda olduğu için panel içeriği kaymaz. Sekme varken REVIEW'da ve Listede de görünür.
+- **Açma:** `e`/`Enter`, `a`, `n`, eşleşmesiz Enter etkin sekmenin yerine açar; etkin sekme düzenlenmişse, yeni sekmede açılmışsa ya da yazılmış taslaksa yeni sekmede. Satır menüsü (sağ tık) ve palet `tab.open` seçili notu yeni sekmede açar. Başka sekmede açık not yinelenmez, o sekme öne gelir (imleci yerinde). `Ctrl+T` yeni sekmede boş taslak.
+- **Geçiş:** `Alt+N` / `Alt+P` (terminal geçirirse `Ctrl+PgDn` / `Ctrl+PgUp`) Listeden, REVIEW'dan ve editörden; editöre girer. Ayrılan sekmenin bekleyen düzenlemesi yalnız kendi notuna yazılır; kayıt olmazsa (çakışma sorusu, hata) geçiş olmaz. Taslak kaydedilmeden sekmesinde kalır. Editörde soru ya da girdi açıkken sekme değişmez. `Ctrl+K` editörde sekmeyi açık bırakıp arama girdisine geçer (GUI `Ctrl+K`); bekleyen düzenleme önce yazılır.
+- **Kapatma:** `Ctrl+W` mevcut akışla kapatır (temizse hemen, kirliyse Kaydet / At / Vazgeç), sonra sağdaki (yoksa soldaki) sekme editörde öne gelir. `Ctrl+Q` aynı akışla sekmeyi kapatıp Listeye döner; öteki sekmeler arka planda kalır.
+- **Senkron ve eylemler:** yeniden taramada her sekme kendi notunu denetler: temiz tampon yenilenir, notu silinen (senkronda yeniden adlandırılan dahil) temiz sekme `Sekme kapandı: '<yol>' artık yok` iletisiyle kapanır, kirli tampon mevcut akışta kalır (`Ctrl+S` yeni not yazar). Liste eylemiyle taşınan not ya da klasör (`F2`, `m`, `r`) sekmelerin yolunu taşır: sonraki kayıt yeni yola gider (GUI A5b). Liste eylemi notu silerse arka plandaki sekme aynı olayda kapanır.
+- **Sınır:** `limits.app.tabs` (0 = sınırsız, varsayılan; GUI ile ortak). Dolunca yeni sekme açılmaz: `En çok N sekme açılabilir` iletisi.
+- **Kalıcılık:** `tui-state.toml` sonunda `active_tab` ve `[[tabs]]` (`path`, `pinned`, `kept`): GUI `gui-state.toml` ile aynı anahtarlar. Taslak yazılmaz. Açılışta artık olmayan ya da yinelenen yol atlanır; açılış Listede kalır, sekmenin içeriği ilk etkinleşmede okunur.
+- **Çıkış:** her sekmenin kirli metni normal yoldan yazılır (taslak not olur; olmazsa geçici dosya, stderr'de).
+
+## Harita
+
+Paletteki `view.map` (plan-parity T4, karar 8) liste panelinde notları çizge olarak gösterir; `view.tree` / `view.details` listeye döner, çöp açılınca çöp listesi görünür. Oturumluktur. Model ve yerleşim GUI ile aynıdır (`app::MapModel`, `app::GraphLayout`; SPEC-gui "Harita"): aynı düğüm ve kenarlar, aynı kapsam, aynı okuma kuralı.
+- **Çizim:** FTXUI braille `Canvas` (hücre 2x4 nokta). Kenar çizgidir (ilişki mor, etiket kenarı soluk), düğüm nokta (rengi tipin ikon rengi), etiket tek nokta. Gösterilen not (etkin sekmenin notu, sekme yoksa seçili not) sarı halkalı ve sarı adlıdır, Tab'la seçilen not köşeli parantezde ve ters renktedir. Komşular yeterince açıkken tüm adlar, değilse yalnız gösterilen ve seçilen not; ad kısalır, başka adın üstüne binmez, kenarda içeri kayar. Ad güvenilmezdir: `terminal_safe`. Tuval dışına düşen kenar kırpılır. İlk satır kapsam ve tuşlardır; sınır aşıldıysa `{total} düğümden {shown}`.
+- **Kapsam:** varsayılan gösterilen notun çevresi, derinlik 2; `1`–`6` derinlik, `w` bütün çizge, `t` etiketler (GUI'deki onay kutuları ve kaydırıcı).
+- **Tuşlar (Liste odağında):** oklar kaydırır, `+` `-` yakınlaştırır (panel ortası yerinde), `0` sığdırır; kaydırma ya da yakınlaştırma kendiliğinden sığdırmayı kapatır, `0` ve çizgenin değişmesi yeniden açar. `Tab` / `Shift+Tab` notlar arasında seçer, `Enter` seçili notu sekme kuralıyla açar (SPEC-tui "Sekmeler"). Diğer liste tuşları (`/`, `:`, `q`, `<` `>` `z`) çalışır.
+- **Arama:** `/` ve `f` süzgeci (liste ile aynı ayrıştırıcı, `tag:` dahil) eşleşen notları renkli bırakır, gerisini soldurur; etiket eşleşen bir notunda yanar.
+- **Okuma ve CPU:** kenarlar yalnız harita görünürken ve taramada değişiklik görülünce tek okumayla gelir (yalnız ilişki değişse de); kare başına depo çağrısı yoktur. Yerleşim kare başına `TuiState::kMapIterationsPerFrame` (1) adım atar ve hareket sürdükçe kare ister; durunca kare üretilmez.
 
 ## Pano
 
@@ -583,8 +604,24 @@ TUI'de yalnız GUI'de olan özellikler (plan-parity T1, T2; karar 9 ve 10). Eşi
 - **ADDED** `links.toggle` (palet): REVIEW'un bağlantı bölümünü gizler/gösterir; gizliyken `b` soluktur. Oturumluk.
 - **ADDED** `view.tree` / `view.details` (palet): Ayrıntılar yalnız geçerli klasörün doğrudan çocuklarıdır (`app::Listing::folder_rows`), ağaç açık klasörlerle döner. Oturumluk.
 - **ADDED** `folder.new` (palet, klasör menüsü): `a` ad satırı `alt/` + `/` ile dolar, hedef GUI ile aynı kural (`app::new_note_folder`).
-- **ADDED** `export.pdf` (REVIEW `P`): alt satır `<ad>.pdf` önerir, göreli yol çalışma dizinine göredir (CLI gibi); PDF diskteki baytlardan `noteapp_pdf` ile üretilir. Var olan dosya yalnız aynı yola ikinci Enter'la ezilir; ikili not reddedilir.
-- **ADDED** Ayarlar: Kaydet'ten önce "Bağlantıyı test et" yuvası (GUI ile aynı akış: form uygulanır, yazılmış token kasaya, `enable`, işçide tek `sync_now`; config yazılmaz). Uzak adres uyuşmazlığı testte sorulmaz, neden sonuçta yazar; Kaydet sorar.
+- **ADDED** `export.pdf` (REVIEW `P`): alt satır `<ad>.pdf` önerir, göreli yol çalışma dizinine göredir (CLI gibi); PDF diskteki baytlardan `noteapp_pdf` ile üretilir. Var olan dosya (kırık bağ dahil: `symlink_status`) yalnız aynı yola ikinci Enter'la ezilir; ikili not reddedilir.
+- **ADDED** Ayarlar: Kaydet'ten önce "Bağlantıyı test et" yuvası (GUI ile aynı akış: form uygulanır, işçide `app::run_connection_test` = `enable` + tek `sync_now`; config ve kasa yazılmaz, yazılmış token Kaydet ya da Enter ile saklanır). Uzak adres uyuşmazlığı testte sorulmaz, neden sonuçta yazar; Kaydet sorar. Yazılmış token remote başka host'a dönünce silinir (başka sunucuya gitmez).
 - **ADDED** REVIEW'da `[[wiki]]`: Tab/Shift+Tab görünen bağlantılar arasında gezer, Enter ya da tıklama hedefi depo kuralıyla (`resolve_link`) çözüp notu REVIEW'da açar; hedefi olmayan bağlantı soluk çizilir ve "böyle not yok" denir. Satırı aşan (sarılmış biçimli satırda bölünen) bağlantı tanınmaz.
 - **ADDED** Liste satırına sağ tık: GUI'nin satır menüsündeki eylemler (not: taşı, çöpe, sil; klasör: yeni klasör, yeniden adlandır, çöpe) o satır için sınırlı palet olarak açılır; menü klavyeyle seçilir. "Yeni sekmede aç" sekmelerle (T3) gelir.
 - **FIXED** Klasörü kendi üst klasörüne yapıştırmak `InvalidPath` veriyordu; yank/yapıştır/taşı ve `a` adı artık GUI ile ortak `app::item_ops`'tadır, klasör yanına `-2` gelir.
+
+## Değişiklik 2026-11-04 (T3)
+
+- **ADDED** Editör sekmeleri (bkz. "Sekmeler"): `tab.new` `Ctrl+T`, `tab.close` `Ctrl+W`, `tab.next` `Alt+N`/`Ctrl+PgDn`, `tab.previous` `Alt+P`/`Ctrl+PgUp`, `tab.open` (satır menüsü, palet), editörde `Ctrl+K`. Eşitlik izin listesinden TUI'nin `tab.*` satırları çıktı. Neden: TUI–GUI eşitliği (karar 8).
+- **ADDED** `limits.app.tabs` (0 = sınırsız); GUI'nin sabit 32 sekme sınırı kalktı.
+
+## Değişiklik 2026-11-04 (T4)
+
+- **ADDED** Not haritası (bkz. "Harita"): `view.map` (palet), braille tuvali, derinlik / bütün çizge / etiket kapsamı, ok / `+` `-` `0` kamera, Tab ile seçim, Enter ile açma, aramada vurgu. Eşitlik izin listesinin TUI yarısı boşaldı. Neden: TUI–GUI eşitliği (karar 8).
+- **ADDED** `limits.app.map_nodes` (varsayılan 2.000, 0 = sınırsız): haritanın düğüm sınırı iki arayüzde aynı; GUI'nin sabit `kMaxMapNodes`'u kalktı.
+- **CHANGED** Yerleşim (`graph_layout`) ve harita modeli (`note_map`, `MapModel`) `src/gui`'den `src/app`'e taşındı; GUI aynı modeli çizer.
+
+## Değişiklik 2026-11-04 (dosya içe alma)
+
+- **ADDED** Palet `import` (Listede): altta dosya sistemi yolu girdisi (göreli yol çalışma dizinine göre; not tamamlaması yok), hedef `n` ile aynı klasör (`app::new_note_folder`). `Enter` `app::import_paths`'ten geçer (`note import` kuralı, SPEC-cli "Dosya içe alma"): özet alt satırda, ilk not REVIEW'da; hiçbir şey alınamazsa neden girdide kalır, `Esc` kapatır.
+- **ADDED** Komut satırı: `notes import YOL... [--folder K] [--name AD] [--overwrite]` TUI açılmadan önce raporu terminale yazar (CLI'nin satırları), sonra TUI'yi ilk notla REVIEW'da açar; hiçbir şey alınamazsa TUI açılmaz, çıkış 1; kullanım hatası 2. `notes --help` kısa kullanım. Argümansız açılış değişmedi.

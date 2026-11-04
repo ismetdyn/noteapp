@@ -45,6 +45,10 @@ inline constexpr GuiCommand kGuiCommands[] = {
     {"view.toggle", ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_V, CommandScope::Global,
      [](GuiState& s) { s.toggle_preview(); }},
     {"sync.now", ImGuiKey_F5, CommandScope::Global, [](GuiState& s) { s.sync_now(); }},
+    // Not içi bul (TUI editörü Ctrl+F, F3): bul satırı editörün altında; sonraki/önceki eşleşme.
+    {"find", ImGuiMod_Ctrl | ImGuiKey_F, CommandScope::Global, [](GuiState& s) { s.find_in_note(); }},
+    {"find.next", ImGuiKey_F3, CommandScope::Global, [](GuiState& s) { s.find_step(1); }},
+    {"find.previous", ImGuiMod_Shift | ImGuiKey_F3, CommandScope::Global, [](GuiState& s) { s.find_step(-1); }},
     // Arama: F(ind) her yerde, T(ag) seçici, R(un view) seçici.
     {"search.global", ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_F, CommandScope::Global,
      [](GuiState& s) { s.search_global(); }},
@@ -54,6 +58,14 @@ inline constexpr GuiCommand kGuiCommands[] = {
      [](GuiState& s) { s.open_picker(Picker::View); }},
     // Sekmeler: T(ab), W(indow) kapat; tarayıcı ve editörlerdeki yerleşik eşleşme.
     {"tab.new", ImGuiMod_Ctrl | ImGuiKey_T, CommandScope::Global, [](GuiState& s) { s.new_tab(); }},
+    // Satır menüsü ve palet; listede Ctrl+Enter aynı işi görür (view_browser).
+    {"tab.open", 0, CommandScope::Widget,
+     [](GuiState& s) {
+         if (const auto path = s.current_path()) {
+             s.open_in_new_tab(*path);
+             s.request_focus(FocusRequest::Editor);
+         }
+     }},
     {"tab.close", ImGuiMod_Ctrl | ImGuiKey_W, CommandScope::Global,
      [](GuiState& s) { s.close_active_tab(); }},
     {"tab.next", ImGuiMod_Ctrl | ImGuiKey_Tab, CommandScope::Global, [](GuiState& s) { s.next_tab(1); }},
@@ -70,6 +82,9 @@ inline constexpr GuiCommand kGuiCommands[] = {
     {"search.mode", ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_M, CommandScope::Global,
      [](GuiState& s) { s.toggle_search_mode(); }},
     {"folder.new", 0, CommandScope::Widget, [](GuiState& s) { s.new_folder(s.target_folder()); }},
+    // Palet ve araç çubuğu menüsü: dosya diyaloğu; klasör diyaloğu menünün ikinci satırıdır.
+    {"import", 0, CommandScope::Widget,
+     [](GuiState& s) { s.request_import(GuiState::ImportRequest::Files); }},
     {"rename", 0, CommandScope::Widget, [](GuiState& s) { s.rename_selected(); }},
     {"go.trash", 0, CommandScope::Widget, [](GuiState& s) { s.toggle_trash(); }},
     {"view.tree", 0, CommandScope::Widget, [](GuiState& s) { s.set_browser_view(BrowserView::Tree); }},

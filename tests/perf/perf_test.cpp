@@ -174,19 +174,22 @@ TEST_CASE("GUI: per-keystroke model update with 5000 notes within 50 ms") {
     CHECK(median(worst_per_run) <= 50.0);
 }
 
-// Plan riski: InputTextMultiline tamponu her karede işler. Tuş gecikmesi = karakter + kare (yazılımsal çizim,
-// en kötü durum). Sınır SPEC §10/3'ün tuş başına 50 ms'i; aşılırsa kullanıcıya sorulur, gizli çözüm eklenmez.
-TEST_CASE("GUI: typing in a 1 MB note stays within 50 ms per keystroke") {
+// G5a: editör EditorBuffer üstünde, yalnız görünen satırlar çizilir. Tuş gecikmesi = karakter + kare (yazılımsal
+// çizim, en kötü durum). Sınır SPEC §10/3 ve SPEC-tui'nin tuş başına 50 ms'i; aşılırsa kullanıcıya sorulur, gizli
+// çözüm eklenmez. 10 MiB tuning.max_note_bytes varsayılanıdır (düzenlenebilen en büyük not).
+namespace {
+
+void measure_gui_typing(std::size_t note_bytes, bool at_end, const char* label) {
     const test::TempDir home;
     const test::ScopedEnv home_env("NOTEAPP_HOME", test::utf8(home.path()));
     core::init_i18n("en");
     core::Config config = core::load_config().config;
     config.notes_dir = home.path() / "notes";
     fs::create_directories(config.notes_dir);
+    const std::string line = "satır çğıİöşü lorem ipsum dolor sit amet consectetur\n";
     std::string note;
-    constexpr std::size_t kNoteBytes = 1024 * 1024;
-    while (note.size() < kNoteBytes)
-        note += "satır çğıİöşü lorem ipsum dolor sit amet consectetur\n";
+    while (note.size() + line.size() <= note_bytes)
+        note += line;
     test::upsert_note(core::data_dir(), "big.txt", note);
 
     gui::GuiState state(config);
@@ -196,6 +199,8 @@ TEST_CASE("GUI: typing in a 1 MB note stays within 50 ms per keystroke") {
     for (int frame = 0; frame < 3; ++frame)
         (*view)->draw_frame();
     REQUIRE((*view)->editor_active());
+    if (at_end)
+        state.editor_key(tui::Key::CtrlEnd);
 
     std::vector<double> samples;
     for (int key = 0; key < 50; ++key) {
@@ -205,11 +210,23 @@ TEST_CASE("GUI: typing in a 1 MB note stays within 50 ms per keystroke") {
         }));
     }
     CHECK(state.dirty());
+    CHECK(state.buffer().size() == note.size() + samples.size());
     const double idle_frame = time_ms([&] { (*view)->draw_frame(); });
-    MESSAGE("GUI 1 MB note: keystroke median " << median(samples) << " ms, worst "
-                                               << *std::ranges::max_element(samples) << " ms, plain frame "
-                                               << idle_frame << " ms");
+    MESSAGE("GUI " << std::string(label) << ": keystroke median " << median(samples) << " ms, worst "
+                    << *std::ranges::max_element(samples) << " ms, plain frame " << idle_frame << " ms");
     CHECK(median(samples) <= 50.0);
+}
+
+}  // namespace
+
+TEST_CASE("GUI: typing in a 1 MB note stays within 50 ms per keystroke") {
+    measure_gui_typing(std::size_t{1024} * 1024, false, "1 MB note");
+}
+
+TEST_CASE("GUI: typing at either end of a 10 MiB note stays within 50 ms per keystroke") {
+    constexpr std::size_t kTenMiB = std::size_t{10} * 1024 * 1024;
+    measure_gui_typing(kTenMiB, false, "10 MiB note, start");
+    measure_gui_typing(kTenMiB, true, "10 MiB note, end");
 }
 #endif
 

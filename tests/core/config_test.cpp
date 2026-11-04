@@ -938,6 +938,31 @@ TEST_CASE("limits.app.trash_undo_steps defaults to 0 (unlimited) and takes a cou
     CHECK(has_warning_about(bytes, "limits.app.trash_undo_steps", "config.invalid_value"));
 }
 
+// app.tabs ve app.map_nodes yalnız app/arayüz testlerindeydi; anahtar ekleme kuralının (4) config testi.
+TEST_CASE("limits.app.tabs defaults to 0 (unlimited), limits.app.map_nodes to 2000; both take a count only") {
+    const LoadedConfig defaults = parse_config("");
+    CHECK(defaults.config.limits.app.tabs.unlimited());
+    CHECK(defaults.config.limits.app.map_nodes == Limit{2000, "2000"});
+
+    const LoadedConfig set = parse_config("[limits.app]\ntabs = 8\nmap_nodes = 0\n");
+    CHECK(set.warnings.empty());
+    CHECK(set.config.limits.app.tabs == Limit{8, "8"});
+    CHECK(set.config.limits.app.map_nodes.unlimited());
+
+    const LoadedConfig bad = parse_config("[limits.app]\ntabs = \"5MiB\"\nmap_nodes = -1\n");
+    CHECK(bad.config.limits.app.tabs.unlimited());
+    CHECK(bad.config.limits.app.map_nodes == Limit{2000, "2000"});
+    CHECK(has_warning_about(bad, "limits.app.tabs", "config.invalid_value"));
+    CHECK(has_warning_about(bad, "limits.app.map_nodes", "config.invalid_value"));
+
+    Config config = defaults.config;
+    REQUIRE(set_config_value(config, "limits.app.tabs", "3"));
+    REQUIRE(set_config_value(config, "limits.app.map_nodes", "0"));
+    CHECK(config.limits.app.tabs == Limit{3, "3"});
+    CHECK(config.limits.app.map_nodes.unlimited());
+    CHECK_FALSE(set_config_value(config, "limits.app.tabs", "2s"));
+}
+
 TEST_CASE("an invalid [limits] value warns through the config path and keeps the default") {
     for (const std::string value : {"-1", "\"lots\"", "\"5MiB\"", "true", "1.5"}) {
         CAPTURE(value);
@@ -1003,20 +1028,22 @@ TEST_CASE("limits.graph, limits.query and limits.view default to today's values 
     CHECK(defaults.graph.peers == Limit{256, "256"});
     CHECK(defaults.graph.hlc_skew == Limit{24U * 60U * 60U * 1000U, "24h"});
     CHECK(defaults.graph.import_line_bytes == Limit{128U * 1024U * 1024U, "128MiB"});
+    CHECK(defaults.graph.import_line_values == Limit{100000, "100000"});
     CHECK(defaults.query.rows == Limit{100000, "100000"});
     CHECK(defaults.query.duration == Limit{5000, "5s"});
     CHECK(defaults.query.text == Limit{64U * 1024U, "64KiB"});
     CHECK(defaults.view == defaults.query);  // görünüm profili korumalı kalır: bugünkü değerler
 
-    const LoadedConfig set =
-        parse_config("[limits.graph]\nframe_ops = 10\nset_aside_logs = 0\ngroup_bytes = 0\n"
-                     "[limits.query]\nrows = 0\nduration = \"2min\"\n"
-                     "[limits.view]\nrows = 3\nmemory = \"1MiB\"\n");
+    const LoadedConfig set = parse_config(
+        "[limits.graph]\nframe_ops = 10\nset_aside_logs = 0\ngroup_bytes = 0\nimport_line_values = 0\n"
+        "[limits.query]\nrows = 0\nduration = \"2min\"\n"
+        "[limits.view]\nrows = 3\nmemory = \"1MiB\"\n");
     INFO((set.warnings.empty() ? std::string() : set.warnings.front().message_key));
     CHECK(set.warnings.empty());
     CHECK(set.config.limits.graph.frame_ops == Limit{10, "10"});
     CHECK(set.config.limits.graph.set_aside_logs.unlimited());
     CHECK(set.config.limits.graph.group_bytes.unlimited());
+    CHECK(set.config.limits.graph.import_line_values.unlimited());
     CHECK(set.config.limits.query.rows.unlimited());
     CHECK(set.config.limits.query.duration.value == 120000);
     CHECK(set.config.limits.view.rows == Limit{3, "3"});

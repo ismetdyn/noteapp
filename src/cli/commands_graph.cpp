@@ -626,7 +626,8 @@ public:
         : store_(store), db_(std::move(db)), overwrite_(overwrite),
           max_ops_(config.tuning.graph_batch_ops),
           max_bytes_(store.max_frame_bytes() / 2),
-          max_line_bytes_(config.limits.graph.import_line_bytes.cap()) {}
+          max_line_bytes_(config.limits.graph.import_line_bytes.cap()),
+          max_line_values_(config.limits.graph.import_line_values.cap()) {}
 
     // Çıkış kodu: dosya sonuna kadar her şey yolundaysa nullopt.
     std::optional<int> run(std::istream& input) {
@@ -668,7 +669,7 @@ private:
     std::optional<int> apply_line(ImportBatch& batch, const std::string& line) {
         if (line.empty())
             return std::nullopt;
-        const auto parsed = JsonParser(line).parse();
+        const auto parsed = JsonParser(line, {.max_values = max_line_values_}).parse();
         if (!parsed || parsed->kind != Json::Kind::Object)
             return bad_line(line_number_, "not_json");
         const std::string* kind = text_field(*parsed, "k");
@@ -700,6 +701,7 @@ private:
     std::size_t max_ops_;
     std::size_t max_bytes_;
     std::size_t max_line_bytes_;
+    std::size_t max_line_values_;
     std::size_t refused_ = 0;
     std::size_t line_number_ = 0;
     std::size_t nodes_ = 0;

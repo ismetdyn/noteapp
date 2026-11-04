@@ -8,6 +8,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <unordered_set>
 #include <utility>
 
 namespace noteapp::tui {
@@ -183,6 +184,7 @@ void TuiState::set_folders(std::vector<std::string> folders) {
 
 // Üst veri yeniden kuruldu: tamamlama kaynakları ve gitmiş öğelerin işaretleri eskidi.
 void TuiState::notes_changed() {
+    map_.edges_changed();  // harita görünürse sonraki çizimde bir kez okunur
     input_sources_.reset();
     relative_sources_.reset();
     prune_marks();
@@ -237,7 +239,159 @@ std::vector<Row> TuiState::rows_in_folder() {
 
 void TuiState::set_details_view(bool details) {
     details_view_ = details;
+    map_view_ = false;
     refilter(false);
+}
+
+void TuiState::set_map_view(bool map) {
+    map_view_ = map;
+}
+
+namespace {
+
+// Harita tuşları (SPEC-tui "Harita"). Adım hücre cinsindendir: kaydırma her boyutta aynı hissettirir.
+constexpr float kMapPanCells = 4.0F;
+constexpr float kMapZoomStep = 1.25F;
+constexpr float kMapMinZoom = 0.0005F;  // 2.000 düğümlük çizge en küçük panelde de sığar
+constexpr float kMapMaxZoom = 2.0F;     // birim başına nokta: ideal kenar 200 nokta (100 hücre)
+constexpr int kMapStatusRows = 1;       // kapsam satırı
+
+}  // namespace
+
+void TuiState::update_map(const app::MapModel::EdgeReader& read,
+                          const std::optional<core::NotePath>& center) {
+    if (!map_view())
+        return;  // görünmeyen harita depoyu okumaz
+    map_.update(read, listing_.metas(), center);
+    if (map_.generation() != map_fitted_generation_) {
+        map_fitted_generation_ = map_.generation();
+        map_camera_.reset();  // çizge değişti: yeni düğümler görünsün (GUI gibi)
+    }
+    // Arama süzgeci listeyle aynıdır: süzgeçten geçen notlar yanar. Sürüm listenin her kuruluşunda artar.
+    map_.refresh_matches(!query().empty(), work_.rebuilds, [this] {
+        std::unordered_set<std::string> listed;
+        for (const Row& row : rows_)
+            if (!row.is_folder)
+                listed.insert(row.path.string());
+        return listed;
+    });
+}
+
+bool TuiState::step_map() {
+    return map_view() && map_.layout().step(kMapIterationsPerFrame);
+}
+
+std::pair<int, int> TuiState::map_cells() const {
+    const int width = layout_.geometry(window_width_, false).list_width - 2;  // panel kenarı
+    return {std::max(width, 1), std::max(pane_rows() - kMapStatusRows, 1)};
+}
+
+MapCamera TuiState::map_camera() const {
+    if (map_camera_)
+        return *map_camera_;
+    const auto [columns, rows] = map_cells();
+    return fit_map_camera(map_.layout().positions(), columns * kMapDotsPerCellX, rows * kMapDotsPerCellY);
+}
+
+void TuiState::pan_map(float dx, float dy) {
+    MapCamera camera = map_camera();
+    camera.x -= dx * kMapPanCells * kMapDotsPerCellX;
+    camera.y -= dy * kMapPanCells * kMapDotsPerCellY;
+    map_camera_ = camera;
+}
+
+// Panelin ortası yerinde kalır.
+void TuiState::zoom_map(float factor) {
+    MapCamera camera = map_camera();
+    const auto [columns, rows] = map_cells();
+    const float cx = static_cast<float>(columns * kMapDotsPerCellX) / 2.0F;
+    const float cy = static_cast<float>(rows * kMapDotsPerCellY) / 2.0F;
+    const float zoom = std::clamp(camera.zoom * factor, kMapMinZoom, kMapMaxZoom);
+    camera.x = cx - (cx - camera.x) * (zoom / camera.zoom);
+    camera.y = cy - (cy - camera.y) * (zoom / camera.zoom);
+    camera.zoom = zoom;
+    map_camera_ = camera;
+}
+
+std::optional<core::NotePath> TuiState::map_selected() const {
+    if (map_selected_.empty())
+        return std::nullopt;
+    const auto& nodes = map_.map().nodes;
+    const bool shown = std::ranges::any_of(nodes, [&](const app::MapNode& node) {
+        return node.kind == app::MapNodeKind::Note && node.key == map_selected_;
+    });
+    if (!shown)
+        return std::nullopt;
+    auto path = core::NotePath::parse(map_selected_);
+    return path ? std::optional(std::move(*path)) : std::nullopt;
+}
+
+// Tab yalnız notlar arasında gezer (etiket açılmaz); sıra haritanınkidir, sondan başa döner.
+void TuiState::step_map_selection(int delta) {
+    std::vector<const std::string*> notes;
+    for (const app::MapNode& node : map_.map().nodes)
+        if (node.kind == app::MapNodeKind::Note)
+            notes.push_back(&node.key);
+    if (notes.empty())
+        return;
+    const auto current =
+        std::ranges::find_if(notes, [&](const std::string* key) { return *key == map_selected_; });
+    std::size_t index = 0;
+    if (current != notes.end())
+        index = app::cycled_tab(static_cast<std::size_t>(current - notes.begin()), delta, notes.size());
+    else if (delta < 0)
+        index = notes.size() - 1;
+    map_selected_ = *notes[index];
+}
+
+// Harita odaktayken (Liste): oklar kaydırır, `+` `-` yakınlaştırır, `0` sığdırır, Tab/Shift+Tab not seçer,
+// Enter seçileni açar, `w` bütün çizge, `t` etiketler, `1`-`6` derinlik. Diğer tuşlar tabloya düşer.
+std::optional<Intent> TuiState::handle_map_key(Key key, std::string_view text) {
+    switch (key) {
+    case Key::Left:
+        pan_map(-1.0F, 0.0F);
+        return Intent::None;
+    case Key::Right:
+        pan_map(1.0F, 0.0F);
+        return Intent::None;
+    case Key::Up:
+        pan_map(0.0F, -1.0F);
+        return Intent::None;
+    case Key::Down:
+        pan_map(0.0F, 1.0F);
+        return Intent::None;
+    case Key::Tab:
+        step_map_selection(1);
+        return Intent::None;
+    case Key::ShiftTab:
+        step_map_selection(-1);
+        return Intent::None;
+    case Key::Enter:
+        return map_selected() ? Intent::OpenMapNode : Intent::None;
+    case Key::Char:
+        break;
+    default:
+        return std::nullopt;
+    }
+    app::MapOptions options = map_.options();
+    if (text == "+" || text == "=") {
+        zoom_map(kMapZoomStep);
+    } else if (text == "-") {
+        zoom_map(1.0F / kMapZoomStep);
+    } else if (text == "0") {
+        map_camera_.reset();
+    } else if (text == "w") {
+        options.whole_graph = !options.whole_graph;
+    } else if (text == "t") {
+        options.show_tags = !options.show_tags;
+    } else if (text.size() == 1 && text[0] >= '0' + app::MapOptions::kMinDepth &&
+               text[0] <= '0' + app::MapOptions::kMaxDepth) {
+        options.depth = text[0] - '0';
+    } else {
+        return std::nullopt;
+    }
+    map_.set_options(options);
+    return Intent::None;
 }
 
 std::string TuiState::name_prefix_for(std::string_view folder) const {
@@ -350,6 +504,13 @@ void TuiState::leave_trash() {
 }
 
 // Elle düzenlenmiş dosyadaki uzun son komut listesi de sınıra iner.
+void TuiState::set_saved_tabs(app::SavedTabs tabs) {
+    if (tabs == prefs_.tabs)
+        return;
+    prefs_.tabs = std::move(tabs);
+    prefs_changed_ = true;
+}
+
 void TuiState::set_list_prefs(const ListPrefs& prefs) {
     prefs_ = prefs;
     if (prefs_.recent_commands.size() > recent_commands_limit_.cap())
@@ -959,10 +1120,14 @@ void TuiState::scroll_preview(int delta) {
 
 Intent TuiState::handle(Key key, std::string_view text) {
     preview_selection_.reset();
-    // Editörde her tuş metne aittir (Ctrl-C kopyalar, F2 kaydedilmemiş metni sorar); yalnız yardım araya
-    // girer.
-    if (focus_ == Focus::Editor)
-        return key == Key::F1 ? Intent::ShowHelp : Intent::EditorKey;
+    // Editörde her tuş metne aittir (Ctrl-C kopyalar, F2 kaydedilmemiş metni sorar); yalnız yardım ve
+    // tablonun editör satırları (sekmeler, Ctrl+K) araya girer. Harf hiçbir zaman: metne gider.
+    if (focus_ == Focus::Editor) {
+        if (key == Key::F1)
+            return Intent::ShowHelp;
+        const Command* command = key == Key::Char ? nullptr : bound_command(kInEditor, key, {});
+        return command ? command->run(*this) : Intent::EditorKey;
+    }
     const bool prefixed = std::exchange(awaiting_prefix_, false);
     if (const auto intent = app_intent(key)) {
         palette_.reset();
@@ -980,6 +1145,9 @@ Intent TuiState::handle(Key key, std::string_view text) {
 }
 
 Intent TuiState::handle_focused(Key key, std::string_view text) {
+    if (focus_ == Focus::List && map_view())
+        if (const auto intent = handle_map_key(key, text))
+            return *intent;
     if (const auto intent = handle_command_key(key, text))
         return *intent;
     if (trash_view_)

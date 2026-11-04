@@ -1,21 +1,23 @@
 // T84: haritanın saf birimleri. Yerleşim (GraphLayout) ve kapsam (build_note_map) ImGui ve depo bilmez.
-#include "gui/graph_layout.hpp"
-#include "gui/note_map.hpp"
+#include "app/graph_layout.hpp"
+#include "app/note_map.hpp"
+#include "core/config.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <doctest/doctest.h>
+#include <expected>
 #include <limits>
 #include <set>
 #include <string>
 #include <vector>
 
-using noteapp::gui::GraphLayout;
-using noteapp::gui::LayoutPoint;
-using noteapp::gui::MapEdgeKind;
-using noteapp::gui::MapNodeKind;
-using noteapp::gui::MapOptions;
+using noteapp::app::GraphLayout;
+using noteapp::app::LayoutPoint;
+using noteapp::app::MapEdgeKind;
+using noteapp::app::MapNodeKind;
+using noteapp::app::MapOptions;
 
 namespace core = noteapp::core;
 
@@ -176,7 +178,7 @@ core::NoteEdge link(const std::string& from, const std::string& to,
     return {core::NotePath::parse(from).value(), core::NotePath::parse(to).value(), kind};
 }
 
-std::set<std::string> keys_of(const noteapp::gui::NoteMap& map) {
+std::set<std::string> keys_of(const noteapp::app::NoteMap& map) {
     std::set<std::string> keys;
     for (const auto& node : map.nodes)
         keys.insert((node.kind == MapNodeKind::Tag ? "#" : "") + node.key);
@@ -207,7 +209,7 @@ TEST_CASE("note map: the neighbourhood follows links both ways up to the depth")
     CHECK_FALSE(two.capped());
     CHECK(two.edges.size() == 4);
     const auto related = std::ranges::count_if(
-        two.edges, [](const noteapp::gui::MapEdge& edge) { return edge.kind == MapEdgeKind::Related; });
+        two.edges, [](const noteapp::app::MapEdge& edge) { return edge.kind == MapEdgeKind::Related; });
     CHECK(related == 1);
 }
 
@@ -251,7 +253,7 @@ TEST_CASE("note map: tags are optional nodes and do not widen the neighbourhood"
     options.show_tags = true;
     const auto tagged = build_note_map(notes, edges, center, options);
     CHECK(keys_of(tagged) == std::set<std::string>{"a.md", "b.md", "#proje", "#iş"});
-    CHECK(std::ranges::count_if(tagged.edges, [](const noteapp::gui::MapEdge& edge) {
+    CHECK(std::ranges::count_if(tagged.edges, [](const noteapp::app::MapEdge& edge) {
               return edge.kind == MapEdgeKind::Tag;
           }) == 3);
     // Sınır önce notlara: etiket yer kalırsa girer.
@@ -259,4 +261,24 @@ TEST_CASE("note map: tags are optional nodes and do not widen the neighbourhood"
     CHECK(tight.nodes.size() == 3);
     CHECK(tight.capped());
     CHECK(tight.total == 4);
+}
+
+// Sabit tavan yok: düğüm sınırı limits.app.map_nodes (0 = sınırsız, varsayılan 2.000); iki arayüz aynı model.
+TEST_CASE("note map: the node cap is limits.app.map_nodes and 0 is unlimited") {
+    CHECK(core::parse_config("").config.limits.app.map_nodes == core::Limit{2000, "2000"});
+    CHECK(core::parse_config("[limits.app]\nmap_nodes = 0\n").config.limits.app.map_nodes.unlimited());
+    const Chain chain;
+    const auto edges = [&]() -> std::expected<std::vector<core::NoteEdge>, core::Error> {
+        return chain.edges;
+    };
+    noteapp::app::MapModel model;
+    model.set_options(MapOptions{.whole_graph = true});
+    model.set_node_limit(core::Limit{3, "3"});
+    model.update(edges, chain.notes, std::nullopt);
+    CHECK(model.map().nodes.size() == 3);
+    CHECK(model.map().capped());
+    model.set_node_limit(core::Limit{});
+    model.update(edges, chain.notes, std::nullopt);
+    CHECK(model.map().nodes.size() == 6);
+    CHECK_FALSE(model.map().capped());
 }
