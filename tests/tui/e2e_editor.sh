@@ -130,14 +130,15 @@ editor_clean() {
     grep -qF -- "Ctrl+S save" <<<"$shown" && ! grep -qF -- " *" <<<"$shown"
 }
 no_notes() { [[ "$(note_tool count)" == 0 ]]; }
-# Liste odağında sol panel kalın çerçevelidir: üst kenarda sağ köşeye dek karakter sayısı = sol panel genişliği
-# (kip etiketi kenarın üstünde olduğundan ━ saymak yetmez).
+# Üst kenarda sol panelin sağ köşesine (ilk ╮) dek karakter sayısı = sol panel genişliği
+# (kip etiketi kenarın üstünde olduğundan ─ saymak yetmez).
 list_width() {
     local LC_ALL=C.UTF-8 top
     top="$(screen | sed -n 2p)"
-    top="${top%%┓*}"
+    top="${top%%╮*}"
     echo $((${#top} + 1))
 }
+one_pane() { [[ "$(screen | sed -n 2p | grep -o '╭' | wc -l)" == 1 ]]; }
 width_is() { [[ "$(list_width)" == "$1" ]]; }
 mouse_press() { literal $'\e'"[<$1;$2;$3M"; }
 mouse_release() { literal $'\e'"[<$1;$2;$3m"; }
@@ -386,7 +387,7 @@ sleep 0.3
 check "< narrows by 5" width_is 35
 keys z
 sleep 0.3
-check "z hides the right pane" screen_lacks "┌"
+check "z hides the right pane" one_pane
 keys z
 sleep 0.3
 check "z again brings it back" width_is 35
@@ -559,7 +560,7 @@ sleep 0.3
 check "a click lands on the text cell, the gutter is not text" cursor_at 46 2
 keys C-q
 wait_screen "← list"
-check "REVIEW has no gutter" screen_has "┃birinci"
+check "REVIEW has no gutter" screen_has "│birinci"
 check "REVIEW has no tilde" screen_lacks "~"
 check "REVIEW hides the terminal cursor" test "$(tmux display-message -p -t "$session" '#{cursor_flag}')" = 0
 keys q
@@ -1024,8 +1025,8 @@ start_app
 keys a
 wait_screen "Enter oluştur"
 literal 'deneme.cpp'
-check "a: the name row is the first row of the list pane" bar_has 3 "┃ " "+ deneme.cpp▏"
-check "a: the row number column stays aligned" bar_has 4 "┃ 1   ilk.md"
+check "a: the name row is the first row of the list pane" bar_has 3 "│ " "+ deneme.cpp▏"
+check "a: the row number column stays aligned" bar_has 4 "│ 1   ilk.md"
 check "a: the bottom line holds no input" test "$(bottom_line 30 | grep -c deneme)" = 0
 check "a: nothing is created while typing" test "$(note_tool count)" = 1
 keys Escape
@@ -1090,7 +1091,7 @@ keys Enter
 sleep 0.3
 check "a: a taken name keeps the row open with the text" screen_has "+ yalin.md▏"
 check "a: a taken name is an inline error, not -2" screen_lacks "yalin-2.md"
-check "a: the error is in the list pane" bar_has 4 "┃Zaten"
+check "a: the error is in the list pane" bar_has 4 "│Zaten"
 keys Escape
 sleep 0.2
 keys a
@@ -1109,7 +1110,7 @@ keys Enter
 wait_screen "> ilk"
 keys a
 wait_screen "Enter oluştur"
-check "a: the row is visible under an active filter" bar_has 3 "┃ " "+ "
+check "a: the row is visible under an active filter" bar_has 3 "│ " "+ "
 literal 'filtre-disi.md'
 keys Enter
 wait_screen " DÜZENLE "

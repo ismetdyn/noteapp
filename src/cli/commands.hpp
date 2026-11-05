@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cli/args.hpp"
+#include "cli/term.hpp"
 #include "core/config.hpp"
 #include "core/note_store.hpp"
 #include "graph/query.hpp"
@@ -8,6 +9,7 @@
 #include <expected>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -59,14 +61,19 @@ int run_invalid(const ParsedArgs& args);
 // Hatayı stderr'e yazar ve türünden çıkış kodunu döner: geçersiz yol/ad 2, bulunamadı/çakışma 1, kalanı 3.
 int fail(const core::Error& error);
 
+// Kullanım hataları (çıkış 2, SPEC-cli "Hata biçimi"): ilk satır bugünkü mesajdır (betikler onu arar), ardından
+// en çok iki girintili ipucu satırı: yakın sözcük önerisi ve `note help KOMUT`. `command` "" = hızlı ekleme.
+int usage_error(std::string_view command);  // `cli.<command>_usage`
+int unknown_option_error(std::string_view command, const std::string& option);
+int missing_value_error(std::string_view command, const std::string& option);
+// Ortak ipucu satırları: varsa "did you mean", sonra `note help KOMUT` (command "" ise `note --help`).
+void print_hints(std::string_view command, std::optional<std::string_view> guess);
+
 // show/edit/export'un ortak "en iyi eşleşme" kuralı (commands.cpp); eşleşme yoksa mesajı yazıp çıkış kodunu
 // döner.
 // max_candidate: limits.search.fuzzy_candidate_chars (sınırsız SIZE_MAX).
 std::expected<core::NoteInfo, int> pick_best_note(const core::NoteStore& store, const std::string& query,
                                                   std::size_t max_candidate);
-
-// stdin gerçek bir terminal mi (Windows'ta NUL aygıtı TTY sayılmaz).
-bool stdin_is_tty();
 
 // `note config list` anahtarları: ayar ekranlarınınkiler ve [limits] (yalnız dosya ve CLI).
 std::vector<std::pair<std::string, std::string>> all_entries(const core::Config& config);

@@ -225,7 +225,7 @@ TEST_CASE("a disabled or empty lsp config starts nothing and creates no workspac
         editor.open("a.py", "import os\n");
         editor.session.handle(Key::Char, "x");
         for (int i = 0; i < 20; ++i) {
-            CHECK_FALSE(editor.update().wants_frame);
+            CHECK_FALSE(editor.update().send_at.has_value());
             std::this_thread::sleep_for(10ms);
         }
         CHECK(editor.servers->started_clients() == 0);
@@ -264,14 +264,19 @@ TEST_CASE("typing sends the full text after the idle debounce with a growing ver
     Editor editor(fake_servers("normal"));
     editor.open("a.py", "abc\n");
     REQUIRE(editor.pump_until([&] { return !editor.session.diagnostics().empty(); }));
+    const auto typed = std::chrono::steady_clock::now();
     editor.session.handle(Key::Char, "x");
-    CHECK(editor.update().wants_frame);  // boşta süre dolmadı: çizim tekrar istenir
+    // Boşta süre dolmadı: gönderim anı bildirilir (yazıştan 50 ms sonra), arayüz o ana dek uyuyabilir.
+    const auto send_at = editor.update().send_at;
+    REQUIRE(send_at.has_value());
+    CHECK(*send_at >= typed + 50ms);
+    CHECK(*send_at <= std::chrono::steady_clock::now() + 50ms);
     editor.session.handle(Key::Char, "y");
     REQUIRE(editor.pump_until([&] {
         const auto marks = editor.session.diagnostics();
         return !marks.empty() && marks.front().message.starts_with("count=2 text=xyabc");
     }));
-    CHECK_FALSE(editor.update().wants_frame);
+    CHECK_FALSE(editor.update().send_at.has_value());
 }
 
 TEST_CASE("escape and bidi characters in a server message never reach the terminal") {

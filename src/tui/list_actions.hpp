@@ -120,6 +120,8 @@ private:
                                                  const std::filesystem::path& output) const;
     void begin_unlink(std::optional<ConfirmState>& confirm);
     void finish_unlink();
+    // Haritada kenar kur ya da kaldır (TuiState::take_map_edit, app::map_relations); sonuç durum satırında.
+    void apply_map_edit();
     void create_folder_from_row(std::optional<NewRowState>& row);
     void submit_folder_rename(std::optional<RenameState>& rename, const std::string& target);
     void trash_folder(const std::string& folder, const app::Prompts& prompts);

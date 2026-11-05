@@ -85,6 +85,7 @@ enum class Intent {
     TabOpenSelected,  // satır menüsü / palet: seçili not yeni sekmede
     ParkEditor,       // Ctrl+K (editör): sekme açık kalır, arama girdisine geçilir
     OpenMapNode,      // haritada Tab ile seçilen not açılır (map_selected)
+    MapEdit,          // haritada kenar kur ya da kaldır (take_map_edit; app::map_relations)
     ImportFiles,      // palet `import`: altta dosya sistemi yolu girdisi, hedef app::new_note_folder
 };
 
@@ -181,8 +182,8 @@ public:
     void set_view_lookup(search::ViewLookup views) { listing_.set_view_lookup(std::move(views)); }
     void set_fuzzy_candidate_chars(std::size_t chars) { listing_.set_fuzzy_candidate_chars(chars); }
     void set_views(std::vector<std::string> names);
-    // İşçiden gelen senkron durumları (UI iş parçacığında): yeniden taramada da korunur.
-    void set_sync_states(std::map<core::NotePath, core::SyncState> states);
+    // İşçiden gelen senkron durumları (UI iş parçacığında): yeniden taramada da korunur. Değiştiyse true.
+    bool set_sync_states(std::map<core::NotePath, core::SyncState> states);
     std::span<const core::NoteMeta> metas() const { return listing_.metas(); }
     // Boş klasörler de görünsün diye deponun klasör listesi; notlardan türeyenlerle birleşir.
     void set_folders(std::vector<std::string> folders);
@@ -220,6 +221,36 @@ public:
     // Tab ile seçilen not; yoksa ya da haritadan çıktıysa nullopt.
     std::optional<core::NotePath> map_selected() const;
     const std::string& map_selected_key() const { return map_selected_; }
+
+    // --- Haritada ilişki kurma (MAP-R; kural app::map_relations, GUI'nin Shift+sürüklemesi ile aynı) ---
+    // `C` (connect) seçili nottan (yoksa gösterilen nottan) başlar; fareyle sağ sürükleme (terminal geçirirse
+    // Shift+sol da) düğümden düğüme. Tab/Shift+Tab hedefi seçer (not ya da etiket), Enter kurar: not → not
+    // `r` ilişki / `l` bağlantı sorar, not ↔ etiket etiketi ekler. `d` aradaki kenarı kaldırır (kenara sağ
+    // tık o kenarı seçer), Esc vazgeçer. Diğer harita tuşları sürer.
+    struct MapLink {
+        app::MapNode source;
+        std::optional<app::MapNode> target;
+        std::optional<app::MapEdgeKind> edge;                    // kenara sağ tık: kaldırılacak kenarın türü
+        bool choosing = false;                                   // not → not: `r` / `l` bekleniyor
+        std::optional<std::pair<int, int>> drag = std::nullopt;  // fare sürüklüyor: işaretçinin tuval noktası
+    };
+    const std::optional<MapLink>& map_link() const { return map_link_; }
+    // Intent::MapEdit'in işi; `kind` boşsa iki düğüm arasında kenar yok (ileti).
+    struct MapEditRequest {
+        app::MapNode from;
+        app::MapNode to;
+        std::optional<app::MapEdgeKind> kind;
+        bool connect = true;
+    };
+    std::optional<MapEditRequest> take_map_edit() { return std::exchange(map_edit_, std::nullopt); }
+    // Fare: tuvalin hücresi (liste panelinin içi, kapsam satırının altı). Düğümün satırında iki yanındaki
+    // ikişer hücre de sayılır: braille noktası tek hücreden küçüktür, en yakın düğüm kazanır.
+    std::optional<std::size_t> map_node_at(int column, int row) const;
+    bool begin_map_drag(int column, int row);  // düğümdeyse sürükleme başlar
+    void move_map_drag(int column, int row);
+    Intent end_map_drag(int column, int row);
+    bool map_dragging() const { return map_link_ && map_link_->drag; }
+    void open_map_edge(int column, int row);  // kenara sağ tık: o kenar seçilir, `d` kaldırır
     void enter_folder(std::string folder);
     // Ata klasöre dönüşte çıkılan yolun çocuğu seçili kalır; kök üstü yoktur.
     void go_to_folder(std::string folder);
@@ -450,6 +481,13 @@ private:
     };
     std::optional<Intent> handle_command_key(Key key, std::string_view text);
     std::optional<Intent> handle_map_key(Key key, std::string_view text);
+    std::optional<Intent> handle_map_link_key(Key key, std::string_view text);
+    void begin_map_link();
+    void step_map_target(int delta);
+    Intent confirm_map_link();
+    Intent request_map_edit(std::optional<app::MapEdgeKind> kind, bool connect);
+    // Hücrenin ortası, yerleşim biriminde.
+    std::optional<app::LayoutPoint> map_point(int column, int row) const;
     void pan_map(float dx, float dy);
     void zoom_map(float factor);
     void step_map_selection(int delta);
@@ -559,8 +597,10 @@ private:
     app::MapModel map_;
     std::optional<MapCamera> map_camera_;  // boş: sığdırılmış; kaydırma ya da yakınlaştırma doldurur
     std::size_t map_fitted_generation_ = 0;
-    std::string map_selected_;               // Tab ile seçilen notun yolu
-    std::optional<std::string> saved_spot_;  // düz listeye geçerken klasördeki seçim; dönüşte geri gelir
+    std::string map_selected_;                // Tab ile seçilen notun yolu
+    std::optional<MapLink> map_link_;         // `C` kipi ya da fareyle sürükleme
+    std::optional<MapEditRequest> map_edit_;  // Intent::MapEdit bekleyen iş
+    std::optional<std::string> saved_spot_;   // düz listeye geçerken klasördeki seçim; dönüşte geri gelir
     mutable SharedInputSources relative_sources_;
     mutable std::string relative_sources_folder_;
     std::optional<std::size_t> last_click_row_;

@@ -62,8 +62,10 @@ void View::draw_right_pane() {
 // düzenlenir).
 void View::draw_trash_preview() {
     const int row = state_.trash_row();
-    ImGui::BeginChild("##trash_preview", ImVec2(0.0F, 0.0F), ImGuiChildFlags_Borders,
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::current().canvas);  // zemin Begin'de çizilir
+    ImGui::BeginChild("##trash_preview", ImVec2(0.0F, 0.0F), theme::kPaneChildFlags,
                       ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::PopStyleColor();
     if (row >= 0) {
         const core::TrashItem& item = state_.trash_items()[static_cast<std::size_t>(row)];
         ImGui::TextDisabled("%s", printable(item.path.string()).c_str());
@@ -222,7 +224,7 @@ void View::draw_header_row() {
     draw_fitted_text("header", state_.header(), header_width, keep_end);
     if (!hidden_badge.empty()) {
         ImGui::SameLine();
-        ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::current().danger);
         draw_fitted_text("hidden_controls", hidden_badge, badge_width - spacing, keep_start);
         ImGui::PopStyleColor();
         ImGui::SetItemTooltip("%s", core::tr("gui.hidden_controls_tip").c_str());
@@ -271,7 +273,10 @@ void View::draw_preview(float reserved_height) {
     size.y -= reserved_height;
     // Kaydırma sekme başına: ImGui onu alt pencerenin kimliğiyle tutar.
     const std::string child = "##preview" + std::to_string(state_.active_tab());
-    ImGui::BeginChild(child.c_str(), size, ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+    // Tuval tonu: içerik kromdan tonla ayrılır; sözdizimi karşıtlığı tuvale göredir (theme_test).
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::current().canvas);  // zemin Begin'de çizilir
+    ImGui::BeginChild(child.c_str(), size, theme::kPaneChildFlags, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::PopStyleColor();
     // Önizleme odaktayken TUI REVIEW'un kaydırma tuşları (CommandScope::Preview); istek bir sonraki karede.
     const float line = ImGui::GetTextLineHeightWithSpacing();
     state_.set_preview_rows(ImGui::GetWindowHeight() / line);

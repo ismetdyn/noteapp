@@ -1,4 +1,5 @@
 #include "app/document.hpp"
+#include "app/map_relations.hpp"
 #include "gui/gui_state.hpp"
 
 #include <unordered_set>
@@ -43,6 +44,32 @@ const std::vector<char>& GuiState::map_matches() {
 void GuiState::open_map_note(const core::NotePath& path) {
     if (flush_shown())
         open_link(path);
+}
+
+void GuiState::connect_map_nodes(const MapNode& from, const MapNode& to, MapEdgeKind kind) {
+    edit_map(from, to, kind, true);
+}
+
+void GuiState::disconnect_map_nodes(const MapNode& from, const MapNode& to, MapEdgeKind kind) {
+    edit_map(from, to, kind, false);
+}
+
+// Yazılacak not editördeyse önce kaydedilir: yoksa işlem tampondaki düzenlemeyi diskteki eski metne ekler ve
+// sonraki kayıt çakışırdı. Başka not ya da taslak kaydedilmez (işlem onlara dokunmaz).
+void GuiState::edit_map(const MapNode& from, const MapNode& to, MapEdgeKind kind, bool connect) {
+    const auto note = app::map_edit_note(from, to, kind);
+    if (note && shown_ && !new_note_ && shown_->path == *note && !flush_for(*note))
+        return;
+    const auto done = connect ? app::connect_map_nodes(store_, from, to, kind)
+                              : app::disconnect_map_nodes(store_, from, to, kind);
+    if (!done) {
+        fail(done.error());
+        return;
+    }
+    changed();
+    map_.edges_changed();  // ilişki listeyi değiştirmez
+    rescan();              // gövde yazıldıysa: liste etiketleri ve temiz editör yeni metni alır
+    status_ = *done;
 }
 
 }  // namespace noteapp::gui

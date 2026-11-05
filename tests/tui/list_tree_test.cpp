@@ -400,7 +400,7 @@ TEST_CASE("row look: no selection marker, the highlight is the row, notes have n
     select_label(s, "c.md");
     const auto screen = draw(s);
     const std::string row = row_of(screen, kFirstRowY + 2);
-    CHECK(row.find("┃ 3   c.md") == 0);
+    CHECK(row.find("│ 3   c.md") == 0);
     CHECK(screen.PixelAt(1, kFirstRowY + 2).inverted);
     CHECK(screen.PixelAt(tui::row_marker_column(s, 2), kFirstRowY + 2).character == " ");  // notta ok yok
     CHECK_FALSE(has(screen.ToString(), ">3"));
@@ -426,7 +426,7 @@ TEST_CASE("row look: note details are an indented block with no marker, also at 
     s.handle(Key::Char, " ");
     const auto screen = draw(s);
     const int y = kFirstRowY + static_cast<int>(s.selected()) + 1;
-    CHECK(row_of(screen, y).find("┃      size:") == 0);
+    CHECK(row_of(screen, y).find("│      size:") == 0);
     CHECK(screen.PixelAt(tui::row_marker_column(s, s.selected()), y - 1).character == " ");
 }
 

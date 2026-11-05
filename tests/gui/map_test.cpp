@@ -89,6 +89,48 @@ void mouse_button(View& view, bool down) {
     view.draw_frame();
 }
 
+// MAP-R: Shift basılıyken düğümden düğüme sürükleme (gerçek ImGui olayları).
+void shift_drag(View& view, const std::string& from, const std::string& to) {
+    const auto [x, y] = view.button_center(from);
+    const auto [tx, ty] = view.button_center(to);
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, true);
+    mouse_to(view, x, y);
+    mouse_button(view, true);
+    constexpr int kSteps = 4;
+    for (int step = 1; step <= kSteps; ++step) {
+        const float share = static_cast<float>(step) / kSteps;
+        mouse_to(view, x + (tx - x) * share, y + (ty - y) * share);
+    }
+    mouse_button(view, false);
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, false);
+    settle(view);
+}
+
+void right_click(View& view, float x, float y) {
+    mouse_to(view, x, y);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+    view.draw_frame();
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+    settle(view);
+}
+
+// İki düğümün ortası: kenarın üstü.
+std::pair<float, float> edge_middle(const View& view, const std::string& from, const std::string& to) {
+    const auto [x1, y1] = view.button_center(from);
+    const auto [x2, y2] = view.button_center(to);
+    return {(x1 + x2) / 2.0F, (y1 + y2) / 2.0F};
+}
+
+bool has_map_edge(GuiState& state, const std::string& from, const std::string& to,
+                  noteapp::gui::MapEdgeKind kind) {
+    const auto& map = state.note_map();
+    return std::ranges::any_of(map.edges, [&](const auto& edge) {
+        const std::string& a = map.nodes[edge.from].key;
+        const std::string& b = map.nodes[edge.to].key;
+        return edge.kind == kind && ((a == from && b == to) || (a == to && b == from));
+    });
+}
+
 // Tuvalin düğümsüz köşesi: arka plan tıklaması odak verir, düğüm açmaz.
 void focus_canvas(MapScene& scene) {
     const View::ItemRect canvas = scene.rect("map_canvas");
@@ -300,4 +342,110 @@ TEST_CASE("map: no frames are drawn once the layout has settled") {
     for (int step = 0; step < 20; ++step)
         scene.view->idle_step(0);
     CHECK(scene.view->frames() == frames);
+}
+
+TEST_CASE("map: Shift+dragging a note onto another asks Related or Link; Related adds the relation") {
+    MapScene scene;
+    scene.open();
+    shift_drag(*scene.view, "map:d.md", "map:e.md");
+    REQUIRE(scene.view->item_rects().contains("map_connect_related"));
+    CHECK(scene.view->item_rects().contains("map_connect_link"));
+    CHECK(scene.state->current_path()->string() == "a.md");  // sürükleme açmaz
+    click_button(*scene.view, "map_connect_related");
+    CHECK(scene.state->status() == "Related: d.md and e.md");
+    CHECK(has_map_edge(*scene.state, "d.md", "e.md", noteapp::gui::MapEdgeKind::Related));
+    const auto links = core::NoteStore(scene.fixture.store_dir()).links(np("d.md")).value();
+    CHECK(links.related == std::vector{np("e.md")});
+    CHECK(scene.fixture.read_note("d.md") == "ilgisiz\n");
+    for (std::size_t node = 0; node < scene.state->map_layout().size(); ++node)
+        CHECK_FALSE(scene.state->map_layout().pinned(node));  // Shift+sürükleme iğnelemez
+}
+
+TEST_CASE("map: the Link choice saves the shown note's edit first and appends the wiki link") {
+    MapScene scene;
+    scene.open();
+    scene.state->edit_text("a düzenlendi\n");
+    REQUIRE(scene.state->dirty());
+    settle(*scene.view);
+    shift_drag(*scene.view, "map:a.md", "map:d.md");
+    click_button(*scene.view, "map_connect_link");
+    CHECK(scene.fixture.read_note("a.md") == "a düzenlendi\n[[d.md]]\n");
+    CHECK_FALSE(scene.state->dirty());
+    CHECK(scene.state->buffer() == "a düzenlendi\n[[d.md]]\n");  // editör yeni metni gösterir
+    CHECK(has_map_edge(*scene.state, "a.md", "d.md", noteapp::gui::MapEdgeKind::Link));
+}
+
+TEST_CASE("map: Esc closes the choice and nothing changes; a drop on empty space does nothing") {
+    MapScene scene;
+    scene.open();
+    shift_drag(*scene.view, "map:d.md", "map:e.md");
+    REQUIRE(scene.view->item_rects().contains("map_connect_related"));
+    press(*scene.view, ImGuiKey_Escape);
+    CHECK_FALSE(scene.view->item_rects().contains("map_connect_related"));
+    CHECK(core::NoteStore(scene.fixture.store_dir()).links(np("d.md")).value().related.empty());
+
+    const View::ItemRect canvas = scene.rect("map_canvas");
+    const auto [x, y] = scene.view->button_center("map:d.md");
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, true);
+    mouse_to(*scene.view, x, y);
+    mouse_button(*scene.view, true);
+    mouse_to(*scene.view, (x + canvas.min_x + 2.0F) / 2.0F, (y + canvas.min_y + 2.0F) / 2.0F);
+    mouse_to(*scene.view, canvas.min_x + 2.0F, canvas.min_y + 2.0F);
+    mouse_button(*scene.view, false);
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, false);
+    settle(*scene.view);
+    CHECK_FALSE(scene.view->item_rects().contains("map_connect_related"));
+    CHECK(scene.fixture.read_note("d.md") == "ilgisiz\n");
+    CHECK(scene.state->current_path()->string() == "a.md");
+}
+
+TEST_CASE("map: Shift+dragging between a note and a tag adds the tag to the note") {
+    MapScene scene;
+    scene.open();
+    scene.state->set_map_options(MapOptions{.whole_graph = true, .show_tags = true});
+    scene.settle_layout();
+    shift_drag(*scene.view, "map:#proje", "map:d.md");  // etiketten nota da aynı
+    CHECK(scene.fixture.read_note("d.md") == "ilgisiz\n#proje\n");
+    CHECK(scene.state->status() == "Tag #proje added to d.md");
+    CHECK(has_map_edge(*scene.state, "d.md", "proje", noteapp::gui::MapEdgeKind::Tag));
+}
+
+TEST_CASE("map: right-clicking an edge removes a relation; a link edge's item is disabled") {
+    MapScene scene;
+    {
+        core::NoteStore store(scene.fixture.store_dir());
+        REQUIRE(store.add_relation(np("d.md"), np("e.md")).has_value());
+    }
+    scene.open();
+    const auto [rx, ry] = edge_middle(*scene.view, "map:d.md", "map:e.md");
+    right_click(*scene.view, rx, ry);
+    REQUIRE(scene.view->item_rects().contains("map_edge_remove"));
+    CHECK_FALSE(scene.view->item_rects().at("map_edge_remove").disabled);
+    click_button(*scene.view, "map_edge_remove");
+    CHECK(scene.state->status() == "Relation removed: d.md and e.md");
+    CHECK(core::NoteStore(scene.fixture.store_dir()).links(np("d.md")).value().related.empty());
+    CHECK_FALSE(has_map_edge(*scene.state, "d.md", "e.md", noteapp::gui::MapEdgeKind::Related));
+
+    scene.settle_layout();
+    const auto [lx, ly] = edge_middle(*scene.view, "map:a.md", "map:b.md");
+    right_click(*scene.view, lx, ly);
+    REQUIRE(scene.view->item_rects().contains("map_edge_remove"));
+    CHECK(scene.view->item_rects().at("map_edge_remove").disabled);
+    click_button(*scene.view, "map_edge_remove");  // kapalı öğe: metin düzenlenmez
+    CHECK(scene.fixture.read_note("a.md") == "[[b]] [[yok]] #proje\n");
+    CHECK(has_map_edge(*scene.state, "a.md", "b.md", noteapp::gui::MapEdgeKind::Link));
+}
+
+TEST_CASE("map: right-clicking a tag edge removes the tag from the note's text") {
+    MapScene scene;
+    scene.open();
+    scene.state->set_map_options(MapOptions{.whole_graph = true, .show_tags = true});
+    scene.settle_layout();
+    const auto [x, y] = edge_middle(*scene.view, "map:e.md", "map:#proje");
+    right_click(*scene.view, x, y);
+    REQUIRE(scene.view->item_rects().contains("map_edge_remove"));
+    click_button(*scene.view, "map_edge_remove");
+    CHECK(scene.fixture.read_note("e.md") == "proje ayrı\n");
+    CHECK(scene.state->status() == "Tag #proje removed from e.md");
+    CHECK_FALSE(has_map_edge(*scene.state, "e.md", "proje", noteapp::gui::MapEdgeKind::Tag));
 }

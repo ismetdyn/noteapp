@@ -11,6 +11,7 @@ add_library(noteapp_app
     ui_args.cpp
     item_ops.cpp
     listing.cpp
+    map_relations.cpp
     note_map.cpp
     settings.cpp
     stray_notice.cpp

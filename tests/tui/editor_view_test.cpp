@@ -91,11 +91,14 @@ constexpr int kPaneY = 2;
 
 }  // namespace
 
-TEST_CASE("editor view: the focused pane is heavy, the list is light, the selection is not inverted") {
+TEST_CASE("editor view: the focused pane is colored, the list is dim, the selection is not inverted") {
     Fixture f("metin");
     const auto screen = f.frame();
-    CHECK(screen.PixelAt(0, 1).character == "┌");
-    CHECK(screen.PixelAt(kWidth * 2 / 5, 1).character == "┏");
+    CHECK(screen.PixelAt(0, 1).character == "╭");
+    CHECK(screen.PixelAt(0, 1).dim);
+    CHECK(screen.PixelAt(kWidth * 2 / 5, 1).character == "╭");
+    CHECK_FALSE(screen.PixelAt(kWidth * 2 / 5, 1).dim);
+    CHECK(screen.PixelAt(kWidth * 2 / 5, 1).foreground_color == ftxui::Color(ftxui::Color::Magenta));
     CHECK(contains(screen, " 1   a.md"));
     CHECK_FALSE(screen.PixelAt(2, kPaneY).inverted);
 }
@@ -413,8 +416,9 @@ TEST_CASE("new note view: the blank editor takes the whole terminal, list and to
     CHECK_FALSE(contains(screen, "a.md"));
     CHECK_FALSE(contains(screen, core::tr("tui.mode_name")));
     CHECK_FALSE(contains(screen, core::tr("tui.sync_off")));
-    CHECK(screen.PixelAt(0, 1).character == "┏");
-    CHECK(screen.PixelAt(tui::kMinWidth - 1, 1).character == "┓");
+    CHECK(screen.PixelAt(0, 1).character == "╭");
+    CHECK(screen.PixelAt(tui::kMinWidth - 1, 1).character == "╮");
+    CHECK_FALSE(screen.PixelAt(0, 1).dim);
     CHECK(contains(screen, core::tr("tui.frame_edit")));
     CHECK(f.session.columns() == tui::kMinWidth - 2 - f.session.gutter_width());
     CHECK(row_text(screen, tui::kMinHeight - 1).find("Ctrl+S save") != std::string::npos);
@@ -490,7 +494,8 @@ TEST_CASE("editor view: zoom gives the focused pane the whole width and the edit
     f.state.layout().toggle_zoom();
     f.session.handle(Key::CtrlEnd);
     const auto screen = f.frame();
-    CHECK(screen.PixelAt(0, 1).character == "┏");
+    CHECK(screen.PixelAt(0, 1).character == "╭");
+    CHECK_FALSE(screen.PixelAt(0, 1).dim);  // tek panel, odaklı
     CHECK(contains(screen, "SON"));
     CHECK_FALSE(contains(screen, "▸"));  // liste gizli
     CHECK(tui::editor_viewport({kWidth, kHeight}, f.state.layout()).columns == kWidth - 2);
@@ -589,15 +594,23 @@ ftxui::Color fg_of(const ftxui::Screen& screen, std::string_view needle) {
     return screen.PixelAt(at->first, at->second).foreground_color;
 }
 
+// Yorum renksizdir, yalnız soluk: NO_COLOR'da da aynı görünür.
+bool is_dim_comment(const ftxui::Screen& screen, std::string_view needle) {
+    const auto at = locate(screen, needle);
+    REQUIRE_MESSAGE(at, needle);
+    const auto& pixel = screen.PixelAt(at->first, at->second);
+    return pixel.dim && pixel.foreground_color == ftxui::Color();
+}
+
 }  // namespace
 
 TEST_CASE("editor syntax: tokens are colored from the 16 ANSI set by the file extension") {
     SyntaxFixture f("a.java", "public class A { // yorum\n  String s = \"dize\"; int n = 42;\n}\n");
     CHECK(f.session.syntax_language() == tui::SyntaxLanguage::Java);
     const auto screen = f.frame();
-    CHECK(fg_of(screen, "class") == ftxui::Color(ftxui::Color::BlueLight));
-    CHECK(fg_of(screen, "// yorum") == ftxui::Color(ftxui::Color::Green));
-    CHECK(fg_of(screen, "\"dize\"") == ftxui::Color(ftxui::Color::Magenta));
+    CHECK(fg_of(screen, "class") == ftxui::Color(ftxui::Color::Magenta));
+    CHECK(is_dim_comment(screen, "// yorum"));
+    CHECK(fg_of(screen, "\"dize\"") == ftxui::Color(ftxui::Color::Green));
     // Çıplak "42" dakikası 42 olan saatte liste sütununda da bulunur: sayı kendi satırında aranır.
     const auto number = locate(screen, "n = 42");
     REQUIRE(number);
@@ -685,7 +698,7 @@ TEST_CASE("editor syntax: an edit recolors the later lines and undo restores the
     CHECK(fg_of(f.frame(), "int c") == ftxui::Color(ftxui::Color::Cyan));
     f.session.handle(Key::Char, "/");
     f.session.handle(Key::Char, "*");
-    CHECK(fg_of(f.frame(), "int c") == ftxui::Color(ftxui::Color::Green));
+    CHECK(is_dim_comment(f.frame(), "int c"));
     f.session.handle(Key::CtrlZ);
     CHECK(fg_of(f.frame(), "int c") == ftxui::Color(ftxui::Color::Cyan));
 }

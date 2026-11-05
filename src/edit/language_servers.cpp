@@ -375,7 +375,7 @@ void LanguageServers::sync_document(LspEditor& editor, std::chrono::steady_clock
                 client->change(document.uri, buffer->text(), document.version);
             document.sent_edits = document.seen_edits;
         } else {
-            out.wants_frame = true;
+            out.send_at = document.changed_at + change_idle_;
         }
     }
     if (completion_asked) {

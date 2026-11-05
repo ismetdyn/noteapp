@@ -496,3 +496,23 @@ TEST_CASE("syntax hostile: pathological lines at the line limit stay well formed
         }
     }
 }
+
+// SPEC-tui "Sözdizimi vurgusu" aile tablosu: GUI token_color ve TUI token_styled renkleri yalnız aileden
+// alır; tür eklenip tabloya yazılmazsa -Wswitch derlemeyi, aile değişirse bu test düşer.
+TEST_CASE("syntax family: every token kind has the family the SPEC table gives it") {
+    using noteapp::tui::syntax_family;
+    using noteapp::tui::SyntaxFamily;
+    CHECK(syntax_family(TokenKind::Plain) == SyntaxFamily::Plain);
+    CHECK(syntax_family(TokenKind::Comment) == SyntaxFamily::Muted);
+    CHECK(syntax_family(TokenKind::String) == SyntaxFamily::Green);
+    CHECK(syntax_family(TokenKind::Value) == SyntaxFamily::Green);
+    CHECK(syntax_family(TokenKind::Number) == SyntaxFamily::Orange);
+    CHECK(syntax_family(TokenKind::Constant) == SyntaxFamily::Orange);
+    CHECK(syntax_family(TokenKind::Type) == SyntaxFamily::Cyan);
+    CHECK(syntax_family(TokenKind::Code) == SyntaxFamily::Cyan);
+    CHECK(syntax_family(TokenKind::Keyword) == SyntaxFamily::Magenta);
+    CHECK(syntax_family(TokenKind::Key) == SyntaxFamily::Magenta);
+    CHECK(syntax_family(TokenKind::Tag) == SyntaxFamily::Magenta);
+    CHECK(syntax_family(TokenKind::Heading) == SyntaxFamily::Blue);
+    CHECK(syntax_family(TokenKind::Emphasis) == SyntaxFamily::Bold);
+}

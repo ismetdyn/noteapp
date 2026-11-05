@@ -3,7 +3,10 @@
 #include "cli/command_table.hpp"
 #include "cli/confirm.hpp"
 #include "cli/highlight.hpp"
+#include "cli/suggest.hpp"
+#include "cli/term.hpp"
 #include "core/editor.hpp"
+#include "core/file_stat.hpp"
 #include "core/error.hpp"
 #include "core/i18n.hpp"
 #include "core/json_text.hpp"
@@ -17,6 +20,8 @@
 #include "search/query.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <expected>
 #include <filesystem>
@@ -25,17 +30,9 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
-
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
 
 namespace noteapp::cli {
 
@@ -43,40 +40,13 @@ using core::append_json_string;
 
 namespace {
 
-#ifdef _WIN32
-// _isatty NUL gibi her karakter aygıtını TTY sayar; `note < NUL` editör açıp betiği asılı bırakırdı.
-// Gerçek konsol yalnız GetConsoleMode'un başarılı olduğu tutamaçtır.
-bool is_console(DWORD std_handle) {
-    DWORD mode = 0;
-    return GetConsoleMode(GetStdHandle(std_handle), &mode) != 0;
+bool stdout_is_tty() {
+    return stream_is_tty(Stream::Out);
 }
-#endif
-
-}  // namespace
-
-bool stdin_is_tty() {
-#ifdef _WIN32
-    return is_console(STD_INPUT_HANDLE);
-#else
-    return isatty(STDIN_FILENO) != 0;
-#endif
-}
-
-namespace {
-
-bool stdout_is_tty();
 
 // Terminale temizlenmiş, boruya bayt bayt (highlight.hpp sözleşmesi).
 std::string terminal_or_bytes(std::string_view text) {
     return stdout_is_tty() ? sanitize_for_terminal(text) : std::string(text);
-}
-
-bool stdout_is_tty() {
-#ifdef _WIN32
-    return is_console(STD_OUTPUT_HANDLE);
-#else
-    return isatty(STDOUT_FILENO) != 0;
-#endif
 }
 
 // Ham baytlar: dönüştürme yok (CRLF/BOM/geçersiz UTF-8 olduğu gibi kalır; çıktıyı NoteStore doğrular).
@@ -121,6 +91,59 @@ int fail(const core::Error& error) {
 
 namespace {
 
+void add_option_names(std::vector<std::string_view>& names, std::span<const OptionSpec> options) {
+    for (const OptionSpec& option : options) {
+        names.push_back(option.name);
+        if (!option.alias.empty())
+            names.push_back(option.alias);
+    }
+}
+
+// Öneri adayları tablodan: komutun ve fiillerinin seçenekleri, her komutta geçerli `-h/--help`.
+std::vector<std::string_view> option_names_of(std::string_view command) {
+    std::vector<std::string_view> names{"--help", "-h"};
+    const CommandSpec* spec = find_command(command);
+    if (spec == nullptr) {
+        add_option_names(names, kAddOptions);
+        return names;
+    }
+    add_option_names(names, spec->options);
+    for (const VerbSpec& verb : spec->verbs)
+        add_option_names(names, verb.options);
+    return names;
+}
+
+}  // namespace
+
+void print_hints(std::string_view command, std::optional<std::string_view> guess) {
+    if (guess)
+        std::cerr << sanitize_for_terminal(core::tr("cli.hint_did_you_mean", {{"word", std::string(*guess)}}))
+                  << '\n';
+    std::cerr << (command.empty() ? core::tr("cli.hint_help_general")
+                                  : core::tr("cli.hint_help_command", {{"command", std::string(command)}}))
+              << '\n';
+}
+
+int usage_error(std::string_view command) {
+    std::cerr << core::tr("cli." + std::string(command) + "_usage") << '\n';
+    print_hints(command, std::nullopt);
+    return kExitUsage;
+}
+
+int unknown_option_error(std::string_view command, const std::string& option) {
+    std::cerr << sanitize_for_terminal(core::tr("cli.unknown_option", {{"option", option}})) << '\n';
+    print_hints(command, suggest(option, option_names_of(command)));
+    return kExitUsage;
+}
+
+int missing_value_error(std::string_view command, const std::string& option) {
+    std::cerr << core::tr("cli.missing_value", {{"option", option}}) << '\n';
+    print_hints(command, std::nullopt);
+    return kExitUsage;
+}
+
+namespace {
+
 namespace fs = std::filesystem;
 
 std::string to_utf8(const fs::path& p) {
@@ -133,9 +156,10 @@ std::string read_file(const fs::path& file) {
     return std::string(std::istreambuf_iterator<char>(in), {});
 }
 
-// Tip/ad/klasör kuralları hızlı ekleme ile aynıdır. Başarıda tek satır yazdırır, hatada hatayı döner.
-std::optional<core::Error> save_note(const ParsedArgs& args, const core::Config& config,
-                                     const std::string& content) {
+// Tip/ad/klasör kuralları hızlı ekleme ile aynıdır. Başarıda tek satır yazdırıp notun yolunu, hatada hatayı
+// döner.
+std::expected<std::string, core::Error> save_note(const ParsedArgs& args, const core::Config& config,
+                                                  const std::string& content) {
     // Adda yazılan uzantı -t'yi ve detect'i geçer; değiştirilmez, üstüne eklenmez.
     const std::string name = args.name.value_or("");
     const core::TypedName typed = core::split_typed_name(name);
@@ -155,15 +179,34 @@ std::optional<core::Error> save_note(const ParsedArgs& args, const core::Config&
     const auto created = store.create(
         core::NewNote{args.folder.value_or(config.default_folder), std::string(typed.stem), type, content});
     if (!created)
-        return created.error();
+        return std::unexpected(created.error());
 
-    std::cout << sanitize_for_terminal(core::tr(
-                     "cli.saved", {{"path", created->string()},
-                                   {"type", type},
-                                   {"how", core::tr(chosen ? "cli.how_chosen" : "cli.how_detected")}}))
-              << '\n';
+    if (!args.quiet)
+        std::cout << sanitize_for_terminal(core::tr(
+                         "cli.saved", {{"path", created->string()},
+                                       {"type", type},
+                                       {"how", core::tr(chosen ? "cli.how_chosen" : "cli.how_detected")}}))
+                  << '\n';
     start_background_sync(config, args.no_sync);
-    return std::nullopt;
+    return created->string();
+}
+
+// `note lss` bir not kaydeder (hızlı ekleme, SPEC-cli); tek sözcük bir komut adına yakınsa yazım hatası
+// olabilir. İpucu yalnız stderr terminaldeyken: betik ve boru çıktısı hiç değişmez, otomatik düzeltme yok.
+void hint_if_mistyped_command(const ParsedArgs& args, const std::string& path) {
+    if (args.text.size() != 1 || args.text.front().find_first_of(" \t\n") != std::string::npos ||
+        !stream_is_tty(Stream::Err))
+        return;
+    std::vector<std::string_view> names;
+    for (const CommandSpec& command : kCommands)
+        names.push_back(command.name);
+    const auto guess = suggest(args.text.front(), names);
+    if (!guess)
+        return;
+    std::cerr << sanitize_for_terminal(core::tr(
+                     "cli.hint_saved_typo",
+                     {{"word", args.text.front()}, {"command", std::string(*guess)}, {"path", path}}))
+              << '\n';
 }
 
 // Değiştiren komutlar (rm/mv/edit) `--no-sync`'i her konumda kabul eder; kalan argümanlar döner.
@@ -204,8 +247,8 @@ int run_editor_flow(const ParsedArgs& args, const core::Config& config, const st
         std::cerr << core::tr("cli.cancelled") << '\n';
         return kExitUser;
     }
-    if (const auto error = save_note(args, config, content)) {
-        const int code = fail(*error);
+    if (const auto saved = save_note(args, config, content); !saved) {
+        const int code = fail(saved.error());
         report_kept();  // kayıt başarısız: yazılan metin kaybolmasın
         return code;
     }
@@ -213,28 +256,33 @@ int run_editor_flow(const ParsedArgs& args, const core::Config& config, const st
     return kExitOk;
 }
 
-// Alt komut argümanları: konumsal değerler + isteğe bağlı -f KLASÖR. Hata mesajını yazar, çıkış kodunu döner.
+// `--limit N`: pozitif tam sayı; değilse mesajı yazıp kullanım hatası (2) döner.
+std::expected<std::size_t, int> parse_limit(const std::string& value) {
+    std::size_t used = 0;
+    unsigned long long parsed = 0;
+    try {
+        parsed = std::stoull(value, &used);
+    } catch (const std::exception&) {  // sayı değil / taşma: kullanım hatası
+        used = 0;
+    }
+    if (used != value.size() || value.empty() || value[0] == '-' || parsed == 0) {
+        std::cerr << sanitize_for_terminal(core::tr("cli.invalid_limit", {{"value", value}})) << '\n';
+        return std::unexpected(kExitUsage);
+    }
+    return static_cast<std::size_t>(parsed);
+}
+
+// show/edit argümanları: yalnız konumsal değerler. Seçenekte hata mesajını yazar, çıkış kodunu döner.
 struct BrowseArgs {
     std::vector<std::string> positional;
-    std::optional<std::string> folder;
 };
 
-std::expected<BrowseArgs, int> parse_browse_args(const std::vector<std::string>& rest, bool allow_folder) {
+std::expected<BrowseArgs, int> parse_browse_args(std::string_view command, const std::vector<std::string>& rest) {
     BrowseArgs parsed;
-    for (std::size_t i = 0; i < rest.size(); ++i) {
-        const std::string& arg = rest[i];
-        if (allow_folder && arg == "-f") {
-            if (i + 1 >= rest.size()) {
-                std::cerr << core::tr("cli.missing_value", {{"option", arg}}) << '\n';
-                return std::unexpected(kExitUsage);
-            }
-            parsed.folder = rest[++i];
-        } else if (arg.size() > 1 && arg[0] == '-') {
-            std::cerr << core::tr("cli.unknown_option", {{"option", arg}}) << '\n';
-            return std::unexpected(kExitUsage);
-        } else {
-            parsed.positional.push_back(arg);
-        }
+    for (const std::string& arg : rest) {
+        if (arg.size() > 1 && arg[0] == '-')
+            return std::unexpected(unknown_option_error(command, arg));
+        parsed.positional.push_back(arg);
     }
     return parsed;
 }
@@ -253,7 +301,7 @@ std::expected<core::NoteInfo, int> pick_best_note(const core::NoteStore& store, 
     }
     const auto ranked = search::rank_notes(query, notes, max_candidate);
     if (ranked.empty()) {
-        std::cerr << core::tr("cli.no_match", {{"query", query}}) << '\n';
+        std::cerr << sanitize_for_terminal(core::tr("cli.no_match", {{"query", query}})) << '\n';
         return std::unexpected(kExitUser);
     }
     const core::NoteInfo& best = notes[ranked.front().index];
@@ -274,22 +322,10 @@ int run_add(const ParsedArgs& args, const core::Config& config) {
         std::cerr << core::tr("cli.empty_input") << '\n';
         return kExitUser;
     }
-    if (const auto error = save_note(args, config, content))
-        return fail(*error);
-    return kExitOk;
-}
-
-int run_help(const ParsedArgs& args) {
-    if (args.command.empty() || args.command == "help") {
-        std::cout << core::tr("cli.help");
-        return kExitOk;
-    }
-    // Komut başına metin katalogda `cli.help_<komut>` anahtarıdır; yalnız tablodaki komut adları aranır.
-    if (!std::ranges::contains(kCommands, args.command, &CommandSpec::name)) {
-        std::cerr << core::tr("cli.unknown_command", {{"command", args.command}}) << '\n';
-        return kExitUsage;
-    }
-    std::cout << core::tr("cli.help_" + args.command) << '\n';
+    const auto saved = save_note(args, config, content);
+    if (!saved)
+        return fail(saved.error());
+    hint_if_mistyped_command(args, *saved);
     return kExitOk;
 }
 
@@ -342,7 +378,7 @@ int run_config(const ParsedArgs& args, const core::Config& config) {
         const auto entries = all_entries(config);
         const auto entry = std::ranges::find(entries, key, &std::pair<std::string, std::string>::first);
         if (entry == entries.end()) {
-            std::cerr << core::tr("cli.config_unknown_key", {{"key", key}}) << '\n';
+            std::cerr << sanitize_for_terminal(core::tr("cli.config_unknown_key", {{"key", key}})) << '\n';
             return kExitUsage;
         }
         if (verb == "get") {
@@ -365,8 +401,7 @@ int run_config(const ParsedArgs& args, const core::Config& config) {
                 std::cout << saved_key << " = " << saved_value << '\n';
         return kExitOk;
     }
-    std::cerr << core::tr("cli.config_usage") << '\n';
-    return kExitUsage;
+    return usage_error("config");
 }
 
 int run_version() {
@@ -376,21 +411,22 @@ int run_version() {
 
 int run_rm(const ParsedArgs& args, const core::Config& config) {
     bool yes = false;
+    bool quiet = false;
     bool no_sync = false;
     std::vector<std::string> paths;
     for (const std::string& arg : take_no_sync(args.rest, no_sync)) {
-        if (arg == "-y") {
+        if (arg == "-y" || arg == "--yes") {
             yes = true;
+        } else if (arg == "-q" || arg == "--quiet") {
+            quiet = true;
         } else if (arg.size() > 1 && arg[0] == '-') {
-            std::cerr << core::tr("cli.unknown_option", {{"option", arg}}) << '\n';
-            return kExitUsage;
+            return unknown_option_error("rm", arg);
         } else {
             paths.push_back(arg);
         }
     }
     if (paths.size() != 1) {
-        std::cerr << core::tr("cli.rm_usage") << '\n';
-        return kExitUsage;
+        return usage_error("rm");
     }
 
     // Yalnız tam yol: fuzzy eşleşme yok. Silmeden önce yolun var olduğu doğrulanır (onay boşuna sorulmasın).
@@ -411,29 +447,32 @@ int run_rm(const ParsedArgs& args, const core::Config& config) {
                   << std::flush;
         std::string answer;
         if (!std::getline(std::cin, answer) || !is_delete_confirmed(answer)) {
-            std::cerr << core::tr("cli.delete_not_confirmed") << '\n';
+            std::cerr << core::tr("cli.delete_not_confirmed") << '\n' << core::tr("cli.hint_rm_confirm") << '\n';
             return kExitUser;
         }
     }
     if (const auto removed = store.remove(*path); !removed)
         return fail(removed.error());
-    std::cout << sanitize_for_terminal(core::tr("cli.removed", {{"path", path->string()}})) << '\n';
+    if (!quiet)
+        std::cout << sanitize_for_terminal(core::tr("cli.removed", {{"path", path->string()}})) << '\n';
     start_background_sync(config, no_sync);
     return kExitOk;
 }
 
 int run_mv(const ParsedArgs& args, const core::Config& config) {
     bool no_sync = false;
-    const std::vector<std::string> rest = take_no_sync(args.rest, no_sync);
-    for (const std::string& arg : rest) {
-        if (arg.size() > 1 && arg[0] == '-') {
-            std::cerr << core::tr("cli.unknown_option", {{"option", arg}}) << '\n';
-            return kExitUsage;
-        }
+    bool quiet = false;
+    std::vector<std::string> rest;
+    for (const std::string& arg : take_no_sync(args.rest, no_sync)) {
+        if (arg == "-q" || arg == "--quiet")
+            quiet = true;
+        else if (arg.size() > 1 && arg[0] == '-')
+            return unknown_option_error("mv", arg);
+        else
+            rest.push_back(arg);
     }
     if (rest.size() != 2) {
-        std::cerr << core::tr("cli.mv_usage") << '\n';
-        return kExitUsage;
+        return usage_error("mv");
     }
     const auto from = core::NotePath::parse(rest[0]);
     if (!from)
@@ -445,19 +484,112 @@ int run_mv(const ParsedArgs& args, const core::Config& config) {
     core::NoteStore store = core::NoteStore::for_config(config);
     if (const auto moved = store.move(*from, *to); !moved)
         return fail(moved.error());
-    std::cout << core::tr("cli.moved", {{"from", from->string()}, {"to", to->string()}}) << '\n';
+    if (!quiet)
+        std::cout << core::tr("cli.moved", {{"from", from->string()}, {"to", to->string()}}) << '\n';
     start_background_sync(config, no_sync);
     return kExitOk;
 }
 
+namespace {
+
+struct LsArgs {
+    std::string query;
+    std::optional<std::string> folder;
+    std::size_t limit = std::numeric_limits<std::size_t>::max();  // varsayılan sınırsız
+    bool json = false;
+    bool long_format = false;
+    bool print0 = false;
+};
+
+std::expected<LsArgs, int> parse_ls_args(const std::vector<std::string>& rest) {
+    LsArgs parsed;
+    std::vector<std::string> positional;
+    for (std::size_t i = 0; i < rest.size(); ++i) {
+        const std::string& arg = rest[i];
+        const bool folder = arg == "-f" || arg == "--folder";
+        if (folder || arg == "-n" || arg == "--limit") {
+            if (i + 1 >= rest.size())
+                return std::unexpected(missing_value_error("ls", arg));
+            const std::string& value = rest[++i];
+            if (folder) {
+                parsed.folder = value;
+                continue;
+            }
+            const auto limit = parse_limit(value);
+            if (!limit)
+                return std::unexpected(limit.error());
+            parsed.limit = *limit;
+        } else if (arg == "--json") {
+            parsed.json = true;
+        } else if (arg == "-l" || arg == "--long") {
+            parsed.long_format = true;
+        } else if (arg == "-0" || arg == "--print0") {
+            parsed.print0 = true;
+        } else if (arg.size() > 1 && arg[0] == '-') {
+            return std::unexpected(unknown_option_error("ls", arg));
+        } else {
+            positional.push_back(arg);
+        }
+    }
+    if (positional.size() > 1)
+        return std::unexpected(usage_error("ls"));
+    if (!positional.empty())
+        parsed.query = positional.front();
+    return parsed;
+}
+
+std::int64_t unix_ms(std::filesystem::file_time_type when) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(core::to_system_time(when).time_since_epoch())
+        .count();
+}
+
+// [{"path","type","size","updated_at"}]; zaman unix ms (`view ls --json` ile aynı birim).
+std::string ls_json(const std::vector<core::NoteMeta>& metas, const std::vector<std::size_t>& order) {
+    std::string out = "[";
+    for (const std::size_t index : order) {
+        const core::NoteMeta& meta = metas[index];
+        out += out.size() > 1 ? ",{\"path\":" : "{\"path\":";
+        append_json_string(out, meta.path.string());
+        out += ",\"type\":";
+        append_json_string(out, core::split_note_path(meta.path.string()).type);
+        out += ",\"size\":" + std::to_string(meta.size) + ",\"updated_at\":" +
+               std::to_string(unix_ms(meta.updated_at)) + '}';
+    }
+    return out + "]\n";
+}
+
+std::size_t code_points(std::string_view text) {
+    return static_cast<std::size_t>(
+        std::ranges::count_if(text, [](char c) { return (static_cast<unsigned char>(c) & 0xC0) != 0x80; }));
+}
+
+// `GÜNCELLEME  BOYUT  TÜR  YOL`: başlık satırı yok, TTY ve boru aynı (betik dostu); boyut sağa, tür sola yaslı.
+std::vector<std::string> ls_long_lines(const std::vector<core::NoteMeta>& metas,
+                                       const std::vector<std::size_t>& order) {
+    std::size_t size_width = 0;
+    std::size_t type_width = 0;
+    for (const std::size_t index : order) {
+        size_width = std::max(size_width, std::to_string(metas[index].size).size());
+        type_width = std::max(type_width, code_points(core::split_note_path(metas[index].path.string()).type));
+    }
+    std::vector<std::string> lines;
+    for (const std::size_t index : order) {
+        const core::NoteMeta& meta = metas[index];
+        const std::string size = std::to_string(meta.size);
+        const std::string type = core::split_note_path(meta.path.string()).type;
+        lines.push_back(core::local_time_text(meta.updated_at) + "  " + std::string(size_width - size.size(), ' ') +
+                        size + "  " + type + std::string(type_width - code_points(type), ' ') + "  " +
+                        meta.path.string());
+    }
+    return lines;
+}
+
+}  // namespace
+
 int run_ls(const ParsedArgs& args, const core::Config& config) {
-    const auto parsed = parse_browse_args(args.rest, true);
+    const auto parsed = parse_ls_args(args.rest);
     if (!parsed)
         return parsed.error();
-    if (parsed->positional.size() > 1) {
-        std::cerr << core::tr("cli.ls_usage") << '\n';
-        return kExitUsage;
-    }
     std::string prefix;
     if (parsed->folder) {
         const auto folder = core::NotePath::parse(*parsed->folder);
@@ -469,8 +601,7 @@ int run_ls(const ParsedArgs& args, const core::Config& config) {
     // Sorgu argümanları (`tag:`, `type:`...) TUI ile aynı kuraldır; kalan metin ada göre sıralar.
     core::NoteStore store = core::NoteStore::for_config(config);
     const auto query =
-        search::parse_query(parsed->positional.empty() ? "" : parsed->positional.front(),
-                            [&store](std::string_view name) { return core::view_notes(store, name); });
+        search::parse_query(parsed->query, [&store](std::string_view name) { return core::view_notes(store, name); });
     if (!query) {
         std::cerr << sanitize_for_terminal(core::format_error(query.error().error)) << '\n';
         return kExitUsage;
@@ -488,19 +619,28 @@ int run_ls(const ParsedArgs& args, const core::Config& config) {
         order.push_back(allowed[r.index]);
     if (query->sort)
         search::sort_notes(order, *query->sort, metas);
+    order.resize(std::min(order.size(), parsed->limit));
+    if (parsed->json) {
+        std::cout << ls_json(metas, order);
+        return kExitOk;
+    }
+    const char separator = parsed->print0 ? '\0' : '\n';
+    if (parsed->long_format) {
+        for (const std::string& line : ls_long_lines(metas, order))
+            std::cout << terminal_or_bytes(line) << separator;
+        return kExitOk;
+    }
     for (const std::size_t index : order)
-        std::cout << terminal_or_bytes(metas[index].path.string()) << '\n';
+        std::cout << terminal_or_bytes(metas[index].path.string()) << separator;
     return kExitOk;
 }
 
 int run_show(const ParsedArgs& args, const core::Config& config) {
-    const auto parsed = parse_browse_args(args.rest, false);
+    const auto parsed = parse_browse_args("show", args.rest);
     if (!parsed)
         return parsed.error();
-    if (parsed->positional.size() != 1) {
-        std::cerr << core::tr("cli.show_usage") << '\n';
-        return kExitUsage;
-    }
+    if (parsed->positional.size() != 1)
+        return usage_error("show");
     core::NoteStore store = core::NoteStore::for_config(config);
     const auto note =
         pick_best_note(store, parsed->positional.front(), config.limits.search.fuzzy_candidate_chars.cap());
@@ -515,9 +655,10 @@ int run_show(const ParsedArgs& args, const core::Config& config) {
         return kExitUser;
     }
     // Terminalde kaçış dizileri etkisizleşir; boruya/dosyaya içerik bayt bayt gider.
+    // Terminalde son satır sonu yoksa eklenir: istem metnin sonuna yapışmasın.
     const std::string& text = content->text;
     if (stdout_is_tty())
-        std::cout << sanitize_for_terminal(text);
+        std::cout << sanitize_for_terminal(text) << (text.empty() || text.ends_with('\n') ? "" : "\n");
     else
         std::cout.write(text.data(), static_cast<std::streamsize>(text.size()));
     return kExitOk;
@@ -525,13 +666,11 @@ int run_show(const ParsedArgs& args, const core::Config& config) {
 
 int run_edit(const ParsedArgs& args, const core::Config& config) {
     bool no_sync = false;
-    const auto parsed = parse_browse_args(take_no_sync(args.rest, no_sync), false);
+    const auto parsed = parse_browse_args("edit", take_no_sync(args.rest, no_sync));
     if (!parsed)
         return parsed.error();
-    if (parsed->positional.size() != 1) {
-        std::cerr << core::tr("cli.edit_usage") << '\n';
-        return kExitUsage;
-    }
+    if (parsed->positional.size() != 1)
+        return usage_error("edit");
     core::NoteStore store = core::NoteStore::for_config(config);
     const auto note =
         pick_best_note(store, parsed->positional.front(), config.limits.search.fuzzy_candidate_chars.cap());
@@ -552,8 +691,33 @@ int run_edit(const ParsedArgs& args, const core::Config& config) {
     return kExitOk;
 }
 
+namespace {
+
+// [{"path","line","snippet","ranges"}]: eşleşen satır başına bir kayıt; ranges kesitteki [başlangıç, bitiş)
+// bayt aralıklarıdır. Düz biçimdeki `yol:satır: kesit` ayrıştırmasının ':' belirsizliği yok.
+std::string find_json(const std::vector<search::ContentResult>& results) {
+    std::string out = "[";
+    for (const search::ContentResult& result : results) {
+        for (const search::Hit& hit : result.first_hits) {
+            out += out.size() > 1 ? ",{\"path\":" : "{\"path\":";
+            append_json_string(out, result.path.string());
+            out += ",\"line\":" + std::to_string(hit.line) + ",\"snippet\":";
+            append_json_string(out, hit.snippet);
+            out += ",\"ranges\":[";
+            for (std::size_t i = 0; i < hit.ranges.size(); ++i)
+                out += (i == 0 ? "[" : ",[") + std::to_string(hit.ranges[i].first) + ',' +
+                       std::to_string(hit.ranges[i].second) + ']';
+            out += "]}";
+        }
+    }
+    return out + "]\n";
+}
+
+}  // namespace
+
 int run_find(const ParsedArgs& args, const core::Config& config) {
     std::size_t limit = std::numeric_limits<std::size_t>::max();
+    bool json = false;
     std::string query;
     bool only_terms = false;  // `--` sonrası her şey terimdir
     for (std::size_t i = 0; i < args.rest.size(); ++i) {
@@ -562,32 +726,21 @@ int run_find(const ParsedArgs& args, const core::Config& config) {
             query += (query.empty() ? "" : " ") + arg;
         } else if (arg == "--") {
             only_terms = true;
-        } else if (arg == "--limit") {
-            if (i + 1 >= args.rest.size()) {
-                std::cerr << core::tr("cli.missing_value", {{"option", arg}}) << '\n';
-                return kExitUsage;
-            }
-            const std::string& value = args.rest[++i];
-            std::size_t used = 0;
-            unsigned long long parsed = 0;
-            try {
-                parsed = std::stoull(value, &used);
-            } catch (const std::exception&) {  // sayı değil / taşma: kullanım hatası
-                used = 0;
-            }
-            if (used != value.size() || value.empty() || value[0] == '-' || parsed == 0) {
-                std::cerr << core::tr("cli.invalid_limit", {{"value", value}}) << '\n';
-                return kExitUsage;
-            }
-            limit = static_cast<std::size_t>(parsed);
+        } else if (arg == "--json") {
+            json = true;
+        } else if (arg == "--limit" || arg == "-n") {
+            if (i + 1 >= args.rest.size())
+                return missing_value_error("find", arg);
+            const auto parsed = parse_limit(args.rest[++i]);
+            if (!parsed)
+                return parsed.error();
+            limit = *parsed;
         } else {
-            std::cerr << core::tr("cli.unknown_option", {{"option", arg}}) << '\n';
-            return kExitUsage;
+            return unknown_option_error("find", arg);
         }
     }
     if (query.empty()) {
-        std::cerr << core::tr("cli.find_usage") << '\n';
-        return kExitUsage;
+        return usage_error("find");
     }
 
     core::NoteStore store = core::NoteStore::for_config(config);
@@ -595,19 +748,27 @@ int run_find(const ParsedArgs& args, const core::Config& config) {
                                config.limits.search.content_hits.cap());
     index.refresh();
     const auto results = index.search(query, limit);
+    if (json)
+        std::cout << find_json(results);
     if (results.empty()) {
-        std::cerr << core::tr("cli.find_no_match", {{"query", query}}) << '\n';
+        std::cerr << sanitize_for_terminal(core::tr("cli.find_no_match", {{"query", query}})) << '\n';
         return kExitUser;
     }
+    if (json)
+        return kExitOk;
 
-    // Boruya/dosyaya kaçış kodu yazılmaz, baytlar aynen gider; terminalde not baytları temizlenir (yol adı da
-    // C1 taşıyabilir).
+    // Boruya/dosyaya baytlar aynen gider; terminalde not baytları temizlenir (yol adı da C1 taşıyabilir).
+    // Vurgu yalnız renk açıkken (color_enabled: NO_COLOR, TERM=dumb, NOTEAPP_COLOR); renk kapalıyken bilgi
+    // kaybolmaz, eşleşme satırda zaten görünür.
     const bool tty = stdout_is_tty();
+    const bool color = color_enabled(Stream::Out);
     for (const search::ContentResult& result : results) {
         const std::string path = result.path.string();
         for (const search::Hit& hit : result.first_hits) {
-            std::cout << (tty ? sanitize_for_terminal(path) : path) << ':' << hit.line << ": "
-                      << (tty ? highlight_ranges(hit.snippet, hit.ranges) : hit.snippet) << '\n';
+            const std::string snippet = color ? highlight_ranges(hit.snippet, hit.ranges)
+                                        : tty ? sanitize_for_terminal(hit.snippet)
+                                              : hit.snippet;
+            std::cout << (tty ? sanitize_for_terminal(path) : path) << ':' << hit.line << ": " << snippet << '\n';
         }
     }
     return kExitOk;
@@ -617,14 +778,23 @@ int run_find(const ParsedArgs& args, const core::Config& config) {
 int run_tags(const ParsedArgs& args, const core::Config& config) {
     const bool json = args.rest.size() == 1 && args.rest.front() == "--json";
     if (!args.rest.empty() && !json) {
-        std::cerr << core::tr("cli.tags_usage") << '\n';
-        return kExitUsage;
+        return usage_error("tags");
     }
     const core::NoteStore store = core::NoteStore::for_config(config);
     const std::vector<core::TagCount> tags = store.tags();
-    if (!json) {
+    if (!json && !stdout_is_tty()) {
         for (const core::TagCount& tag : tags)
-            std::cout << terminal_or_bytes(tag.display) << '\t' << tag.count << '\n';
+            std::cout << tag.display << '\t' << tag.count << '\n';
+        return kExitOk;
+    }
+    if (!json) {  // terminal: sayılar tek sütunda; boru TSV kalır
+        std::size_t width = 0;
+        for (const core::TagCount& tag : tags)
+            width = std::max(width, code_points(sanitize_for_terminal(tag.display)));
+        for (const core::TagCount& tag : tags) {
+            const std::string display = sanitize_for_terminal(tag.display);
+            std::cout << display << std::string(width - code_points(display) + 2, ' ') << tag.count << '\n';
+        }
         return kExitOk;
     }
     std::string out = "[";
@@ -640,6 +810,18 @@ int run_tags(const ParsedArgs& args, const core::Config& config) {
 }
 
 int run_reserved(const ParsedArgs& args, const core::Config& config) {
+    // Fiilli komutta bilinmeyen fiil: komutun kullanım satırı + en yakın fiil. Seçenekle başlayan sözcük
+    // (`sync --background`) ve fiilsiz çağrı (`note sync`) komutun kendisine kalır.
+    if (const CommandSpec* spec = find_command(args.command);
+        spec != nullptr && !spec->verbs.empty() && !args.rest.empty() && !args.rest.front().starts_with('-') &&
+        !std::ranges::contains(spec->verbs, args.rest.front(), &VerbSpec::name)) {
+        std::vector<std::string_view> verbs;
+        for (const VerbSpec& verb : spec->verbs)
+            verbs.push_back(verb.name);
+        std::cerr << core::tr("cli." + args.command + "_usage") << '\n';
+        print_hints(args.command, suggest(args.rest.front(), verbs));
+        return kExitUsage;
+    }
     if (args.command == "find")
         return run_find(args, config);
     if (args.command == "config")
@@ -677,7 +859,13 @@ int run_reserved(const ParsedArgs& args, const core::Config& config) {
 }
 
 int run_invalid(const ParsedArgs& args) {
+    const std::string option = args.error_args.empty() ? std::string() : args.error_args.front().second;
+    if (args.error_key == "cli.unknown_option")
+        return unknown_option_error("", option);
+    if (args.error_key == "cli.missing_value")
+        return missing_value_error("", option);
     std::cerr << core::tr(args.error_key, args.error_args) << '\n';
+    print_hints("", std::nullopt);
     return kExitUsage;
 }
 

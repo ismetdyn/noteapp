@@ -1,5 +1,6 @@
 // Yerleşim sahnelerinin PNG görüntüsünü üretir (ctest'e kayıtlı değildir; gözle inceleme aracı):
 //   SDL_VIDEO_DRIVER=dummy SDL_RENDER_DRIVER=software NOTEAPP_SHOT_DIR=/yol gui_layout_shots
+#include "gui/theme.hpp"
 #include "layout_scenes.hpp"
 
 #include <chrono>
@@ -36,11 +37,9 @@ void save_png(const std::filesystem::path& file) {
     REQUIRE(saved);
 }
 
-// Dummy sürücüde sistem teması yoktur: View::apply_theme'in koyu dalı elle kurulur (saydam olmayan diyalog
-// dahil).
+// Dummy sürücüde sistem teması yoktur: View::apply_theme'in koyu dalı elle kurulur.
 void apply_dark_theme() {
-    ImGui::StyleColorsDark();
-    ImGui::GetStyle().Colors[ImGuiCol_PopupBg].w = 1.0F;
+    noteapp::gui::theme::apply_colors(ImGui::GetStyle(), noteapp::gui::theme::kDark);
 }
 
 // Formun sonu: küçük pencerede Senkron grubu ancak kaydırılınca görünür; altbilgi yerinde kalmalı.

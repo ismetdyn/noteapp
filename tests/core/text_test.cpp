@@ -217,3 +217,10 @@ TEST_CASE("slugify_stem keeps dots between the slugged parts") {
     CHECK(slugify_stem("a..b", now) == "a.b");
     CHECK(slugify_stem("...", now) == slugify("", now));
 }
+
+TEST_CASE("next_local_midnight is the start of the next local day") {
+    CHECK(next_local_midnight(kNow) == local_time(2026, 10, 29, 0, 0, 0));
+    CHECK(next_local_midnight(local_time(2026, 12, 31, 23, 59, 59)) == local_time(2027, 1, 1, 0, 0, 0));
+    // Tam gece yarısında bir sonraki gün: aynı an iki kez uyandırmaz.
+    CHECK(next_local_midnight(local_time(2026, 10, 29, 0, 0, 0)) == local_time(2026, 10, 30, 0, 0, 0));
+}

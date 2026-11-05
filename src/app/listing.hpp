@@ -96,8 +96,9 @@ public:
     bool set_notes(std::vector<core::NoteInfo> notes);
     // Boş klasörler de görünsün diye deponun klasör listesi; notlardan türeyenlerle birleşir. Aynıysa false.
     bool set_folders(std::vector<std::string> folders);
-    // İşçiden gelen senkron durumları: `sync:` süzgeci ve üst veri bunları görür.
-    void set_sync_states(std::map<core::NotePath, core::SyncState> states);
+    // İşçiden gelen senkron durumları: `sync:` süzgeci ve üst veri bunları görür. Aynıysa dokunmaz ve false
+    // döner.
+    bool set_sync_states(std::map<core::NotePath, core::SyncState> states);
     // `view:` süzgecinin notları; bağlanmazsa `view:` hiçbir notu geçirmez.
     void set_view_lookup(search::ViewLookup views) { views_ = std::move(views); }
     void set_content_searcher(ContentSearcher searcher) { content_searcher_ = std::move(searcher); }

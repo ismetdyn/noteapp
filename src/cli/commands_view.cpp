@@ -19,8 +19,7 @@ using core::append_json_string;
 namespace {
 
 int usage() {
-    std::cerr << core::tr("cli.view_usage") << '\n';
-    return kExitUsage;
+    return usage_error("view");
 }
 
 struct ViewArgs {

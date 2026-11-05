@@ -292,13 +292,23 @@ tui::TuiState state_in(Focus focus) {
     return state;
 }
 
-// Sol ve sağ panelin üst sol köşesi: odaklı panel kalın çerçeve (┏), diğeri ince (┌). Üst çubuk 0. satırda.
+// Sol ve sağ panelin üst sol köşesi (üst çubuk 0. satırda). Her panel yuvarlak çerçevelidir; odak
+// çerçevenin renginden (odaklı) ya da solukluğundan (odaksız) okunur.
+std::string frame_at(const ftxui::Screen& screen, int x) {
+    const auto& corner = screen.PixelAt(x, 1);
+    if (corner.character != "╭")
+        return "not rounded: " + corner.character;
+    if (corner.dim)
+        return "blurred";
+    return corner.foreground_color == ftxui::Color() ? "plain" : "focused";
+}
+
 std::string list_corner(const ftxui::Screen& screen) {
-    return screen.PixelAt(0, 1).character;
+    return frame_at(screen, 0);
 }
 
 std::string preview_corner(const ftxui::Screen& screen, int width) {
-    return screen.PixelAt(width * 2 / 5, 1).character;
+    return frame_at(screen, width * 2 / 5);
 }
 
 std::string row_text(const ftxui::Screen& screen, int y) {
@@ -315,11 +325,11 @@ constexpr std::array kHintKeys = {std::pair{Focus::List, "tui.key_hints_list"},
 
 }  // namespace
 
-TEST_CASE("List focus: heavy frame on the list, no cursor, inverted selection") {
+TEST_CASE("List focus: colored frame on the list, no cursor, inverted selection") {
     const auto state = state_in(Focus::List);
     const auto screen = render_screen(state, text_preview({"body"}));
-    CHECK(list_corner(screen) == "┏");
-    CHECK(preview_corner(screen, kWidth) == "┌");
+    CHECK(list_corner(screen) == "focused");
+    CHECK(preview_corner(screen, kWidth) == "blurred");
     CHECK_FALSE(contains(screen, "▏"));
     const auto selected = find_text(screen, "work-meeting.md");
     REQUIRE(selected);
@@ -330,8 +340,8 @@ TEST_CASE("Search focus: the input is on the bottom line, the top line has only 
     auto state = state_in(Focus::Search);
     state.handle(Key::Char, "o");
     const auto screen = render_screen(state, text_preview({"body"}));
-    CHECK(list_corner(screen) == "┌");
-    CHECK(preview_corner(screen, kWidth) == "┌");
+    CHECK(list_corner(screen) == "blurred");
+    CHECK(preview_corner(screen, kWidth) == "blurred");
     CHECK(contains(screen, "> o▏"));
     const auto cursor = find_text(screen, "▏");
     REQUIRE(cursor);
@@ -348,11 +358,11 @@ TEST_CASE("a filter that stays after Search is visible on the bottom line in Lis
     CHECK(row_text(screen, kHeight - 1).starts_with("> o"));
 }
 
-TEST_CASE("Preview focus: heavy frame on the preview, selection marked but not inverted") {
+TEST_CASE("Preview focus: colored frame on the preview, selection marked but not inverted") {
     const auto state = state_in(Focus::Preview);
     const auto screen = render_screen(state, text_preview({"body"}));
-    CHECK(list_corner(screen) == "┌");
-    CHECK(preview_corner(screen, kWidth) == "┏");
+    CHECK(list_corner(screen) == "blurred");
+    CHECK(preview_corner(screen, kWidth) == "focused");
     CHECK_FALSE(contains(screen, "▏"));
     CHECK(contains(screen, " 1   work-meeting.md"));
     const auto selected = find_text(screen, "work-meeting.md");
@@ -456,10 +466,27 @@ TEST_CASE("Preview find: highlights in the pane and 3/12-style counter in the bo
     CHECK(screen.PixelAt(second->first, second->second).bold);
 }
 
+// FTXUI yan yana kutu çizgilerini birleştirir: modal kenarı alttaki panel çizgisiyle ┰┬┴ olmamalı.
+TEST_CASE("an open modal keeps its own border: no box junctions with the panes under it") {
+    core::init_i18n("en");
+    for (const auto& [width, height] : {std::pair{120, 40}, std::pair{tui::kMinWidth, tui::kMinHeight}}) {
+        CAPTURE(width);
+        auto state = sample_state();
+        state.handle(Key::Char, ":");
+        REQUIRE(state.palette_open());
+        const auto screen = render_screen(state, text_preview({"body"}), width, height);
+        REQUIRE(contains(screen, "╰"));
+        for (const char* junction : {"┬", "┴", "├", "┤", "┼", "┰", "┸", "┠", "┨", "╂", "┯", "┷", "┿"}) {
+            CAPTURE(junction);
+            CHECK_FALSE(contains(screen, junction));
+        }
+    }
+}
+
 TEST_CASE("the frames use the panes' own height: all rows of a small window are drawn") {
     const auto screen = render_screen(state_in(Focus::List), text_preview({"body"}), 60, 15);
-    CHECK(list_corner(screen) == "┏");
-    CHECK(screen.PixelAt(0, 12).character == "┗");  // altta toplamlar ve kısayol satırı
+    CHECK(list_corner(screen) == "focused");
+    CHECK(screen.PixelAt(0, 12).character == "╰");  // altta toplamlar ve kısayol satırı
     CHECK(contains(screen, "T trash"));
 }
 
@@ -703,7 +730,7 @@ TEST_CASE("a: the name row is the first row of the list pane, not the bottom lin
     const auto screen = render_new_row(state, typed_row("deneme.cpp"), 100, 24);
     const std::string first = row_text(screen, 2);
     CHECK(first.find("deneme.cpp▏") != std::string::npos);
-    CHECK(first.starts_with("┃ "));
+    CHECK(first.starts_with("│ "));
     CHECK(first.find('>') == std::string::npos);
     CHECK(row_text(screen, 3).find("work-meeting.md") != std::string::npos);
     const std::string bottom = row_text(screen, 23);
@@ -772,8 +799,10 @@ TEST_CASE("mode frame: the list has a LIST label and its own border color") {
     const auto label = find_text(screen, core::tr("tui.frame_list"));
     REQUIRE(label);
     CHECK(screen.PixelAt(label->first, label->second).foreground_color == ftxui::Color(ftxui::Color::Cyan));
-    // Çerçeve: üst sol köşe etiketle aynı renkte ve kalın; sağ panel odaksız, etiketsiz.
-    CHECK(screen.PixelAt(0, 1).character == "┏");
+    // Çerçeve: üst sol köşe etiketle aynı renkte, etiket kalın; sağ panel odaksız (soluk), etiketsiz.
+    CHECK(screen.PixelAt(0, 1).character == "╭");
+    CHECK(screen.PixelAt(label->first, label->second).bold);
+    CHECK(preview_corner(screen, kWidth) == "blurred");
     CHECK(screen.PixelAt(0, 1).foreground_color == ftxui::Color(ftxui::Color::Cyan));
     CHECK_FALSE(find_text(screen, core::tr("tui.frame_review")));
     CHECK_FALSE(find_text(screen, core::tr("tui.frame_edit")));
@@ -814,8 +843,7 @@ TEST_CASE("review syntax: the preview colors by language and search wins over th
           ftxui::Color(ftxui::Color::Cyan));
     const auto comment = find_text(screen, "hala");
     REQUIRE(comment);
-    CHECK(screen.PixelAt(comment->first, comment->second).foreground_color ==
-          ftxui::Color(ftxui::Color::Green));
+    CHECK(screen.PixelAt(comment->first, comment->second).dim);  // yorum soluk, renksiz
 
     state.handle(Key::Char, "/");
     state.set_preview_lines(&preview.lines, 1);
@@ -825,7 +853,9 @@ TEST_CASE("review syntax: the preview colors by language and search wins over th
     screen = render_screen(state, preview);
     const auto hit = find_text(screen, "hala");
     REQUIRE(hit);
-    CHECK(screen.PixelAt(hit->first, hit->second).foreground_color != ftxui::Color(ftxui::Color::Green));
+    // Geçerli eşleşme ters çizilir: yorumun solukluğu aramanın önüne geçmez.
+    CHECK(screen.PixelAt(hit->first, hit->second).inverted);
+    CHECK_FALSE(screen.PixelAt(hit->first, hit->second).dim);
 }
 
 TEST_CASE("review syntax: PreviewCache picks the language from the extension") {

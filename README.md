@@ -154,15 +154,16 @@ note -n deneme.cpp "int x;"                # yazılan uzantı aynen kalır: dene
 note                                       # metin yok: editör açılır; boş bırakırsan iptal
 note -e "Başlık"                           # editörü ön içerikle aç
 note ls [SORGU] [-f KLASÖR]                # listele (sorgu: bulanık sıra, yoksa en yeni önce); argüman alır: note ls "plan tag:proje type:md"
+note ls -l | note ls --json | note ls -0   # sütunlu (zaman, boyut, tür, yol) / JSON / NUL ayırıcılı; --limit N (-n N)
 note tags [--json]                         # #etiketler ve not sayıları
 note import rapor.txt                      # dosyayı bayt bayt not yap: rapor.txt (ad doluysa rapor-2.txt)
 note import ~/belgeler --folder arsiv      # klasörü alt klasörleriyle: arsiv/belgeler/...; bağ ve gizli girdi gelmez
 note import x.log --name kayit.md --overwrite   # tek dosyaya ad ver, aynı adlı notun üzerine yaz; --json, --type TİP
 note view save AD 'CYPHER' [--force]       # salt okunur sorguyu adla kaydet; view ls|run AD|show AD|rm AD, --json
-note find bütçe onay                       # içerik araması → yol:satır: kesit
+note find bütçe onay                       # içerik araması → yol:satır: kesit; --json, --limit N
 note show SORGU | note edit SORGU          # en iyi eşleşmeyi yazdır / editörde aç
 note mv KAYNAK HEDEF                       # taşı/yeniden adlandır; uzantı değişimi = tip değişimi
-note rm YOL [-y]                           # yalnız tam yol; TTY yoksa -y şart
+note rm YOL [-y]                           # yalnız tam yol; TTY yoksa -y (--yes) şart
 note export --pdf YOL [-o ÇIKTI]           # PDF (A4; GUI ve ekran gerekmez)
 note export --all DİZİN [--ignore-skipped]  # tüm notlar bayt bayt düz dosya, çöp .trash/ altında; üzerine yazmaz, bağdan geçmez; ulaşılamayan not ya da geçişte dışarıda kalan dosya varsa çıkış 1
 note graph migrate [--skip-failed | --new]  # eski düz dosya notları içe aktar (aşağıda); --new: yalnız geçişten sonra düşenler
@@ -171,12 +172,24 @@ note graph export --format jsonl [-o DOSYA] | note graph import [--overwrite] DO
 note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]
 note config path | list | get ANAHTAR | set ANAHTAR DEĞER
 note completion zsh | bash | fish          # kabuk tamamlama betiği (aşağıda)
-note --help | note help KOMUT              # tüm komutlar / tek komutun ayrıntısı
+note --help | note help KOMUT              # gruplu komut listesi / tek komutun ayrıntısı (örneklerle)
+note ls --help                             # her komutta -h/--help: note help ls ile aynı
 note -- ls                                 # "ls" metnini not et (alt komut adıyla çakışma)
 ```
 
-`--no-sync` yazan komutlarda arka plan senkronunu atlar. Çıkış kodları: `0` başarı · `1` kullanıcı kaynaklı (iptal,
+`--no-sync` yazan komutlarda arka plan senkronunu atlar. Her kısa bayrağın uzun adı var (`-t/--type`, `-f/--folder`,
+`-n/--name`, `-y/--yes`, `-o/--output`...); değer `--type=md` biçiminde de verilebilir. `-q/--quiet` başarı satırını
+(`Kaydedildi:`, `Silindi:`...) yazmaz, hatalar yine görünür. Çıkış kodları: `0` başarı · `1` kullanıcı kaynaklı (iptal,
 bulunamadı) · `2` kullanım hatası · `3` G/Ç/iç hata · `4` senkron hatası.
+
+Hatalı kullanımda ilk satırın altında ipucu çıkar (`ipucu: bunu mu demek istediniz: 'status'?`, `ipucu: ayrıntı için
+'note help sync'`). Komut adına benzeyen tek sözcük (`note lss`) yine not olarak kaydedilir; terminalde geri alma
+ipucu gösterilir.
+
+Terminal: renk `NO_COLOR`, `TERM=dumb` ve `NOTEAPP_COLOR=always|never|auto` ile yönetilir; boruya renk gitmez. Ekrana
+sığmayan `ls`, `find`, `show`, `tags`, `config list`, `view ls` ve yardım çıktısı `NOTEAPP_PAGER`, yoksa `PAGER`, yoksa
+`less -FIRX` ile sayfalanır; `--no-pager` ya da `NOTEAPP_PAGER=cat` kapatır, boruda pager hiç açılmaz (Windows'ta
+pager yok). `note sync` ve `note import` terminalde çalışırken tek satırlık ilerleme yazar.
 
 #### Kabuk tamamlama
 
@@ -275,7 +288,7 @@ Pencerenin üstünde tek araç çubuğu, dosya yöneticisindeki gibi gruplu: `Ye
 
 - **Ağaç** (varsayılan): TUI'deki gibi klasörler ve notlar tek panelde, kök `Tümü`; oka ya da çift tıklayınca klasör açılır/kapanır. Açık klasörler `gui-state.toml`'da kalır; seçili not açılışta görünür olur.
 - **Ayrıntılar**: yalnız geçerli klasörün içeriği, sütunlar Ad, Boyut, Değiştirilme, Oluşturulma; önce klasörler. Klasöre çift tıklama ya da `Enter` içine girer; üstte `Yukarı` ve tıklanabilir yol düğmeleri.
-- **Harita**: notlar çizge olarak, editör sağda kalır. Kenarlar `[[bağlantı]]` (oklu) ve ilişki (renkli, oksuz); düğüm rengi not tipinden, gösterilen not halkalı. Üstte `Tüm çizge` (kapalıyken gösterilen notun çevresi), `Derinlik` (varsayılan 2) ve `Etiketler` (etiketler küçük kare). Tıklama notu açar (bekleyen düzenleme önce kendi notuna kaydedilir), çift tıklama açıp Ağaç'a geçer, düğümü sürüklemek onu oraya sabitler. Tekerlek imlecin çevresinde yakınlaştırır; boşluğu sürüklemek ya da orta tuş kaydırır; harita odaktayken oklar kaydırır, `+`/`-` yakınlaştırır, `0` sığdırır. Arama kutusu eşleşen notları vurgular, gerisini soldurur (`tag:` dahil). En çok 2.000 düğüm çizilir, aşılınca üstte uyarı çıkar. Hedefinden önce kaydedilmiş bir notun `[[bağlantı]]`ı, not yeniden kaydedilene dek haritada çizilmez (bağlantı panelinde görünür).
+- **Harita**: notlar çizge olarak, editör sağda kalır. Kenarlar `[[bağlantı]]` (oklu) ve ilişki (renkli, oksuz); düğüm rengi not tipinden, gösterilen not halkalı. Üstte `Tüm çizge` (kapalıyken gösterilen notun çevresi), `Derinlik` (varsayılan 2) ve `Etiketler` (etiketler küçük kare). Tıklama notu açar (bekleyen düzenleme önce kendi notuna kaydedilir), çift tıklama açıp Ağaç'a geçer, düğümü sürüklemek onu oraya sabitler. Tekerlek imlecin çevresinde yakınlaştırır; boşluğu sürüklemek ya da orta tuş kaydırır; harita odaktayken oklar kaydırır, `+`/`-` yakınlaştırır, `0` sığdırır. **İlişki kurma:** `Shift` basılıyken bir düğümü başka düğüme sürükle: not → not küçük menüde `İlişkili` ya da `Bağlantı` (ilk notun sonuna `[[yol]]` eklenir), not ↔ etiket etiketi nota ekler. Kenara sağ tık ilişkiyi ya da etiketi kaldırır (cümledeki etiketin yalnız `#`i gider, sözcük kalır); `[[bağlantı]]` notun metnindedir, editörde silinir. Bağlantı ve etiket yalnız metin notlarına (md, txt, uzantısız) yazılır. TUI haritasında aynısı: `C` (Tab hedef, Enter, `r`/`l`, `d` kaldır, Esc), düğümden sağ sürükleme, kenara sağ tık + `d`. Arama kutusu eşleşen notları vurgular, gerisini soldurur (`tag:` dahil). En çok 2.000 düğüm çizilir, aşılınca üstte uyarı çıkar. Hedefinden önce kaydedilmiş bir notun `[[bağlantı]]`ı, not yeniden kaydedilene dek haritada çizilmez (bağlantı panelinde görünür).
 - **İçe al** (araç çubuğu menüsü `Dosya içe al…` / `Klasör içe al…`, palette `import`, ya da dosya/klasörleri pencereye sürükleyip bırak): yerel diyalogda çoklu seçim; `note import` kuralıyla bayt bayt, `Yeni not`un klasörüne. Özet durum çubuğunda, ilk not sekme kuralıyla açılır: iğnelenmiş, tutulan ya da yazılmış taslak sekmesi yerinde kalır, not yeni sekmede; kaydedilmemiş düzenleme önce kaydedilir. Linux'ta diyalog XDG portal ya da `zenity` ister; yoksa durum çubuğu söyler, sürükle-bırak yine çalışır. `notes-gui --help` kısa kullanım.
 - Klasör satırı seçilince açık notun bekleyen düzenlemesi önce kaydedilir, sağ panelde editör yerine klasör özeti (yol, not ve klasör sayısı) görünür.
 - Arama kutusuna yazınca liste düz sonuca döner (vurgulu, seçili klasörün içinde); çöp görünümü de düz listedir. Yanındaki düğme `Ad` / `İçerik` arasında geçer (`Ctrl+Shift+M`); kutuda `Tab` argümanı, etiketi ya da not adını tamamlar (çok aday varsa liste: yazı süzer, `Enter` ekler, `Esc` kapatır), soluk öneriyi `→` alır, `Ctrl+P` önceki aramalara döner (`Ctrl+N` ileri); argümanlar renklidir, bozuk değer kırmızı. Bulunan aramalar `gui-state.toml`'da hatırlanır (TUI kuralıyla, parola benzeri sorgu yazılmaz); `Ctrl+Shift+F` ad ve içerikte birlikte arar (`Tümü`), içerikte bulunan notun en iyi satırı yolun altında görünür. `Ctrl+Shift+T` etiketleri, `Ctrl+Shift+R` kayıtlı görünümleri listeler; seçilen `tag:` ya da `view:` sorgusu olur. `sync:new` gibi senkron argümanı not başına durumu kullanır (senkron açıkken).
@@ -304,6 +317,7 @@ Pencerenin üstünde tek araç çubuğu, dosya yöneticisindeki gibi gruplu: `Ye
 | `Shift+E` / `Ctrl+C` (listede) | Dış editörde aç / panoya kopyala |
 | `Ctrl+Shift+M` | Arama modu (Ad / İçerik) |
 | Oklar / `+` `-` / `0` (harita odaktayken) | Kaydır / yakınlaştır, uzaklaştır / sığdır |
+| `Shift`+sürükleme / kenara sağ tık (haritada) | İki düğümü ilişkilendir, bağla ya da etiketle / ilişkiyi ya da etiketi kaldır |
 | `F5` | Şimdi senkronla |
 | `Ctrl+,` | Ayarlar sekmesi |
 

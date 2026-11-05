@@ -23,8 +23,6 @@ constexpr float kToolbarGroupGapEms = 0.6F;
 constexpr float kPickerMaxHeightEms = 20.0F;
 
 // Argüman renkleri TUI'ninkiler: anahtar camgöbeği, değer yeşil, bozuk değer kırmızı.
-constexpr ImU32 kArgumentKeyColor = IM_COL32(40, 160, 170, 255);
-constexpr ImU32 kArgumentValueColor = IM_COL32(60, 150, 60, 255);
 
 struct SearchKeys {
     GuiState* state;
@@ -178,13 +176,14 @@ void View::draw_search_text(const std::string& text) {
     for (const tui::InputSpan& span : tui::search_spans(text)) {
         paint(at, span.begin, plain);
         const char* kind = "key";
-        ImU32 color = kArgumentKeyColor;
+        // Anahtar ve değer sözdizimi aileleriyle aynı: tip camgöbeği, değer yeşil.
+        ImU32 color = theme::current().type;
         if (span.kind == tui::InputSpan::Kind::Value) {
             kind = "value";
-            color = kArgumentValueColor;
+            color = theme::current().string;
         } else if (span.kind == tui::InputSpan::Kind::Invalid) {
             kind = "invalid";
-            color = ImGui::GetColorU32(kErrorColor);
+            color = theme::current().danger;
         }
         paint(span.begin, span.end, color);
         remember_rect(std::format("search_arg:{}:{}", kind, span.begin), ImVec2(x_at(span.begin), origin.y),

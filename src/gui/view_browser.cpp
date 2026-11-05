@@ -215,7 +215,7 @@ void View::draw_note_list() {
         draw_details_path();
     draw_quick_add();
     // Ayrıntılar tablosu dar panelde yatay kaydırılır; diğer görünümlerde içerik zaten panel genişliğindedir.
-    ImGui::BeginChild("##notes", ImVec2(0.0F, 0.0F), ImGuiChildFlags_Borders,
+    ImGui::BeginChild("##notes", ImVec2(0.0F, 0.0F), theme::kPaneChildFlags,
                       ImGuiWindowFlags_HorizontalScrollbar);
     // Klavyeyle (arama kutusunda Shift+Tab, Enter) girilince gezinti imleci seçili satırda başlar; yoksa
     // imleç ve seçim ayrı satırlarda yürür, bağlam menüsü ile Del farklı notlara giderdi. Fareyle odak zaten
@@ -581,7 +581,7 @@ void View::draw_column_menu() {
 
 void View::draw_folder_summary() {
     const auto summary = state_.folder_summary();
-    ImGui::BeginChild("##folder_summary", ImVec2(0.0F, 0.0F), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##folder_summary", ImVec2(0.0F, 0.0F), theme::kPaneChildFlags);
     if (summary) {
         const std::string icon = core::icon_text(core::folder_icon(true), state_.icon_style());
         const std::string title = summary->path.empty() ? core::tr("gui.all_notes") : summary->path;

@@ -166,6 +166,43 @@ TEST_CASE_FIXTURE(SearchFixture, "sync: sees per-note sync states filled off the
     CHECK(rows(*state).empty());
 }
 
+TEST_CASE_FIXTURE(SearchFixture, "sync states that did not change draw no frames; changed ones still do") {
+    config.sync.enabled = true;
+    std::filesystem::create_directories(config.notes_dir / ".git");
+    auto state = make_state();
+    auto view = make_view(*state);
+    state->set_query("sync:new");
+    const auto idle_until = [&](const auto& done, std::chrono::milliseconds limit) {
+        const auto until = std::chrono::steady_clock::now() + limit;
+        while (!done() && std::chrono::steady_clock::now() < until)
+            view->idle_step(1);
+    };
+    idle_until([&] { return state->model().row_count() == 4; }, std::chrono::seconds(10));
+    REQUIRE(state->model().row_count() == 4);
+    // Açılıştaki senkron iletileri dinsin: 500 ms kare yoksa sakin.
+    for (auto quiet = view->frames(), seen = quiet + 1; seen != quiet;) {
+        seen = quiet;
+        idle_until([] { return false; }, std::chrono::milliseconds(500));
+        quiet = view->frames();
+    }
+    const std::size_t frames = view->frames();
+
+    // Başka bağlantı yazar: liste değişir, notun durumu aynı (new). Tarama doğrudan: kareyi yalnız işçinin
+    // sonucu üretebilir.
+    add_note("plan.md", "#proje toplantı\nbütçe\nek satır\n", 5);
+    state->rescan();
+    idle_until([] { return false; }, std::chrono::milliseconds(1500));
+    CHECK(view->frames() == frames);
+
+    // Yeni not yeni durum getirir: sonuç uygulanır ve çizilir.
+    add_note("yeni.md", "x\n");
+    state->rescan();
+    idle_until([&] { return state->model().row_count() == 5 && view->frames() > frames; },
+               std::chrono::seconds(10));
+    CHECK(state->model().row_count() == 5);
+    CHECK(view->frames() > frames);
+}
+
 TEST_CASE_FIXTURE(SearchFixture, "a name-only global row is one line tall; a content row has its best line") {
     add_note("zeta.md", "x\n", 50);
     add_note("other.md", "zeta burada\n", 60);

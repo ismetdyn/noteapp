@@ -9,6 +9,7 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <chrono>
 #include <ctime>
 #include <doctest/doctest.h>
@@ -18,6 +19,7 @@
 #include <functional>
 #include <git2.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -126,6 +128,10 @@ struct SettingsFixture : WindowFixture {
         return done();
     }
 };
+
+// Senkron grubu formun sonundadır; 650 piksellik varsayılan pencerede kaydırmadan görünmez. Satırı tıklayan
+// testler pencereyi uzatır (sığma ve kaydırma layout_test'te denetlenir).
+constexpr int kTallWindowHeight = 1000;
 
 void show_settings(GuiState& state, View& view) {
     state.show_settings_tab();
@@ -245,6 +251,7 @@ TEST_CASE_FIXTURE(SettingsFixture, "the notes_dir browse button goes through the
 
 TEST_CASE_FIXTURE(SettingsFixture, "the token row is enabled only for HTTPS remotes") {
     auto state = make_state_wired();
+    state->layout().height = kTallWindowHeight;
     auto view = make_view(*state);
     SettingsPage& page = state->settings();
     show_settings(*state, *view);
@@ -372,6 +379,7 @@ TEST_CASE_FIXTURE(SettingsFixture,
     add_note("a.md", "# a\n");
     const fs::path remote = make_bare("remote.git");
     auto state = make_state_wired();
+    state->layout().height = kTallWindowHeight;
     auto view = make_view(*state);
     SettingsPage& page = state->settings();
     show_settings(*state, *view);
@@ -540,6 +548,99 @@ TEST_CASE_FIXTURE(SettingsFixture, "text fields grow with the window") {
     REQUIRE(SDL_SetWindowSize(windows.get()[0], 1600, 650));
     gui_test::settle(*view);
     CHECK(width() > before + 500.0F);
+}
+
+namespace {
+
+// Fare basılıp ayrı karede bırakılır (click_button gibi); ad yerine ekran noktası.
+void click_at(View& view, float x, float y) {
+    ImGui::GetIO().AddMousePosEvent(x, y);
+    view.draw_frame();
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    view.draw_frame();
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    gui_test::settle(view);
+}
+
+// Varsayılan tür alanının ok düğmesi grubun sağ ucundadır; ortası metin alanına düşer.
+const ImGuiWindow* open_type_list(View& view, const View::ItemRect& field) {
+    click_at(view, field.max_x - 2.0F, (field.min_y + field.max_y) / 2.0F);
+    const ImGuiWindow* popup = ImGui::FindWindowByName("##Combo_00");
+    REQUIRE(popup != nullptr);
+    REQUIRE(popup->Active);
+    return popup;
+}
+
+}  // namespace
+
+// combo_field listesi: ImGui varsayılanı ok düğmesi kadar dar ve 8 satır yüksekliğindeydi, tür adları kesiliyordu.
+TEST_CASE_FIXTURE(SettingsFixture, "the type list opens under the field and shows every type in full") {
+    const std::string longest = "a_rather_long_type_name_for_notes";
+    config.types = {"md", "txt", "py", "rs", "js", "ts", "go", "sh", "c", "h", "cpp", "hpp", longest};
+    REQUIRE(noteapp::core::save_config(config));
+    auto state = make_state_wired();
+    auto view = make_view(*state);
+    show_settings(*state, *view);
+    const View::ItemRect field = view->item_rects().at("setting:default_type");
+    const ImGuiWindow* popup = open_type_list(*view, field);
+
+    CHECK(popup->Pos.x == doctest::Approx(field.min_x));
+    CHECK(popup->Size.x >= field.max_x - field.min_x);
+    const float longest_width =
+        ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0F, longest.c_str()).x;
+    CHECK(popup->WorkRect.GetWidth() >= longest_width);
+    CHECK_FALSE(popup->ScrollbarY);  // ekrana sığan liste kaydırmasız, bütün satırlar görünür
+    CHECK(popup->ContentSize.y >= static_cast<float>(config.types.size()) * ImGui::GetTextLineHeight());
+
+    // Son satır (en uzun ad) seçilir: değer yazılır, liste kapanır.
+    click_at(*view, popup->Pos.x + (popup->Size.x / 2.0F),
+             popup->InnerRect.Max.y - popup->WindowPadding.y - (ImGui::GetTextLineHeight() / 2.0F));
+    CHECK(state->settings().field("default_type") == longest);
+    CHECK_FALSE(popup->Active);
+}
+
+// BeginCombo gibi: açıkken oka yeniden tıklamak listeyi kapatır.
+TEST_CASE_FIXTURE(SettingsFixture, "clicking the type arrow again closes the list") {
+    auto state = make_state_wired();
+    auto view = make_view(*state);
+    show_settings(*state, *view);
+    const View::ItemRect field = view->item_rects().at("setting:default_type");
+    const ImGuiWindow* popup = open_type_list(*view, field);
+    click_at(*view, field.max_x - 2.0F, (field.min_y + field.max_y) / 2.0F);
+    CHECK_FALSE(popup->Active);
+}
+
+TEST_CASE_FIXTURE(SettingsFixture, "a type list taller than the screen scrolls inside the screen") {
+    auto state = make_state_wired();
+    auto view = make_view(*state);
+    show_settings(*state, *view);
+    // Alandan geniş ad: listenin genişliğini alan değil ad belirler, kaydırma çubuğu adı kesmemeli.
+    const View::ItemRect field = view->item_rects().at("setting:default_type");
+    const float char_width = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0F, "w").x;
+    const std::string longest(static_cast<std::size_t>((field.max_x - field.min_x) / char_width) + 4, 'w');
+    std::string types = longest;
+    constexpr int kTypes = 200;
+    for (int i = 0; i < kTypes; ++i)
+        types += ", t" + std::to_string(i);
+    SettingsPage& page = state->settings();
+    page.set_field("types", types);
+    page.save();
+    REQUIRE(page.types().size() == kTypes + 1);
+    gui_test::settle(*view);
+    const View::ItemRect opened_at = view->item_rects().at("setting:default_type");
+    const ImGuiWindow* popup = open_type_list(*view, opened_at);
+
+    CHECK(popup->ScrollbarY);
+    // Liste alanın altında ya da üstünde kayar; alanın üstüne binmez (ok yeniden tıklanabilir kalır).
+    CHECK((popup->Pos.y >= opened_at.max_y || popup->Pos.y + popup->Size.y <= opened_at.min_y));
+    CHECK(popup->Size.y <= ImGui::GetMainViewport()->WorkSize.y);
+    constexpr float kImGuiDefaultRows = 8.0F;  // eski sabit tavan: liste ondan uzun açılmalı
+    CHECK(popup->Size.y > 2.0F * kImGuiDefaultRows * ImGui::GetTextLineHeightWithSpacing());
+    const float longest_width =
+        ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0F, longest.c_str()).x;
+    CHECK(popup->Size.x <
+          ImGui::GetMainViewport()->WorkSize.x);  // ekrana sığan ad: kesilmesi kırpmadan olmaz
+    CHECK(popup->WorkRect.GetWidth() >= longest_width);
 }
 
 TEST_CASE_FIXTURE(SettingsFixture, "language options read as text while the stored value stays a code") {

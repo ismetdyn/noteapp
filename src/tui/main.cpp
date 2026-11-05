@@ -13,6 +13,8 @@
 #include "core/note_store.hpp"
 #include "core/note_views.hpp"
 #include "core/paths.hpp"
+#include "core/process.hpp"
+#include "core/text.hpp"
 #include "detect/detect.hpp"
 #include "edit/clipboard.hpp"
 #include "edit/completion.hpp"
@@ -51,6 +53,7 @@
 #include <ftxui/component/loop.hpp>
 #include <ftxui/component/mouse.hpp>
 #include <ftxui/screen/terminal.hpp>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <memory>
@@ -245,7 +248,7 @@ noteapp::tui::MouseInput to_mouse(const ftxui::Mouse& mouse) {
             return MouseMotion::Move;
         }
     }();
-    return {mouse.x, mouse.y, button, motion};
+    return {mouse.x, mouse.y, button, motion, mouse.shift};
 }
 
 // Yeni notun klasörü: GUI ile ortak kural (app::new_note_folder).
@@ -273,24 +276,32 @@ void exit_if_terminated(ftxui::App& app) {
 
 // FTXUI Loop, her turda okuduğundan bağımsız 16 ms uyur ve tek okumada 128 bayt alır: tuş 16 ms'ye kadar
 // bekler, biriken girdi 42 tuş/kare ile erir. Burada uyku girdide kesilir, kuyruk boşalana dek turlar uyumaz.
-// Windows ve terminal olmayan stdin (FTXUI o zaman /dev/tty okur) eski yolda kalır.
-void run_event_loop(ftxui::App& app, const ftxui::Component& component) {
+// Windows ve terminal olmayan stdin (FTXUI o zaman /dev/tty okur) FTXUI'nin temposunda düz uyur.
+// Zamanlayıcılar (autosave, dil sunucusu, önizleme ertelemesi) kare istemez: `wake_due` süre dolunca true
+// döner ve tek yeniden çizim gönderilir. RequestAnimationFrame beklerken her 15 ms'de tam kare kurardı.
+void run_event_loop(ftxui::App& app, const ftxui::Component& component,
+                    const std::function<bool()>& wake_due) {
+    constexpr int kIdleWaitMs = 16;
+    ftxui::Loop loop(&app, component);
 #ifndef _WIN32
-    if (isatty(STDIN_FILENO) == 1) {
-        constexpr int kIdleWaitMs = 16;
-        ftxui::Loop loop(&app, component);
-        while (!loop.HasQuitted()) {
-            loop.RunOnce();
+    const bool poll_stdin = isatty(STDIN_FILENO) == 1;
+#endif
+    while (!loop.HasQuitted()) {
+        if (wake_due())
+            app.Post(redraw_event());
+        loop.RunOnce();
+#ifndef _WIN32
+        if (poll_stdin) {
             pollfd input{STDIN_FILENO, POLLIN, 0};
             const int ready = poll(&input, 1, kIdleWaitMs);
             // Kapanan terminalde poll hemen döner: işlemciyi yememek için eski tempoya düş.
             if (ready > 0 && (input.revents & POLLIN) == 0)
                 std::this_thread::sleep_for(std::chrono::milliseconds(kIdleWaitMs));
+            continue;
         }
-        return;
-    }
 #endif
-    app.Loop(component);
+        std::this_thread::sleep_for(std::chrono::milliseconds(kIdleWaitMs));
+    }
 }
 
 // FTXUI terminali bıraktıktan sonra yazılır: not yolu (senkrondan gelebilir) kaçış dizisi ya da bidi taşır.
@@ -361,6 +372,9 @@ private:
     void report_closed_tabs(const std::vector<tui::EditorTabs::Closed>& closed, std::uint64_t focused);
     void settle_tabs();
     bool on_event(ftxui::Event event);
+    // En yakın zamanlayıcının (autosave, dil sunucusu gönderimi, önizleme ertelemesi) süresi dolduysa true;
+    // anı son çizim hesaplar (render), çağrı onu tüketir: bir süre bir yeniden çizim.
+    bool wake_due(std::chrono::steady_clock::time_point now);
     void rescan_loop(const std::stop_token& stop, std::vector<core::NoteInfo> listing,
                      std::uint64_t listing_version);
 
@@ -381,6 +395,10 @@ private:
     noteapp::search::ViewLookup view_lookup_;
     ftxui::App app_ = ftxui::App::Fullscreen();
     tui::FrameDiff frame_diff_;
+    std::optional<std::chrono::steady_clock::time_point> wake_at_;  // render yazar, wake_due tüketir
+    // Tanı: NOTEAPP_TUI_DRAW_LOG bir dosya yoluysa her çizim bir satır (terminale yazılan bayt) ekler. Boşta
+    // çizim olmadığını tui_pty testleri bununla sayar; değişken yoksa dosya açılmaz.
+    std::ofstream draw_log_;
     // Durumlar işçide hesaplanır, tuş beklemez; sonuç UI iş parçacığına Post edilir. app_'ten sonra
     // bildirildiği için ondan önce yıkılır.
     app::SyncStatusWorker sync_status_;
@@ -435,9 +453,11 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
       // Yükleme uyarıları (ör. bozuk config.toml -> varsayılanlar) açılışta alt çubukta görünür.
       status_{core::tr("tui.sync_off"), tui::config_warnings_message(loaded.warnings)},
       sync_status_([this](app::SyncStates states) {
-          app_.Post(
-              [this, states = std::move(states)]() mutable { state_.set_sync_states(std::move(states)); });
-          app_.Post(redraw_event());
+          // Aynı durumlar (her kayıttan sonraki istek, senkron kapalıyken hep) çizim istemez.
+          app_.Post([this, states = std::move(states)]() mutable {
+              if (state_.set_sync_states(std::move(states)))
+                  app_.Post(redraw_event());
+          });
       }),
       word_tables_(kWordTableIdle,
                    tui::completion_limits_of(config_.limits.tui, config_.tuning.completion_min_prefix_bytes)),
@@ -491,8 +511,15 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
         status_.message = opening->status;
     }
 
+    if (const auto draw_log = core::get_env_utf8("NOTEAPP_TUI_DRAW_LOG"))
+        draw_log_.open(std::filesystem::path(std::u8string(draw_log->begin(), draw_log->end())),
+                       std::ios::app);
     app_.SetFrameWriter([this](const ftxui::Screen& screen, bool repaint, std::string& output) {
+        const std::size_t before = output.size();
         frame_diff_.write(screen, repaint, output);
+        // flush: test sayarken satır yarım kalmasın.
+        if (draw_log_.is_open())
+            draw_log_ << (output.size() - before) << '\n' << std::flush;
     });
     if (!issue)
         stray_probe_ = std::jthread([this, config = config_](const std::stop_token& stop) {
@@ -683,11 +710,9 @@ void TuiSession::start_auto_sync() {
 // Önizleme satır sayısı modele bildirilir ki PgDn son satırı aşmasın.
 const tui::Preview& TuiSession::sync_preview() {
     const tui::Preview& shown = preview_.throttled(state_, store(), std::chrono::steady_clock::now());
-    // Beklerken eski notun satır sayısı yeni notun kaydırmasını kırpmasın; animasyon tıkı son seçimi
-    // okur.
-    if (preview_.deferred())
-        ftxui::animation::RequestAnimationFrame();
-    else
+    // Beklerken eski notun satır sayısı yeni notun kaydırmasını kırpmasın; erteleme bitince çizim (render'ın
+    // uyanma anı) son seçimi okur.
+    if (!preview_.deferred())
         state_.set_preview_lines(&shown.lines, preview_.generation());
     return shown;
 }
@@ -726,14 +751,22 @@ ftxui::Element TuiSession::render() {
     const tui::EditorViewport viewport = tui::editor_viewport(window, state_.layout());
     tui::EditorSession& editor = tabs_.active();
     editor.layout(viewport.columns, viewport.rows);  // boyut değişince de imleç görünür kalsın
-    // Tanılar ve öneriler çizimden hemen önce alınır. Değişiklik boşta beklerken kare istenir: süre dolunca
-    // gönderilsin (önizlemenin ertelemesiyle aynı yol).
+    // Tanılar ve öneriler çizimden hemen önce alınır. Boşta bekleyen değişiklik, otomatik kayıt ve önizleme
+    // ertelemesi kare istemez: en yakın süre uyanma anı olur (wake_due), o an tek çizim yazar/gönderir.
     const auto now = std::chrono::steady_clock::now();
-    // Otomatik kayıt; süre beklerken kare istenir ki süre dolunca yazılsın (dil sunucusuyla aynı yol). Süresi
-    // geçmiş ama kipi bekleyen kayıt kare istemez: sıradaki tuş onu yapar.
+    // Süresi geçmiş ama kipi bekleyen kayıt uyandırmaz: sıradaki tuş onu yapar.
     editor.tick(now);
+    std::optional<std::chrono::steady_clock::time_point> wake_at;
+    const auto wake_by = [&wake_at](std::optional<std::chrono::steady_clock::time_point> deadline) {
+        if (deadline && (!wake_at || *deadline < *wake_at))
+            wake_at = deadline;
+    };
     if (const auto deadline = editor.autosave_deadline(); deadline && *deadline > now)
-        ftxui::animation::RequestAnimationFrame();
+        wake_by(deadline);
+    // Gün dönünce listedeki "bugün" saatleri (HH:MM) tarihe döner (core::short_time_text): bir çizim.
+    const auto wall = std::chrono::system_clock::now();
+    wake_by(now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                      core::next_local_midnight(wall) - wall));
     // Harita görünürse: kenarlar yalnız eskiyince okunur, yerleşim kare başına bir adım; durunca kare
     // istenmez. Çevrenin merkezi etkin sekmenin notu (GUI gibi), sekme yoksa seçili not.
     std::optional<core::NotePath> map_center = editor.path();
@@ -748,8 +781,7 @@ ftxui::Element TuiSession::render() {
     if (state_.step_map())
         ftxui::animation::RequestAnimationFrame();
     const tui::LanguageServers::Update lsp = language_servers_.update(editor, now);
-    if (lsp.wants_frame)
-        ftxui::animation::RequestAnimationFrame();
+    wake_by(lsp.send_at);
     if (!lsp.status.empty())
         lsp_status_ = lsp.status;
     // Editörün kendi iletisi ("Kaydedildi", hata) önce gelir: dil sunucusu iletisi satır boşalınca çıkar.
@@ -758,7 +790,10 @@ ftxui::Element TuiSession::render() {
     if (!lsp_status_.empty() && editor.is_open() && editor.message().empty())
         editor.show_notice(std::exchange(lsp_status_, {}));
     const std::vector<tui::TabLabel> tabs = tabs_.labels();
-    return tui::render(state_, sync_preview(), status_, window, dialog_ ? &*dialog_ : nullptr,
+    const tui::Preview& preview = sync_preview();
+    wake_by(preview_.deferred_until());
+    wake_at_ = wake_at;
+    return tui::render(state_, preview, status_, window, dialog_ ? &*dialog_ : nullptr,
                        confirm_ ? &*confirm_ : nullptr, help_ ? &*help_ : nullptr,
                        settings_ ? &*settings_ : nullptr, new_row_ ? &*new_row_ : nullptr, &editor,
                        spell_.get(), rename_ ? &*rename_ : nullptr, tabs);
@@ -1113,6 +1148,13 @@ void TuiSession::run_intent(const tui::Intent intent, const Key key, const std::
     }
 }
 
+bool TuiSession::wake_due(std::chrono::steady_clock::time_point now) {
+    if (!wake_at_ || now < *wake_at_)
+        return false;
+    wake_at_.reset();
+    return true;
+}
+
 void TuiSession::rescan_loop(const std::stop_token& stop, std::vector<core::NoteInfo> listing,
                              const std::uint64_t listing_version) {
     std::mutex mutex;
@@ -1163,7 +1205,8 @@ int TuiSession::run() {
     tui::install_termination_handlers();
     app_.Post([this] { exit_if_terminated(app_); });
     run_event_loop(
-        app_, ftxui::CatchEvent(view_, [this](ftxui::Event event) { return on_event(std::move(event)); }));
+        app_, ftxui::CatchEvent(view_, [this](ftxui::Event event) { return on_event(std::move(event)); }),
+        [this] { return wake_due(std::chrono::steady_clock::now()); });
 
     // Dış sonlandırma dahil her çıkış: kirli metin sessizce düşmez. Senkrondan önce: kayıt da gönderilsin.
     for (const std::string& note : tabs_.flush_on_exit())

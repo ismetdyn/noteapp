@@ -11,7 +11,7 @@ gezinmek; ayarları bir sekmeden yönetmek; PDF dışa aktarmak.
 
 Tek SDL3 penceresi, Dear ImGui sekmeleri: **Notlar** | **Ayarlar**. Durum çubuğu: senkron durumu, not sayısı.
 Mimari: `GuiState` (saf model, ImGui/SDL bilmez; testlerin çoğu burada) + `View` (her karede `GuiState`'i çizer, kullanıcı
-niyetini kare bittikten sonra ona iletir). Olay döngüsü `SDL_WaitEventTimeout`; boştayken sürekli çizilmez. AutoSync
+niyetini kare bittikten sonra ona iletir). Olay döngüsü `SDL_WaitEventTimeout`; boştayken kare üretilmez: değişiklik bulmayan `rescan_seconds` taraması ve odaktaki not editörü (imleci yanıp sönmez) kare istemez, bekleyen dil sunucusu değişikliği gönderileceği anda tek kare çizer. Açık diyalog da olay yoksa çizmez (metin alanı odaktaysa kırpma imleci hariç). Değişmeyen senkron durumu sonucu kare istemez (`GuiState::post_quiet`). Fare gecikmeli ipucu olan öğede durunca gecikme dolunca, yerel gece yarısında ("bugün" saati tarihe döner) birer kez uyanılır. AutoSync
 sonucu işçiden ana iş parçacığına `GuiState::post` kuyruğuyla geçer, `SDL_PushEvent` yalnız uyandırır.
 
 **Ölçek:** arayüz ölçeği pencereninkidir: `SDL_GetWindowDisplayScale / SDL_GetWindowPixelDensity`. ImGui pencere koordinatında
@@ -46,7 +46,7 @@ yer açılınca kayıtlı boyuta dönülür.
 - **Bilgi paneli (T82):** editörün altında, bağlantı panelinin üstünde katlanır başlık `Bilgi` (`Ctrl+I`); TUI'nin satır ayrıntısıyla aynı alanlar (boyut, güncelleme, oluşturma, senkron, kaynak cihaz) ve tip, etiketler. `created` ve `origin` boşken "bilinmiyor", etiket ve tip yoksa "yok". Senkron durumu `sync::fill_sync_status` ile yalnız gösterilen not için doldurulur (senkron kapalıyken `senkron kapalı`). Değerler bağlantılarla aynı anlarda tazelenir (gösterim, kayıt, yeniden tarama); boyut ve zaman listedeki kayıttan gelir. Sığarsa iki alan çifti yan yana (yedi alan dört satır), yoksa tek sütun; yükseklik bağlantı paneliyle aynı kuralla sınırlı (en çok 8 satır, kalan alanın %40'ı), kalanı kaydırılır. Kapalı başlar, katlanma oturumluktur. Taslakta ve klasör seçiliyken panel yoktur. Kaynak cihaz adı güvenilmez: denetim baytı `U+FFFD` olur.
 - **Önizleme (T82, G4):** yalnız gösterilen kayıtlı `md`, `markdown`, `csv` ya da `json` notunda (TUI REVIEW ile aynı kural, tek sahibi `app::preview_kind_for`), düzenlenebilir metinde (geçerli UTF-8, NUL yok) ve `limits.tui.view_bytes` (256 KiB; TUI biçimli görünümüyle aynı anahtar, `0` sınırsız) altında; aksi hâlde düğme kapalıdır, nedeni ipucunda. `Ctrl+Shift+V` ya da başlıktaki düğme önizleme ↔ düzenleme; seçim oturum boyunca tüm önizlenen notlarda geçerlidir (TUI `R`), önizlenemeyen notta editör görünür. Düzenlemeye dönüş odağı editöre verir; imleç ve kaydırma sekmenin EditorBuffer'ında kalır; önizleme konumu kaynağa eşlenmez. Önizleme salt okunurdur ve tamponu (kaydedilmemiş düzenleme dahil) gösterir.
   - **Ayrıştırma:** PDF dışa aktarmanın md4c yürüyüşü (`pdf::parse_markdown`, `MarkdownOptions::links`): aynı bayraklar ve `MD_FLAG_NOHTML`; önizleme ayrıca bağlantı hedeflerini ve `[[wiki]]` bağlantılarını (`MD_FLAG_WIKILINKS`) ister, PDF istemez (çıktısı değişmez). TUI'nin `render_markdown`'ı terminal hücresine sarılmış satır ürettiği için kullanılmaz.
-  - **Çizim** (`src/gui/markdown_preview.*`): başlıklar gömülü DejaVu Sans Bold ile 1,6 / 1,4 / 1,2 / 1,1 em; vurgu Oblique / Bold / BoldOblique; listeler asılı imle (`•`, `1.`, `[x]`) derinlik başına girintili; kod bloğu DejaVu Sans Mono, zeminli, boşluklar korunur, sarılmaz; satır içi kod `ImGuiCol_TableBorderLight` zeminli (açık ve koyu temada pencere zeminine karşı ≥ 1,5, metne karşı ≥ 4,5 karşıtlık); alıntı solda çubuk; yatay çizgi; tablo tek satırlık hücreler, başlık kalın, ızgara çizgili. Metin boşlukta sarılır, satırdan geniş sözcük bölünür; kod ve geniş tablo yatay kaydırılır. Görsel yerine alt metni (yoksa `pdf.image_placeholder`), HTML düz metin. Ayrıştırma metin değişince, yerleşim genişlik ya da yazı boyu değişince yeniden kurulur; karede yalnız görünen koşular çizilir.
+  - **Çizim** (`src/gui/markdown_preview.*`): başlıklar gömülü DejaVu Sans Bold ile 1,6 / 1,4 / 1,2 / 1,1 em; vurgu Oblique / Bold / BoldOblique; listeler asılı imle (`•`, `1.`, `[x]`) derinlik başına girintili; kod bloğu DejaVu Sans Mono, zeminli, boşluklar korunur, sarılmaz; kod bloğu ve satır içi kod tema `code_bg` zeminli (açık ve koyu temada tuvale karşı ≥ 1,5, metne karşı ≥ 4,5 karşıtlık); alıntı solda çubuk; yatay çizgi; tablo tek satırlık hücreler, başlık kalın, ızgara çizgili. Metin boşlukta sarılır, satırdan geniş sözcük bölünür; kod ve geniş tablo yatay kaydırılır. Görsel yerine alt metni (yoksa `pdf.image_placeholder`), HTML düz metin. Ayrıştırma metin değişince, yerleşim genişlik ya da yazı boyu değişince yeniden kurulur; karede yalnız görünen koşular çizilir.
   - **Bağlantılar:** `[[hedef]]` metni (takma adda takma ad) bağlantı renginde ve altı çizili. Tıklama `GuiState::open_wiki_link`: bekleyen düzenleme önce kendi notuna yazılır (`flush_for`), hedef sonra `NoteStore::resolve_link` ile yazmanın kuralıyla (yol, uzantısız yol, dosya adı, yalın ad; `|takma ad` ve `#başlık` atılır) çözülür ve `open_link` ile açılır; çözülmezse durum çubuğunda `bulunamadı` iletisi, not değişmez. Çözülmeyen hedef bağlantı panelindeki `Eksik` gibi soluk ve üstü çizilidir, tıklanmaz (`GuiState::resolves_link`); hedef sonradan oluşursa (kayıt, senkron) yeniden taramada eksik listesi değişir, yerleşim yeniden kurulur ve bağlantı canlanır. Dış bağlantı (`[metin](url)`) açılmaz: adres yalnız ipucunda gösterilir (not güvenilmez).
   - **CSV ve JSON (G4, matris 55–57):** ayrıştırma TUI REVIEW'unkiyle aynıdır (`app::parse_csv`, `app::pretty_json`; TUI yalnız terminal çizimini tutar). CSV: ayırıcı `detect` kuralıyla, ilk satır başlık zeminli, ImGui tablosu (`ImGuiListClipper`); en çok `limits.tui.table_rows` satır ve `table_columns` sütun (ImGui tablosunun 512 sütun tavanı da), kesilen satır ve sütun soluk satırla söylenir. JSON: iç içelik başına iki karakter girinti (genişliğin yarısını geçmez), belirteçler editörün sözdizimi kuralıyla renkli (`tui::highlight_line`, `limits.tui.highlight_line_bytes`), en çok `limits.tui.view_lines` satır, fazlası soluk satırla. Tablo olmayan CSV ve geçersiz JSON nedenle birlikte ham metin gösterir. Hücre ve dizgi metni güvenilmezdir: denetim baytı `U+FFFD`, `##`/`%` yorumlanmaz.
 
@@ -76,6 +76,16 @@ Görünüm seçicideki **Harita** sol bölmede notları çizge olarak gösterir;
   Ağaç'a geçer (kayıttan vazgeçilirse görünüm kalır), düğümü sürüklemek onu bırakıldığı yere sabitler. Tekerlek imlecin çevresinde yakınlaştırır; boşluğu sol
   tuşla ya da orta tuşla sürüklemek kaydırır. Tuval odaktayken oklar kaydırır, `+`/`-` yakınlaştırır (SDL tuş kodundan: Türkçe Q'da `+` Shift+4'tür), `0`
   sığdırır. Kamera kendiliğinden sığdırır; kaydırma, yakınlaştırma ya da sürükleme bunu kapatır, `0` ve çizgenin değişmesi yeniden açar.
+- **İlişki kurma (MAP-R):** Shift + sol sürükleme bir düğümden lastik çizgi çeker (düğüm iğnelenmez, açılmaz). Shift bağlama hareketidir:
+  düğüme Shift+tıklama ve Shift+çift tıklama notu açmaz (aynı düğüme bırakmak hiçbir şey yapmaz; açmak için Shift'siz tıklanır). Bırakılan düğüme göre (`app::map_drop`):
+  not → not küçük menü açar, `İlişkili (RELATED_TO)` (`add_relation`) ya da `Bağlantı` (kaynağın sonuna kendi satırında `[[tam/yol.md]]`; kısa ad başka
+  nota çözülebilirdi); not ↔ etiket (iki yön) etiketi doğrudan nota ekler (sonuna `#etiket`); etiket → etiket, aynı düğüm ve boşluk hiçbir şey yapmaz. Esc ve
+  dışarı tıklama menüyü kapatır. Kenara sağ tık kaldırma menüsü açar: ilişki `remove_relation`, etiket notun metnindeki her yazımı (`core::remove_note_tag`,
+  `note_tags` kuralıyla; kod ve `[[...]]` içindeki kalır; başka metin de olan satırda yalnız `#` gider, sözcük kalır: `I love #cats` → `I love cats`; yalnız etiketlerden oluşan satırda etiket silinir, boşalan satır da); bağlantı notun metnindedir, öğe kapalıdır ve ipucu editörde
+  silmeyi söyler (metin sessizce düzenlenmez). Bağlantı ve etiket yalnız düzyazı notuna yazılır (md, markdown, txt, uzantısız): kod notu, ikili not ve sonu
+  kapanmamış kod çitindeki etiket reddedilir, not değişmez. Gövdeyi yazan işlemden önce o not editördeyse bekleyen düzenlemesi kaydedilir (`flush_for`);
+  kayıt olmazsa işlem yapılmaz. Sonuç ya da hata (var olan kenar, eksik not, dışarıda değişmiş not) durum satırındadır, harita hemen yeni kenarı çizer.
+  Kural `src/app/map_relations.*`'tedir, TUI aynısını çağırır.
 - **Arama:** arama kutusunun süzgeci (liste ile aynı ayrıştırıcı, `tag:` dahil) eşleşen notları tam renkte bırakır, gerisini soldurur; etiket, eşleşen bir notunda yanar.
 
 ## Sekmeler
@@ -216,7 +226,8 @@ dal, boşta bekleme, yazar adı, yazar e-postası, token, bağlantı testi) ve s
 
 ## Diğer
 - **Tema:** yalnız açık/koyu ayrımı `SDL_GetSystemTheme` ile izlenir (değişince güncellenir); pencere KDE/Windows temasını
-  izlemez, yerel görünüm yoktur. Tüm eylemler klavyeyle erişilebilir.
+  izlemez, yerel görünüm yoktur. Renk token'ları ve stil değerleri tek yerde, `src/gui/theme.hpp` (koyu ve açık);
+  metin, soluk ve sözdizimi tuvalde ≥ 4,5, sınır ve vurgu ≥ 3 karşıtlık (`theme_test`). Tüm eylemler klavyeyle erişilebilir.
 - **Ekran okuyucu desteği yok:** ImGui erişilebilirlik ağacı sunmaz. Eski "erişilebilir adlar" maddesi emekli. `gui.a11y_*`
   katalog anahtarları kullanılmıyor (silinmedi).
 - **Fontlar:** yalnız gömülü DejaVu Sans / Sans Mono; önizleme ayrıca PDF'in gömülü Bold / Oblique / BoldOblique yüzlerini yükler. DejaVu'da olmayan glifler (CJK, renkli emoji) ekranda `?` kutusu
@@ -262,6 +273,9 @@ doğrudan koşulursa aynı ortam elle verilmelidir.
     sığar, düğümler tuvalde (`layout_test.cpp`). **Ölçüm** (Release, dummy + yazılımsal çizici, 1000x650, 2.001 not, 2.000 düğüm, 4.999 kenar, sınır uyarısı
     görünür; `gui_tests -tc="map perf*"`, yalnız Release'te derlenir): iki koşu, yerleşim sürerken kare 19,2–20,5 ms, durunca 16,3–17,1 ms (bütçe 33,3 ms =
     30 fps); yerleşim adımı kare başına en kötü 3,1–3,2 ms (bütçe `View::kMapLayoutBudgetMs` 8 ms). Debug'da çizici -O0'dır, ölçülmez. Görüntüler: `gui_layout_shots -tc="renders the map*"`.
+    (MAP-R) Shift+sürükleme → menü → İlişkili / Bağlantı (bekleyen düzenleme önce kaydedilir), not ↔ etiket, Esc ve boşluğa bırakma bir şey yapmaz,
+    kenara sağ tıkla ilişki ve etiket kaldırma, bağlantı öğesi kapalı (`tests/gui/map_test.cpp`); kural, hata yolları ve kenar isabeti
+    `tests/app/map_relations_test.cpp`, etiket çıkarma `tests/core/note_tags_test.cpp`.
 
 **Elle (yapılmadı):** Windows 11 (çapraz derlenmiş `.exe`) ve Fedora KDE/GNOME — Türkçe klavye (`ı/İ`, dead key, Ctrl kısayolları),
 IME, koyu tema, yerel dosya diyaloğu, PDF'te Türkçe karakterlerin gözle kontrolü, senkron durumunun durum çubuğuna yansıması,
@@ -387,7 +401,7 @@ Editör ImGui metin kutusu değil, TUI ile ortak `tui::EditorBuffer` üstünde �
 Editörde sözdizimi, yazım denetimi ve tamamlama; TUI ile aynı modüller ve sınırlar (plan-parity G5b).
 
 - **ADDED** Kaydedilmemiş taslakta tip canlı `detect`'tir (TUI ile aynı kural, `app::DraftTypeTracker`: metnin 1/32'si değişince yeniden): renk, yazım ve durum çubuğu ilk kayıttan önce çalışır.
-- **ADDED** Sözdizimi renkleri: `tui::highlight_line` (TUI'nin dilleri, satır giriş durumu önbelleği), renkler `token_color` (TUI'nin 16 renk ailesinin tonları, JSON önizlemesiyle aynı). `limits.tui.highlight_bytes` üstündeki not ve `highlight_line_bytes` üstündeki satır düz çizilir.
+- **ADDED** Sözdizimi renkleri: `tui::highlight_line` (TUI'nin dilleri, satır giriş durumu önbelleği), renkler `token_color` (SPEC-tui "Sözdizimi vurgusu" aile tablosu, tema token'larından; JSON önizlemesiyle aynı). `limits.tui.highlight_bytes` üstündeki not ve `highlight_line_bytes` üstündeki satır düz çizilir.
 - **ADDED** Yazım denetimi: `tui::SpellChecker` (`hunspell -a`, yalnız `md` ve `txt`, sözlük arayüz dilinden, `limits.tui.spellcheck_line_bytes`); yanlış sözcük kırmızı alt çizgili. Tuşu bekletmez, sonuç gelince kare çizilir; `hunspell` yoksa oturum boyunca kapalı.
 - **ADDED** Tamamlama: satır sonunda gölge öneri (`Tab`/`→` alır), `Ctrl+Space` listesi imlecin altında (yazı listeyi süzer, metne yazılmaz; `Enter` imleçteki öneki seçilenle değiştirir). Diğer notların sözcükleri `tui::WordTableBuilder` (ilk editör kullanımında kurulur, kayıtta tazelenir; env/properties/ini/toml/yaml notlarından yalnız anahtarlar). Sınırlar `limits.tui.completion_*`, `tuning.completion_min_prefix_bytes`. Liste açıkken `Ctrl+P`/`Ctrl+N` genel arama ve yeni not değil, listede gezinmedir (TUI).
 
@@ -402,3 +416,7 @@ Editörde dil sunucusu; TUI ile aynı `tui::LanguageServers` (plan-parity G5c).
 
 - **ADDED** `import`: araç çubuğunda `İçe al` menüsü (`Dosya içe al…`, `Klasör içe al…`; SDL yerel diyalogları, çoklu seçim), palette `import` (dosya diyaloğu) ve pencereye sürükle-bırak (`SDL_EVENT_DROP_FILE`, dosya ve klasör). Hepsi `GuiState::import_files` → `app::import_paths` (`note import` kuralı); hedef `target_folder()` (`app::new_note_folder`), özet durum çubuğunda, ilk not sekme kuralıyla açılır. Diyalog geri çağrısı başka iş parçacığından gelir: yollar paylaşılan kutuya yazılır, kare dışında içe alınır. Diyalog açılamazsa (portal/zenity yok) neden durum çubuğunda.
 - **ADDED** `notes-gui --help` pencere açmadan kısa kullanım; tanınmayan argüman çıkış 2. Argümansız açılış değişmedi.
+
+## Değişiklik 2026-11-05 (MAP-R)
+
+- **ADDED** Haritada fareyle ilişki kurma (bkz. "Harita" → "İlişki kurma"): Shift+sürükleme not → not (İlişkili ya da `[[bağlantı]]`), not ↔ etiket (etiket eklenir); kenara sağ tık ilişkiyi ya da etiketi kaldırır, bağlantı kapalı öğe ve ipucuyla. Kural `app::map_relations` (TUI ile ortak), etiket çıkarma `core::remove_note_tag`. Neden: kullanıcı isteği ("graph ekranında fare ile node'lar arası ilişki kurulabilsin").

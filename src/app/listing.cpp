@@ -58,9 +58,12 @@ bool Listing::set_folders(std::vector<std::string> folders) {
     return true;
 }
 
-void Listing::set_sync_states(std::map<core::NotePath, core::SyncState> states) {
+bool Listing::set_sync_states(std::map<core::NotePath, core::SyncState> states) {
+    if (states == sync_states_)
+        return false;
     sync_states_ = std::move(states);
     rebuild_metas();
+    return true;
 }
 
 void Listing::rebuild_metas() {

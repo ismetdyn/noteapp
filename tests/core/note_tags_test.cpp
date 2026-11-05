@@ -112,6 +112,29 @@ TEST_CASE("note_tags reads prose notes only: code types and binary notes have no
     CHECK(note_tags("a.md", std::string("#ikili\0x", 9)).empty());
 }
 
+// MAP-R: haritadan etiket kaldırma aynı tarayıcıyı kullanır; kod, bağlantı ve başka etiket yerinde kalır.
+// Düzyazıdaki etiketin sözcüğü kalır, yalnız `#` gider (lead kararı); yalnız etiketlerden oluşan satırda
+// etiket bir boşlukla silinir, satır boşalırsa satır da.
+TEST_CASE("remove_note_tag keeps the word in prose, cuts it from tag-only lines, leaves code alone") {
+    CHECK(remove_note_tag("a.md", "I love #cats and dogs\n", "cats") == "I love cats and dogs\n");
+    CHECK(remove_note_tag("a.md", "a #Proje b\n", "proje") == "a Proje b\n");
+    CHECK(remove_note_tag("a.md", "#proje b\n", "proje") == "proje b\n");
+    CHECK(remove_note_tag("a.md", "x\n#proje\r\ny\n", "proje") == "x\ny\n");
+    CHECK(remove_note_tag("a.md", "#proje #proje\n", "proje") == "");
+    CHECK(remove_note_tag("a.md", "#proje #iş\n", "proje") == "#iş\n");
+    CHECK(remove_note_tag("a.md", "#proje/ #proje/alt\n", "proje") == "#proje/alt\n");
+    CHECK(remove_note_tag("a.md", "#a#b\n", "a") == "a#b\n");  // ikinci `#` etiket değildir
+    CHECK(note_tags("a.md", "a#b\n").empty());
+    CHECK(remove_note_tag("a.md", "(#proje) `#proje` [[n#proje]]\n", "proje") ==
+          "(proje) `#proje` [[n#proje]]\n");
+    CHECK(remove_note_tag("a.md", "```\n#proje\n```\n#proje", "proje") == "```\n#proje\n```\n");
+    CHECK(remove_note_tag("a.py", "#proje\n", "proje") == "#proje\n");
+    CHECK(remove_note_tag("a.md", "#iş\n", "proje") == "#iş\n");
+    CHECK(is_prose_note("a.md"));
+    CHECK(is_prose_note("a"));
+    CHECK_FALSE(is_prose_note("a.py"));
+}
+
 // L3: etiket sayısı ve uzunluğu sınırsızdır; eski tavanların (256 etiket, 128 bayt) üstü sessizce düşmez.
 TEST_CASE("note_tags keeps more than 256 tags and tags longer than 128 bytes") {
     std::string body;

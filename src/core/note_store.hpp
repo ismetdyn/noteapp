@@ -82,6 +82,14 @@ bool looks_binary(std::string_view bytes);
 // bayt sırasıyla. Yalnız düzyazı notunda (md, markdown, txt, uzantısız); ikili notta boş. Yazma ve ön yüzler
 // aynı kuralı kullansın diye tek yer burasıdır.
 std::vector<std::string> note_tags(std::string_view path, std::string_view body);
+// Etiketlerin tarandığı düzyazı tipi mi (md, markdown, txt, uzantısız). Harita bağlantıyı ve etiketi yalnız
+// bunlara ekler: kod notunun sonuna eklenen `[[x]]` ya da `#x` kodu bozar.
+bool is_prose_note(std::string_view path);
+// Anahtarı `key` (tag_key) olan her `#etiket` gövdeden çıkar, note_tags'in kuralıyla (kod ve [[...]] içindeki
+// dokunulmaz). Başka metin de olan satırda yalnız `#` gider, sözcük kalır ("I love #cats" -> "I love cats");
+// yalnız etiketlerden oluşan satırda etiket yanındaki tek boşlukla silinir, boşalan satır da. Düzyazı değilse
+// aynen.
+std::string remove_note_tag(std::string_view path, std::string_view body, std::string_view key);
 // Eşleştirme anahtarı: küçük harf (Latin-1 ve Latin Extended-A; İ ve I -> i). Tag.name budur.
 std::string tag_key(std::string_view tag);
 
@@ -149,6 +157,9 @@ struct NoteEdge {
 // kırpılır. Satır sonlu hedef bağlantı değildir: boş döner. Uzunluk sınırı yok (L3). NoteLinks::missing bu
 // anahtarları taşır.
 std::string_view link_target(std::string_view raw);
+// Gövdenin [[hedef]] anahtarları, yazmanın okuduğu gibi (link_target kuralı; ikili notta yok): sıralı, tekil.
+// Metne bağlantı ekleyen (harita) yazmadan önce geri okur.
+std::vector<std::string> note_link_targets(std::string_view body);
 
 // Panelin düz satırları: TUI ve GUI aynı sırada çizer (gelen, giden, ilişkili, eksik). Boş grubun satırı yok.
 enum class LinkGroup { Incoming, Outgoing, Related, Missing };

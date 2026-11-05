@@ -194,6 +194,10 @@ std::set<NodeId> resolved_targets(const std::vector<std::string>& targets, const
 
 }  // namespace
 
+std::vector<std::string> note_link_targets(std::string_view body) {
+    return body_links(body);
+}
+
 // Kaydın kenarları kaydın görüntüsüyle çözülür. Sonradan oluşan hedefi link_appeared bağlar. Not başına
 // tavan yok: bütçeye sığmayan kenarlar unfinished ile sonraki işlemlere kalır, yinelenen çağrı yapılmışı
 // atlar.

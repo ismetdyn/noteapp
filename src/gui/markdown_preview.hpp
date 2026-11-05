@@ -25,9 +25,6 @@ struct PreviewFonts {
 // Missing: çözülmeyen [[hedef]] — bağlantı panelindeki "Eksik" gibi soluk, üstü çizili, tıklanmaz.
 enum class PreviewInk { Text, Muted, Link, Missing };
 
-// Satır içi kodun zemini: temanın kendi rengi, açık ve koyu temada pencere zemininden ayırt edilir.
-inline constexpr ImGuiCol kInlineCodeBackground = ImGuiCol_TableBorderLight;
-
 // [[hedef]] canlı bir nota çözülüyor mu (GuiState::resolves_link).
 using LinkResolves = std::function<bool(std::string_view target)>;
 

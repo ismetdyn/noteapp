@@ -15,7 +15,8 @@ namespace {
 constexpr int kFirstPaneRow = 2;      // üst çubuk + panel kenarı
 constexpr int kBottomChromeRows = 3;  // panel kenarı, toplamlar ya da editör durumu, alt çubuk
 constexpr int kWheelStep = 3;
-constexpr int kFrameCells = 1;  // panel kenarı
+constexpr int kFrameCells = 1;     // panel kenarı
+constexpr int kMapStatusRows = 1;  // haritanın kapsam satırı (map_pane)
 
 bool in_pane_rows(const TuiState& state, int y) {
     return y >= kFirstPaneRow && y < state.window_height() - kBottomChromeRows;
@@ -96,6 +97,37 @@ void open_list_menu(const MouseInput& input, TuiState& state, EditorSession& edi
         return;
     state.click_row(row);
     state.open_row_menu();
+}
+
+// Haritanın tuval hücresi: liste paneli kenarının ve kapsam satırının içi.
+std::pair<int, int> map_cell(const MouseInput& input) {
+    return {input.x - kFrameCells, input.y - kFirstPaneRow - kMapStatusRows};
+}
+
+// MAP-R: düğümden sürükleme başlar; sağ tık düğüm dışındaysa yakındaki kenarı seçer. Editör önce park edilir
+// (bekleyen düzenleme notuna yazılır): yazılacak notta kaydedilmemiş metin kalmaz.
+void press_map(const MouseInput& input, TuiState& state, EditorSession& editor) {
+    if (!leave_editor(state, editor))
+        return;
+    const auto [column, row] = map_cell(input);
+    if (row < 0)
+        return;  // kapsam satırı
+    if (!state.begin_map_drag(column, row) && input.button == MouseButton::Right)
+        state.open_map_edge(column, row);
+}
+
+// Sürüklerken tuş basılıyken gelen hareket hedefi izler; bırakma (ya da kaybolan bırakmadan sonraki ilk
+// başka olay) sürüklemeyi bitirir.
+MouseResult continue_map_drag(const MouseInput& input, TuiState& state) {
+    const auto [column, row] = map_cell(input);
+    const bool held = input.button == MouseButton::Right || input.button == MouseButton::Left;
+    if (input.motion == MouseMotion::Move && held) {
+        state.move_map_drag(column, row);
+        return MouseResult::None;
+    }
+    if (input.button == MouseButton::WheelUp || input.button == MouseButton::WheelDown)
+        return MouseResult::None;
+    return state.end_map_drag(column, row) == Intent::MapEdit ? MouseResult::MapEdit : MouseResult::None;
 }
 
 MouseResult click_top_line(const MouseInput& input, TuiState& state, EditorSession& editor) {
@@ -236,9 +268,12 @@ MouseResult route_mouse(const MouseInput& input, TuiState& state, EditorSession&
     const PaneGeometry geometry = layout.geometry(state.window_width(), right_pane_focused(state.focus()));
     if (state.preview_selection_dragging())
         return continue_selection(input, state, geometry);
+    if (state.map_dragging())
+        return continue_map_drag(input, state);
     if (editor_busy(state, editor) || input.motion != MouseMotion::Press)
         return MouseResult::None;
     const bool right = over_right(input.x, geometry);
+    const bool on_map = state.map_view() && in_pane_rows(state, input.y) && !right;
     switch (input.button) {
     case MouseButton::WheelUp:
     case MouseButton::WheelDown:
@@ -246,9 +281,15 @@ MouseResult route_mouse(const MouseInput& input, TuiState& state, EditorSession&
         break;
     case MouseButton::Left:
         state.clear_preview_selection();
+        if (on_map && input.shift) {
+            press_map(input, state, editor);
+            break;
+        }
         return handle_left_press(input, state, editor, geometry);
     case MouseButton::Right:
-        if (in_pane_rows(state, input.y) && !right && !state.trash_view())
+        if (on_map)
+            press_map(input, state, editor);
+        else if (in_pane_rows(state, input.y) && !right && !state.trash_view())
             open_list_menu(input, state, editor);
         break;
     case MouseButton::Other:

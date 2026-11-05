@@ -117,6 +117,9 @@ private:
     void queue(std::function<void()> intent);
     void queue_command(const GuiCommand& command);  // gui/commands.hpp tablosundaki eylem
     int idle_timeout_ms() const;
+    bool caret_blinks() const;  // odaktaki ImGui metin alanının kırpma imleci boşta da yenilenmeli
+    void schedule_tooltip_wake();
+    bool tooltip_due(std::chrono::steady_clock::time_point now);  // süre dolduysa tüketir ve true
 
     void draw_root();
     void draw_notes_tab();
@@ -160,6 +163,10 @@ private:
     void draw_map_controls(const NoteMap& map);
     void handle_map_input(const NoteMap& map, ImVec2 origin, ImVec2 size, int hovered);
     void draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered);
+    // MAP-R: Shift+sürüklemenin bırakılışı ve kenara sağ tık; seçim ve kaldırma menüleri.
+    void drop_map_link(const NoteMap& map, int hovered);
+    void open_map_edge_menu(const NoteMap& map, ImVec2 origin);
+    void draw_map_menus();
     void zoom_map(ImVec2 origin, ImVec2 anchor, float factor);
     void draw_trash_header();
     void draw_trash_rows(bool focus_row);
@@ -252,8 +259,17 @@ private:
     std::optional<std::size_t>
         map_pressed_;  // basılı tutulan düğüm: bırakınca açılır, sürüklenince iğnelenir
     bool map_dragged_ = false;
-    int map_zoom_keys_ = 0;       // SDL tuş kodundan: '+' ve '-' klavye düzeninden bağımsız okunur
-    bool map_animating_ = false;  // bu karede yerleşim sürdü: boşta beklemeden yeni kare
+    std::optional<std::size_t> map_link_from_;  // Shift+sürükleme sürüyor: kaynak düğüm (lastik çizgi)
+    // Menünün düğümleri kopyadır: menü açıkken çizge yeniden kurulsa da işlem açıldığı kenara gider.
+    struct MapPair {
+        MapNode from;
+        MapNode to;
+        MapEdgeKind kind = MapEdgeKind::Related;
+    };
+    std::optional<MapPair> map_choice_;     // not → not bırakıldı: ilişki mi bağlantı mı
+    std::optional<MapPair> map_edge_menu_;  // sağ tıklanan kenar
+    int map_zoom_keys_ = 0;                 // SDL tuş kodundan: '+' ve '-' klavye düzeninden bağımsız okunur
+    bool map_animating_ = false;            // bu karede yerleşim sürdü: boşta beklemeden yeni kare
     bool close_requested_ = false;
     bool rescan_on_focus_ = false;  // diyalogda gelen odak da kaybolmaz: tarama kare dışında çalışır
     bool search_active_ = false;
@@ -261,7 +277,8 @@ private:
     bool search_popup_hovered_ = false;  // fare tamamlama listesinde: kutu odağı bıraksa da liste kalır
     bool picker_shown_ = false;  // seçici açılır pencereyi geçen karede çizdi: kapanışı kullanıcı yaptı mı
     bool editor_active_ = false;
-    bool lsp_waiting_ = false;  // dil sunucusu değişikliği boşta bekliyor (LanguageServers::Update)
+    // Boşta bekleyen dil sunucusu değişikliğinin gönderileceği an (LanguageServers::Update::send_at).
+    std::optional<std::chrono::steady_clock::time_point> lsp_send_at_;
     bool list_focused_ = false;
     bool refocus_editor_ = false;
     int scrolled_row_ = -1;
@@ -283,6 +300,11 @@ private:
     // İçe alma: diyalog geri çağrısı başka iş parçacığından, View kapandıktan sonra da gelebilir (paylaşılan
     // kutu); bırakılan dosyalar kare dışında içe alınır (diyalog açıkken gelenler de beklemez, kaybolmaz).
     std::shared_ptr<ImportInbox> import_inbox_;
+    // Bekleyen ipucunun gecikmesinin dolduğu an ve ait olduğu ImGui öğesi (schedule_tooltip_wake).
+    std::optional<std::chrono::steady_clock::time_point> tooltip_at_;
+    unsigned int tooltip_item_ = 0;  // ImGuiID; başlık ImGui'yi içermez
+    // Sonraki yerel gece yarısı (core::next_local_midnight).
+    std::chrono::system_clock::time_point day_ends_at_;
     std::vector<std::filesystem::path> dropped_;
 };
 

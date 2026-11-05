@@ -17,8 +17,7 @@ namespace {
 namespace fs = std::filesystem;
 
 int usage() {
-    std::cerr << core::tr("cli.import_usage") << '\n';
-    return kExitUsage;
+    return usage_error("import");
 }
 
 void print_json(const app::ImportReport& report) {
@@ -52,9 +51,14 @@ void print_json(const app::ImportReport& report) {
 }
 
 // Yollar dosya sisteminden gelir, notlar başka cihazdan gelmiş olabilir: terminale temizlenerek yazılır.
-void print_text(const app::ImportReport& report) {
-    for (const app::ImportLine& line : app::import_report_lines(report))
-        (line.problem ? std::cerr : std::cout) << sanitize_for_terminal(line.text) << '\n';
+// quiet: yalnız sorun satırları (stderr) yazılır.
+void print_text(const app::ImportReport& report, bool quiet) {
+    for (const app::ImportLine& line : app::import_report_lines(report)) {
+        if (line.problem)
+            std::cerr << sanitize_for_terminal(line.text) << '\n';
+        else if (!quiet)
+            std::cout << sanitize_for_terminal(line.text) << '\n';
+    }
 }
 
 }  // namespace
@@ -62,6 +66,7 @@ void print_text(const app::ImportReport& report) {
 int run_import(const ParsedArgs& args, const core::Config& config) {
     app::ImportOptions options = app::import_options(config, config.default_folder);
     bool json = false;
+    bool quiet = false;
     bool no_sync = false;
     bool only_paths = false;  // `--` sonrası her şey yoldur
     std::optional<std::string> type;
@@ -79,12 +84,12 @@ int run_import(const ParsedArgs& args, const core::Config& config) {
             json = true;
         } else if (arg == "--no-sync") {
             no_sync = true;
+        } else if (arg == "-q" || arg == "--quiet") {
+            quiet = true;
         } else if (arg == "--folder" || arg == "-f" || arg == "--type" || arg == "-t" || arg == "--name" ||
                    arg == "-n") {
-            if (i + 1 >= rest.size()) {
-                std::cerr << core::tr("cli.missing_value", {{"option", arg}}) << '\n';
-                return kExitUsage;
-            }
+            if (i + 1 >= rest.size())
+                return missing_value_error("import", arg);
             const std::string& value = rest[++i];
             if (arg == "--folder" || arg == "-f")
                 options.folder = value;
@@ -93,8 +98,7 @@ int run_import(const ParsedArgs& args, const core::Config& config) {
             else
                 options.name = value;
         } else {
-            std::cerr << core::tr("cli.unknown_option", {{"option", arg}}) << '\n';
-            return kExitUsage;
+            return unknown_option_error("import", arg);
         }
     }
     if (sources.empty() || (!options.name.empty() && sources.size() != 1))
@@ -119,11 +123,15 @@ int run_import(const ParsedArgs& args, const core::Config& config) {
     core::NoteStore store = core::NoteStore::for_config(config);
     if (const auto health = store.health())
         return fail(*health);
-    const app::ImportReport report = app::import_paths(store, sources, options);
+    // ponytail: tek "içe alınıyor" satırı; n/m sayacı app::import_paths'e ilerleme geri çağrısı ister.
+    const app::ImportReport report = [&] {
+        const ProgressLine progress(core::tr("cli.import_progress"));
+        return app::import_paths(store, sources, options);
+    }();
     if (json)
         print_json(report);
     else
-        print_text(report);
+        print_text(report, quiet);
     if (report.wrote)
         start_background_sync(config, no_sync);
     return report.complete() ? kExitOk : kExitUser;

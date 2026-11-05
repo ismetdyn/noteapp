@@ -7,12 +7,16 @@
 #include "window_fixture.hpp"
 
 #include <SDL3/SDL.h>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <fstream>
 #include <imgui.h>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 using gui_test::make_view;
@@ -25,6 +29,7 @@ using noteapp::gui::GuiState;
 using noteapp::gui::SaveDetails;
 using noteapp::gui::SaveDialogRequest;
 using noteapp::gui::Tab;
+using noteapp::gui::View;
 namespace fs = std::filesystem;
 
 namespace {
@@ -586,6 +591,201 @@ TEST_CASE_FIXTURE(WindowFixture, "an idle window draws no frames") {
     REQUIRE(SDL_PushEvent(&wake));
     view->idle_step(0);
     CHECK(view->frames() > frames);
+}
+
+namespace {
+
+// Gerçek zamanlı boşta bekleme; timeout 1: kırpma imleci gibi zamanlayıcı kareleri de sayılsın (0 onları
+// kapatır).
+void idle_for(View& view, std::chrono::milliseconds duration) {
+    const auto until = std::chrono::steady_clock::now() + duration;
+    while (std::chrono::steady_clock::now() < until)
+        view.idle_step(1);
+}
+
+}  // namespace
+
+TEST_CASE_FIXTURE(WindowFixture, "a periodic rescan that finds no change draws no frames") {
+    add_note("alpha.md", "a");
+    config.tuning.rescan_seconds = 1;  // en kısa aralık; tarama testte birkaç kez koşsun
+    auto state = make_state();
+    auto view = make_view(*state);
+    for (int i = 0; i < 10; ++i)  // olaydan sonraki sabitlenme kareleri tükensin
+        view->idle_step(0);
+    const auto frames = view->frames();
+    idle_for(*view, std::chrono::milliseconds(2500));  // en az iki tarama
+    CHECK(view->frames() == frames);
+
+    // Başka bağlantının yazması sonraki taramada görünür ve aynı adımda çizilir.
+    const auto quiet = view->frames();
+    add_note("beta.md", "b");
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (state->model().row_count() != 2 && std::chrono::steady_clock::now() < until)
+        view->idle_step(1);
+    CHECK(state->model().row_count() == 2);
+    CHECK(view->frames() > quiet);
+    // Değişiklik görüldükten sonraki tarama yine iş saymaz.
+    CHECK_FALSE(state->tick(std::chrono::steady_clock::now() + std::chrono::seconds(2)));
+}
+
+TEST_CASE_FIXTURE(WindowFixture, "an idle focused editor draws no frames") {
+    add_note("alpha.md", "a");
+    auto state = make_state();
+    auto view = make_view(*state);
+    state->request_focus(FocusRequest::Editor);
+    settle(*view);
+    REQUIRE(view->editor_active());
+    REQUIRE(ImGui::GetIO().WantTextInput);  // IME/SDL metin girdisi açık kalır
+    for (int i = 0; i < 10; ++i)
+        view->idle_step(0);
+    const auto frames = view->frames();
+    idle_for(*view, std::chrono::milliseconds(300));
+    CHECK(view->frames() == frames);
+    CHECK(view->editor_active());
+
+    // Yazılan harf yine hemen çizilir.
+    type_text(*view, "x");
+    CHECK(view->frames() > frames);
+    CHECK(state->buffer() == "xa");
+}
+
+namespace {
+
+// Silme onayını açar; `idle` sonra başka iş parçacığından gerçek Esc (SDL olayı) gelir ve kapatır.
+// on_modal_frame yok: diyalog üretimdeki gibi olay bekler. Diyalog boyunca çizilen kare sayısı döner.
+std::size_t frames_in_idle_dialog(GuiState& state, View& view, std::chrono::milliseconds idle) {
+    int count = 0;
+    SDL_Window** windows = SDL_GetWindows(&count);
+    REQUIRE(count > 0);
+    const SDL_WindowID window = SDL_GetWindowID(windows[0]);
+    SDL_free(windows);
+    const std::size_t before = view.frames();
+    std::atomic<bool> closed = false;
+    std::jthread escape([window, idle, &closed] {
+        std::this_thread::sleep_for(idle);
+        constexpr int kTries = 50;  // tuş kaybolursa yeniden: test asılı kalmasın
+        for (int attempt = 0; attempt < kTries && !closed; ++attempt) {
+            for (const bool down : {true, false}) {
+                SDL_Event key{};
+                key.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+                key.key.windowID = window;
+                key.key.key = SDLK_ESCAPE;
+                key.key.scancode = SDL_SCANCODE_ESCAPE;
+                key.key.down = down;
+                SDL_PushEvent(&key);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+    });
+    CHECK_FALSE(state.deciders.confirm_delete("really?"));
+    const std::size_t frames = view.frames() - before;
+    closed = true;
+    escape.join();
+    settle(view);  // geç kalan tuş olayları sonraki diyaloğa taşınmasın
+    return frames;
+}
+
+}  // namespace
+
+TEST_CASE_FIXTURE(WindowFixture, "an open dialog draws no frames while nothing happens") {
+    add_note("alpha.md", "a");
+    auto state = make_state();
+    auto view = make_view(*state);
+    view->install_deciders();
+    const std::size_t quick = frames_in_idle_dialog(*state, *view, std::chrono::milliseconds(100));
+    const std::size_t slow = frames_in_idle_dialog(*state, *view, std::chrono::milliseconds(2500));
+    MESSAGE("dialog frames: quick=", quick, " slow=", slow);
+    CHECK(quick > 0);
+    CHECK(slow <= quick + 1);  // bekleme süresi kare sayısını değiştirmez (eskiden 500 ms'de bir kare)
+}
+
+// ImGui modal arka planını kareler arası süreyle karartır (DimBgRatio += DeltaTime * 6). Açılışın birkaç
+// karesi milisaniyeler içinde biter; olay gelmezse karartma yarım kalmamalı.
+TEST_CASE_FIXTURE(WindowFixture, "a dialog's dimmed background finishes fading in without events") {
+    add_note("alpha.md", "a");
+    auto state = make_state();
+    auto view = make_view(*state);
+    view->install_deciders();
+    struct Sample {
+        std::chrono::steady_clock::time_point at;
+        float dim = 0.0F;
+    };
+    std::vector<Sample> samples;
+    ImGuiContextHook hook;
+    hook.Type = ImGuiContextHookType_EndFramePre;
+    hook.UserData = &samples;
+    hook.Callback = [](ImGuiContext* context, ImGuiContextHook* self) {
+        static_cast<std::vector<Sample>*>(self->UserData)
+            ->push_back({std::chrono::steady_clock::now(), context->DimBgRatio});
+    };
+    const ImGuiID hook_id = ImGui::AddContextHook(ImGui::GetCurrentContext(), &hook);
+    const auto opened = std::chrono::steady_clock::now();
+    constexpr auto kIdle = std::chrono::milliseconds(800);
+    frames_in_idle_dialog(*state, *view, kIdle);
+    ImGui::RemoveContextHook(ImGui::GetCurrentContext(), hook_id);
+    float dim_before_key = 0.0F;  // Esc gelmeden önceki karelerin en koyusu
+    for (const Sample& sample : samples)
+        if (sample.at < opened + kIdle)
+            dim_before_key = std::max(dim_before_key, sample.dim);
+    CHECK(dim_before_key == doctest::Approx(1.0F));
+}
+
+// Çöp görünümünde editör çizilmez: bir önceki karenin "editör odakta" bilgisi arama kutusunun imlecini
+// durdurmamalı.
+TEST_CASE_FIXTURE(WindowFixture, "the search box caret blinks in the trash view after the editor had focus") {
+    add_note("alpha.md", "a");
+    auto state = make_state();
+    auto view = make_view(*state);
+    state->request_focus(FocusRequest::Editor);
+    settle(*view);
+    REQUIRE(view->editor_active());
+    state->open_trash();
+    settle(*view);
+    state->request_focus(FocusRequest::Search);
+    settle(*view);
+    REQUIRE(view->search_active());
+    REQUIRE(ImGui::GetIO().WantTextInput);
+    CHECK_FALSE(view->editor_active());
+    for (int i = 0; i < 10; ++i)  // olaydan sonraki sabitlenme kareleri tükensin (0: imleç karesi yok)
+        view->idle_step(0);
+    const auto frames = view->frames();
+    constexpr int kSteps = 5;
+    for (int i = 0; i < kSteps; ++i)
+        view->idle_step(1);
+    CHECK(view->frames() == frames + kSteps);  // her uyanmada imleç karesi
+}
+
+// Boşta kare yok: fare bir düğmede durunca ipucu yine gecikmesi dolunca açılmalı (tek uyanma).
+TEST_CASE_FIXTURE(WindowFixture,
+                  "a tooltip appears when the mouse rests on a button with no further events") {
+    add_note("alpha.md", "a");
+    auto state = make_state();
+    auto view = make_view(*state);
+    settle(*view);
+    int count = 0;
+    SDL_Window** windows = SDL_GetWindows(&count);
+    REQUIRE(count > 0);
+    const SDL_WindowID window = SDL_GetWindowID(windows[0]);
+    SDL_free(windows);
+    const auto [x, y] = view->button_center("sort");
+    SDL_Event motion{};
+    motion.type = SDL_EVENT_MOUSE_MOTION;
+    motion.motion.windowID = window;
+    motion.motion.x = x;
+    motion.motion.y = y;
+    REQUIRE(SDL_PushEvent(&motion));
+    const gui_test::RenderedText rendered;
+    const std::string tip = noteapp::core::tr("gui.sort_tip");
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!rendered.contains(tip) && std::chrono::steady_clock::now() < until)
+        view->idle_step(1);
+    CHECK(rendered.contains(tip));
+    for (int i = 0; i < 10; ++i)  // uyanmanın kalan kareleri (ipucu ilk karede ölçülür) tükensin
+        view->idle_step(0);
+    // İpucu açıldıktan sonra yine boşta kare yok.
+    const auto frames = view->frames();
+    idle_for(*view, std::chrono::milliseconds(800));
+    CHECK(view->frames() == frames);
 }
 
 TEST_CASE_FIXTURE(WindowFixture, "closing during a modal is deferred until the modal is answered") {

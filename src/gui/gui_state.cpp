@@ -128,7 +128,8 @@ GuiState::GuiState(core::Config config)
       sync_label_(core::tr("gui.sync_off")),
       // İşçi iş parçacığından gelir: durumlar UI iş parçacığına aktarılır (tick).
       sync_status_([this](app::SyncStates states) {
-          post([this, states = std::move(states)]() mutable { apply_sync_states(std::move(states)); });
+          post_quiet(
+              [this, states = std::move(states)]() mutable { return apply_sync_states(std::move(states)); });
       }),
       settings_(config_, deciders,
                 SettingsHost{.flush = [this] { return flush(); },
@@ -331,9 +332,17 @@ void GuiState::save_gui_state() const {
 
 void GuiState::post(std::function<void()> work) {
     const std::scoped_lock lock(posted_mutex_);
-    posted_.push_back(std::move(work));
+    posted_.emplace_back([work = std::move(work)] {
+        work();
+        return true;
+    });
     if (wake_)
         wake_();
+}
+
+void GuiState::post_quiet(std::function<bool()> work) {
+    const std::scoped_lock lock(posted_mutex_);
+    posted_.push_back(std::move(work));
 }
 
 void GuiState::set_wake(std::function<void()> wake) {
@@ -342,15 +351,16 @@ void GuiState::set_wake(std::function<void()> wake) {
 }
 
 bool GuiState::run_posted() {
-    std::vector<std::function<void()>> work;
+    std::vector<std::function<bool()>> work;
     {
         const std::scoped_lock lock(posted_mutex_);
         work.swap(posted_);
     }
     // Kilit dışında: iş diyalog açabilir, işçi o sırada post edebilmeli.
+    bool changed = false;
     for (const auto& item : work)
-        item();
-    return !work.empty();
+        changed = item() || changed;
+    return changed;
 }
 
 bool GuiState::tick(std::chrono::steady_clock::time_point now) {
@@ -366,8 +376,8 @@ bool GuiState::tick(std::chrono::steady_clock::time_point now) {
         // görülür. Tarama anlık görüntü karşılaştırdığından arada kaç olay olduğu önemsizdir, hiçbiri
         // kaybolmaz.
         rescan_at_ = now + rescan_interval(config_);
-        rescan();
-        worked = true;
+        if (rescan())
+            worked = true;  // değişmeyen tarama kare istemez: boşta 5 sn'de bir 3 boş kare olurdu
     }
     return worked;
 }
@@ -478,10 +488,12 @@ void GuiState::request_sync_states() {
         sync_status_.request(config_, model_.listing().metas());
 }
 
-void GuiState::apply_sync_states(app::SyncStates states) {
-    model_.listing().set_sync_states(std::move(states));
+bool GuiState::apply_sync_states(app::SyncStates states) {
+    if (!model_.listing().set_sync_states(std::move(states)))
+        return false;  // her kayıttan sonraki istek çoğunlukla aynı durumları getirir: kare yok
     rows_stale_ = true;                          // Ayrıntılar'ın senkron sütunu
     apply_filter([this] { model_.refresh(); });  // `sync:` süzgeci yeni durumları görsün
+    return true;
 }
 
 const search::ContentIndex& GuiState::content_index() {
@@ -617,10 +629,18 @@ void GuiState::set_folder(std::string folder) {
     });
 }
 
-void GuiState::rescan() {
+bool GuiState::rescan() {
+    // Görünen durum değişti mi: liste, klasörler, başka bağlantının yazması (çöp, bağlantılar, içerik),
+    // seçim, sekmeler ve durum satırı (hata, kapanan sekme iletisi). Kendi yazmalarımız data_version'ı
+    // değiştirmez; onlar zaten bir niyetin karesinde çağırır.
+    const std::string status_before = status_;
+    const std::size_t tabs_before = tabs_.size();
+    const int row_before = current_row_;
+    bool changed = false;
     if (content_index_ && search_mode_ != app::SearchMode::Name)
         content_index_->refresh();
     if (auto folders = store_.folders(); folders != folders_) {
+        changed = true;
         folders_ = std::move(folders);
         model_.listing().set_folders(folders_);
         rows_stale_ = true;
@@ -645,6 +665,7 @@ void GuiState::rescan() {
     const auto selected = current_path();
     model_.set_folder(current_folder_);
     if (model_.set_notes(std::move(notes))) {
+        changed = true;
         word_tables_.request();
         language_servers_.notes_changed();
         rows_stale_ = true;
@@ -660,10 +681,12 @@ void GuiState::rescan() {
     // Yalnız ilişki değiştiren başka bağlantı (CLI, senkron) listeyi değiştirmez; harita kenarları yine
     // tazelenir.
     if (const std::uint64_t version = store_.data_version(); version != data_version_) {
+        changed = true;
         data_version_ = version;
         map_.edges_changed();
     }
     reload_links();  // kayıt ya da senkron başka notun bağlantısını değiştirmiş olabilir
+    return changed || status_ != status_before || tabs_.size() != tabs_before || current_row_ != row_before;
 }
 
 void GuiState::apply_filter(const std::function<void()>& change) {
@@ -1056,7 +1079,8 @@ private:
 
 }  // namespace
 
-bool GuiState::update_language_servers(std::chrono::steady_clock::time_point now) {
+std::optional<std::chrono::steady_clock::time_point>
+GuiState::update_language_servers(std::chrono::steady_clock::time_point now) {
     // Taslak, klasör özeti (park) ve salt-okunur not sunucuya gitmez.
     std::optional<core::NotePath> path =
         shown_ && !new_note_ && !parked_ ? std::optional(shown_->path) : std::nullopt;
@@ -1064,7 +1088,7 @@ bool GuiState::update_language_servers(std::chrono::steady_clock::time_point now
     const tui::LanguageServers::Update update = language_servers_.update(editor, now);
     if (!update.status.empty())
         editor_notice_ = update.status;
-    return update.wants_frame;
+    return update.send_at;
 }
 
 std::shared_ptr<const tui::WordTable> GuiState::word_table() {

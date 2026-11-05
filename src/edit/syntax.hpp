@@ -49,6 +49,21 @@ enum class TokenKind : std::uint8_t {
     Emphasis,
 };
 
+// Türün renk ailesi; tek tablo (SPEC-tui "Sözdizimi vurgusu"). GUI token_color ve TUI token_styled yalnız
+// aileyi renge çevirir: iki arayüzün eşlemesi ayrışamaz.
+enum class SyntaxFamily : std::uint8_t {
+    Plain,
+    Muted,    // yorum
+    Green,    // dizge, değer
+    Orange,   // sayı, sabit (TUI: açık kırmızı, sarı aramanındır)
+    Cyan,     // tip, kod
+    Magenta,  // anahtar sözcük, anahtar, etiket
+    Blue,     // başlık (kalın)
+    Bold,     // vurgu
+};
+
+SyntaxFamily syntax_family(TokenKind kind);
+
 // Satır içi bayt aralığı [begin, end); Plain aralık üretilmez, aralıklar sıralı ve örtüşmesizdir. Sınır UTF-8
 // dizisinin ortasına düşebilir: boyama grapheme'in ilk baytına bakar, bayta dokunmaz.
 struct SyntaxSpan {

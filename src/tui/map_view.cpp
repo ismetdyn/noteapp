@@ -59,6 +59,15 @@ std::string status_text(const app::MapModel& model, int columns) {
     return fit_hints(text, columns);
 }
 
+// `C` kipi ve sürükleme (MAP-R): kaynak → hedef ve kipin tuşları.
+std::string link_text(const TuiState::MapLink& link, int columns) {
+    const auto name = [](const app::MapNode& node) { return label_text(node, kLabelMaxCells); };
+    const std::string target = link.target ? name(*link.target) : "?";
+    return fit_hints(core::tr(link.choosing ? "tui.map_choose" : "tui.map_link",
+                              {{"from", name(link.source)}, {"to", target}}),
+                     columns);
+}
+
 // Liang–Barsky: kenar tuvale kırpılır; yakınlaştırınca binlerce noktalık çizgi tuval dışında yürünmez.
 bool clip_line(float& x1, float& y1, float& x2, float& y2, float width, float height) {
     const float dx = x2 - x1;
@@ -133,7 +142,9 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
     using namespace ftxui;
     const app::MapModel& model = state.map_model();
     const app::NoteMap& map = model.map();
-    Element status = text(status_text(model, columns)) | dim;
+    const std::optional<TuiState::MapLink>& link = state.map_link();
+    Element status =
+        link ? text(link_text(*link, columns)) | color(Color::Cyan) : text(status_text(model, columns)) | dim;
     if (map.nodes.empty())
         return vbox({std::move(status), paragraph(core::tr("tui.map_empty")) | dim, filler()});
     const int canvas_rows = std::max(rows - 1, 1);
@@ -147,21 +158,37 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
                          static_cast<int>(std::lround(camera.y + positions[node].y * camera.zoom)));
     };
 
-    for (const app::MapEdge& edge : map.edges) {
-        Color color = edge.kind == app::MapEdgeKind::Related ? Color::Magenta : Color::GrayLight;
-        if (edge.kind == app::MapEdgeKind::Tag || !lit(edge.from) || !lit(edge.to))
-            color = Color::GrayDark;
-        const auto [from_x, from_y] = dot(edge.from);
-        const auto [to_x, to_y] = dot(edge.to);
-        auto x1 = static_cast<float>(from_x);
-        auto y1 = static_cast<float>(from_y);
-        auto x2 = static_cast<float>(to_x);
-        auto y2 = static_cast<float>(to_y);
+    const auto line = [&](std::pair<int, int> from, std::pair<int, int> to, Color color) {
+        auto x1 = static_cast<float>(from.first);
+        auto y1 = static_cast<float>(from.second);
+        auto x2 = static_cast<float>(to.first);
+        auto y2 = static_cast<float>(to.second);
         if (clip_line(x1, y1, x2, y2, static_cast<float>(canvas.width()),
                       static_cast<float>(canvas.height())))
             canvas.DrawPointLine(static_cast<int>(std::lround(x1)), static_cast<int>(std::lround(y1)),
                                  static_cast<int>(std::lround(x2)), static_cast<int>(std::lround(y2)), color);
+    };
+    for (const app::MapEdge& edge : map.edges) {
+        Color color = edge.kind == app::MapEdgeKind::Related ? Color::Magenta : Color::GrayLight;
+        if (edge.kind == app::MapEdgeKind::Tag || !lit(edge.from) || !lit(edge.to))
+            color = Color::GrayDark;
+        line(dot(edge.from), dot(edge.to), color);
     }
+    // İlişki kurulurken kaynaktan hedefe (sürüklerken işaretçiye) çizgi; hedef köşeli parantezde.
+    const auto node_of = [&](const app::MapNode& wanted) -> std::optional<std::size_t> {
+        const auto found = std::ranges::find_if(map.nodes, [&](const app::MapNode& node) {
+            return node.kind == wanted.kind && node.key == wanted.key;
+        });
+        return found == map.nodes.end() ? std::nullopt
+                                        : std::optional(static_cast<std::size_t>(found - map.nodes.begin()));
+    };
+    const std::optional<std::size_t> link_source = link ? node_of(link->source) : std::nullopt;
+    const std::optional<std::size_t> link_target =
+        link && link->target ? node_of(*link->target) : std::nullopt;
+    if (link_source && link->drag)
+        line(dot(*link_source), *link->drag, Color::Cyan);
+    else if (link_source && link_target)
+        line(dot(*link_source), dot(*link_target), Color::Cyan);
 
     const std::string current = model.center() ? model.center()->string() : std::string{};
     const std::string& selected = state.map_selected_key();
@@ -188,7 +215,7 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
 
     // Önce gösterilen ve seçilen not: sıkışık haritada da adları yazılır.
     std::vector<std::size_t> order;
-    for (const auto node : {current_node, selected_node})
+    for (const auto node : {link_source, link_target, current_node, selected_node})
         if (node && std::ranges::find(order, *node) == order.end())
             order.push_back(*node);
     if (app::GraphLayout::kIdealEdge * camera.zoom >= kLabelSpacingDots)
@@ -197,7 +224,8 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
                 order.push_back(i);
     Labels labels{columns, canvas_rows};
     for (const std::size_t i : order) {
-        const bool is_selected = selected_node == i;
+        // Kip açıkken köşeli parantez hedefindir: Tab seçimi değil.
+        const bool is_selected = link ? link_target == i : selected_node == i;
         std::string label = label_text(map.nodes[i], kLabelMaxCells);
         if (is_selected)
             label = "[" + label + "]";
@@ -207,10 +235,14 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
         if (x < 0 || y < 0 || !labels.place(cell_x, cell_y, ftxui::string_width(label)))
             continue;
         const bool is_current = current_node == i;
+        const bool is_source = link_source == i;
         const bool is_lit = lit(i);
         canvas.DrawText(cell_x * kMapDotsPerCellX, cell_y * kMapDotsPerCellY, label,
-                        [is_current, is_selected, is_lit](Cell& cell) {
-                            if (is_current) {
+                        [is_current, is_selected, is_source, is_lit](Cell& cell) {
+                            if (is_source) {
+                                cell.foreground_color = Color::Cyan;
+                                cell.bold = true;
+                            } else if (is_current) {
                                 cell.foreground_color = Color::Yellow;
                                 cell.bold = true;
                             } else if (!is_lit) {

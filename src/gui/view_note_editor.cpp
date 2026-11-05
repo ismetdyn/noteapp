@@ -62,9 +62,6 @@ constexpr EditorChord kFindChords[] = {
     {ImGuiMod_Ctrl | ImGuiKey_N, tui::Key::CtrlN},
 };
 
-constexpr ImU32 kFindMatchColor = IM_COL32(255, 200, 0, 90);
-constexpr ImU32 kFindCurrentColor = IM_COL32(255, 170, 0, 190);
-constexpr ImU32 kHiddenTextColor = IM_COL32(255, 255, 255, 255);
 constexpr float kCurrentLineAlpha = 0.35F;
 constexpr float kCursorWidth = 2.0F;
 constexpr float kUnderlineInset = 2.0F;  // alt çizgi satırın dibinden bu kadar yukarıda
@@ -84,13 +81,13 @@ ImU32 severity_color(core::lsp::DiagnosticSeverity severity) {
     case Severity::Error:
         break;
     case Severity::Warning:
-        return IM_COL32(214, 160, 0, 255);
+        return theme::current().warning;
     case Severity::Information:
-        return IM_COL32(64, 132, 214, 255);
+        return theme::current().accent;
     case Severity::Hint:
         return ImGui::GetColorU32(ImGuiCol_TextDisabled);
     }
-    return ImGui::GetColorU32(kErrorColor);
+    return theme::current().danger;
 }
 
 // Örtüşen tanılardan en önemlisi (Error = 1 en küçük değer); yoksa Unspecified.
@@ -132,7 +129,9 @@ void View::draw_editor(float reserved_height) {
     constexpr ImGuiWindowFlags kFlags =
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNavInputs;
     ImGui::PushFont(platform_->mono_font, 0.0F);
-    ImGui::BeginChild("##editor", size, ImGuiChildFlags_Borders, kFlags);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::current().canvas);  // zemin Begin'de çizilir
+    ImGui::BeginChild("##editor", size, theme::kPaneChildFlags, kFlags);
+    ImGui::PopStyleColor();
     editor_active_ = ImGui::IsWindowFocused();
     draw_editor_text();
     ImGui::EndChild();
@@ -211,7 +210,9 @@ std::optional<ImVec2> View::draw_editor_rows(ImVec2 origin, float text_x, float 
     const ImU32 text_color = ImGui::GetColorU32(ImGuiCol_Text);
     const ImU32 dim_color = ImGui::GetColorU32(ImGuiCol_TextDisabled);
     const ImU32 selection_color = ImGui::GetColorU32(ImGuiCol_TextSelectedBg);
-    const ImU32 hidden_color = ImGui::GetColorU32(kErrorColor);
+    const theme::Theme& colors = theme::current();
+    const ImU32 find_match_color = theme::with_alpha(colors.warning, theme::kFindMatchAlpha);
+    const ImU32 find_current_color = theme::with_alpha(colors.warning, theme::kFindCurrentAlpha);
     const std::size_t cursor = buffer.cursor();
     const std::size_t current_line = buffer.cursor_line();
     const std::optional<tui::ByteRange> selection = buffer.selection();
@@ -279,18 +280,18 @@ std::optional<ImVec2> View::draw_editor_rows(ImVec2 origin, float text_x, float 
                 span != spans.end() && span->begin <= local ? span->kind : tui::TokenKind::Plain;
             ImU32 background = 0;
             if (glyph.hidden != 0)
-                background = hidden_color;  // seçim ve aramanın altında da görünür (TUI ile aynı)
+                background = colors.danger_fill;  // seçim ve aramanın altında da görünür (TUI ile aynı)
             else if (selection && inside(*selection, at))
                 background = selection_color;
             else if (match != matches.end() && inside(*match, at))
-                background = match->begin == current_match ? kFindCurrentColor : kFindMatchColor;
+                background = match->begin == current_match ? find_current_color : find_match_color;
             if (background != 0)
                 draw->AddRectFilled(ImVec2(x, y), ImVec2(x + glyph_width, y + row_height), background);
             for (const tui::ByteRange& word : misspelled) {  // satırda birkaç sözcük: doğrusal yeter
                 if (!inside(word, local))
                     continue;
                 draw->AddLine(ImVec2(x, y + row_height - kUnderlineInset),
-                              ImVec2(x + glyph_width, y + row_height - kUnderlineInset), hidden_color,
+                              ImVec2(x + glyph_width, y + row_height - kUnderlineInset), colors.danger,
                               kUnderlineThickness);
                 if (local == word.begin)
                     remember_rect(std::format("editor_spell:{}:{}", row.line + 1, word.begin), ImVec2(x, y),
@@ -306,7 +307,7 @@ std::optional<ImVec2> View::draw_editor_rows(ImVec2 origin, float text_x, float 
                         remember_rect(std::format("editor_diagnostic:{}:{}", row.line + 1, local), ImVec2(x, y),
                                       ImVec2(x + glyph_width, y + row_height));
             }
-            const ImU32 color = glyph.hidden != 0                ? kHiddenTextColor
+            const ImU32 color = glyph.hidden != 0                ? colors.on_fill
                                 : kind == tui::TokenKind::Plain ? text_color
                                                                 : token_color(kind);
             const bool plain = glyph.hidden == 0 && glyph.cells == 1 && glyph.shown.size() == 1;
@@ -403,7 +404,7 @@ void View::draw_find_bar() {
     }
     ImGui::SameLine();
     if (editor.find_missed()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::current().danger);
         ImGui::TextUnformatted(core::tr("tui.editor_not_found").c_str());
         ImGui::PopStyleColor();
     } else {
@@ -438,7 +439,7 @@ void View::draw_editor_status() {
             notice = core::tr("tui.editor_hidden_char",
                               {{"code", std::format("U+{:04X}", static_cast<std::uint32_t>(control->code_point))},
                                {"name", std::string(control->name)}});
-        notice_color = ImGui::GetColorU32(kErrorColor);
+        notice_color = theme::current().danger;
     }
     if (notice.empty()) {
         if (const tui::DiagnosticMark* mark = state_.editor().diagnostic_at_cursor()) {

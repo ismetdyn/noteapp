@@ -4,11 +4,13 @@
 
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <imgui.h>
 #include <imgui_stdlib.h>
 #include <iterator>
 #include <mutex>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -147,13 +149,37 @@ void View::run_modal(const std::string& title, const std::function<bool()>& body
     } depth(modal_depth_);
     const std::string id = title + "###modal";
     frames_left_ = kFramesAfterEvent;
+    // Açılış kareleri milisaniyeler içinde biter: olay gelmezse karartma yarım kalırdı (kModalDimWake).
+    std::optional<std::chrono::steady_clock::time_point> dim_at =
+        std::chrono::steady_clock::now() + kModalDimWake;
+    const auto wait_ms = [&] {
+        const auto now = std::chrono::steady_clock::now();
+        return shorten_wait(shorten_wait(kIdleWaitMs, tooltip_at_, now), dim_at, now);
+    };
+    // idle_step'teki zamanlayıcılar: diyaloğun içindeki ipucu da gecikmesi dolunca açılır.
+    const auto timer_due = [&] {
+        const auto now = std::chrono::steady_clock::now();
+        bool due = false;
+        if (dim_at && now >= *dim_at) {
+            dim_at.reset();
+            due = true;
+        }
+        if (tooltip_due(now)) {
+            frames_left_ = kFramesAfterEvent;
+            due = true;
+        }
+        return due;
+    };
     for (bool finished = false; !finished;) {
         if (on_modal_frame)  // test kancası tuşları kendisi üretir: beklemek yalnız testi yavaşlatır
             on_modal_frame();
         else if (frames_left_ > 0)
             --frames_left_;
-        else if (SDL_WaitEventTimeout(nullptr, kIdleWaitMs))
+        else if (SDL_WaitEventTimeout(nullptr, wait_ms()))
             frames_left_ = kFramesAfterEvent;
+        // Olay yok: kare yalnız süresi dolan zamanlayıcıda ya da metin alanının kırpma imlecinde (idle_step).
+        else if (!timer_due() && !caret_blinks())
+            continue;
         render([&] {
             if (!ImGui::IsPopupOpen(id.c_str()))
                 ImGui::OpenPopup(id.c_str());

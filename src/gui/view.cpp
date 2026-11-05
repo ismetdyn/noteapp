@@ -144,7 +144,8 @@ std::expected<std::unique_ptr<View>, std::string> View::create(GuiState& state) 
 
 View::View(GuiState& state, std::unique_ptr<Platform> platform)
     : state_(state), platform_(std::move(platform)), preview_(std::make_unique<PreviewCache>()),
-      frames_left_(kFramesAfterEvent), import_inbox_(std::make_shared<ImportInbox>()) {
+      frames_left_(kFramesAfterEvent), import_inbox_(std::make_shared<ImportInbox>()),
+      day_ends_at_(core::next_local_midnight(std::chrono::system_clock::now())) {
     state_.set_wake(wake_event_loop);
 }
 
@@ -175,6 +176,7 @@ void View::set_ui_scale(float scale) {
     // ScaleAllSizes çarpımı birikir: yeni ölçek temiz stilden kurulur (ImGui örneği de böyle önerir).
     ImGuiStyle& style = ImGui::GetStyle();
     style = ImGuiStyle();
+    theme::apply_style(style);
     style.ScaleAllSizes(scale);
     style.FontScaleDpi = scale;
     apply_theme();
@@ -186,12 +188,8 @@ void View::set_ui_scale(float scale) {
 
 void View::apply_theme() {
     // Plan davranış 2: yalnız açık/koyu ayrımı izlenir.
-    if (SDL_GetSystemTheme() == SDL_SYSTEM_THEME_DARK)
-        ImGui::StyleColorsDark();
-    else
-        ImGui::StyleColorsLight();
-    // Varsayılan yarı saydam (koyu temada %94): arkadaki yazı diyalog metninin içinde hayalet gibi görünürdü.
-    ImGui::GetStyle().Colors[ImGuiCol_PopupBg].w = 1.0F;
+    theme::apply_colors(ImGui::GetStyle(),
+                        SDL_GetSystemTheme() == SDL_SYSTEM_THEME_DARK ? theme::kDark : theme::kLight);
 }
 
 void View::pump_events() {
@@ -234,7 +232,7 @@ void View::pump_events() {
 void View::render(const std::function<void()>& overlay) {
     pump_events();
     // TUI gibi her kareden önce: tanılar ve öneriler bu karede çizilsin.
-    lsp_waiting_ = state_.update_language_servers(std::chrono::steady_clock::now());
+    lsp_send_at_ = state_.update_language_servers(std::chrono::steady_clock::now());
     item_rects_.clear();  // yalnız bu karede çizilenler kalır: gizli sekmenin eski konumu test edilmesin
     // Harita bu karede çizilmezse yerleşim de beklemez.
     map_animating_ = false;
@@ -244,6 +242,7 @@ void View::render(const std::function<void()>& overlay) {
     draw_root();
     if (overlay)
         overlay();
+    schedule_tooltip_wake();
     ImGui::Render();
     SDL_Renderer* renderer = platform_->renderer.get();
     const ImGuiIO& io = ImGui::GetIO();
@@ -292,28 +291,76 @@ void View::run_intents() {
 int View::idle_timeout_ms() const {
     if (frames_left_ > 0 || map_animating_)
         return 0;
-    // Dil sunucusuna gidecek değişiklik boşta bekliyor: süre dolunca gönderilsin diye sık uyanılır.
-    int timeout = lsp_waiting_ ? kLspPollMs : kIdleWaitMs;
-    if (const auto deadline = state_.next_deadline()) {
-        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
-            *deadline - std::chrono::steady_clock::now());
-        timeout = std::clamp(static_cast<int>(left.count()), 0, timeout);
-    }
+    // En yakın zamanlayıcıya dek uyunur: autosave ve dil sunucusuna gidecek değişiklik (süre dolunca
+    // gönderilir).
+    int timeout = kIdleWaitMs;
+    const auto clamp_to = [&timeout](auto left) {
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(left).count();
+        timeout = static_cast<int>(std::clamp<decltype(ms)>(ms, 0, timeout));
+    };
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& deadline : {state_.next_deadline(), lsp_send_at_, tooltip_at_})
+        if (deadline)
+            clamp_to(*deadline - now);
+    clamp_to(day_ends_at_ - std::chrono::system_clock::now());
     return timeout;
+}
+
+// Boşta kare yok: fare gecikmeli ipucu olan bir öğede durursa ipucu hiç açılmazdı (ImGui gecikmeyi kareler
+// arası süreden sayar). Gecikme dolunca bir kez uyanılır; fare kıpırdadıkça yeniden kurulur, öğeden çıkınca
+// kalkar. HoverItemDelayId: bu karede gecikmeli IsItemHovered soran öğe (SetItemTooltip, BeginItemTooltip).
+void View::schedule_tooltip_wake() {
+    const ImGuiID item = GImGui->HoverItemDelayId;
+    if (item == 0) {
+        tooltip_item_ = 0;
+        tooltip_at_.reset();
+        return;
+    }
+    const ImGuiIO& io = ImGui::GetIO();
+    if (item == tooltip_item_ && io.MouseDelta.x == 0.0F && io.MouseDelta.y == 0.0F)
+        return;
+    tooltip_item_ = item;
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const std::chrono::duration<float> delay(std::max(style.HoverStationaryDelay, style.HoverDelayNormal) +
+                                             kTooltipWakeMarginSeconds);
+    tooltip_at_ = std::chrono::steady_clock::now() +
+                  std::chrono::duration_cast<std::chrono::steady_clock::duration>(delay);
+}
+
+bool View::tooltip_due(std::chrono::steady_clock::time_point now) {
+    if (!tooltip_at_ || now < *tooltip_at_)
+        return false;
+    tooltip_at_.reset();
+    return true;
+}
+
+bool View::caret_blinks() const {
+    // ImGui metin alanı kırpma imleci için yavaş bir tempoda yenilenir (uyanma aralığı kadar). Not editörünün
+    // imleci yanıp sönmez (her karede çizilir); IME için WantTextInput'u o da açar, boşta kare istemez.
+    return ImGui::GetIO().WantTextInput && !editor_active_;
 }
 
 void View::idle_step(int timeout_ms) {
     // Olay kuyruktan alınmaz (NULL): draw_frame hepsini tek yerde işler.
     if (SDL_WaitEventTimeout(nullptr, timeout_ms))
         frames_left_ = kFramesAfterEvent;
-    if (state_.tick(std::chrono::steady_clock::now()))
+    const auto now = std::chrono::steady_clock::now();
+    if (state_.tick(now))
         frames_left_ = kFramesAfterEvent;
-    // Etkin metin alanı kırpma imleci için yavaş bir tempoda yenilenir (uyanma aralığı kadar).
-    const bool blinking = ImGui::GetIO().WantTextInput && timeout_ms > 0;
+    if (tooltip_due(now))
+        frames_left_ = kFramesAfterEvent;  // ipucu penceresi ilk karede ölçülür, sonrakinde görünür
+    // Gün dönünce "bugün" saatleri (HH:MM) tarihe döner: bir kez çizilir. Duvar saatiyle: uyku sonrası da.
+    if (const auto wall = std::chrono::system_clock::now(); wall >= day_ends_at_) {
+        day_ends_at_ = core::next_local_midnight(wall);
+        frames_left_ = kFramesAfterEvent;
+    }
+    const bool blinking = caret_blinks() && timeout_ms > 0;
+    // Değişiklik render'da gönderilir (update_language_servers): süresi dolunca tek kare.
+    const bool lsp_due = lsp_send_at_ && now >= *lsp_send_at_;
     if (frames_left_ > 0) {
         --frames_left_;
         draw_frame();
-    } else if (blinking || map_animating_) {  // yerleşim durunca kare de durur: boşta CPU yok
+    } else if (blinking || lsp_due || map_animating_) {  // yerleşim durunca kare de durur: boşta CPU yok
         draw_frame();
     }
 }
@@ -369,6 +416,9 @@ void View::draw_root() {
     ImGui::Begin("##root", nullptr, kRootFlags);
     ImGui::PopStyleVar();
     handle_shortcuts();
+    // Kısayollar önceki karenin değerini okudu; editör bu karede çizilmezse (çöp, klasör özeti, harita,
+    // Ayarlar) odakta sayılmaz, yoksa arama kutusunun kırpma imleci duruyordu (caret_blinks).
+    editor_active_ = false;
 
     const FocusRequest focus = state_.take_focus_request();
     if (focus != FocusRequest::None)

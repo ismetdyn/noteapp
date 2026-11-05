@@ -20,6 +20,8 @@ struct ParsedArgs {
     };
 
     Kind kind = Kind::Add;
+    // Çıktı pager'dan geçebilir: komut tabloda `--no-pager` taşıyor ve verilmedi (bayrak `rest`ten çıkarılır).
+    bool paged = false;
 
     // Add
     std::optional<std::string> type;
@@ -27,6 +29,7 @@ struct ParsedArgs {
     std::optional<std::string> name;
     bool no_sync = false;
     bool editor = false;  // -e: editörü her durumda aç; metin argümanları ön içerik olur
+    bool quiet = false;   // -q: başarı satırı ("Saved:") yazılmaz; hatalar yazılır
     std::vector<std::string> text;
 
     // Reserved

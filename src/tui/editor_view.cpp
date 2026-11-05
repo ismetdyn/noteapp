@@ -68,30 +68,26 @@ ftxui::Element severity_styled(ftxui::Element element, core::lsp::DiagnosticSeve
 
 }  // namespace
 
-// Yalnız 16 ANSI rengi: açık ve koyu terminalde de okunur. Sarı arama vurgusuna ayrılmıştır.
+// Yalnız 16 ANSI rengi: açık ve koyu terminalde de okunur. Aile tablosu GUI ile ortak (syntax_family); yorum
+// soluk kalır ki içerikten parlak olmasın. Sarı arama vurgusuna ayrılmıştır.
 ftxui::Element token_styled(ftxui::Element element, TokenKind token) {
     using namespace ftxui;
-    switch (token) {
-    case TokenKind::Plain:
+    switch (syntax_family(token)) {
+    case SyntaxFamily::Plain:
         return element;
-    case TokenKind::Comment:
+    case SyntaxFamily::Muted:
+        return element | dim;
+    case SyntaxFamily::Green:
         return element | color(Color::Green);
-    case TokenKind::String:
-    case TokenKind::Value:
-        return element | color(Color::Magenta);
-    case TokenKind::Number:
-    case TokenKind::Constant:
+    case SyntaxFamily::Orange:
         return element | color(Color::RedLight);
-    case TokenKind::Type:
-    case TokenKind::Code:
+    case SyntaxFamily::Cyan:
         return element | color(Color::Cyan);
-    case TokenKind::Keyword:
-    case TokenKind::Key:
-    case TokenKind::Tag:
-        return element | color(Color::BlueLight);
-    case TokenKind::Heading:
+    case SyntaxFamily::Magenta:
+        return element | color(Color::Magenta);
+    case SyntaxFamily::Blue:
         return element | bold | color(Color::BlueLight);
-    case TokenKind::Emphasis:
+    case SyntaxFamily::Bold:
         return element | bold;
     }
     return element;

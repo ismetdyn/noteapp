@@ -13,16 +13,19 @@ struct MouseInput {
     int y = 0;
     MouseButton button = MouseButton::Other;
     MouseMotion motion = MouseMotion::Press;
+    bool shift = false;  // çoğu terminal Shift+fareyi kendi seçimine ayırır, uygulamaya gelmez
 };
 
-enum class MouseResult { None, SelectionFinished, OpenTrash, SavePrefs, FollowLink };
+enum class MouseResult { None, SelectionFinished, OpenTrash, SavePrefs, FollowLink, MapEdit };
 
 // Fare olayını modele uygular (FTXUI bilmez): bölücü sürükleme, işaretçinin altındaki paneli kaydırma, satır
 // seçme, panele odaklanma. Editörden çıkan her yol Esc ile aynı kapıdan geçer: kaydedilmemiş metin yine
 // sorulur. REVIEW'da sürükleme metin seçer; `SelectionFinished` seçimin panoya kopyalanacağını söyler. Üst
 // satırdaki çöp göstergesine tıklama `OpenTrash` döner: çöpü listelemek modelin işi değil. REVIEW'da
 // sürüklenmeyen tıklama bir [[bağlantı]] üstündeyse onu seçer ve `FollowLink` döner: depo çözer. Liste
-// satırına sağ tık o satırın bağlam menüsünü açar (TuiState::open_row_menu).
+// satırına sağ tık o satırın bağlam menüsünü açar (TuiState::open_row_menu). Haritada (MAP-R) düğümden sağ
+// sürükleme (terminal geçirirse Shift+sol da) başka düğüme ilişki kurar, kenara sağ tık onu seçer; doğrudan
+// yazılacak iş `MapEdit` döner.
 MouseResult route_mouse(const MouseInput& input, TuiState& state, EditorSession& editor);
 
 }  // namespace noteapp::tui

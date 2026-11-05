@@ -1,9 +1,12 @@
 #include "tui/tui_state.hpp"
 
+#include "app/map_relations.hpp"
 #include "search/query.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdlib>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -190,10 +193,12 @@ void TuiState::notes_changed() {
     prune_marks();
 }
 
-void TuiState::set_sync_states(std::map<core::NotePath, core::SyncState> states) {
-    listing_.set_sync_states(std::move(states));
+bool TuiState::set_sync_states(std::map<core::NotePath, core::SyncState> states) {
+    if (!listing_.set_sync_states(std::move(states)))
+        return false;
     notes_changed();
     refilter(false);
+    return true;
 }
 
 const SharedInputSources& TuiState::input_sources() const {
@@ -240,11 +245,13 @@ std::vector<Row> TuiState::rows_in_folder() {
 void TuiState::set_details_view(bool details) {
     details_view_ = details;
     map_view_ = false;
+    map_link_.reset();
     refilter(false);
 }
 
 void TuiState::set_map_view(bool map) {
     map_view_ = map;
+    map_link_.reset();
 }
 
 namespace {
@@ -255,6 +262,14 @@ constexpr float kMapZoomStep = 1.25F;
 constexpr float kMapMinZoom = 0.0005F;  // 2.000 düğümlük çizge en küçük panelde de sığar
 constexpr float kMapMaxZoom = 2.0F;     // birim başına nokta: ideal kenar 200 nokta (100 hücre)
 constexpr int kMapStatusRows = 1;       // kapsam satırı
+// Fare isabeti: braille noktası hücreden küçük; düğümün iki yanındaki hücre ve aynı satır sayılır, kenar
+// çizgisine bu kadar nokta yakın.
+constexpr int kMapHitCells = 2;
+constexpr float kMapEdgeHitDots = 4.0F;  // bir hücre boyu: çizginin geçtiği hücrenin ortası
+
+bool same_node(const app::MapNode& a, const app::MapNode& b) {
+    return a.kind == b.kind && a.key == b.key;
+}
 
 }  // namespace
 
@@ -347,6 +362,9 @@ void TuiState::step_map_selection(int delta) {
 // Harita odaktayken (Liste): oklar kaydırır, `+` `-` yakınlaştırır, `0` sığdırır, Tab/Shift+Tab not seçer,
 // Enter seçileni açar, `w` bütün çizge, `t` etiketler, `1`-`6` derinlik. Diğer tuşlar tabloya düşer.
 std::optional<Intent> TuiState::handle_map_key(Key key, std::string_view text) {
+    if (map_link_)
+        if (const auto intent = handle_map_link_key(key, text))
+            return intent;
     switch (key) {
     case Key::Left:
         pan_map(-1.0F, 0.0F);
@@ -384,6 +402,9 @@ std::optional<Intent> TuiState::handle_map_key(Key key, std::string_view text) {
         options.whole_graph = !options.whole_graph;
     } else if (text == "t") {
         options.show_tags = !options.show_tags;
+    } else if (text == "C") {
+        begin_map_link();
+        return Intent::None;
     } else if (text.size() == 1 && text[0] >= '0' + app::MapOptions::kMinDepth &&
                text[0] <= '0' + app::MapOptions::kMaxDepth) {
         options.depth = text[0] - '0';
@@ -392,6 +413,184 @@ std::optional<Intent> TuiState::handle_map_key(Key key, std::string_view text) {
     }
     map_.set_options(options);
     return Intent::None;
+}
+
+// Kip açıkken: Esc, Tab, Enter ve `d` (seçimde `r` `l`) burada; başka tuş haritaya ve listeye düşer, seçim
+// beklerken yutulur (yanlış harf liste komutu çalıştırmasın).
+std::optional<Intent> TuiState::handle_map_link_key(Key key, std::string_view text) {
+    MapLink& link = *map_link_;
+    switch (key) {
+    case Key::Escape:
+        map_link_.reset();
+        return Intent::None;
+    case Key::Tab:
+    case Key::ShiftTab:
+        if (!link.choosing)
+            step_map_target(key == Key::Tab ? 1 : -1);
+        return Intent::None;
+    case Key::Enter:
+        return link.choosing ? Intent::None : confirm_map_link();
+    case Key::Char:
+        break;
+    default:
+        return std::nullopt;
+    }
+    if (link.choosing) {
+        if (text == "r")
+            return request_map_edit(app::MapEdgeKind::Related, true);
+        if (text == "l")
+            return request_map_edit(app::MapEdgeKind::Link, true);
+        return Intent::None;
+    }
+    if (text != "d")
+        return std::nullopt;
+    if (!link.target)
+        return Intent::None;
+    const auto kind = link.edge ? link.edge : app::map_edge_between(map_.map(), link.source, *link.target);
+    return request_map_edit(kind, false);
+}
+
+// Kaynak Tab'la seçilen not, yoksa gösterilen not (çevrenin merkezi); haritada yoksa kip açılmaz.
+void TuiState::begin_map_link() {
+    std::optional<core::NotePath> source = map_selected();
+    if (!source)
+        source = map_.center();
+    if (!source)
+        return;
+    app::MapNode node{app::MapNodeKind::Note, source->string()};
+    if (std::ranges::none_of(map_.map().nodes,
+                             [&](const app::MapNode& shown) { return same_node(shown, node); }))
+        return;
+    map_link_ = MapLink{std::move(node), std::nullopt, std::nullopt};
+}
+
+// Hedef kaynak dışındaki her düğümdür (not ve etiket), haritanın sırasıyla; sondan başa döner.
+void TuiState::step_map_target(int delta) {
+    MapLink& link = *map_link_;
+    std::vector<const app::MapNode*> targets;
+    for (const app::MapNode& node : map_.map().nodes)
+        if (!same_node(node, link.source))
+            targets.push_back(&node);
+    if (targets.empty())
+        return;
+    const auto current =
+        link.target ? std::ranges::find_if(
+                          targets, [&](const app::MapNode* node) { return same_node(*node, *link.target); })
+                    : targets.end();
+    std::size_t index = 0;
+    if (current != targets.end())
+        index = app::cycled_tab(static_cast<std::size_t>(current - targets.begin()), delta, targets.size());
+    else if (delta < 0)
+        index = targets.size() - 1;
+    link.target = *targets[index];
+    link.edge.reset();
+}
+
+Intent TuiState::confirm_map_link() {
+    if (!map_link_ || !map_link_->target)
+        return Intent::None;
+    switch (app::map_drop(map_link_->source, *map_link_->target)) {
+    case app::MapDrop::ChooseNoteEdge:
+        map_link_->choosing = true;
+        return Intent::None;
+    case app::MapDrop::AddTag:
+        return request_map_edit(app::MapEdgeKind::Tag, true);
+    case app::MapDrop::None:
+        break;
+    }
+    return Intent::None;
+}
+
+Intent TuiState::request_map_edit(std::optional<app::MapEdgeKind> kind, bool connect) {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- çağıranlar hedefi denetledi
+    map_edit_ = MapEditRequest{map_link_->source, *map_link_->target, kind, connect};
+    map_link_.reset();
+    return Intent::MapEdit;
+}
+
+std::optional<app::LayoutPoint> TuiState::map_point(int column, int row) const {
+    const MapCamera camera = map_camera();
+    if (camera.zoom <= 0.0F)
+        return std::nullopt;
+    const float x = static_cast<float>(column * kMapDotsPerCellX) + kMapDotsPerCellX / 2.0F;
+    const float y = static_cast<float>(row * kMapDotsPerCellY) + kMapDotsPerCellY / 2.0F;
+    return app::LayoutPoint{(x - camera.x) / camera.zoom, (y - camera.y) / camera.zoom};
+}
+
+// Düğümün hücresi çizimdeki gibidir (map_pane: nokta yuvarlanır, hücreye bölünür).
+std::optional<std::size_t> TuiState::map_node_at(int column, int row) const {
+    const MapCamera camera = map_camera();
+    const auto& positions = map_.layout().positions();
+    std::optional<std::size_t> best;
+    int best_distance = kMapHitCells + 1;
+    for (std::size_t i = 0; i < positions.size() && i < map_.map().nodes.size(); ++i) {
+        const float dot_x = std::round(camera.x + positions[i].x * camera.zoom);
+        const float dot_y = std::round(camera.y + positions[i].y * camera.zoom);
+        const auto cell_x = static_cast<int>(std::floor(dot_x / kMapDotsPerCellX));
+        const auto cell_y = static_cast<int>(std::floor(dot_y / kMapDotsPerCellY));
+        const int distance = std::abs(cell_x - column);
+        if (cell_y == row && distance < best_distance) {
+            best_distance = distance;
+            best = i;
+        }
+    }
+    return best;
+}
+
+bool TuiState::begin_map_drag(int column, int row) {
+    const auto node = map_node_at(column, row);
+    if (!node)
+        return false;
+    leave_preview();  // tıklama haritaya odaklanır (click_row gibi): seçim tuşları haritaya gelsin
+    focus_ = Focus::List;
+    map_link_ = MapLink{map_.map().nodes[*node], std::nullopt, std::nullopt};
+    map_link_->drag = std::pair(column * kMapDotsPerCellX + 1, row * kMapDotsPerCellY + 2);
+    return true;
+}
+
+void TuiState::move_map_drag(int column, int row) {
+    if (!map_dragging())
+        return;
+    map_link_->drag = std::pair(column * kMapDotsPerCellX + 1, row * kMapDotsPerCellY + 2);
+    const auto node = map_node_at(column, row);
+    if (node && !same_node(map_.map().nodes[*node], map_link_->source))
+        map_link_->target = map_.map().nodes[*node];
+    else
+        map_link_->target.reset();
+}
+
+// Bırakış: not → not seçim sorar (kip `r` `l` bekler), not ↔ etiket hemen ekler; boşluk ya da aynı düğüm
+// vazgeçmektir.
+Intent TuiState::end_map_drag(int column, int row) {
+    if (!map_link_)
+        return Intent::None;
+    map_link_->drag.reset();
+    const auto node = map_node_at(column, row);
+    if (!node || same_node(map_.map().nodes[*node], map_link_->source)) {
+        map_link_.reset();
+        return Intent::None;
+    }
+    map_link_->target = map_.map().nodes[*node];
+    const Intent intent = confirm_map_link();
+    if (map_link_ && !map_link_->choosing)
+        map_link_.reset();
+    return intent;
+}
+
+void TuiState::open_map_edge(int column, int row) {
+    map_link_.reset();
+    const auto point = map_point(column, row);
+    if (!point)
+        return;
+    const app::NoteMap& map = map_.map();
+    const auto edge =
+        app::map_edge_at(map, map_.layout().positions(), *point, kMapEdgeHitDots / map_camera().zoom);
+    if (!edge)
+        return;
+    leave_preview();
+    focus_ = Focus::List;
+    const app::MapEdge& hit = map.edges[*edge];
+    map_link_ = MapLink{map.nodes[hit.from], map.nodes[hit.to], hit.kind};
 }
 
 std::string TuiState::name_prefix_for(std::string_view folder) const {

@@ -76,7 +76,9 @@ public:
     static constexpr std::chrono::milliseconds kMirrorIdle{500};
 
     struct Update {
-        bool wants_frame = false;  // değişiklik boşta bekliyor: süre dolunca gönderilsin diye yeni kare iste
+        // Değişiklik boşta bekliyor: bu andan sonraki update onu gönderir; arayüz o ana dek çizmek zorunda
+        // değil.
+        std::optional<std::chrono::steady_clock::time_point> send_at;
         std::string status;        // durmuş sunucunun iletisi; her sunucu için bir kez
     };
 

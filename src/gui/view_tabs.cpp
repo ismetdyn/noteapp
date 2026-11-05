@@ -45,6 +45,12 @@ void View::draw_note_tabs() {
         ImGui::PopItemFlag();
         return;
     }
+    ImGuiTabBar* bar = ImGui::GetCurrentTabBar();
+    // Birden çok sekmede ImGui (1.93) kaydırma oklarını çubuğun sağına koyar (her biri 1 em'den dar) ve
+    // sekmeye kaydırırken iki yanda 1 em komşu payı bırakır: sekme bunların dışında kalan yere sığmalı.
+    constexpr float kScrollReserveEms = 4.0F;
+    const float reserve = tabs.size() > 1 ? kScrollReserveEms * ImGui::GetFontSize() : 0.0F;
+    const float tab_room = bar->BarRect.GetWidth() - reserve;
     const std::uint64_t active = state_.active_tab();
     if (active != drawn_note_tab_)
         note_tab_pending_ = true;
@@ -64,6 +70,11 @@ void View::draw_note_tabs() {
         const bool replaceable = !tab.pinned && !tab.kept;  // sonra açılan not bunun yerine geçer: eğik yazı
         if (replaceable)
             ImGui::PushFont(platform_->preview_fonts.italic, 0.0F);
+        // Kaydırmalı çubuk sekmeyi daraltmaz: dar bölmede tek sekme çubuktan geniş olup etkin sekme taşardı.
+        // Sınır yalnız taşan sekmede; başlık ImGui'nin üç noktasıyla kısalır, tam adı ipucunda.
+        const bool has_marker = !tab.pinned || tab.unsaved;  // kapatma düğmesi ya da kaydedilmedi işareti
+        if (ImGui::TabItemCalcSize(label.c_str(), has_marker).x > tab_room)
+            ImGui::SetNextItemWidth(std::max(tab_room, 1.0F));
         bool open = true;
         const bool selected = ImGui::BeginTabItem(label.c_str(), tab.pinned ? nullptr : &open, flags);
         if (replaceable)
@@ -99,7 +110,6 @@ void View::draw_note_tabs() {
     }
     // Sürükleyerek sıralama ImGui'nin içinde kalır: sıra modele geri yazılır (Ctrl+Tab ve gui-state onu
     // izler).
-    ImGuiTabBar* bar = ImGui::GetCurrentTabBar();
     // GEÇİCİ: ImGui 1.93 seçilen sekmeye kaydırmayı, kaydırma okları aynı karede belirince önceki yerleşimin
     // genişliğiyle hesaplar; yeni sekme okların altında yarım kalır. Seçim oturduktan bir kare sonra kaydırma
     // yeniden istenir.

@@ -1,6 +1,7 @@
 // Önizleme yerleşimi (markdown_preview, ImGui'den yalnız font ölçümü): sarma maliyeti ve görünen koşular.
 #include "gui/gui_state.hpp"
 #include "gui/markdown_preview.hpp"
+#include "gui/theme.hpp"
 #include "window_fixture.hpp"
 
 #include <algorithm>
@@ -150,16 +151,13 @@ TEST_CASE("preview layout: inline code shading stands out in the light and the d
     const FontScene scene;
     constexpr double kMinShadeContrast = 1.5;  // zemin farkı gözle seçilir; eski açık tema 1,14'tü
     constexpr double kMinTextContrast = 4.5;   // WCAG AA gövde metni
-    for (const bool dark : {false, true}) {
-        CAPTURE(dark);
-        if (dark)
-            ImGui::StyleColorsDark();
-        else
-            ImGui::StyleColorsLight();
-        const ImGuiStyle& style = ImGui::GetStyle();
-        const ImVec4 shade = style.Colors[noteapp::gui::kInlineCodeBackground];
+    // Önizleme tuval zeminindedir; kod zemini temanın code_bg token'ı.
+    namespace theme = noteapp::gui::theme;
+    for (const theme::Theme* colors : {&theme::kLight, &theme::kDark}) {
+        CAPTURE(colors->dark);
+        const ImVec4 shade = ImGui::ColorConvertU32ToFloat4(colors->code_bg);
         REQUIRE(shade.w == 1.0F);  // saydam renk karşıtlığı burada ölçülemezdi
-        CHECK(contrast(shade, style.Colors[ImGuiCol_WindowBg]) >= kMinShadeContrast);
-        CHECK(contrast(shade, style.Colors[ImGuiCol_Text]) >= kMinTextContrast);
+        CHECK(contrast(shade, ImGui::ColorConvertU32ToFloat4(colors->canvas)) >= kMinShadeContrast);
+        CHECK(contrast(shade, ImGui::ColorConvertU32ToFloat4(colors->text)) >= kMinTextContrast);
     }
 }

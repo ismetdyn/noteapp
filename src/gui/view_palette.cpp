@@ -85,7 +85,7 @@ std::optional<std::string> View::ask_palette() {
         std::optional<std::size_t> clicked;
         ImGui::BeginChild("##palette_rows",
                           ImVec2(width, ImGui::GetTextLineHeightWithSpacing() * kPaletteRows),
-                          ImGuiChildFlags_Borders);
+                          theme::kPaneChildFlags);
         for (std::size_t index = 0; index < rows.size(); ++index) {
             const PaletteRow& row = rows[index];
             std::string label = core::tr(row.label_key) + "  ·  " + command_keys(row.id);
@@ -123,7 +123,7 @@ void View::show_help_dialog() {
         ImGui::TextUnformatted(core::tr("gui.help_hint").c_str());
         ImGui::PopTextWrapPos();
         const float height = ImGui::GetMainViewport()->WorkSize.y * kHelpHeightShare;
-        ImGui::BeginChild("##help_rows", ImVec2(width, height), ImGuiChildFlags_Borders);
+        ImGui::BeginChild("##help_rows", ImVec2(width, height), theme::kPaneChildFlags);
         constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
         if (ImGui::BeginTable("##help", 2, kFlags)) {
             const auto help_row = [this](const std::string& name, const std::string& label,

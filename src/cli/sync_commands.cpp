@@ -50,8 +50,7 @@ int sync_fail(const core::Error& error) {
 }
 
 int usage() {
-    std::cerr << core::tr("cli.sync_usage") << '\n';
-    return kExitUsage;
+    return usage_error("sync");
 }
 
 std::string utf8(const fs::path& path) {
@@ -166,7 +165,10 @@ std::optional<std::string> token_host(const core::Config& config, const std::vec
 
 int sync_foreground(const core::Config& config) {
     // Ön planda süreç içinde: kullanıcı başında, asılı kalan ssh'ı Ctrl-C ile keser (SPEC-sync karar 3).
-    const auto result = sync::SyncService(config).sync_now();
+    const auto result = [&config] {
+        const ProgressLine progress(core::tr("cli.sync_progress"));
+        return sync::SyncService(config).sync_now();
+    }();
     if (!result)
         return sync_fail(result.error());
     std::cout << core::tr("cli.sync_done",

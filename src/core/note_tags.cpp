@@ -126,7 +126,8 @@ bool closes_fence(std::string_view line, std::string_view fence, std::string_vie
     return line.find_first_not_of(" \t\r", after) == std::string_view::npos;
 }
 
-void scan_line(std::string_view line, std::map<std::string, std::string>& tags) {
+// Satırdaki her etiket için visit(`#` konumu, taramanın sürdüğü konum, etiket).
+template <class Visit> void scan_line(std::string_view line, Visit&& visit) {
     std::size_t at = 0;
     while (at < line.size()) {
         if (const std::size_t skipped = skip_span(line, at); skipped != at) {
@@ -139,8 +140,28 @@ void scan_line(std::string_view line, std::map<std::string, std::string>& tags) 
         }
         std::size_t end = at + 1;
         if (const std::string_view tag = tag_at(line, at, end); !tag.empty())
-            tags.try_emplace(tag_key(tag), tag);
+            visit(at, end, tag);
         at = end;
+    }
+}
+
+// Gövdedeki her etiket için visit(satırın gövdedeki başı, satır, `#` konumu, son, etiket); çitli kod atlanır.
+template <class Visit> void scan_body(std::string_view body, Visit&& visit) {
+    std::string_view open_fence;
+    for (std::size_t start = 0; start <= body.size();) {
+        const std::size_t newline = std::min(body.find('\n', start), body.size());
+        const std::string_view line = body.substr(start, newline - start);
+        const std::size_t line_start = start;
+        start = newline + 1;
+        const std::string_view fence = fence_of(line);
+        if (open_fence.empty() && !fence.empty())
+            open_fence = fence;
+        else if (open_fence.empty())
+            scan_line(line, [&](std::size_t hash, std::size_t end, std::string_view tag) {
+                visit(line_start, line, hash, end, tag);
+            });
+        else if (closes_fence(line, fence, open_fence))
+            open_fence = {};
     }
 }
 
@@ -150,23 +171,95 @@ std::vector<std::string> note_tags(std::string_view path, std::string_view body)
     if (!is_prose(path) || looks_binary(body))
         return {};
     std::map<std::string, std::string> tags;  // anahtar -> ilk yazım
-    std::string_view open_fence;
-    for (std::size_t start = 0; start <= body.size();) {
-        const std::size_t newline = std::min(body.find('\n', start), body.size());
-        const std::string_view line = body.substr(start, newline - start);
-        start = newline + 1;
-        const std::string_view fence = fence_of(line);
-        if (open_fence.empty() && !fence.empty())
-            open_fence = fence;
-        else if (open_fence.empty())
-            scan_line(line, tags);
-        else if (closes_fence(line, fence, open_fence))
-            open_fence = {};
-    }
+    scan_body(body, [&](std::size_t, std::string_view, std::size_t, std::size_t, std::string_view tag) {
+        tags.try_emplace(tag_key(tag), tag);
+    });
     std::vector<std::string> out;
     out.reserve(tags.size());
     for (auto& [key, display] : tags)
         out.push_back(std::move(display));
+    return out;
+}
+
+bool is_prose_note(std::string_view path) {
+    return is_prose(path);
+}
+
+std::string remove_note_tag(std::string_view path, std::string_view body, std::string_view key) {
+    if (!is_prose(path) || looks_binary(body))
+        return std::string(body);
+    struct Found {
+        std::size_t line_start;
+        std::string_view line;
+        std::size_t hash;
+        std::size_t end;
+        bool matches;
+    };
+    std::vector<Found> found;  // satır ve konum sırasıyla
+    scan_body(body, [&](std::size_t line_start, std::string_view line, std::size_t hash, std::size_t end,
+                        std::string_view tag) {
+        found.push_back({line_start, line, hash, end, tag_key(tag) == key});
+    });
+    // Kesilecek aralıklar (gövde konumu), sırayla; ardışık etiketlerin boşluk payı çakışabilir. Düzyazıdaki
+    // etiketin yalnız `#`'i gider (sözcük cümlenin parçasıdır); yalnız etiketlerden oluşan satırda etiket bir
+    // boşlukla silinir.
+    std::vector<std::pair<std::size_t, std::size_t>> cuts;
+    const auto is_blank = [](std::string_view text) {
+        return text.find_first_not_of(" \t\r") == std::string_view::npos;
+    };
+    for (std::size_t first = 0; first < found.size();) {
+        std::size_t last = first;
+        while (last < found.size() && found[last].line_start == found[first].line_start)
+            ++last;
+        const std::string_view line = found[first].line;
+        bool tags_only = true;
+        std::size_t at = 0;
+        for (std::size_t i = first; i < last; ++i) {
+            tags_only = tags_only && is_blank(line.substr(at, found[i].hash - at));
+            at = found[i].end;
+        }
+        tags_only = tags_only && is_blank(line.substr(at));
+        for (std::size_t i = first; i < last; ++i) {
+            if (!found[i].matches)
+                continue;
+            std::size_t from = found[i].hash;
+            std::size_t to = tags_only ? found[i].end : from + 1;
+            const auto blank = [&](std::size_t pos) { return line[pos] == ' ' || line[pos] == '\t'; };
+            if (tags_only && from > 0 && blank(from - 1))
+                --from;
+            else if (tags_only && to < line.size() && blank(to))
+                ++to;
+            cuts.emplace_back(found[i].line_start + from, found[i].line_start + to);
+        }
+        first = last;
+    }
+    if (cuts.empty())
+        return std::string(body);
+    std::string out;
+    out.reserve(body.size());
+    std::size_t next = 0;
+    for (std::size_t start = 0; start < body.size();) {
+        const std::size_t newline = body.find('\n', start);
+        const std::size_t stop = newline == std::string_view::npos ? body.size() : newline;
+        const std::size_t after = newline == std::string_view::npos ? body.size() : newline + 1;
+        std::string line;
+        bool cut = false;
+        std::size_t at = start;
+        for (; next < cuts.size() && cuts[next].first < stop; ++next) {
+            const auto [from, to] = cuts[next];
+            if (from > at)
+                line.append(body.substr(at, from - at));
+            at = std::max(at, to);
+            cut = true;
+        }
+        line.append(body.substr(at, stop - at));
+        // Yalnız etiketten oluşan satır boş satır bırakmaz.
+        if (!cut || line.find_first_not_of(" \t\r") != std::string::npos) {
+            out += line;
+            out.append(body.substr(stop, after - stop));
+        }
+        start = after;
+    }
     return out;
 }
 

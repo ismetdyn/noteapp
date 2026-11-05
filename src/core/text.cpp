@@ -523,6 +523,16 @@ std::string short_time_text(std::filesystem::file_time_type time, std::chrono::s
     return format_tm(local, same_day ? "%H:%M" : "%Y-%m-%d");
 }
 
+std::chrono::system_clock::time_point next_local_midnight(std::chrono::system_clock::time_point now) {
+    std::tm local = local_tm(now);
+    ++local.tm_mday;  // mktime ay ve yıl taşmasını düzeltir
+    local.tm_hour = 0;
+    local.tm_min = 0;
+    local.tm_sec = 0;
+    local.tm_isdst = -1;  // yaz saati geçişinde yerel kural karar versin
+    return std::chrono::system_clock::from_time_t(std::mktime(&local));
+}
+
 char32_t to_lower(char32_t cp) {
     if (cp < 0x80)
         return (cp >= U'A' && cp <= U'Z') ? cp + 0x20 : cp;

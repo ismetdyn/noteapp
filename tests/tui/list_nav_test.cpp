@@ -370,7 +370,7 @@ TEST_CASE("a narrow list drops the date, then the size, and never clips a value"
     CHECK(row.find(date.substr(0, 3)) == std::string::npos);
     s.layout().set_list_width(tui::PaneLayout::kMinListWidth, 120);
     row = row_of(draw(s, 120, 24), 2);
-    const std::string left = row.substr(0, row.find("┃│") == std::string::npos ? row.size() : row.find("┃│"));
+    const std::string left = row.substr(0, row.find("││") == std::string::npos ? row.size() : row.find("││"));
     CHECK((left.find("2.9 KiB") != std::string::npos || left.find("KiB") == std::string::npos));
     CHECK(left.find("2.9") == left.find("2.9 KiB"));  // yarım değer yok
 }

@@ -707,49 +707,13 @@ TEST_CASE("the status file cannot put escape sequences on the terminal") {
 }
 
 #ifdef __linux__
-#include <fcntl.h>
-#include <sys/wait.h>
-#include <unistd.h>
+#include "support/pty_run.hpp"
 
 namespace {
 
 // stdout ve stderr gerçek terminal: isatty dalı böyle sınanır.
 std::string run_in_pty(const std::vector<std::string>& args) {
-    const int master = posix_openpt(O_RDWR | O_NOCTTY);
-    REQUIRE(master >= 0);
-    REQUIRE(grantpt(master) == 0);
-    REQUIRE(unlockpt(master) == 0);
-    const std::string slave = ptsname(master);
-    const pid_t child = fork();
-    REQUIRE(child >= 0);
-    if (child == 0) {
-        setsid();
-        const int fd = open(slave.c_str(), O_RDWR);
-        dup2(fd, 0);
-        dup2(fd, 1);
-        dup2(fd, 2);
-        std::vector<char*> argv;
-        std::string exe = NOTEAPP_NOTE_EXE;
-        argv.push_back(exe.data());
-        std::vector<std::string> copy = args;
-        for (std::string& arg : copy)
-            argv.push_back(arg.data());
-        argv.push_back(nullptr);
-        execv(exe.c_str(), argv.data());
-        _exit(127);
-    }
-    std::string output;
-    char buffer[4096];
-    while (true) {
-        const ssize_t got = read(master, buffer, sizeof buffer);
-        if (got <= 0)
-            break;
-        output.append(buffer, static_cast<std::size_t>(got));
-    }
-    close(master);
-    int status = 0;
-    waitpid(child, &status, 0);
-    return output;
+    return noteapp::test::run_in_pty(NOTEAPP_NOTE_EXE, args).terminal;
 }
 
 }  // namespace
@@ -758,15 +722,27 @@ TEST_CASE("names from sync are sanitized on a terminal and stay byte-exact in a 
     const Sandbox box("en");
     const std::string evil = "kotu\xC2\x9D"
                              "52;c;ZXZpbA==\xC2\x9C.md";
-    box.put(evil, "içerik\n");
+    // Etiketin gösterim adı graph'tan gelir (senkronla başka cihazdan): C1 (OSC/ST) taşıyan ad `note tags`ta
+    // temizlenmeli. Ayrıştırıcı içerikten böyle etiket üretmez; düğüm doğrudan yazılır.
+    box.put(evil, "#etiket içerik\n");
+    REQUIRE(box.run({"query", "--write", "--param",
+                     "d=etiket\xC2\x9D"
+                     "52;c;ZXZpbA==\xC2\x9C",
+                     "MATCH (t:Tag) SET t.display = $d"})
+                .exit_code == 0);
+    REQUIRE(box.run({"tags"}).out.find("\xC2\x9D") != std::string::npos);  // boru: etiket bayt bayt
 
     for (const std::vector<std::string>& args :
-         {std::vector<std::string>{"ls"}, std::vector<std::string>{"show", "kotu"}}) {
+         {std::vector<std::string>{"ls"}, std::vector<std::string>{"show", "kotu"}, std::vector<std::string>{"ls", "-l"},
+          std::vector<std::string>{"tags"}}) {
+        CAPTURE(args.back());
         const std::string terminal = run_in_pty(args);
         CHECK(terminal.find("52;c;ZXZpbA==") != std::string::npos);
         CHECK(terminal.find("\xC2\x9D") == std::string::npos);
+        CHECK(terminal.find("\xC2\x9C") == std::string::npos);
     }
-    CHECK(box.run({"ls"}).out.find(evil) != std::string::npos);  // boru: bayt bayt
+    CHECK(box.run({"ls"}).out.find(evil) != std::string::npos);     // boru: bayt bayt
+    CHECK(box.run({"ls", "-l"}).out.find(evil) != std::string::npos);
 }
 
 TEST_CASE("bidi and zero-width characters show as U+FFFD on a terminal and stay byte-exact in a pipe") {

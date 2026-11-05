@@ -44,20 +44,15 @@ std::expected<ExportArgs, int> parse_export_args(const std::vector<std::string>&
         } else if (arg == "--ignore-skipped") {
             parsed.ignore_skipped = true;
         } else if (arg == "--all") {
-            if (i + 1 >= rest.size()) {
-                std::cerr << core::tr("cli.missing_value", {{"option", arg}}) << '\n';
-                return std::unexpected(kExitUsage);
-            }
+            if (i + 1 >= rest.size())
+                return std::unexpected(missing_value_error("export", arg));
             parsed.all = rest[++i];
-        } else if (arg == "-o") {
-            if (i + 1 >= rest.size()) {
-                std::cerr << core::tr("cli.missing_value", {{"option", arg}}) << '\n';
-                return std::unexpected(kExitUsage);
-            }
+        } else if (arg == "-o" || arg == "--output") {
+            if (i + 1 >= rest.size())
+                return std::unexpected(missing_value_error("export", arg));
             parsed.output = rest[++i];
         } else if (arg.size() > 1 && arg[0] == '-') {
-            std::cerr << core::tr("cli.unknown_option", {{"option", arg}}) << '\n';
-            return std::unexpected(kExitUsage);
+            return std::unexpected(unknown_option_error("export", arg));
         } else {
             parsed.positional.push_back(arg);
         }
@@ -72,16 +67,12 @@ int run_export(const ParsedArgs& args, const core::Config& config) {
     if (!parsed)
         return parsed.error();
     if (parsed->all) {
-        if (parsed->pdf || parsed->output || !parsed->positional.empty()) {
-            std::cerr << core::tr("cli.export_usage") << '\n';
-            return kExitUsage;
-        }
+        if (parsed->pdf || parsed->output || !parsed->positional.empty())
+            return usage_error("export");
         return run_export_all(*parsed->all, parsed->ignore_skipped, config);
     }
-    if (!parsed->pdf || parsed->ignore_skipped || parsed->positional.size() != 1) {
-        std::cerr << core::tr("cli.export_usage") << '\n';
-        return kExitUsage;
-    }
+    if (!parsed->pdf || parsed->ignore_skipped || parsed->positional.size() != 1)
+        return usage_error("export");
 
     core::NoteStore store = core::NoteStore::for_config(config);
     const auto note =

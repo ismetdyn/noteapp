@@ -2,6 +2,7 @@
 #include "cli/command_table.hpp"
 #include "cli/commands.hpp"
 #include "cli/highlight.hpp"
+#include "cli/pager.hpp"
 #include "core/config.hpp"
 #include "core/console.hpp"
 #include "core/dll_search.hpp"
@@ -62,23 +63,22 @@ int main(int argc, char** argv) {
     int code = cli::kExitInternal;
     // Bellek biterse yığın sarmalanır, işlem geri alınır; çıkış terminate değil.
     try {
-        switch (args.kind) {
-        case cli::ParsedArgs::Kind::Add:
-            code = cli::run_add(args, loaded.config);
-            break;
-        case cli::ParsedArgs::Kind::Help:
-            code = cli::run_help(args);
-            break;
-        case cli::ParsedArgs::Kind::Version:
-            code = cli::run_version();
-            break;
-        case cli::ParsedArgs::Kind::Reserved:
-            code = cli::run_reserved(args, loaded.config);
-            break;
-        case cli::ParsedArgs::Kind::Invalid:
-            code = cli::run_invalid(args);
-            break;
-        }
+        const auto dispatch = [&]() -> int {
+            switch (args.kind) {
+            case cli::ParsedArgs::Kind::Add:
+                return cli::run_add(args, loaded.config);
+            case cli::ParsedArgs::Kind::Help:
+                return cli::run_help(args);
+            case cli::ParsedArgs::Kind::Version:
+                return cli::run_version();
+            case cli::ParsedArgs::Kind::Reserved:
+                return cli::run_reserved(args, loaded.config);
+            case cli::ParsedArgs::Kind::Invalid:
+                return cli::run_invalid(args);
+            }
+            return cli::kExitInternal;
+        };
+        code = args.paged ? cli::run_paged(dispatch) : dispatch();
     } catch (const std::bad_alloc&) {
         std::fputs("note: out of memory\n", stderr);
         code = cli::kExitInternal;

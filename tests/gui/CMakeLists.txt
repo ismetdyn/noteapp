@@ -32,6 +32,7 @@ noteapp_add_test(gui
     settings_test.cpp
     stray_notice_test.cpp
     tabs_test.cpp
+    theme_test.cpp
     toolbar_test.cpp
     trash_test.cpp)
 target_link_libraries(gui_tests PRIVATE noteapp_detect)

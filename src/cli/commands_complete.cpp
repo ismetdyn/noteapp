@@ -523,8 +523,7 @@ int run_completion(const ParsedArgs& args) {
     } else if (shell == "fish") {
         std::cout << fish_script();
     } else {
-        std::cerr << core::tr("cli.completion_usage") << '\n';
-        return kExitUsage;
+        return usage_error("completion");
     }
     return kExitOk;
 }

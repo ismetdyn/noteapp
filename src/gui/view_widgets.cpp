@@ -2,7 +2,9 @@
 #include "gui/view_internal.hpp"
 
 #include <algorithm>
+#include <cfloat>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_stdlib.h>
 #include <string>
 #include <string_view>
@@ -38,7 +40,7 @@ std::size_t fitting_bytes(std::string_view text, float width) {
 void draw_row_text(ImVec2 position, std::string_view text, const std::vector<std::size_t>& highlights,
                    ImU32 normal) {
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    const ImU32 accent = ImGui::GetColorU32(ImGuiCol_PlotHistogram);
+    const ImU32 accent = theme::current().accent;
     const auto draw_piece = [&](std::size_t from, std::size_t to, ImU32 color) {
         if (from >= to)
             return;
@@ -74,7 +76,7 @@ std::vector<std::size_t> hit_offsets(const search::Hit& hit) {
 void draw_error(const std::string& message) {
     if (message.empty())
         return;
-    ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::current().danger);
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + std::min(kFormWidth * ImGui::GetStyle().FontScaleDpi,
                                                              ImGui::GetContentRegionAvail().x));
     ImGui::TextUnformatted(message.c_str());
@@ -156,30 +158,28 @@ std::string printable(std::string_view raw) {
     return out;
 }
 
-// Sabit tonlar, TUI'nin eşlemesiyle aynı aileler (editor_view token_styled): açık ve koyu zeminde okunur.
+// Aile tablosu TUI ile ortak (tui::syntax_family); tonlar temanın, tuvalde ≥ 4,5. Vurgu tek fontta metin
+// rengi.
 ImU32 token_color(tui::TokenKind kind) {
-    switch (kind) {
-    case tui::TokenKind::Plain:
-    case tui::TokenKind::Emphasis:
+    const theme::Theme& colors = theme::current();
+    switch (tui::syntax_family(kind)) {
+    case tui::SyntaxFamily::Plain:
+    case tui::SyntaxFamily::Bold:
         break;
-    case tui::TokenKind::Comment:
-        return IM_COL32(60, 150, 60, 255);
-    case tui::TokenKind::String:
-    case tui::TokenKind::Value:
-        return IM_COL32(176, 82, 176, 255);
-    case tui::TokenKind::Number:
-    case tui::TokenKind::Constant:
-        return IM_COL32(214, 92, 72, 255);
-    case tui::TokenKind::Type:
-    case tui::TokenKind::Code:
-        return IM_COL32(40, 160, 170, 255);
-    case tui::TokenKind::Keyword:
-    case tui::TokenKind::Key:
-    case tui::TokenKind::Tag:
-    case tui::TokenKind::Heading:
-        return IM_COL32(64, 132, 214, 255);
+    case tui::SyntaxFamily::Muted:
+        return colors.comment;
+    case tui::SyntaxFamily::Green:
+        return colors.string;
+    case tui::SyntaxFamily::Orange:
+        return colors.number;
+    case tui::SyntaxFamily::Cyan:
+        return colors.type;
+    case tui::SyntaxFamily::Magenta:
+        return colors.keyword;
+    case tui::SyntaxFamily::Blue:
+        return colors.heading;
     }
-    return ImGui::GetColorU32(ImGuiCol_Text);
+    return colors.text;
 }
 
 void draw_token_line(std::string_view text, const std::vector<tui::SyntaxSpan>& spans) {
@@ -216,25 +216,26 @@ void draw_token_line(std::string_view text, const std::vector<tui::SyntaxSpan>& 
         ImGui::TextUnformatted("");
 }
 
-// Sabit tonlar: tema değişse de hem açık hem koyu zeminde okunur.
+// İkon aileleri sözdizimi ailelerinin tonlarıdır (sarı = warning, kırmızı = danger): temaya göre okunur.
 ImU32 icon_color(core::IconColor color) {
+    const theme::Theme& colors = theme::current();
     switch (color) {
     case core::IconColor::Blue:
-        return IM_COL32(64, 132, 214, 255);
+        return colors.heading;
     case core::IconColor::Cyan:
-        return IM_COL32(32, 152, 168, 255);
+        return colors.type;
     case core::IconColor::Green:
-        return IM_COL32(64, 160, 88, 255);
+        return colors.string;
     case core::IconColor::Yellow:
-        return IM_COL32(196, 150, 32, 255);
+        return colors.warning;
     case core::IconColor::Red:
-        return IM_COL32(212, 84, 72, 255);
+        return colors.danger;
     case core::IconColor::Magenta:
-        return IM_COL32(170, 96, 200, 255);
+        return colors.keyword;
     case core::IconColor::Default:
         break;
     }
-    return ImGui::GetColorU32(ImGuiCol_Text);
+    return colors.text;
 }
 
 // İkonu çizip metne ayrılan genişliği döner. Yuva sabit: orantılı fontta sembol genişlikleri farklı, adlar
@@ -295,13 +296,12 @@ bool plain_selectable(const std::string& text, bool selected, const std::vector<
 // Çoklu seçimdeki satır: kehribar zemin ve solda şerit; metin üstüne çizilir. Temanın mavi seçim vurgusundan
 // ayrı renk: imleç satırı ile işaretli satır aynı satırda da ayırt edilir, açık ve koyu temada okunur.
 void draw_mark_background() {
-    constexpr ImU32 kMarkFill = IM_COL32(230, 160, 40, 80);
-    constexpr ImU32 kMarkBar = IM_COL32(220, 140, 20, 255);
+    const ImU32 bar = theme::current().warning;
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
     ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled(min, max, kMarkFill);
-    draw->AddRectFilled(min, ImVec2(min.x + (ImGui::GetFontSize() * kMarkBarEms), max.y), kMarkBar);
+    draw->AddRectFilled(min, max, theme::with_alpha(bar, theme::kMarkFillAlpha));
+    draw->AddRectFilled(min, ImVec2(min.x + (ImGui::GetFontSize() * kMarkBarEms), max.y), bar);
 }
 
 // Editable açılır kutu (ImGui'de yok): serbest metin alanı + seçim listesi. Alanda Enter basıldıysa true.
@@ -313,8 +313,32 @@ bool combo_field(const char* id, const std::string& label, std::string& value,
     ImGui::SetNextItemWidth(field_width);
     const bool entered =
         ImGui::InputTextWithHint("##field", hint, &value, ImGuiInputTextFlags_EnterReturnsTrue);
+    const ImVec2 field_min = ImGui::GetItemRectMin();
     ImGui::SameLine(0.0F, 0.0F);
-    if (ImGui::BeginCombo("##pick", "", ImGuiComboFlags_NoPreview | ImGuiComboFlags_PopupAlignLeft)) {
+    // BeginCombo listeyi yalnız ok düğmesine bağlar: liste ok kadar dar ve en çok 8 satır olur; satırlar metni
+    // ölçü bildirmeden çizdiğinden (plain_selectable) içerik de genişletmez, adlar kesilir. Bu yüzden liste alan +
+    // ok kutusuna bağlanır, en uzun ad kadar genişler; yüksekliği yalnız ekranla sınırlıdır (taşarsa kayar).
+    const ImGuiID popup_id = ImGui::GetID("##list");
+    if (ImGui::ArrowButton("##pick", ImGuiDir_Down) && !ImGui::IsPopupOpen(popup_id, ImGuiPopupFlags_None))
+        ImGui::OpenPopup(popup_id);
+    if (ImGui::IsPopupOpen(popup_id, ImGuiPopupFlags_None)) {  // kapalıyken binlerce ad her karede ölçülmesin
+        float longest = root_first ? text_width(hint) : 0.0F;
+        for (const std::string& item : items)
+            longest = std::max(longest, text_width(item));
+        // Yatay iç boşluk FramePadding.x'tir (BeginComboPopup). Kaydırma çubuğu en küçük genişliğin içinden
+        // yer alır; payı eklenmezse uzun listede en uzun ad kesilir.
+        const ImGuiStyle& style = ImGui::GetStyle();
+        // Liste alanın altına ya da üstüne sığacak kadar uzar, fazlası kayar: ikisine de sığmayan liste ImGui'de
+        // alanın üstüne biner ve oka yeniden tıklamak onu kapatamazdı.
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const float below = viewport->WorkPos.y + viewport->WorkSize.y - ImGui::GetItemRectMax().y;
+        const float above = field_min.y - viewport->WorkPos.y;
+        const float tallest = std::max(below, above) - (2.0F * style.DisplaySafeAreaPadding.y);
+        ImGui::SetNextWindowSizeConstraints(
+            ImVec2(longest + (2.0F * style.FramePadding.x) + style.ScrollbarSize, 0.0F),
+            ImVec2(FLT_MAX, std::max(tallest, ImGui::GetFrameHeight())));
+    }
+    if (ImGui::BeginComboPopup(popup_id, ImRect(field_min, ImGui::GetItemRectMax()), ImGuiComboFlags_None)) {
         if (root_first && plain_selectable(hint, value.empty()))
             value.clear();
         for (std::size_t i = 0; i < items.size(); ++i) {

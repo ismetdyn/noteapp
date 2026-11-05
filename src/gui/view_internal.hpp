@@ -8,11 +8,14 @@
 #include "edit/syntax.hpp"
 #include "gui/icon_font.hpp"
 #include "gui/markdown_preview.hpp"
+#include "gui/theme.hpp"
 #include "gui/view.hpp"
 #include "pdf/markdown_blocks.hpp"
 #include "search/content_index.hpp"
 
 #include <SDL3/SDL.h>
+#include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <imgui.h>
@@ -29,15 +32,26 @@ namespace noteapp::gui {
 
 // Boşta en fazla bu aralıkla uyanılır (kırpma imleci, zamanlayıcı); kare yalnız iş varsa üretilir.
 inline constexpr int kIdleWaitMs = 500;
-// Dil sunucusu değişikliği beklerken uyanma aralığı (LanguageServers::kChangeIdle'ın beşte biri).
-inline constexpr int kLspPollMs = 50;
+// İpucu uyanması ImGui gecikmesinden bu kadar sonra: o karede süre kesin dolmuş olsun (kare zamanı kayar).
+inline constexpr float kTooltipWakeMarginSeconds = 0.05F;
+// ImGui modal arka planını DeltaTime * 6 hızla karartır (1/6 sn'de tam); açılıştan bu kadar sonra tek kare
+// onu tamamlar (o karenin DeltaTime'ı aradaki süredir).
+inline constexpr std::chrono::milliseconds kModalDimWake{220};
+
+// `timeout_ms`yi `deadline`a dek kısaltır; geçmiş süre 0, süre yoksa olduğu gibi.
+inline int shorten_wait(int timeout_ms, std::optional<std::chrono::steady_clock::time_point> deadline,
+                        std::chrono::steady_clock::time_point now) {
+    if (!deadline)
+        return timeout_ms;
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - now).count();
+    return static_cast<int>(std::clamp<decltype(left)>(left, 0, timeout_ms));
+}
 // ImGui bir etkileşimi birkaç karede tamamlar (fare üzerinde, odak, açılır kutu).
 inline constexpr int kFramesAfterEvent = 3;
 inline constexpr float kFormWidth = 420.0F;
 // Pencere en küçük boyutun da altındaysa (bileşikçi sınırı uygulamayabilir) alan ve yazı bu kadar kalır.
 // Negatif genişlik ImGui'de "sağdan pay" demektir, sarma genişliği 1 piksele iner.
 inline constexpr float kMinFieldEms = 4.0F;
-inline constexpr ImVec4 kErrorColor(0.75F, 0.22F, 0.17F, 1.0F);  // açık ve koyu temada okunur kırmızı
 
 using WindowPtr = std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)>;
 using RendererPtr = std::unique_ptr<SDL_Renderer, decltype(&SDL_DestroyRenderer)>;

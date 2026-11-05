@@ -184,14 +184,18 @@ public:
     Deciders deciders;
     std::filesystem::path sync_note_exe;  // arka plan senkronunu koşan `note`; testler değiştirir
 
-    // Diski yeniden tarar; yalnız listeleme değiştiyse listeyi günceller, seçimi ve editörü korur.
-    void rescan();
+    // Diski yeniden tarar; yalnız listeleme değiştiyse listeyi günceller, seçimi ve editörü korur. Görünen
+    // bir şey değiştiyse true (ekran yenilenmeli).
+    bool rescan();
     // Süresi dolan zamanlayıcıları (autosave, rescan_seconds taraması) çalıştırır; bir iş yaptıysa true
     // (ekran yenilenmeli).
     bool tick(std::chrono::steady_clock::time_point now);
     // İşçi iş parçacığından UI iş parçacığına iş aktarır; tick çalıştırır. wake olay döngüsünü uyandırır
     // (SDL_PushEvent).
     void post(std::function<void()> work);
+    // post gibi ama olay döngüsünü uyandırmaz: iş bir sonraki tick'te (boşta en geç kIdleWaitMs) çalışır ve
+    // yalnız true dönerse ekran yenilenir. Değişmeyebilen arka plan sonuçları için (senkron durumları).
+    void post_quiet(std::function<bool()> work);
     void set_wake(std::function<void()> wake);
     // Bekleyen autosave'in anı; yoksa boş. Tarama buraya girmez: döngü onun aralığından sık uyanır.
     std::optional<std::chrono::steady_clock::time_point> next_deadline() const {
@@ -359,6 +363,12 @@ public:
     const std::vector<char>& map_matches();
     // Düğüme tıklama: bekleyen düzenleme önce kendi notuna yazılır (flush_for), sonra not açılır (open_link).
     void open_map_note(const core::NotePath& path);
+    // İki düğüm arasında kenar kurar ya da kaldırır (MAP-R; kural app::map_relations, TUI ile ortak). Gövdeyi
+    // yazan işlemden (bağlantı, etiket) önce o not gösteriliyorsa bekleyen düzenlemesi kaydedilir
+    // (flush_for); kayıt olmazsa işlem yapılmaz. Sonuç ya da hata durum satırında; harita hemen yeni kenarı
+    // gösterir.
+    void connect_map_nodes(const MapNode& from, const MapNode& to, MapEdgeKind kind);
+    void disconnect_map_nodes(const MapNode& from, const MapNode& to, MapEdgeKind kind);
     std::size_t map_reads() const { return map_.reads(); }  // test kancası: NoteStore::edges çağrısı
 
     // --- Editör ---
@@ -383,8 +393,9 @@ public:
     std::vector<tui::ByteRange> misspelled(std::string_view line);
     // Dil sunucuları (TUI ile aynı tui::LanguageServers: varsayılan açık sunucular, sıkılaştırma, uzak dosya
     // başvurusu kuralı): her kareden önce. Belgeyi açar/kapatır, boşta değişikliği gönderir, tanıları ve
-    // önerileri editöre koyar. true = boşta bekleyen değişiklik var, kısa süre sonra yeni kare gerekir.
-    bool update_language_servers(std::chrono::steady_clock::time_point now);
+    // önerileri editöre koyar. Boşta bekleyen değişiklik varsa gönderileceği an: o andaki kare gönderir.
+    std::optional<std::chrono::steady_clock::time_point>
+    update_language_servers(std::chrono::steady_clock::time_point now);
     // Editörün tek seferlik iletisi (dil sunucusu durdu, bulunamadı); sonraki editör tuşu siler (TUI).
     const std::string& editor_notice() const { return editor_notice_; }
     void edit_text(std::string_view text);  // tüm metin, tek geri alma adımı (testler ve programatik yazım)
@@ -665,8 +676,9 @@ private:
     const char* command_block(app::CommandNeeds needs);
     void set_sort(search::SortSpec sort);
     void request_sync_states();
-    void apply_sync_states(app::SyncStates states);
+    bool apply_sync_states(app::SyncStates states);  // durumlar değiştiyse true
     void ensure_map();
+    void edit_map(const MapNode& from, const MapNode& to, MapEdgeKind kind, bool connect);
     bool show_folder(const std::string& folder, bool scope);
     bool select_nearest_note(int from);
     void activate_row(int index);
@@ -796,7 +808,7 @@ private:
     GuiLayout layout_;
 
     std::mutex posted_mutex_;
-    std::vector<std::function<void()>> posted_;
+    std::vector<std::function<bool()>> posted_;  // iş true dönerse ekran yenilenir
     std::function<void()> wake_;
     // Sıra önemli: bu üçünün işçileri post çağırır, yukarıdaki üyelerden önce yıkılmalı.
     app::SyncStatusWorker sync_status_;  // `sync:` süzgecinin not durumları, UI iş parçacığı dışında

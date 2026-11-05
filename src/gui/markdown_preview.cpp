@@ -1,5 +1,7 @@
 #include "gui/markdown_preview.hpp"
 
+#include "gui/theme.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cfloat>
@@ -338,7 +340,8 @@ std::span<const PreviewRun> visible_runs(const PreviewLayout& layout, float top,
 
 void draw_preview_layout(const PreviewLayout& layout, ImVec2 origin, float top, float bottom) {
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    const ImU32 background = ImGui::GetColorU32(ImGuiCol_FrameBg);
+    // Kod bloğu ve satır içi kod aynı zemin: tuvale karşı ≥ 1,5, metne karşı ≥ 4,5 (theme_test).
+    const ImU32 background = theme::current().code_bg;
     const ImU32 line = ImGui::GetColorU32(ImGuiCol_Separator);
     const float rounding = ImGui::GetStyle().FrameRounding;
     const auto at = [origin](ImVec2 point) { return ImVec2(origin.x + point.x, origin.y + point.y); };
@@ -359,7 +362,7 @@ void draw_preview_layout(const PreviewLayout& layout, ImVec2 origin, float top, 
         if (run.code_background) {
             const float pad = run.size * kInlineCodePadEms;
             draw_list->AddRectFilled(ImVec2(pos.x - pad, pos.y), ImVec2(pos.x + run.width + pad, pos.y + run.size),
-                                     ImGui::GetColorU32(kInlineCodeBackground), rounding);
+                                     background, rounding);
         }
         draw_list->AddText(run.font, run.size, pos, color, run.text.data(), run.text.data() + run.text.size());
         if (run.underline)

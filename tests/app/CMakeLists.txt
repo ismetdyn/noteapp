@@ -6,6 +6,7 @@ noteapp_add_test(app
     import_files_test.cpp
     item_ops_test.cpp
     listing_test.cpp
+    map_relations_test.cpp
     settings_test.cpp
     stray_notice_test.cpp
     tabs_test.cpp

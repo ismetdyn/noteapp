@@ -11,7 +11,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <ftxui/dom/node.hpp>
+#include <ftxui/screen/screen.hpp>
 #include <ftxui/screen/string.hpp>
+#include <memory>
 #include <ranges>
 #include <span>
 #include <string_view>
@@ -251,22 +254,58 @@ PaneMode editor_mode(const EditorSession& editor) {
             core::tr("tui.frame_edit") + (editor.dirty() ? std::string(kDirtyMark) : "")};
 }
 
-// Odaklı panel kalın ve renkli çerçeve alır; renksiz terminalde de kalınlık farkı ve etiket görünür. Etiket
-// çerçevenin üzerine ayrı katmandır: `color` süsleyicisi içeriğe uygulanırsa sözdizimi renklerini ezerdi.
-// Sekme satırı da kenardadır (`tabs`): panel içeriği kaymaz, editör imleci ve fare eşlemesi değişmez.
+// Çocuğu çizdikten sonra kutusunun kenar hücrelerine `apply` uygular; içerik hücrelerine dokunmaz.
+class EdgeCells : public ftxui::Node {
+public:
+    EdgeCells(ftxui::Element child, void (*apply)(ftxui::Cell&)) : Node({std::move(child)}), apply_(apply) {}
+
+    void ComputeRequirement() override {
+        Node::ComputeRequirement();
+        requirement_ = children_[0]->requirement();
+    }
+    void SetBox(ftxui::Box box) override {
+        Node::SetBox(box);
+        children_[0]->SetBox(box);
+    }
+    void Render(ftxui::Screen& screen) override {
+        Node::Render(screen);
+        for (int x = box_.x_min; x <= box_.x_max; ++x) {
+            apply_(screen.CellAt(x, box_.y_min));
+            apply_(screen.CellAt(x, box_.y_max));
+        }
+        for (int y = box_.y_min; y <= box_.y_max; ++y) {
+            apply_(screen.CellAt(box_.x_min, y));
+            apply_(screen.CellAt(box_.x_max, y));
+        }
+    }
+
+private:
+    void (*apply_)(ftxui::Cell&);
+};
+
+ftxui::Decorator edge_cells(void (*apply)(ftxui::Cell&)) {
+    return [apply](ftxui::Element child) { return std::make_shared<EdgeCells>(std::move(child), apply); };
+}
+
+// İki panel de yuvarlak çerçeveli (yan yana kalın/ince dikişi olmaz). Odaklı panel kip renginde çerçeve ve
+// kalın etiket alır, odaksız çerçeve soluktur: renksiz terminalde de kalınlık ve solukluk odağı anlatır.
+// Etiket çerçevenin üzerine ayrı katmandır: `color` süsleyicisi içeriğe uygulanırsa sözdizimi renklerini
+// ezerdi. Sekme satırı da kenardadır (`tabs`): panel içeriği kaymaz, editör imleci ve fare eşlemesi değişmez.
 ftxui::Element framed_pane(ftxui::Element content, const std::optional<PaneMode>& mode,
                            const std::string& tabs = {}) {
     using namespace ftxui;
+    Element framed = mode ? std::move(content) | borderStyled(ROUNDED, mode->color)
+                          : std::move(content) | borderStyled(ROUNDED) |
+                                edge_cells([](Cell& cell) { cell.dim = true; });
     if (!mode && tabs.empty())
-        return std::move(content) | borderStyled(LIGHT);
+        return framed;
     Elements label = {emptyElement() | size(WIDTH, EQUAL, kFrameLabelOffset)};
     if (mode)
         label.push_back(text(" " + mode->label + " ") | bold | color(mode->color));
     if (!tabs.empty())
         label.push_back(text(tabs));
     // Dolgu şart: katman tüm panel boyunu alırsa `color` kutusu etiketin altındaki sütunları da boyar.
-    return dbox({std::move(content) | (mode ? borderStyled(HEAVY, mode->color) : borderStyled(LIGHT)),
-                 vbox({hbox(std::move(label)), filler()})});
+    return dbox({std::move(framed), vbox({hbox(std::move(label)), filler()})});
 }
 
 std::string sync_state_text(core::SyncState state) {
@@ -1320,7 +1359,7 @@ const Preview& PreviewCache::current(const TuiState& state, const core::NoteStor
 
 const Preview& PreviewCache::throttled(TuiState& state, const core::NoteStore& store,
                                        std::chrono::steady_clock::time_point now) {
-    deferred_ = false;
+    deferred_until_.reset();
     const Row* row = state.selected_row();
     if (!row)
         requested_.reset();  // klasör satırı: sonraki not yine birleştirme kuralından geçer
@@ -1331,7 +1370,7 @@ const Preview& PreviewCache::throttled(TuiState& state, const core::NoteStore& s
         waiting_ = !idle;
     }
     if (row && waiting_ && now - last_move_ < std::chrono::milliseconds(kCoalesceMs)) {
-        deferred_ = true;
+        deferred_until_ = last_move_ + std::chrono::milliseconds(kCoalesceMs);
         return shown();
     }
     waiting_ = false;
@@ -1408,7 +1447,7 @@ const Preview& PreviewCache::publish(TuiState& state, std::chrono::steady_clock:
     if (update_rendered(wanted, width, now))
         state.set_preview_view(rendered_active_ ? &rendered_.source_lines : nullptr, generation_);
     else
-        deferred_ = true;  // çağıran yeniden çizim ister; önceki yerleşim kalır
+        deferred_until_ = last_resize_ + std::chrono::milliseconds(kResizeSettleMs);  // önceki yerleşim kalır
     return shown();
 }
 
@@ -1628,7 +1667,9 @@ ftxui::Element render(const TuiState& state, const Preview& preview, const Statu
         modal = inner_modal(state, editing, new_row, rename);
     if (!modal)
         return main;
-    return dbox({main, modal | center});
+    // FTXUI komşu kutu çizgilerini birleştirir (automerge): modal kenarı alttaki panel çizgisiyle ┬┴ olurdu,
+    // clear_under bunu önlemez. Kenar hücreleri birleşmeden çıkarılır; modalın boyu ve yeri değişmez.
+    return dbox({main, modal | edge_cells([](ftxui::Cell& cell) { cell.automerge = false; }) | center});
 }
 
 }  // namespace noteapp::tui

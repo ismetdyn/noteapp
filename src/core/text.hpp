@@ -69,6 +69,9 @@ std::string human_size(std::uintmax_t bytes);
 std::string local_time_text(std::filesystem::file_time_type time);
 // Bugünse "14:32", başka günse "2026-11-01" (yerel saat).
 std::string short_time_text(std::filesystem::file_time_type time, std::chrono::system_clock::time_point now);
+// `now`dan sonraki ilk yerel gece yarısı: short_time_text'in "bugün" kararı o an değişir (arayüz bir kez
+// çizer).
+std::chrono::system_clock::time_point next_local_midnight(std::chrono::system_clock::time_point now);
 
 // env/properties/ini/toml/yaml: değerleri sır olabilir; adlara ve öneriye yalnız anahtarları girer.
 bool type_has_secret_values(std::string_view type);

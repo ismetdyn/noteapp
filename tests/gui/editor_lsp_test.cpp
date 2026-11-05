@@ -74,6 +74,32 @@ TEST_CASE_FIXTURE(LspFixture, "editor: language server diagnostics are underline
     CHECK_FALSE(rendered.contains("count=1 text=import os"));
 }
 
+// Editörün imleci yanıp sönmez, boşta kare yoktur: değişiklik yine süresi dolunca kendi karesiyle gider.
+TEST_CASE_FIXTURE(LspFixture, "editor: an edit reaches the language server while the window only idles") {
+    add_note("pkg/e.py", "x = 1\n");
+    auto state = make_state();
+    auto view = make_view(*state);
+    state->request_focus(FocusRequest::Editor);
+    settle(*view);
+    REQUIRE(view->editor_active());
+    REQUIRE(pump_until(*state, *view, [&] { return !state->editor().diagnostics().empty(); }));
+    type_text(*view, "y");
+    REQUIRE(state->buffer() == "yx = 1\n");
+    const auto frames = view->frames();
+    const auto sent = [&] {
+        const auto marks = state->editor().diagnostics();
+        return !marks.empty() && marks.front().message.find("text=yx = 1") != std::string::npos;
+    };
+    const auto deadline = std::chrono::steady_clock::now() + kArrival;
+    while (!sent() && std::chrono::steady_clock::now() < deadline)
+        view->idle_step(1);  // yalnız olay döngüsü: draw_frame doğrudan çağrılmaz
+    CHECK(sent());
+    // Gönderim karesi + sunucu cevabının kareleri; boşta sık uyanma ya da imleç karesi yok.
+    constexpr std::size_t kMaxFrames = 10;
+    MESSAGE("frames until the diagnostic of the edit: ", view->frames() - frames);
+    CHECK(view->frames() - frames <= kMaxFrames);
+}
+
 TEST_CASE_FIXTURE(LspFixture, "editor: server completion items join the Ctrl+Space list and are inserted") {
     add_note("pkg/b.py", "al\n");
     auto state = make_state();

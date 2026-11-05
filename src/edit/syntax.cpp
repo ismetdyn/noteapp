@@ -1178,6 +1178,33 @@ constexpr ExtensionRule kExtensions[] = {
 
 }  // namespace
 
+SyntaxFamily syntax_family(TokenKind kind) {
+    switch (kind) {
+    case TokenKind::Plain:
+        return SyntaxFamily::Plain;
+    case TokenKind::Comment:
+        return SyntaxFamily::Muted;
+    case TokenKind::String:
+    case TokenKind::Value:
+        return SyntaxFamily::Green;
+    case TokenKind::Number:
+    case TokenKind::Constant:
+        return SyntaxFamily::Orange;
+    case TokenKind::Type:
+    case TokenKind::Code:
+        return SyntaxFamily::Cyan;
+    case TokenKind::Keyword:
+    case TokenKind::Key:
+    case TokenKind::Tag:
+        return SyntaxFamily::Magenta;
+    case TokenKind::Heading:
+        return SyntaxFamily::Blue;
+    case TokenKind::Emphasis:
+        return SyntaxFamily::Bold;
+    }
+    return SyntaxFamily::Plain;
+}
+
 SyntaxLanguage syntax_language_for(std::string_view extension) {
     std::string lowered(extension);
     std::ranges::transform(lowered, lowered.begin(), folded);

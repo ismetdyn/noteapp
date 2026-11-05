@@ -41,9 +41,8 @@ struct QueryArgs {
     std::vector<std::string> positional;
 };
 
-int usage_error() {
-    std::cerr << core::tr("cli.query_usage") << '\n';
-    return kExitUsage;
+int usage() {
+    return usage_error("query");
 }
 
 int bad_param(const std::string& param) {
@@ -106,19 +105,16 @@ std::expected<QueryArgs, int> parse_query_args(const std::vector<std::string>& r
         } else if (arg == "--json") {
             parsed.json = true;
         } else if (arg == "--param") {
-            if (i + 1 >= rest.size()) {
-                std::cerr << core::tr("cli.missing_value", {{"option", arg}}) << '\n';
-                return std::unexpected(kExitUsage);
-            }
+            if (i + 1 >= rest.size())
+                return std::unexpected(missing_value_error("query", arg));
             if (const auto added = add_param(parsed, rest[++i]); !added)
                 return std::unexpected(added.error());
         } else {
-            std::cerr << sanitize_for_terminal(core::tr("cli.unknown_option", {{"option", arg}})) << '\n';
-            return std::unexpected(kExitUsage);
+            return std::unexpected(unknown_option_error("query", arg));
         }
     }
     if (parsed.positional.size() != 1)
-        return std::unexpected(usage_error());
+        return std::unexpected(usage());
     return parsed;
 }
 

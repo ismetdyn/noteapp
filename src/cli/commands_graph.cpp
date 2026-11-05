@@ -563,17 +563,14 @@ int run_graph_export(const std::vector<std::string>& rest, const core::Config& c
         if (rest[i] == "--format" && i + 1 < rest.size() && rest[i + 1] == "jsonl") {
             jsonl = true;
             ++i;
-        } else if (rest[i] == "-o" && i + 1 < rest.size()) {
+        } else if ((rest[i] == "-o" || rest[i] == "--output") && i + 1 < rest.size()) {
             output_path = rest[++i];
         } else {
-            std::cerr << core::tr("cli.graph_usage") << '\n';
-            return kExitUsage;
+            return usage_error("graph");
         }
     }
-    if (!jsonl) {
-        std::cerr << core::tr("cli.graph_usage") << '\n';
-        return kExitUsage;
-    }
+    if (!jsonl)
+        return usage_error("graph");
     const fs::path db = core::data_dir() / "graph.db";
     std::error_code ec;
     if (!fs::exists(db, ec)) {
@@ -710,10 +707,8 @@ private:
 
 int run_graph_import(const std::vector<std::string>& rest, const core::Config& config) {
     const bool overwrite = rest.size() == 3 && rest[1] == "--overwrite";
-    if (rest.size() != (overwrite ? 3U : 2U)) {
-        std::cerr << core::tr("cli.graph_usage") << '\n';
-        return kExitUsage;
-    }
+    if (rest.size() != (overwrite ? 3U : 2U))
+        return usage_error("graph");
     std::ifstream input(from_utf8(rest.back()), std::ios::binary);
     if (!input) {
         std::cerr << core::format_error(core::io_error(rest.back(), "cannot open file")) << '\n';
@@ -862,8 +857,7 @@ int run_graph_status_command(const std::vector<std::string>& rest, const core::C
         return run_graph_status(config, true);
     if (rest.size() == 2 && rest[1] == kClearSkipped)
         return run_graph_clear_skipped();
-    std::cerr << core::tr("cli.graph_usage") << '\n';
-    return kExitUsage;
+    return usage_error("graph");
 }
 
 void print_removal_advice(const std::filesystem::path& notes_dir) {
@@ -955,8 +949,7 @@ int run_graph(const ParsedArgs& args, const core::Config& config) {
         return run_graph_export(args.rest, config);
     if (sub == "import")
         return run_graph_import(args.rest, config);
-    std::cerr << core::tr("cli.graph_usage") << '\n';
-    return kExitUsage;
+    return usage_error("graph");
 }
 
 int run_export_all(const std::string& directory, bool ignore_skipped, const core::Config& config) {

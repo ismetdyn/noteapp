@@ -1,6 +1,7 @@
 #include "tui/list_actions.hpp"
 
 #include "app/import_files.hpp"
+#include "app/map_relations.hpp"
 #include "core/atomic_file.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
@@ -380,6 +381,9 @@ void ListActions::run(Intent intent, std::optional<ConfirmState>& confirm) {
     case Intent::ToggleIcons:
         toggle_icons();
         break;
+    case Intent::MapEdit:
+        apply_map_edit();
+        break;
     default:
         break;
     }
@@ -398,6 +402,9 @@ void ListActions::on_mouse(const MouseInput& input, EditorSession& editor) {
         break;
     case MouseResult::FollowLink:
         follow_wiki_link();
+        break;
+    case MouseResult::MapEdit:
+        apply_map_edit();
         break;
     case MouseResult::None:
         break;
@@ -799,6 +806,37 @@ void ListActions::finish_unlink() {
         return;
     }
     host_.status.message = core::tr("tui.unlinked", {{"path", terminal_safe(second.string())}});
+    host_.refresh_notes();
+    host_.notify_changed();
+}
+
+// Liste odağına editör park edilerek (kayıtla) gelinir, ayrılan sekme de kaydedilir: yazılacak notun
+// bekleyen düzenlemesi yoktur. refresh_notes'tan sonra main her olayda sekmeleri tazeler (settle_tabs →
+// EditorTabs::on_listing): temiz sekme yeni metni okur, yine de kirli kalmış sekme ezilmez, kaydı çakışma
+// sorar.
+void ListActions::apply_map_edit() {
+    const auto request = host_.state.take_map_edit();
+    if (!request)
+        return;
+    if (!request->kind) {
+        host_.status.message = terminal_safe(
+            core::tr("tui.map_no_edge", {{"from", request->from.key}, {"to", request->to.key}}));
+        return;
+    }
+    const auto done = [&] {
+        const std::scoped_lock lock(host_.store_mutex);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+        core::NoteStore& store = *host_.store;
+        return request->connect
+                   ? app::connect_map_nodes(store, request->from, request->to, *request->kind)
+                   : app::disconnect_map_nodes(store, request->from, request->to, *request->kind);
+    }();
+    if (!done) {
+        host_.status.message = terminal_safe(core::format_error(done.error()));
+        return;
+    }
+    host_.status.message = terminal_safe(*done);
+    host_.state.map_edges_changed();  // ilişki listeyi değiştirmez: kenarlar sonraki çizimde okunur
     host_.refresh_notes();
     host_.notify_changed();
 }

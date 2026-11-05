@@ -83,7 +83,9 @@ public:
                              std::chrono::steady_clock::time_point now);
     // Şu an gösterilen: biçimli görünüm ya da ham metin. Seçim kopyası bunu okur.
     const Preview& shown() const { return rendered_active_ ? rendered_ : preview_; }
-    bool deferred() const { return deferred_; }
+    bool deferred() const { return deferred_until_.has_value(); }
+    // Ertelemenin bittiği an: çağıran o ana dek çizim istemez, o an bir kez yeniden çizer.
+    std::optional<std::chrono::steady_clock::time_point> deferred_until() const { return deferred_until_; }
     void invalidate() { path_.reset(); }
     // Her yeniden okumada artar: not içi arama eşleşmeleri eski metne ait kalmasın.
     std::size_t generation() const { return generation_; }
@@ -107,7 +109,7 @@ private:
     std::optional<core::NotePath> requested_;
     std::chrono::steady_clock::time_point last_move_{};
     bool waiting_ = false;
-    bool deferred_ = false;
+    std::optional<std::chrono::steady_clock::time_point> deferred_until_;
     Preview preview_;
     std::size_t generation_ = 0;
     core::NoteLinks links_;

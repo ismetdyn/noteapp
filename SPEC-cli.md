@@ -14,11 +14,11 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `… \| note [bayraklar]` | stdin TTY değilse ve metin argümanı yoksa içerik stdin'den |
 | `note [bayraklar]` | Metin de stdin de yoksa editör açılır (aşağıda) |
 | `note -e [bayraklar] [METİN…]` | Editörü her durumda açar; METİN varsa ön içerik olur (ör. başlık yazıp devam etmek) |
-| `note ls [SORGU] [-f KLASÖR]` | Notları listeler: sorgu varsa fuzzy sıra, yoksa mtime azalan. Sorgu SPEC-search argümanlarını alır (`tag:proje`, `view:iş`, `type:md`, `sort:-size`…); geçersiz argüman değeri, bilinmeyen ya da yazan görünüm çıkış 2 |
-| `note find TERİM…` | İçerik araması; `yol:satır: kesit` (TTY'de vurgulu) |
+| `note ls [SORGU] [-f KLASÖR] [-n N] [-l \| -0 \| --json]` | Notları listeler: sorgu varsa fuzzy sıra, yoksa mtime azalan. Sorgu SPEC-search argümanlarını alır (`tag:proje`, `view:iş`, `type:md`, `sort:-size`…); geçersiz argüman değeri, bilinmeyen ya da yazan görünüm çıkış 2 |
+| `note find TERİM… [-n N] [--json]` | İçerik araması; `yol:satır: kesit` (renk açıkken vurgulu) |
 | `note show SORGU` | En iyi eşleşmenin içeriğini yazdırır |
 | `note edit SORGU` | En iyi eşleşmeyi editörde açar |
-| `note rm YOL [-y]` | **Yalnız tam yol**; onay ister (TTY değilse `-y` zorunlu) |
+| `note rm YOL [-y] [-q]` | **Yalnız tam yol**; onay ister (TTY değilse `-y`/`--yes` zorunlu) |
 | `note mv KAYNAK HEDEF` | Taşı/yeniden adlandır; uzantı değişimi = tip değişimi; klasörler oluşur |
 | `note export --pdf YOL [-o ÇIKTI]` | PDF dışa aktar (aşağıda) |
 | `note sync` · `sync status` · `sync on\|off` · `sync init REMOTE [--replace]` | Senkron yönetimi (aşağıda) |
@@ -31,7 +31,7 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `note import YOL… [--folder KLASÖR] [--type TİP] [--name AD] [--overwrite] [--json] [--no-sync]` | Dosya sisteminden not olarak içe alma; kural `app::import_paths`tedir, TUI ve GUI de onu çağırır (aşağıda "Dosya içe alma") |
 | `note graph export --format jsonl [-o DOSYA]`, `note graph import [--overwrite] DOSYA` | Tüm graph'ı JSON satırları olarak çıkar ya da yükle; satırın JSON kuralları ve sınırları SPEC-graph "Sınırlar" (bilinmeyen alanda `null` kabul). İçe aktarma satır aralarında işlemlere bölünür; bir satır tek işlemdir (ya hepsi ya hiç): çerçeveden (`limits.graph.frame_ops`, `frame_bytes`) büyük satır reddedilmez; yineleme işlem yazmaz |
 | `note export --all DİZİN` | Tüm notları bayt bayt düz dosya olarak çıkar |
-| `note --help` · `note help KOMUT` · `note --version` | Yardım (i18n); `--help` her komutu listeler, her komutun `cli.help_<komut>` metni var |
+| `note --help` · `note help KOMUT` · `note KOMUT -h\|--help` · `note --version` | Yardım (i18n, aşağıda "Yardım"); genel yardım komutları gruplu listeler |
 | `note completion zsh\|bash\|fish` | Kabuk tamamlama betiğini stdout'a yazar (aşağıda "Kabuk tamamlama") |
 
 - Alt komut adıyla aynı metinde not eklemek için: `note -- ls`.
@@ -43,6 +43,69 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
   OSC 52 (pano) ya da başlık dizisi yollayabilirdi. T91: görünmez bidi ve sıfır genişlikli karakterler de (TUI/GUI ile
   aynı liste `core::hidden_controls`, ZWNJ/ZWJ hariç) `U+FFFD` olur; `ls` adları da bu yoldan geçer. `query` tablosu
   her zaman temizlenir (insan biçimi), ham değer `--json` iledir.
+
+## Yardım
+- `note help` = `note --help` = `note -h`: hızlı ekleme biçimleri, seçenekleri (`kAddOptions`) ve komutlar dört grupta
+  (Notlar, Senkron, Gelişmiş, Diğer; `CommandSpec::group`), her biri tek satırlık `cli.desc_*` ile.
+- `note help KOMUT` = `note KOMUT -h|--help` (bayt bayt aynı; yardım bayrağı öbür argümanları yok sayar, `--`
+  sonrası metindir): başlık, `cli.help_<komut>` açıklaması, Kullanım (`cli.<komut>_usage`), Komutlar (fiiller) ve
+  Seçenekler tablodan, Örnekler (`cli.examples_<komut>`, satır başına `komut<TAB>açıklama`) ve Ayrıca bakınız
+  (`cli.see_also_<komut>`) katalogdan; anahtar yoksa bölüm basılmaz. Elle yazılmış seçenek listesi yoktur.
+- Satır en çok 80 sütun (terminal daha darsa onun genişliği, en az 40); sözcük sınırında sarılır, sütun = kod noktası.
+  Başlıklar yalnız renk açıkken kalın.
+
+## Hata biçimi
+- İlk stderr satırı bugünkü mesajdır (betikler onu arar); ardından en çok iki girintili `hint:`/`ipucu:` satırı:
+  yakın sözcük önerisi (`cli::suggest`: kod noktası Levenshtein, uzaklık <= 2 ve sözcük uzunluğunun yarısından
+  küçük, eşit iki aday varsa öneri yok) ve `note help KOMUT` (hızlı eklemede `note --help`). Adaylar tablodan:
+  komutlar, fiiller, seçenekler. Çıkış kodları değişmez. stderr metni kararlı arayüz değildir: yalnız ilk satır ve
+  çıkış kodu.
+- Hızlı ekleme komut değildir: `note lss` not kaydeder (çıktı ve çıkış kodu aynı). Tek boşluksuz sözcük bir komuta
+  yakınsa ve stderr TTY ise ek ipucu: `'lss' was saved as a note. Meant 'note ls'? Undo: note rm lss.md`. Otomatik
+  düzeltme yok.
+- `rm` onayı reddedilince çare satırı (`y` ya da `-y`/`--yes`).
+
+## Terminal
+- **Renk** (`cli::color_enabled`, stdout ve stderr ayrı): ilk eşleşen kazanır: `NOTEAPP_COLOR=always|never`;
+  `NO_COLOR` boş değilse kapalı; `TERM=dumb` kapalı; akış TTY değilse kapalı; aksi açık. Renk yalnız anlam taşır
+  (`find` vurgusu kalın sarı, yardım başlıkları kalın); kapalıyken bilgi kaybolmaz. `NOTEAPP_COLOR=always` boruda da
+  vurgular (o zaman kesit terminal temizliğinden geçer).
+- **Pager** (POSIX): tabloda `--no-pager` taşıyan komutlar (`ls`, `find`, `show`, `tags`, `config list`, `view ls`,
+  `help` ve `KOMUT --help`) yalnız stdout TTY iken sayfalanır. Çıktı belleğe alınır; terminal yüksekliğine (sarılan
+  satırlar dahil, `TIOCGWINSZ`, yedek `LINES`) sığıyorsa doğrudan basılır, sabit eşik yok. Komut: `NOTEAPP_PAGER` >
+  `PAGER` > `less -FIRX`; `more`/`most` -> `less -FIRX`; `cat` ve `--no-pager` kapatır. Ortama (`LESS` dahil)
+  dokunulmaz. Pager açıkken `note` SIGINT/SIGQUIT/SIGPIPE'ı yok sayar (Ctrl-C pager'a kalır), sonra geri yükler.
+  Pager PATH'te yoksa ya da başlamazsa düz çıktı, çıkış kodu komutunki. Pager erken kapanırsa (EPIPE) sessiz biter.
+  Terminal temizliği pager'dan önce yapılır. Windows'ta pager yok.
+- **İlerleme:** `note sync` ve `note import` stderr TTY iken (`TERM=dumb` değil) tek satır `Syncing...` /
+  `Importing...` yazar, iş bitince satırı siler (`\r` + `ESC[K`). Boru ve dosya hiçbir ara çıktı görmez.
+- `show` TTY'de son satır sonu yoksa ekler (istem yapışmasın); boruya baytlar aynen. `tags` TTY'de sayıları tek
+  sütunda hizalar; boruda TSV aynen.
+
+## Bayraklar ve çıktı biçimleri
+- Her kısa bayrağın uzun adı var (`OptionSpec.alias`): `-t/--type`, `-f/--folder`, `-n/--name`, `-e/--editor`,
+  `-q/--quiet`, `-y/--yes`, `-o/--output`, `-n/--limit` (`ls`, `find`), `-l/--long`, `-0/--print0`, `-h/--help`.
+  Eski kısa adlar çalışır. Değer alan uzun seçenek `--ad=DEĞER` biçimini de kabul eder; yalnız tablodaki değer alan
+  uzun adda bölünür, `--` sonrası ve başka sözcükler (`note "a=b"`) aynen kalır.
+- `-q/--quiet` (hızlı ekleme, `rm`, `mv`, `import`): başarı satırlarını (`Saved:`, `Deleted:`, `Moved:`, içe alma
+  satırları) bastırır; hatalar, sorun satırları ve `--json` aynen.
+- `note ls --json`: `[{"path","type","size","updated_at"}]` (zaman unix ms; `ls` sırası). `-l/--long`:
+  `GÜNCELLEME  BOYUT  TÜR  YOL` (yerel `YYYY-MM-DD HH:MM`, boyut sağa, tür sola yaslı; başlık yok, TTY ve boru aynı).
+  `-0/--print0`: kayıt ayırıcı NUL. `--limit/-n N`: en çok N satır (pozitif tam sayı, değilse çıkış 2; varsayılan
+  sınırsız). `--json` `-l`/`-0`'dan önce gelir.
+- `note find --json`: `[{"path","line","snippet","ranges":[[başlangıç,bitiş]…]}]` (kesitte bayt aralıkları);
+  eşleşme yoksa `[]` ve çıkış 1.
+- Varsayılan çıktılar (`ls`, `find`, `tags`, `query`, `view`, `config`, `show`) ve mevcut `--json` şemaları değişmez.
+
+## Ortam değişkenleri
+| Değişken | Etki |
+|---|---|
+| `NOTEAPP_HOME` | Config, veri ve log kökü (testler geçici dizin verir) |
+| `NOTEAPP_COLOR` | `always` / `never` / `auto` (varsayılan): renk kararı, `NO_COLOR`'dan üstün |
+| `NO_COLOR` | Boş değilse renk yok (no-color.org) |
+| `TERM` | `dumb`: renk ve ilerleme satırı yok |
+| `NOTEAPP_PAGER`, `PAGER` | Pager komutu (yukarıda "Terminal"); `cat` kapatır |
+| `COLUMNS`, `LINES` | Pencere boyutu okunamazsa yedek |
 
 ## Hızlı ekleme kuralları
 
@@ -123,8 +186,16 @@ Tablo her zaman terminal için temizlenir (hücrede `\n` ve `\t` görünür kaç
 `{"$timestamp":ms}`, düğüm ve kenar `{"$node":"<hex>"}`, `{"$edge":"<hex>"}`.
 
 ## Çıkış kodları
-`0` başarı · `1` kullanıcı kaynaklı (iptal, bulunamadı, onay verilmedi) · `2` kullanım hatası ·
-`3` G/Ç/iç hata · `4` senkron hatası. Hatalar stderr'e, i18n mesajıyla.
+| Kod | Anlam | Örnek |
+|---|---|---|
+| 0 | başarı | not kaydedildi, `find` eşleşme buldu |
+| 1 | kullanıcı kaynaklı sonuç | bulunamadı (`show zzzz`), `find` eşleşme yok, iptal/onay verilmedi, `rm` TTY'siz `-y`'siz, var olan ada yazma, kısmi içe alma |
+| 2 | kullanım hatası | bilinmeyen komut/fiil/seçenek, eksik değer, geçersiz yol/ad/sorgu, geçersiz `--limit` |
+| 3 | G/Ç ya da iç hata | yazılamayan çıktı, bellek yetersiz |
+| 4 | senkron hatası | `note sync` başarısız (yapılandırılmamış dahil) |
+| 130 | SIGINT (kabuk) | Ctrl-C; uygulama özel kod üretmez |
+
+Hatalar stderr'e, i18n mesajıyla (biçim yukarıda "Hata biçimi"). Yeni kod eklenmez.
 
 **Config uyarıları (T36):** `load_config()` uyarıları (bozuk `config.toml` -> tüm varsayılanlar, ayıklanan remote kimlik
 bilgisi, geçersiz değer) her komutta stderr'e yazılır; stdout ve çıkış kodu değişmez. Tek istisna ayrık süreç
@@ -150,7 +221,25 @@ Argüman ayrıştırma elle yazılır (ek kütüphane yok). Windows'ta UTF-8 arg
     `-2` alır, `--overwrite` ezer; var olmayan yol çıkış 1, `--name` ile iki YOL çıkış 2 (`tests/cli/cli_import_test.cpp`,
     kural testleri `tests/app/import_files_test.cpp`: bağ atlanır, ikili salt okunur, zamanlar dosyadan).
 
-**Elle:** Windows Terminal ve Fedora'da `edit`/`micro`/`nano`/`vim` ile editör akışı; Türkçe karakterli argümanlar.
+12. Renk: pty'de `NO_COLOR=1`, `TERM=dumb`, `NOTEAPP_COLOR=never` ile `find` çıktısında `ESC` yok; boruda
+    `NOTEAPP_COLOR=always` vurgular; boru varsayılanı bayt bayt aynı (`tests/cli/cli_term_test.cpp`).
+13. Yardım: her komutun `-h`/`--help` çıktısı `note help KOMUT` ile bayt bayt aynı, çıkış 0, her satır <= 80 sütun,
+    tablodaki her seçenek ve fiil görünür; genel yardım dört grup ve tüm komutlar (`tests/cli/cli_help_test.cpp`).
+14. Hata: `note help bogus` ilk satır `Unknown command: bogus` + `hint:`; `note sync stauts` -> `status` önerisi; her
+    kullanım hatasında `note help KOMUT` ipucu, çıkış 2 (`cli_help_test.cpp`, `cli_suggest_test.cpp`).
+15. Yazım ipucu: pty'de `note lss` kaydeder (çıkış 0, stdout aynı) ve stderr'de ipucu; stderr dosyaya giderse ya da
+    boruda ipucu yok (`cli_term_test.cpp`).
+16. Bayraklar: uzun adlar ve `--ad=DEĞER` kısa adlarla aynı sonucu verir; `-q` başarı satırını bastırır, hata ve
+    `--json` aynı; tamamlama betikleri yeni adları sunar (`cli_flags_test.cpp`).
+17. Çıktı: boş depoda `ls --json` = `[]`; `--limit 2` iki satır; `-0` NUL; `-l` hizalı; `find --json` aralıklarla;
+    varsayılan `ls` aynı (`cli_output_test.cpp`).
+18. Pager: pty'de uzun `ls` `PAGER`'dan geçer, sığan çıktı geçmez; `NOTEAPP_PAGER=cat`, `--no-pager`, olmayan pager
+    düz çıktı ve çıkış 0; boruda pager yok (`cli_term_test.cpp`).
+19. Küçükler ve ilerleme: pty'de `show` satır sonuyla biter; `rm` `yes` yanıtı reddedilir + ipucu; `tags` hizalı;
+    `sync`/`import` ilerleme satırı yazıp siler, stderr dosyada ve `TERM=dumb`'da ara çıktı yok (`cli_term_test.cpp`).
+
+**Elle:** Windows Terminal ve Fedora'da `edit`/`micro`/`nano`/`vim` ile editör akışı; Türkçe karakterli argümanlar;
+Windows Terminal'de renk ve ilerleme satırı (VT kipi), pager yokluğu.
 
 ## Kabuk tamamlama
 - Tek kaynak `src/cli/command_table.hpp`: komutlar, fiiller, seçenekler, değer türleri ve i18n açıklama anahtarları.
@@ -182,3 +271,17 @@ Etkileşimli seçici (fzf benzeri seçim TUI'nin işi), `mkdir/rmdir` komutları
 - **ADDED** Kabuk tamamlama (`note completion zsh|bash|fish`, gizli `note __complete`); önceki "Kapsam dışı" maddesinden
   çıktı. Neden: kullanıcı isteği (zsh + fzf-tab). `completion` ve `__complete` artık ayrılmış sözcük: o metni not etmek
   için `note -- completion`.
+
+## Değişiklik 2026-11-05 (CLI yeniden tasarım, T1-T12)
+- **ADDED** "Yardım", "Hata biçimi", "Terminal", "Bayraklar ve çıktı biçimleri", "Ortam değişkenleri" bölümleri ve
+  kabul 12-19. Neden: yazım hatası sessizce not oluyordu, alt komutlarda `--help` yoktu, `NO_COLOR` yok sayılıyordu,
+  makine çıktısı tutarsızdı, uzun çıktı sayfalanmıyordu.
+- **ADDED** `-h/--help` her komutta; `ls --json|-l|-0|--limit`, `find --json|-n`; uzun bayrak adları, `--ad=DEĞER`,
+  `--yes`, `-q/--quiet`, `--no-pager`; `NOTEAPP_COLOR`, `NOTEAPP_PAGER`.
+- **MODIFIED** Yardım metni tablodan üretilir; `cli.help_<komut>` artık yalnız açıklama paragrafıdır, `cli.help`
+  hızlı ekleme biçimlerinin listesidir. Kullanım hatalarına `hint:` satırları eklendi; ilk satır, stdout ve çıkış
+  kodları aynı.
+- **MODIFIED** `find` vurgusu artık "stdout TTY" yerine `color_enabled` ile karar verir.
+- **Kapsam dışı (bilinçli):** `--color` bayrağı (env yeter), kısa/uzun yardım ayrımı, alt komut kısaltması,
+  `-v/--verbose`, hata başlığının kırmızı renklendirilmesi, `config list --json` ve `sync status --json`, `import`
+  için `n/m` sayacı (app::import_paths'e ilerleme geri çağrısı gerekir; şimdilik tek satır), Windows pager.

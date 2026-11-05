@@ -170,7 +170,10 @@ tab_closed_missing = "Sekme kapandı: '{path}' artık yok"
 map_whole = "bütün çizge"
 map_depth = "derinlik {depth}"
 map_tags = " · etiketler"
-map_status = "{scope}{tags}  Tab seç  Enter aç  oklar + - 0  w bütün  t etiket  1-6 derinlik"
+map_status = "{scope}{tags}  Tab seç  Enter aç  C bağla  oklar + - 0  w bütün  t etiket  1-6 derinlik"
+map_link = "{from} → {to}  Tab hedef  Enter bağla  d kenarı kaldır  Esc vazgeç"
+map_choose = "{from} → {to}  r ilişkili  l bağlantı ({from} içine [[wiki]])  Esc vazgeç"
+map_no_edge = "{from} ile {to} arasında kenar yok"
 map_capped = "{total} düğümden {shown}"
 map_empty = "Haritada gösterilecek not yok"
 editor_leave_title = "Kaydedilmemiş değişiklik"
@@ -342,6 +345,12 @@ Harita (palet view.map; view.tree döner)
 Tab ⇧Tab      not seç, Enter açar
 w t           bütün çizge, etiket  1-6 derinlik
 /             arama eşleşen notları yakar
+C             seçili nottan bağla: Tab hedef,
+              Enter bağlar (not: r ilişkili,
+              l [[bağlantı]]; etiket: ekler),
+              d kenarı kaldırır, Esc vazgeçer
+Sağ sürükle   düğümden düğüme: C ile aynı
+Sağ tık       kenarda: seçer, d kaldırır
 Sekmeler (sağ panelin üst kenarında)
 ^T            yeni sekmede boş not
 ^W            sekmeyi kapat (değişiklikte sorar)
@@ -672,7 +681,7 @@ view_tree_tip = "Klasörler ve notlar tek ağaçta; oklar klasörü açar ve kap
 view_details = "Ayrıntılar"
 view_details_tip = "Yalnız geçerli klasör, boyut ve tarihlerle; çift tıklama ya da Enter klasöre girer"
 view_map = "Harita"
-view_map_tip = "Notlar bağlantı ve ilişkileriyle çizge olarak. Tıklama notu açar, çift tıklama ağaçta açar, sürükleme sabitler; tekerlek ya da +/- yakınlaştırır, oklar ya da sürükleme kaydırır, 0 sığdırır"
+view_map_tip = "Notlar bağlantı ve ilişkileriyle çizge olarak. Tıklama notu açar, çift tıklama ağaçta açar, sürükleme sabitler; tekerlek ya da +/- yakınlaştırır, oklar ya da sürükleme kaydırır, 0 sığdırır. Shift+sürükleme düğümü ötekine ilişkilendirir, bağlar ya da etiketler; kenara sağ tık onu kaldırır"
 map_whole = "Tüm çizge"
 map_whole_tip = "Kapalı: yalnız gösterilen notun çevresi"
 map_depth = "Derinlik {depth}"
@@ -806,9 +815,10 @@ not_implemented = "'{command}' komutu henüz kullanılamıyor"
 chosen = "Seçilen: {path}"
 no_match = "'{query}' ile eşleşen not yok"
 binary_note = "İkili not gösterilemez: {path}"
-ls_usage = "Kullanım: note ls [SORGU] [-f KLASÖR]"
+ls_usage = "Kullanım: note ls [SORGU] [-f KLASÖR] [-n N] [-l | -0 | --json]"
 tags_usage = "Kullanım: note tags [--json]"
 import_usage = "Kullanım: note import YOL... [--folder KLASÖR] [--type TİP] [--name AD (yalnız tek YOL)] [--overwrite] [--json]"
+import_progress = "İçe alınıyor..."
 import_done = "İçe alındı: {source} -> {path}"
 import_renamed = "İçe alındı: {source} -> {path} (ad doluydu)"
 import_overwritten = "Üzerine yazıldı: {path} <- {source}"
@@ -824,7 +834,7 @@ show_usage = "Kullanım: note show SORGU"
 edit_usage = "Kullanım: note edit SORGU"
 export_usage = "Kullanım: note export --pdf SORGU|YOL [-o ÇIKTI] | note export --all DİZİN [--ignore-skipped]"
 exported = "Dışa aktarıldı: {path}"
-find_usage = "Kullanım: note find TERİM... [--limit N]"
+find_usage = "Kullanım: note find TERİM... [-n N] [--json]"
 find_no_match = "'{query}' geçen not yok"
 invalid_limit = "--limit pozitif bir tam sayı ister, verilen: '{value}'"
 config_usage = "Kullanım: note config path | list | get ANAHTAR | set ANAHTAR DEĞER"
@@ -832,51 +842,81 @@ config_unknown_key = "Bilinmeyen ayar: {key} ('note config list' ile bakın)"
 config_not_saved = "Hiçbir şey kaydedilmedi."
 token_not_config = "Token'lar yapılandırmada saklanmaz; kimlik kasasına yazmak için 'note sync login' kullanın"
 unknown_command = "Bilinmeyen komut: {command}"
-help_ls = "note ls [SORGU] [-f KLASÖR]   Notları listeler: sorguyla fuzzy sırada, sorgusuz en yeniden eskiye; -f klasörle sınırlar. Sorgu arama argümanlarını alır (tag:AD, type:, in:, size:, updated:, created:, origin:, sync:, sort:)"
-help_tags = "note tags [--json]   Canlı notların #etiketlerini not sayılarıyla listeler (AD<TAB>SAYI); --json ad, gösterim ve sayı yazar"
-help_import = "note import YOL... [--folder KLASÖR] [--type TİP] [--name AD] [--overwrite] [--json]   Dosyaları bayt bayt not olarak içe alır (BOM, CRLF ve ikili korunur; ikili not salt okunurdur). Klasör kendi adıyla, alt klasörleriyle gelir. Ad dosya adından, tip uzantıdan gelir (--type yerine geçer; uzantı yoksa içerikten tespit). Dolu ad -2, -3 alır; --overwrite bunun yerine o notun üzerine yazar. --name tek YOL'u adlandırır. Bağlar izlenmez, klasör içindeki gizli girdiler dışarıda kalır, özgün dosyalar hiç değişmez. Atlanan ya da alınamayan varsa çıkış 1"
-help_view = "note view save AD CYPHER [--force] | ls [--json] | run AD [--json] | rm AD | show AD   Kayıtlı Cypher görünümleri: salt okunur sorguyu adla kaydet (--force değiştirir), listele (AD<TAB>SORGU), note query çıktısıyla çalıştır, sil ya da yazdır. Görünümler notlar gibi senkronlanır; yazan sorgu kayıtta da çalıştırmada da reddedilir. Aramada view:AD notları görünümün döndürdüklerine süzer"
-help_find = "note find TERİM...   Not içeriklerinde arar (tüm terimler geçmeli); yol:satır: kesit yazar; --limit N gösterilen not sayısını sınırlar"
-help_show = "note show SORGU   En iyi eşleşmeyi yazdırır (tam yol önceliklidir; seçilen yol stderr'e yazılır)"
-help_edit = "note edit SORGU   En iyi eşleşmeyi editörde açar"
-help_rm = "note rm YOL [-y]   Notu siler (yalnız tam yol); onay ister, terminal dışında -y gerekir"
-help_mv = "note mv KAYNAK HEDEF   Notu taşır veya yeniden adlandırır; uzantı değişimi tip değişimidir; klasörler oluşur"
-help_export = "note export --pdf YOL [-o ÇIKTI]   Notu PDF olarak dışa aktarır"
-help_sync = "note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]   Hemen senkronlar ya da senkronu yönetir; login erişim token'ını stdin'den ekosuz okuyup sistem anahtar kasasına yazar"
-help_query = "note query [--write] [--json] [--param ANAHTAR=DEĞER]... CYPHER   Graph veritabanında Cypher sorgusu çalıştırır (--write olmadan salt okunur); tablo veya JSON yazar"
+hint_help_command = "  ipucu: ayrıntı için 'note help {command}'"
+hint_help_general = "  ipucu: ayrıntı için 'note --help'"
+hint_help_list = "  ipucu: komut listesi için 'note help'"
+hint_did_you_mean = "  ipucu: bunu mu demek istediniz: '{word}'?"
+hint_saved_typo = "  ipucu: '{word}' not olarak kaydedildi. 'note {command}' mi demek istediniz? Geri almak için: note rm {path}"
+hint_rm_confirm = "  ipucu: silmek için 'e' yazın ya da -y (--yes) verin"
+help_heading_usage = "Kullanım:"
+help_heading_commands = "Komutlar:"
+help_heading_options = "Seçenekler:"
+help_heading_examples = "Örnekler:"
+help_heading_see_also = "Ayrıca bakınız:"
+value_text = "DEĞER"
+value_note = "NOT"
+value_folder = "KLASÖR"
+value_type = "TİP"
+value_view = "GÖRÜNÜM"
+value_config_key = "ANAHTAR"
+value_query = "SORGU"
+value_command = "KOMUT"
+value_file = "DOSYA"
+value_directory = "DİZİN"
+examples_ls = "note ls\ten yeniden eskiye\nnote ls tag:proje sort:-size\tetiketli, en büyük önce\nnote ls toplanti -f is\ttek klasörde bulanık sıra"
+examples_find = "note find bütçe 2026\tiki sözcüğü de içeren notlar\nnote find yapilacak --limit 5\ten çok beş not"
+examples_show = "note show plan\ten iyi eşleşmeyi yazdır\nnote show is/plan.md > plan.md\tsaklandığı gibi baytlar"
+examples_edit = "note edit plan\ten iyi eşleşmeyi editörde aç"
+examples_rm = "note rm is/plan.md\tsor, sonra sil\nnote rm -y is/plan.md\tsormadan sil"
+examples_mv = "note mv plan.md is/plan.md\tklasöre taşı\nnote mv notlar.txt notlar.md\ttipi değiştir"
+examples_export = "note export --pdf plan\tgeçerli dizinde plan.pdf\nnote export --all ~/yedek\ther not düz dosya olarak"
+examples_sync = "note sync\themen senkronla\nnote sync init git@host:ben/notlar.git\tkur ve aç\nnote sync status\tdurum, uzak depo ve son senkron"
+examples_config = "note config list\ttüm ayarlar ve değerleri\nnote config set language tr\tbir ayarı değiştir"
+examples_query = "note query 'MATCH (n:Note) RETURN n.name'\tsalt okunur tablo\nnote query --json 'MATCH (n:Note) RETURN count(n)'\tJSON olarak"
+examples_graph = "note graph status\tveritabanında olmayan dosyalar\nnote graph export --format jsonl -o dokum.jsonl\tgraph'ı dök"
+examples_tags = "note tags\tsatır başına AD<TAB>SAYI\nnote tags --json\tJSON olarak"
+examples_view = "note view save son 'MATCH (n:Note) RETURN n'\tsorguyu kaydet\nnote ls view:son\tsüzgeç olarak kullan"
+examples_import = "note import ~/Belgeler/notlar\talt klasörleriyle bir klasör\nnote import --type md beni-oku.txt\tverilen tipte tek dosya"
+examples_completion = "note completion bash\t~/.bashrc içinde source edin\nnote completion zsh > _note\tzsh işlev dosyası"
+see_also_ls = "note find, note show, note tags"
+see_also_find = "note ls, note show"
+see_also_show = "note edit, note ls"
+see_also_edit = "note show, note ls"
+see_also_rm = "note mv, note ls"
+see_also_mv = "note rm, note ls"
+see_also_export = "note show, note graph"
+see_also_sync = "note config"
+see_also_config = "note sync"
+see_also_query = "note view, note graph"
+see_also_graph = "note export, note query"
+see_also_tags = "note ls"
+see_also_view = "note query, note ls"
+see_also_import = "note export, note graph"
+see_also_completion = "note help"
+help_ls = "Notları listeler: sorguyla fuzzy sırada, sorgusuz en yeniden eskiye; -f klasörle sınırlar. Sorgu arama argümanlarını alır (tag:AD, type:, in:, size:, updated:, created:, origin:, sync:, sort:)"
+help_tags = "Canlı notların #etiketlerini not sayılarıyla listeler (AD<TAB>SAYI); --json ad, gösterim ve sayı yazar"
+help_import = "Dosyaları bayt bayt not olarak içe alır (BOM, CRLF ve ikili korunur; ikili not salt okunurdur). Klasör kendi adıyla, alt klasörleriyle gelir. Ad dosya adından, tip uzantıdan gelir (--type yerine geçer; uzantı yoksa içerikten tespit). Dolu ad -2, -3 alır; --overwrite bunun yerine o notun üzerine yazar. --name tek YOL'u adlandırır. Bağlar izlenmez, klasör içindeki gizli girdiler dışarıda kalır, özgün dosyalar hiç değişmez. Atlanan ya da alınamayan varsa çıkış 1"
+help_view = "Kayıtlı Cypher görünümleri: salt okunur sorguyu adla kaydet (--force değiştirir), listele (AD<TAB>SORGU), note query çıktısıyla çalıştır, sil ya da yazdır. Görünümler notlar gibi senkronlanır; yazan sorgu kayıtta da çalıştırmada da reddedilir. Aramada view:AD notları görünümün döndürdüklerine süzer"
+help_find = "Not içeriklerinde arar (tüm terimler geçmeli); yol:satır: kesit yazar; --limit N gösterilen not sayısını sınırlar"
+help_show = "En iyi eşleşmeyi yazdırır (tam yol önceliklidir; seçilen yol stderr'e yazılır)"
+help_edit = "En iyi eşleşmeyi editörde açar"
+help_rm = "Notu siler (yalnız tam yol); onay ister, terminal dışında -y gerekir"
+help_mv = "Notu taşır veya yeniden adlandırır; uzantı değişimi tip değişimidir; klasörler oluşur"
+help_export = "Notu PDF olarak ya da tüm notları bir klasöre bayt bayt düz dosya olarak dışa aktarır"
+help_sync = "Hemen senkronlar ya da senkronu yönetir; login erişim token'ını stdin'den ekosuz okuyup sistem anahtar kasasına yazar"
+help_query = "Graph veritabanında Cypher sorgusu çalıştırır (--write olmadan salt okunur); tablo veya JSON yazar"
 query_usage = "Kullanım: note query [--write] [--json] [--param ANAHTAR=DEĞER]... CYPHER"
 query_no_database = "{path} konumunda graph veritabanı yok; 'note query --write' oluşturur"
 query_bad_param = "--param düz adlı ANAHTAR=DEĞER ister, verilen: '{param}'"
-help_config = "note config path | list | get ANAHTAR | set ANAHTAR DEĞER   Ayarları yönetir (types virgülle ayrılmış liste alır)"
-help = """
-Kullanım:
-  note [-t TİP] [-f KLASÖR] [-n AD] [--no-sync] METİN...   Argümanlardan not ekler
-  ... | note [bayraklar]                                    stdin'den not ekler
-  note [bayraklar]                                          Editörde not ekler
-  note -e [bayraklar] [METİN...]                            Editörü her durumda açar; METİN ön içerik olur
-  note ls [SORGU] [-f KLASÖR]                               Notları listeler
-  note find TERİM...                                        Not içeriklerinde arar
-  note show SORGU                                           En iyi eşleşmeyi yazdırır
-  note edit SORGU                                           En iyi eşleşmeyi editörde açar
-  note rm YOL [-y]                                          Notu siler (yalnız tam yol)
-  note mv KAYNAK HEDEF                                      Notu taşır veya yeniden adlandırır
-  note export --pdf YOL [-o ÇIKTI]                          Notu PDF olarak dışa aktarır
-  note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]
-                                                            Hemen senkronlar ya da senkronu yönetir
-  note config path | list | get ANAHTAR | set ANAHTAR DEĞER Ayarları yönetir
-  note query [--write] [--json] [--param ANAHTAR=DEĞER]... CYPHER Graph veritabanında Cypher sorgusu çalıştırır
-  note tags [--json]                                        #etiketleri not sayılarıyla listeler
-  note import YOL... [--folder KLASÖR] [--overwrite]        Dosyaları ya da klasörleri not olarak içe alır
-  note view save|ls|run|rm|show                             Kayıtlı salt okunur Cypher görünümleri
-  note graph migrate|status|export|import                   Graph'ı geçirir, denetler, döker ya da yükler
-  note completion zsh|bash|fish                             Kabuk tamamlama betiğini yazdırır
-  note --help | help KOMUT | --version                      Yardımı veya sürümü gösterir
-
-Komut adıyla aynı metni not etmek için: 'note -- ls'.
-
-Çıkış kodları: 0 başarı, 1 kullanıcı kaynaklı, 2 kullanım hatası, 3 G/Ç veya iç hata, 4 senkron hatası.
-"""
+help_config = "Ayarları yönetir (types virgülle ayrılmış liste alır)"
+help = "note [SEÇENEKLER] METİN...\tArgümanlardan not ekler\n... | note [SEÇENEKLER]\tstdin'den not ekler\nnote [SEÇENEKLER]\tEditörde not ekler\nnote -e [SEÇENEKLER] [METİN...]\tEditörü her durumda açar; METİN ön içerik olur\nnote KOMUT [ARGÜMANLAR...]\tAşağıdaki komutlardan birini çalıştırır"
+help_footer = "Ayrıntı: 'note help KOMUT' ya da 'note KOMUT --help'.\nKomut adıyla aynı metni not etmek için: 'note -- ls'.\nOrtam: NO_COLOR, NOTEAPP_COLOR=auto|always|never, NOTEAPP_PAGER, PAGER, NOTEAPP_HOME.\n\nÇıkış kodları: 0 başarı, 1 kullanıcı kaynaklı, 2 kullanım hatası, 3 G/Ç veya iç hata, 4 senkron hatası."
+group_notes = "Notlar:"
+group_sync = "Senkron:"
+group_advanced = "Gelişmiş:"
+group_other = "Diğer:"
 sync_usage = "Kullanım: note sync [status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST]]"
+sync_progress = "Senkronlanıyor..."
 sync_done = "Senkron tamam: {committed} commit'lendi, {pulled} çekildi, {pushed}, {conflicts} çakışma kopyası"
 sync_pushed = "gönderildi"
 sync_not_pushed = "gönderilecek bir şey yok"
@@ -928,7 +968,7 @@ migrate_remove_repo = "Eski dosyalar SİLİNMEDİ, senkron da onlara dokunmaz. N
 migrate_remove_plain = "Eski dosyalar SİLİNMEDİ. Notlarınızı denetleyin (note export --all DİZİN); sonra {path} içindeki eski dosyaları kendiniz silebilirsiniz"
 export_all_done = "{count} not {path} dizinine çıkarıldı"
 export_all_refused = "Çıkarılmadı: {path} ({reason})"
-help_graph = "note graph migrate [--new] | status [--ignore-skipped | --clear-skipped] | export --format jsonl [-o DOSYA] | import DOSYA   Eski düz dosya notları içe aktar (--new: yalnız geçişten sonra not klasörüne düşen dosyalar); tüm graph'ı JSON satırları olarak çıkar ya da yükle. status geçerli notes_dir'i denetler, veritabanında olmayan dosyaları listeler; --clear-skipped dışarıda kalan dosya listesini tüm notes_dir'ler için yazıp unutur, eski dosyalara asla dokunmaz"
+help_graph = "Eski düz dosya notları içe aktar (--new: yalnız geçişten sonra not klasörüne düşen dosyalar); tüm graph'ı JSON satırları olarak çıkar ya da yükle. status geçerli notes_dir'i denetler, veritabanında olmayan dosyaları listeler; --clear-skipped dışarıda kalan dosya listesini tüm notes_dir'ler için yazıp unutur, eski dosyalara asla dokunmaz"
 desc_ls = "Notları listele"
 desc_find = "Not içeriklerinde ara"
 desc_show = "En iyi eşleşmeyi yazdır"
@@ -978,7 +1018,11 @@ opt_editor = "Editörü her durumda aç"
 opt_help = "Yardımı göster"
 opt_version = "Sürümü göster"
 opt_limit = "En çok bu kadar not göster"
+opt_long = "Zaman, boyut, tür ve yol sütunlarda"
+opt_print0 = "Her yolu NUL baytıyla bitir (xargs -0 için)"
 opt_yes = "Sormadan sil"
+opt_quiet = "Başarıda bir şey yazma; hatalar yine görünür"
+opt_no_pager = "Pager olmadan doğrudan yazdır"
 opt_pdf = "PDF olarak aktar"
 opt_all = "Tüm notları bu klasöre aktar"
 opt_ignore_skipped = "Dışarıda kalan dosya olsa da 0 ile çık"
@@ -992,7 +1036,7 @@ opt_clear_skipped = "Dışarıda kalan dosyalar listesini unut"
 opt_format = "Döküm biçimi (jsonl)"
 opt_force = "Aynı adlı görünümün yerine yaz"
 completion_usage = "Kullanım: note completion zsh | bash | fish"
-help_completion = "note completion zsh | bash | fish   Kabuğun için tamamlama betiğini yazdırır: Tab sonra komutları, seçenekleri, not yollarını, klasörleri, tipleri, etiketleri, görünümleri ve config anahtarlarını senin dilindeki açıklamalarla önerir. zsh: note completion zsh > ~/.local/share/zsh/site-functions/_note (bu dizin compinit'ten önce fpath'te olmalı); bash: ~/.bashrc'ye source <(note completion bash); fish: note completion fish > ~/.config/fish/completions/note.fish"
+help_completion = "Kabuğun için tamamlama betiğini yazdırır: Tab sonra komutları, seçenekleri, not yollarını, klasörleri, tipleri, etiketleri, görünümleri ve config anahtarlarını senin dilindeki açıklamalarla önerir. zsh: note completion zsh > ~/.local/share/zsh/site-functions/_note (bu dizin compinit'ten önce fpath'te olmalı); bash: ~/.bashrc'ye source <(note completion bash); fish: note completion fish > ~/.config/fish/completions/note.fish"
 migrate_backup_hint = "Yedek {path} altında (özel). Gerekmediğinde kendiniz silin: rm -r {path}"
 export_all_unreachable = "Çıkarılmadı, güvenli yolu yok: {name} (kimlik {id}, {reason}). Baytları şurada: note graph export --format jsonl"
 
@@ -1033,6 +1077,27 @@ incoming = "Gelen ({count})"
 outgoing = "Giden ({count})"
 related = "İlişkili ({count})"
 missing = "Eksik ({count})"
+
+# Haritada düğüm birleştirme (app::map_relations; GUI Shift+sürükleme, TUI sağ sürükleme ve C). Yollar güvenilmez.
+[map]
+related = "İlişkili: {from} ve {to}"
+linked = "{from} notuna bağlantı eklendi: [[{to}]]"
+tagged = "#{tag} etiketi {path} notuna eklendi"
+unrelated = "İlişki kaldırıldı: {from} ve {to}"
+untagged = "#{tag} etiketi {path} notundan kaldırıldı"
+already_linked = "{from} zaten {to} notuna bağlanıyor"
+already_tagged = "{path} notunda #{tag} etiketi zaten var"
+not_prose = "Bağlantı ve etiket yalnız metin notlarına yazılır (md, markdown, txt, uzantısız): {path}"
+not_tagged = "{path} notunun metninde #{tag} yok"
+tag_not_added = "{path} notunun sonundaki #{tag} etiket sayılmazdı (kapanmamış kod bloğu?); hiçbir şey değişmedi"
+link_not_added = "{to} yolu [[bağlantı]] olarak yazılamaz (| ya da # içeriyor); hiçbir şey değişmedi"
+link_in_text = "Bağlantı {from} notunun metninde; {to} notuna giden [[bağlantı]]yı editörde silin"
+invalid_pair = "Bu iki harita düğümü birleştirilemez"
+choose_related = "İlişkili (RELATED_TO)"
+choose_link = "Bağlantı ({from} notuna [[wiki]] bağlantısı)"
+remove_related = "İlişkiyi kaldır"
+remove_tag = "#{tag} etiketini {path} notundan kaldır"
+remove_link = "Bağlantıyı kaldır"
 
 [graph]
 cypher_syntax = "Sorgu söz dizimi hatası, satır {line}, sütun {col}: {what}"

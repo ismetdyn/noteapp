@@ -54,8 +54,8 @@ inline bool is_completion_safe(std::string_view text) {
 }
 
 // `ranges`, `text` içindeki [başlangıç, bitiş) bayt aralıklarıdır (search::Hit::ranges). Terminalde vurgu
-// için aralıkları kalın + sarı ANSI koduna sarar; her parça sanitize_for_terminal'dan geçer (yalnız TTY'de
-// çağrılır). Bozuk aralık (taşan, boş, öncekiyle çakışan) çıktıyı bozmasın diye kırpılır/atlanır.
+// için aralıkları kalın + sarı ANSI koduna sarar; her parça sanitize_for_terminal'dan geçer (yalnız renk
+// açıkken çağrılır: term.hpp color_enabled). Bozuk aralık (taşan, boş, öncekiyle çakışan) çıktıyı bozmasın diye kırpılır/atlanır.
 inline std::string highlight_ranges(std::string_view text,
                                     const std::vector<std::pair<std::size_t, std::size_t>>& ranges) {
     constexpr std::string_view kOn = "\x1b[1;33m";

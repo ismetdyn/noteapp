@@ -299,7 +299,9 @@ TEST_CASE("search: sync: and view: see the states and the lookup given to the li
     Listing listing;
     listing.set_notes(trio());
     CHECK(listing.search("sync:modified", SearchMode::Name).rows.empty());
-    listing.set_sync_states({{*NotePath::parse("personal-todo.md"), SyncState::Modified}});
+    CHECK(listing.set_sync_states({{*NotePath::parse("personal-todo.md"), SyncState::Modified}}));
+    // Aynı durumlar değişiklik sayılmaz: arayüz boş kare çizmez.
+    CHECK_FALSE(listing.set_sync_states({{*NotePath::parse("personal-todo.md"), SyncState::Modified}}));
     CHECK(paths(listing.search("sync:modified", SearchMode::Name).rows) == Strings{"personal-todo.md"});
     REQUIRE(listing.meta_of(*NotePath::parse("personal-todo.md")) != nullptr);
     CHECK(listing.meta_of(*NotePath::parse("personal-todo.md"))->sync_status == SyncState::Modified);
