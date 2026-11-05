@@ -381,30 +381,33 @@ ftxui::Element editor_status_bar(const EditorSession& session, int width, ftxui:
                               session.find_label(), session.message());
 
     const bool read_only = session.read_only() != EditorSession::ReadOnly::No;
+    const std::string hints = core::tr(read_only ? "tui.key_hints_editor_readonly" : "tui.key_hints_editor");
+    // Uzun ileti yardımı ekrandan itmez: F1 ipucuna ve araya yer kalacak kadar baştan gösterilir, sonu "…".
+    const int room = width - pinned_help_cells(hints) - static_cast<int>(kHintGap.size());
     // İleti çoğu kez yol taşır (kopya, yeni not, hata ayrıntısı): kaynağı ne olursa olsun burada arınır.
     const std::string notice = terminal_safe(status_notice(session));
+    std::string shown;
     Elements cells;
-    int used = 0;
     if (!notice.empty()) {
-        Element shown = text(notice) | bold;
-        cells.push_back(session.message_is_error() ? shown | color(Color::Red) : shown);
-        used += string_width(notice) + static_cast<int>(kHintGap.size());
+        shown = head_ellipsis(notice, room);
+        Element message = text(shown) | bold;
+        cells.push_back(session.message_is_error() ? message | color(Color::Red) : message);
     } else if (const std::string hidden = hidden_char_notice(*session.buffer()); !hidden.empty()) {
         // Tanıdan önce: işaret hücresi yalnız "burada bir şey var" der, ne olduğunu bu satır söyler.
-        cells.push_back(text(hidden) | bold | color(Color::Red));
-        used += string_width(hidden) + static_cast<int>(kHintGap.size());
+        shown = head_ellipsis(hidden, room);
+        cells.push_back(text(shown) | bold | color(Color::Red));
     } else if (const DiagnosticMark* mark = session.diagnostic_at_cursor()) {
         // Sunucu metni güvenilmez: denetim/bidi karakteri terminale gitmez, satır sonu ileti satırını bölmez.
-        std::string message = terminal_safe(mark->message);
-        cells.push_back(severity_styled(text(message), mark->severity));
-        used += string_width(message) + static_cast<int>(kHintGap.size());
+        shown = head_ellipsis(terminal_safe(mark->message), room);
+        cells.push_back(severity_styled(text(shown), mark->severity));
     }
     // Hata ya da ileti varken kısayol sığdığı kadar yanında kalır; kelime ortasında kesilmez.
-    if (!cells.empty())
+    int used = 0;
+    if (!cells.empty()) {
         cells.push_back(text(std::string(kHintGap)));
-    cells.push_back(hint_bar(core::tr(read_only ? "tui.key_hints_editor_readonly" : "tui.key_hints_editor"),
-                             width - used, key_color) |
-                    flex);
+        used = string_width(shown) + static_cast<int>(kHintGap.size());
+    }
+    cells.push_back(hint_bar(hints, width - used, key_color) | flex);
     return hbox(std::move(cells));
 }
 

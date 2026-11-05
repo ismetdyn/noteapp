@@ -80,6 +80,11 @@ ProgressLine::~ProgressLine() {
         std::cerr << "\r\x1b[K" << std::flush;  // satır başına dön, satırı sil
 }
 
+void ProgressLine::update(std::string_view text) {
+    if (shown_)
+        std::cerr << "\r\x1b[K" << text << std::flush;
+}
+
 TermSize term_size() {
     TermSize size;
 #ifdef _WIN32

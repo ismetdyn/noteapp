@@ -5,6 +5,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <ctime>
 #include <format>
 #include <system_error>
@@ -118,43 +119,61 @@ bool is_comment_or_structure(std::string_view line) {
 
 }  // namespace
 
+namespace {
+
+struct CodePoint {
+    char32_t value = 0;
+    std::size_t length = 0;
+};
+
+// `at`taki ASCII olmayan kod noktası; geçersizse (fazla uzun kodlama, vekil, > U+10FFFF, kesik) nullopt.
+std::optional<CodePoint> multibyte_at(std::string_view utf8, std::size_t at) {
+    const auto lead = static_cast<unsigned char>(utf8[at]);
+    std::size_t extra = 0;
+    char32_t cp = 0;
+    char32_t min_cp = 0;  // fazla uzun kodlamayı yakalamak için alt sınır
+    if (lead >= 0xC2 && lead <= 0xDF) {
+        extra = 1, cp = lead & 0x1Fu, min_cp = 0x80;
+    } else if (lead >= 0xE0 && lead <= 0xEF) {
+        extra = 2, cp = lead & 0x0Fu, min_cp = 0x800;
+    } else if (lead >= 0xF0 && lead <= 0xF4) {
+        extra = 3, cp = lead & 0x07u, min_cp = 0x10000;
+    } else {
+        return std::nullopt;
+    }
+    if (at + extra >= utf8.size()) {
+        return std::nullopt;  // kesik dizi
+    }
+    for (std::size_t k = 1; k <= extra; ++k) {
+        const auto next = static_cast<unsigned char>(utf8[at + k]);
+        if (!is_continuation(next))
+            return std::nullopt;
+        cp = (cp << 6) | (next & 0x3Fu);
+    }
+    const bool surrogate = cp >= 0xD800 && cp <= 0xDFFF;
+    if (cp < min_cp || cp > 0x10FFFF || surrogate)
+        return std::nullopt;
+    return CodePoint{cp, extra + 1};
+}
+
+}  // namespace
+
 std::optional<std::u32string> decode_utf8(std::string_view utf8) {
     std::u32string out;
     out.reserve(utf8.size());
     std::size_t i = 0;
     while (i < utf8.size()) {
         const auto lead = static_cast<unsigned char>(utf8[i]);
-        std::size_t extra = 0;
-        char32_t cp = 0;
-        char32_t min_cp = 0;  // fazla uzun kodlamayı yakalamak için alt sınır
         if (lead < 0x80) {
             out.push_back(lead);
             ++i;
             continue;
         }
-        if (lead >= 0xC2 && lead <= 0xDF) {
-            extra = 1, cp = lead & 0x1Fu, min_cp = 0x80;
-        } else if (lead >= 0xE0 && lead <= 0xEF) {
-            extra = 2, cp = lead & 0x0Fu, min_cp = 0x800;
-        } else if (lead >= 0xF0 && lead <= 0xF4) {
-            extra = 3, cp = lead & 0x07u, min_cp = 0x10000;
-        } else {
+        const auto cp = multibyte_at(utf8, i);
+        if (!cp)
             return std::nullopt;
-        }
-        if (i + extra >= utf8.size()) {
-            return std::nullopt;  // kesik dizi
-        }
-        for (std::size_t k = 1; k <= extra; ++k) {
-            const auto next = static_cast<unsigned char>(utf8[i + k]);
-            if (!is_continuation(next))
-                return std::nullopt;
-            cp = (cp << 6) | (next & 0x3Fu);
-        }
-        const bool surrogate = cp >= 0xD800 && cp <= 0xDFFF;
-        if (cp < min_cp || cp > 0x10FFFF || surrogate)
-            return std::nullopt;
-        out.push_back(cp);
-        i += extra + 1;
+        out.push_back(cp->value);
+        i += cp->length;
     }
     return out;
 }
@@ -205,8 +224,30 @@ std::string encode_utf8(std::u32string_view codepoints) {
     return out;
 }
 
+// Kod noktaları üretilmez: 20 MiB'lık notta 80 MiB'lık geçici dizi gerekmesin. ASCII sekizer bayt atlanır (not
+// açılışında tüm metin denetlenir).
 bool is_valid_utf8(std::string_view utf8) {
-    return decode_utf8(utf8).has_value();
+    constexpr std::uint64_t kHighBits = 0x8080808080808080ULL;
+    std::size_t i = 0;
+    while (i < utf8.size()) {
+        std::uint64_t word = 0;
+        if (i + sizeof(word) <= utf8.size()) {
+            std::memcpy(&word, utf8.data() + i, sizeof(word));
+            if ((word & kHighBits) == 0) {
+                i += sizeof(word);
+                continue;
+            }
+        }
+        if (static_cast<unsigned char>(utf8[i]) < 0x80) {
+            ++i;
+            continue;
+        }
+        const auto cp = multibyte_at(utf8, i);
+        if (!cp)
+            return false;
+        i += cp->length;
+    }
+    return true;
 }
 
 namespace {

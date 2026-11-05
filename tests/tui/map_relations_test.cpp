@@ -30,7 +30,7 @@ constexpr int kWidth = 120;
 constexpr int kHeight = 30;
 constexpr int kSettleSteps = 5000;
 constexpr int kFirstCanvasRow = 3;  // üst çubuk, panel kenarı, kapsam satırı
-constexpr int kFrameCells = 1;
+constexpr int kFrameCells = 2;      // panel kenarı ve iç boşluk
 
 core::NotePath np(const std::string& path) {
     return core::NotePath::parse(path).value();

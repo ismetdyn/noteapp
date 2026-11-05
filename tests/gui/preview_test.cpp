@@ -1,13 +1,20 @@
 // T82: md notunun salt-okunur Markdown önizlemesi. Ayrıştırma PDF ile aynı md4c yürüyüşüdür (blok çıktısı
 // tests/pdf/markdown_blocks_test.cpp'de); burada model kuralları ve gerçek çizim katmanındaki sahne sınanır.
 #include "core/i18n.hpp"
+#include "core/text.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/view.hpp"
 #include "window_fixture.hpp"
 
+#include <algorithm>
+#include <cfloat>
 #include <doctest/doctest.h>
+#include <format>
+#include <imgui.h>
+#include <imgui_internal.h>
 #include <memory>
 #include <string>
+#include <string_view>
 
 using gui_test::click_button;
 using gui_test::make_view;
@@ -44,6 +51,14 @@ float height_of(const View& view, const std::string& name) {
     return rect.max_y - rect.min_y;
 }
 
+// Önizlemenin çocuk penceresi (adı "…/##preview<sekme>_…"): kaydırması yalnız ImGui'de durur.
+ImGuiWindow* preview_window() {
+    for (ImGuiWindow* window : ImGui::GetCurrentContext()->Windows)
+        if (window->Active && std::string_view(window->Name).find("/##preview") != std::string_view::npos)
+            return window;
+    return nullptr;
+}
+
 }  // namespace
 
 TEST_CASE("gui preview: only a saved markdown note previews, the switch lasts the session") {
@@ -78,15 +93,157 @@ TEST_CASE("gui preview: a .markdown note previews like .md") {
     CHECK(state->can_preview());
 }
 
-TEST_CASE("gui preview: a note over the size bound is not previewed") {
+// NX-B (L1): sınırın üstündeki not reddedilmez; TUI REVIEW gibi ham metin ve nedeni (anahtarıyla) görünür.
+TEST_CASE("gui preview: a note over limits.tui.view_bytes previews as raw text with the TUI's notice") {
     WindowFixture fixture;
-    fixture.add_note("büyük.md", std::string(fixture.config.limits.tui.view_bytes.cap() + 1, 'x'), 10);
-    fixture.add_note("sınır.md", std::string(fixture.config.limits.tui.view_bytes.cap(), 'x'), 20);
+    fixture.config.limits.tui.view_bytes = {16, "16"};
+    fixture.add_note("büyük.md", "# Başlık\n\nuzun bir paragraf satırı\n", 10);
+    fixture.add_note("sınır.md", "# Kısa\n", 20);
     const auto state = fixture.make_state();
+    const auto view = make_view(*state);
     select(*state, "büyük.md");
-    CHECK_FALSE(state->can_preview());
+    REQUIRE(state->can_preview());
+    CHECK(state->preview_too_large());
+    state->toggle_preview();
+    settle(*view);
+    const RenderedText text;
+    settle(*view);
+    REQUIRE(view->item_rects().contains("preview"));
+    CHECK(text.contains(core::tr("gui.preview_too_large", {{"limit", core::human_size(16)}})));
+    CHECK(text.contains("# Başlık"));  // biçimlenmemiş: başlık işareti görünür
+    CHECK(text.contains("uzun bir paragraf satırı"));
     select(*state, "sınır.md");
-    CHECK(state->can_preview());
+    CHECK_FALSE(state->preview_too_large());
+}
+
+// Ham önizlemede uzun satır parçalara bölünür: her bayt çizilir, çok baytlı karakter bölünmez.
+TEST_CASE("gui preview: a long raw line is drawn in 4 KiB rows without losing or splitting a character") {
+    WindowFixture fixture;
+    fixture.config.limits.tui.view_bytes = {16, "16"};
+    fixture.add_note("uzun.md", std::string(4095, 'a') + "ş" + std::string(10, 'b') + "SON\nikinci\n", 10);
+    const auto state = fixture.make_state();
+    const auto view = make_view(*state);
+    select(*state, "uzun.md");
+    state->toggle_preview();
+    settle(*view);
+    const RenderedText text;
+    settle(*view);
+    REQUIRE(view->item_rects().contains("preview"));
+    // ImGui günlüğü satırları IM_NEWLINE ile ayırır (Windows'ta "\r\n"): parçanın sonu platformun satır sonudur.
+    CHECK(text.contains(std::string(4095, 'a') + IM_NEWLINE));  // ilk parça ş'den önce biter
+    CHECK(text.contains("şbbbbbbbbbbSON"));
+    CHECK(text.contains("ikinci"));
+}
+
+// Kaydırılmış ham önizleme: ImGuiListClipper görünen aralığa satırları atlayarak gelir; bölünmüş uzun satır iki
+// görüntü satırı sayılmazsa sondaki satırlar kayardı. ImGui günlüğü açıkken kırpıcı kırpmaz (RenderedText bu yolu
+// görmez): çizilen satırlar `preview_raw:` kancalarından okunur.
+TEST_CASE("gui preview: a scrolled raw preview skips to the visible rows, counting split long lines") {
+    constexpr int kLines = 2000;
+    constexpr int kLongLine = 1990;
+    WindowFixture fixture;
+    fixture.config.limits.tui.view_bytes = {16, "16"};
+    std::string note;
+    for (int line = 0; line < kLines; ++line) {
+        note += line == kLongLine ? std::string(4096, 'x') + "UÇ" : std::format("satır {:04}", line);
+        note += '\n';
+    }
+    note.pop_back();
+    fixture.add_note("uzun.md", note, 10);
+    const auto state = fixture.make_state();
+    const auto view = make_view(*state);
+    select(*state, "uzun.md");
+    state->toggle_preview();
+    settle(*view);
+    state->scroll_preview(FLT_MAX);
+    settle(*view);
+    const auto& rects = view->item_rects();
+    const auto top_of = [&](const std::string& row) {
+        const auto found = rects.find("preview_raw:" + row);
+        REQUIRE_MESSAGE(found != rects.end(), row);
+        return found->second.min_y;
+    };
+    CHECK_FALSE(rects.contains("preview_raw:satır 1000"));
+    // Bölünen satır iki görüntü satırıdır ve ardışık: x'ler, "UÇ", sonraki satır.
+    CHECK(top_of("satır 1989") < top_of(std::string(32, 'x')));
+    CHECK(top_of(std::string(32, 'x')) < top_of("UÇ"));
+    CHECK(top_of("UÇ") < top_of("satır 1991"));
+    // Son satır en altta çizilir: atlama bir satır kaysaydı ya çizilmez ya da yerinde başka satır olurdu.
+    float lowest = 0.0F;
+    for (const auto& [name, rect] : rects)
+        if (name.starts_with("preview_raw:"))
+            lowest = std::max(lowest, rect.min_y);
+    CHECK(top_of("satır 1999") == lowest);
+    // Sona kaydırılmış: son satır pencerenin içinde biter (atlama bir satır az olsaydı bir satır aşağıda kalırdı).
+    REQUIRE(rects.contains("preview"));
+    CHECK(rects.at("preview_raw:satır 1999").max_y <= rects.at("preview").max_y);
+}
+
+// NX-D: sondan yukarı her karede küçük bir klavye isteği (görünen alandan kısa). Son parça kısa paragraf, üstündeki
+// ölçülmemiş kod parçası (tahmini ilk paragraf parçasından, tutmaz). Sınır geçilirken görünen son parça çapadır,
+// üstteki ölçülür ve kaydırma düzeltilir; o karenin isteği düzeltmeye eklenir, kaybolmaz. Sondan uzaklık bu
+// düzeltmeyle değişmez: N istekten sonra N adım. Sona atlama, ölçüm toplamı değiştirse de sonda kalır.
+TEST_CASE("gui preview: a keyboard scroll in the frame of an anchor correction is kept") {
+    constexpr float kLines = 10.0F;
+    constexpr int kSteps = 40;
+    constexpr std::size_t kChunk = 64 * 1024;
+    const std::string prose = "## Bölüm\n\nBir paragraf *vurgu* ve **kalın** metin; satır sarılsın diye biraz uzun "
+                              "yazılmış bir cümle daha.\n\n";
+    const std::string code = "```\nkod\nkod\nkod\nkod\n```\n\n";
+    std::string note;
+    while (note.size() < kChunk)
+        note += prose;
+    while (note.size() < 3 * kChunk)
+        note += code;
+    while (note.size() < (3 * kChunk) + 3000)
+        note += prose;
+    WindowFixture fixture;
+    fixture.config.limits.tui.view_bytes = {0, "0"};
+    fixture.add_note("büyük.md", note, 10);
+    const auto state = fixture.make_state();
+    const auto view = make_view(*state);
+    select(*state, "büyük.md");
+    state->toggle_preview();
+    settle(*view);
+    state->scroll_preview(FLT_MAX);
+    settle(*view);
+    const auto from_bottom = [] {
+        const ImGuiWindow* preview = preview_window();
+        REQUIRE(preview != nullptr);
+        return preview->ScrollMax.y - preview->Scroll.y;
+    };
+    CHECK(from_bottom() == 0.0F);
+    state->scroll_preview(-kLines);
+    settle(*view);
+    const float step = from_bottom();
+    REQUIRE(step > 0.0F);
+    for (int i = 1; i < kSteps; ++i) {
+        state->scroll_preview(-kLines);
+        view->draw_frame();
+    }
+    settle(*view);
+    CHECK(from_bottom() == doctest::Approx(step * kSteps).epsilon(0.005));
+}
+
+// NX-E H2: geniş kod bloğu yatay kaydırma çubuğu açar, görünen yükseklik onun kadar kısalır: End yine en alta iner.
+TEST_CASE("gui preview: End reaches the bottom when a wide code block adds a horizontal scrollbar") {
+    WindowFixture fixture;
+    std::string note = "```\n" + std::string(2000, 'x') + "\n```\n\n";
+    for (int i = 0; i < 200; ++i)
+        note += "Paragraf " + std::to_string(i) + "\n\n";
+    fixture.add_note("geniş.md", note, 10);
+    const auto state = fixture.make_state();
+    const auto view = make_view(*state);
+    select(*state, "geniş.md");
+    state->toggle_preview();
+    settle(*view);
+    state->scroll_preview(FLT_MAX);
+    settle(*view);
+    const ImGuiWindow* preview = preview_window();
+    REQUIRE(preview != nullptr);
+    REQUIRE(preview->ScrollbarX);
+    CHECK(preview->ScrollMax.y > 0.0F);
+    CHECK(preview->Scroll.y == preview->ScrollMax.y);
 }
 
 TEST_CASE("gui preview: Ctrl+Shift+V renders headings, lists, code, quotes and links instead of the editor") {
@@ -290,7 +447,9 @@ TEST_CASE("gui preview: limits.tui.view_bytes bounds every previewed type") {
     const auto state = fixture.make_state();
     select(*state, "büyük.json");
     CHECK(state->previewable_type());
-    CHECK_FALSE(state->can_preview());
+    CHECK(state->can_preview());  // reddedilmez: ham metin ve neden (önceki testte)
+    CHECK(state->preview_too_large());
     select(*state, "sınır.json");
     CHECK(state->can_preview());
+    CHECK_FALSE(state->preview_too_large());
 }

@@ -1,17 +1,21 @@
 // T64: gezinme depo okuması yapmaz (G4'ten beri okuma graph.db'dendir; generation her gövde okumasında
 // artar). Sayaç ölçülür, duvar saati değil: yük altında yanlış kırmızı vermez. Gerçek terminal sayıları
 // (boşalma süresi, kare, tuş gecikmesi) tmux ölçümündedir; bkz. SPEC-tui "Değişiklik 2026-11-01".
+#include "core/config.hpp"
 #include "core/note_store.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
+#include "memory.hpp"
 #include "wine.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <doctest/doctest.h>
+#include <ftxui/dom/node.hpp>
+#include <ftxui/screen/screen.hpp>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -133,6 +137,126 @@ TEST_CASE("nav perf: scrolling a 1 MiB note in REVIEW reads it once") {
     }
     CHECK(cache.generation() == start);
     CHECK(state.preview_scroll() > 0);
+}
+
+// NX-B: ham REVIEW'da tek satırlık 20 MiB not. Görünen satır sarılırken satırın tamamı gezilmemeli: tuş
+// başına bütçe (SPEC-tui 50 ms) çizimin kendisine uygulanır.
+TEST_CASE("nav perf: REVIEW draws a 20 MiB single-line note within the key budget") {
+    constexpr std::size_t kLineBytes = std::size_t{20} * 1024 * 1024;
+    constexpr double kKeyBudgetMs = 50.0;
+    constexpr int kFrames = 5;
+    const test::TempDir dir;
+    test::upsert_note(dir.path(), "tek.txt", std::string(kLineBytes, 'x'));
+    const core::NoteStore store(dir.path());
+    tui::TuiState state;
+    state.set_notes(store.list());
+    tui::PreviewCache cache;
+    const std::chrono::steady_clock::time_point now{std::chrono::hours(1)};
+    const tui::Preview& shown = cache.throttled(state, store, now);
+    REQUIRE(shown.text.size() == kLineBytes);
+    state.set_preview_lines(&shown.lines, cache.generation());
+    state.handle(tui::Key::Right);
+    const ftxui::Dimensions window{120, 40};
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(window.dimx), ftxui::Dimension::Fixed(window.dimy));
+    const auto frame = [&] {
+        const auto start = std::chrono::steady_clock::now();
+        ftxui::Render(screen, tui::render(state, cache.shown(), {"sync off", ""}, window));
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    };
+    double worst = frame();
+    for (int i = 0; i < kFrames; ++i) {
+        state.handle(tui::Key::Down);
+        worst = std::max(worst, frame());
+    }
+    MESSAGE("TUI REVIEW 20 MiB single line: worst frame ", worst, " ms");
+    CHECK(worst <= kKeyBudgetMs);
+}
+
+namespace {
+
+// GUI önizleme ölçümüyle (preview_perf_test) aynı birim: başlık, sarılan paragraf, wiki bağlantısı, liste, kod.
+std::string large_markdown(std::size_t bytes) {
+    const std::string unit = "## Bölüm\n\n"
+                             "Bir paragraf *vurgu* ve **kalın** metin [[hedef]] ile; satır sarılsın diye biraz "
+                             "uzun yazılmış bir cümle daha ekleniyor burada.\n\n"
+                             "- madde bir\n- madde iki\n\n"
+                             "```\nkod satırı\n```\n\n";
+    std::string text;
+    text.reserve(bytes + unit.size());
+    while (text.size() < bytes)
+        text += unit;
+    return text;
+}
+
+}  // namespace
+
+// NX-D: biçimli REVIEW'da 20 MiB md notu, sınırlar kapalı (view_bytes = 0, view_lines = 0). Görünüm görünen
+// pencere kadar üretilir: biçimli görünüme geçiş karesi tuş bütçesinde (50 ms), kaydırma karesi 16 ms'de. Notun
+// okunması (ham görünümle ortak, satırlara bölme) ayrı ölçülür; sona atlama (`G`) tüm görünümü üretir. İkisinin
+// süresi bilgi için yazılır.
+TEST_CASE("nav perf: REVIEW renders a 20 MiB markdown note lazily within the key budget") {
+    constexpr std::size_t kNoteBytes = std::size_t{20} * 1024 * 1024;
+    constexpr double kFirstBudgetMs = 50.0;
+    constexpr double kFrameBudgetMs = 16.0;
+    constexpr int kFrames = 10;
+    const test::TempDir dir;
+    test::upsert_note(dir.path(), "büyük.md", large_markdown(kNoteBytes));
+    const core::NoteStore store(dir.path());
+    tui::TuiState state;
+    state.set_notes(store.list());
+    const ftxui::Dimensions window{120, 40};
+    state.set_window(window.dimx, window.dimy);
+    const core::TuiLimits limits =
+        core::parse_config("[limits.tui]\nview_bytes = 0\nview_lines = 0\n").config.limits.tui;
+    tui::PreviewCache cache(tui::view_limits_of(limits), tui::syntax_limits_of(limits));
+    const std::chrono::steady_clock::time_point now{std::chrono::hours(1)};
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(window.dimx), ftxui::Dimension::Fixed(window.dimy));
+    const auto frame = [&] {
+        const auto start = std::chrono::steady_clock::now();
+        const tui::Preview& shown = cache.throttled(state, store, now);
+        state.set_preview_lines(&shown.lines, cache.generation(), shown.partial);
+        ftxui::Render(screen, tui::render(state, shown, {"sync off", ""}, window));
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    };
+    state.handle(tui::Key::Right);
+    state.handle(tui::Key::Char, "R");  // ham: yalnız notun okunması
+    const double load = frame();
+    REQUIRE_FALSE(cache.shown().rendered);
+    state.handle(tui::Key::Char, "R");
+    const auto before = test::resident_bytes();
+    const double first = frame();
+    REQUIRE(cache.shown().rendered);
+    const double rss_mib = test::resident_growth_mib(before).value_or(-1.0);  // -1: bu platformda ölçülmez
+    double worst = 0.0;
+    for (int i = 0; i < kFrames; ++i) {
+        state.handle(tui::Key::PageDown);
+        worst = std::max(worst, frame());
+    }
+    CHECK(state.preview_scroll() > 0);
+    state.handle(tui::Key::Char, "G");
+    const double bottom = frame();
+    const double steady_after_bottom = frame();
+    MESSAGE("TUI REVIEW 20 MiB md: note read (raw) ", load, " ms; formatted first ", first, " ms, worst scroll frame ",
+            worst, " ms, rss +", rss_mib, " MiB; G ", bottom, " ms, then ", steady_after_bottom, " ms");
+    CHECK(first <= kFirstBudgetMs);
+    CHECK(worst <= kFrameBudgetMs);
+    CHECK(steady_after_bottom <= kFrameBudgetMs);
+
+    // Bilgi: tek blok (20 MiB'lık tek satır) parçalara bölünmez; biçimli görünüm satırın tamamını sarar
+    // (limits.tui.view_bytes varsayılanı bu yüzden kalır).
+    const test::TempDir single_dir;
+    test::upsert_note(single_dir.path(), "tek.md", std::string(kNoteBytes, 'x'));
+    const core::NoteStore single_store(single_dir.path());
+    tui::TuiState single;
+    single.set_notes(single_store.list());
+    single.set_window(window.dimx, window.dimy);
+    tui::PreviewCache single_cache(tui::view_limits_of(limits), tui::syntax_limits_of(limits));
+    const auto start = std::chrono::steady_clock::now();
+    const tui::Preview& single_shown = single_cache.throttled(single, single_store, now);
+    single.set_preview_lines(&single_shown.lines, single_cache.generation(), single_shown.partial);
+    ftxui::Render(screen, tui::render(single, single_shown, {"sync off", ""}, window));
+    MESSAGE("TUI REVIEW 20 MiB single-line md, formatted: first ",
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(), " ms");
 }
 
 namespace {

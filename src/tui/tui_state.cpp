@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -297,7 +298,7 @@ bool TuiState::step_map() {
 }
 
 std::pair<int, int> TuiState::map_cells() const {
-    const int width = layout_.geometry(window_width_, false).list_width - 2;  // panel kenarı
+    const int width = layout_.geometry(window_width_, false).list_width - kPaneChromeCells;
     return {std::max(width, 1), std::max(pane_rows() - kMapStatusRows, 1)};
 }
 
@@ -360,7 +361,8 @@ void TuiState::step_map_selection(int delta) {
 }
 
 // Harita odaktayken (Liste): oklar kaydırır, `+` `-` yakınlaştırır, `0` sığdırır, Tab/Shift+Tab not seçer,
-// Enter seçileni açar, `w` bütün çizge, `t` etiketler, `1`-`6` derinlik. Diğer tuşlar tabloya düşer.
+// Enter seçileni açar, `w` bütün çizge, `t` etiketler, `1`-`9` derinlik (en çok limits.app.map_depth). Diğer
+// tuşlar tabloya düşer.
 std::optional<Intent> TuiState::handle_map_key(Key key, std::string_view text) {
     if (map_link_)
         if (const auto intent = handle_map_link_key(key, text))
@@ -405,8 +407,8 @@ std::optional<Intent> TuiState::handle_map_key(Key key, std::string_view text) {
     } else if (text == "C") {
         begin_map_link();
         return Intent::None;
-    } else if (text.size() == 1 && text[0] >= '0' + app::MapOptions::kMinDepth &&
-               text[0] <= '0' + app::MapOptions::kMaxDepth) {
+    } else if (text.size() == 1 && text[0] >= '0' + app::MapOptions::kMinDepth && text[0] <= '9' &&
+               text[0] - '0' <= map_.max_depth()) {
         options.depth = text[0] - '0';
     } else {
         return std::nullopt;
@@ -1026,6 +1028,11 @@ void TuiState::scroll_to_source_line(std::size_t line) {
 }
 
 void TuiState::set_preview_view(const std::vector<std::size_t>* source_lines, std::size_t generation) {
+    // Parça parça uzayan görünüm aynı üretimdir: yalnız eklenen satırların eşlemesi kopyalanır.
+    if (generation == view_generation_ && source_lines && source_lines->size() > view_source_lines_.size())
+        view_source_lines_.insert(view_source_lines_.end(),
+                                  source_lines->begin() + static_cast<std::ptrdiff_t>(view_source_lines_.size()),
+                                  source_lines->end());
     if (generation == view_generation_ && !pending_source_line_)
         return;
     const std::size_t top = pending_source_line_ ? *pending_source_line_ : source_line_at(preview_scroll_);
@@ -1040,13 +1047,18 @@ void TuiState::set_preview_view(const std::vector<std::size_t>* source_lines, st
     preview_scroll_ = display_line_of(top);
 }
 
-void TuiState::set_preview_lines(const std::vector<std::string>* lines, std::size_t generation) {
+void TuiState::set_preview_lines(const std::vector<std::string>* lines, std::size_t generation, bool partial) {
+    const bool grew = generation == preview_generation_ && preview_lines_ != lines->size();
     preview_text_ = lines;
+    preview_partial_ = partial;
     set_preview_line_count(lines->size());
     if (generation != preview_generation_) {
         preview_generation_ = generation;
         preview_selection_.reset();  // uçlar eski metne ait
         wiki_link_.reset();
+        preview_column_ = 0;
+        preview_find_.recompute(*lines);
+    } else if (grew && !preview_find_.query().empty()) {
         preview_find_.recompute(*lines);
     }
 }
@@ -1307,7 +1319,34 @@ void TuiState::scroll_accelerated(int direction) {
 }
 
 std::size_t TuiState::max_preview_scroll() const {
+    // Devamı üretilmemiş görünümde sınır yok: istenen satıra dek üretilir, sonra kenetlenir. Toplamada taşmasın.
+    if (preview_partial_)
+        return std::numeric_limits<std::size_t>::max() / 2;
     return preview_lines_ == 0 ? 0 : preview_lines_ - 1;
+}
+
+std::size_t TuiState::preview_skip(std::string_view line) const {
+    std::size_t skip = std::min(preview_column(), line.size());
+    while (skip > 0 && skip < line.size() && (static_cast<unsigned char>(line[skip]) & 0xC0) == 0x80)
+        --skip;
+    return skip;
+}
+
+// Ham görünümün satırı panele sarılır; kaydırma birimi satırdır. Ekrandan uzun satırın devamına yana kaydırarak
+// gelinir (GUI ham önizlemesi uzun satırı 4 KiB'lık satırlara böler): adım bir panel genişliği, sarılan dev
+// satırda bir görüntü satırı. Bayt cinsindendir: ofset kod noktası başına çekilir, iş satır boyuyla büyümez.
+void TuiState::scroll_preview_columns(int direction) {
+    if (!preview_text_ || !view_source_lines_.empty())
+        return;
+    const auto step = static_cast<std::size_t>(
+        std::max(layout_.geometry(window_width_, true).right_width - kPaneChromeCells, 1));
+    const std::size_t end = std::min(preview_text_->size(), preview_scroll_ + page_rows());
+    std::size_t longest = 0;
+    for (std::size_t line = std::min(preview_scroll_, end); line < end; ++line)
+        longest = std::max(longest, (*preview_text_)[line].size());
+    const std::size_t last = longest == 0 ? 0 : longest - 1;
+    preview_column_ = direction < 0 ? preview_column_ - std::min(preview_column_, step)
+                                    : std::min(preview_column_ + step, std::max(last, preview_column_));
 }
 
 void TuiState::scroll_preview(int delta) {
@@ -1620,6 +1659,10 @@ Intent TuiState::handle_preview(Key key) {
         return Intent::None;
     case Key::Left:
         leave_preview();
+        return Intent::None;
+    case Key::ShiftLeft:
+    case Key::ShiftRight:
+        scroll_preview_columns(key == Key::ShiftLeft ? -1 : 1);
         return Intent::None;
     case Key::Tab:
     case Key::ShiftTab:

@@ -189,4 +189,21 @@ consteval const GuiCommand& gui_command(std::string_view id) {
     throw "unknown GUI command id";
 }
 
+// Ayarlar açıkken de yerinde koşan komutlar: kendi geçişi, görünmeyen iş (senkron, yardım, ikon ayarı) ve kendi
+// sorusunu soran çıkış.
+inline constexpr std::string_view kSettingsCommands[] = {"settings", "sync.now", "help", "quit", "icons.toggle"};
+
+// Kısayolun, düğmenin ve paletin tek yolu. Notları değiştiren komut önce Ayarlar'dan çıkar: kaydedilmemiş formda
+// Kaydet / At / Vazgeç sorulur, Vazgeç'te komut koşmaz (yeni not Ayarlar'ın arkasında açılmaz).
+// false: Ayarlar'da kalındı (Vazgeç), komut koşmamalı.
+inline bool leave_settings_for(GuiState& state, const GuiCommand& command) {
+    return std::ranges::find(kSettingsCommands, command.id) != std::end(kSettingsCommands) ||
+           state.leave_settings();
+}
+
+inline void run_gui_command(GuiState& state, const GuiCommand& command) {
+    if (leave_settings_for(state, command))
+        command.run(state);
+}
+
 }  // namespace noteapp::gui

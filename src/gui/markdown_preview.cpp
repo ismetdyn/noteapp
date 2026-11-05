@@ -1,5 +1,6 @@
 #include "gui/markdown_preview.hpp"
 
+#include "app/data_preview.hpp"
 #include "gui/theme.hpp"
 
 #include <algorithm>
@@ -28,6 +29,11 @@ constexpr std::array<float, 6> kHeadingScale = {1.6F, 1.35F, 1.2F, 1.05F, 1.0F, 
 // Köşe yarıçapı, ölçek 1 pikseli: kod bloğu çocuk pencere gibi, satır içi kod çip gibi.
 constexpr float kCodeBlockRounding = 6.0F;
 constexpr float kInlineCodeRounding = 4.0F;
+// Hiç ölçülmemiş notun yükseklik tahmini (okuma ölçüsünde satır başına bayt); ilk parça ölçülünce oran ondan.
+constexpr float kEstimateBytesPerLine = 70.0F;
+// Görünen alanın üstünde ve altında bu kadar ekranlık parça yerleşik kalır: kısa geri kaydırma yeniden
+// yerleştirmez, uzaktakiler bırakılır (bellek görünen alanla orantılı).
+constexpr float kKeptScreens = 1.0F;
 
 std::size_t utf8_length(char lead) {
     const auto byte = static_cast<unsigned char>(lead);
@@ -316,7 +322,7 @@ bool is_list_item(const pdf::Block& block) {
 }  // namespace
 
 PreviewLayout layout_preview(const std::vector<pdf::Block>& blocks, const PreviewFonts& fonts, float font_size,
-                             float width, const LinkResolves& resolves) {
+                             float width, const LinkResolves& resolves, const pdf::Block* following) {
     PreviewLayout out;
     Layouter layouter(out, fonts, font_size, width, resolves);
     const float bar_width = kQuoteBarEms * font_size;
@@ -325,7 +331,7 @@ PreviewLayout layout_preview(const std::vector<pdf::Block>& blocks, const Previe
         const pdf::Block& block = blocks[index];
         const float bottom = layouter.add(block, y);
         out.block_spans.emplace_back(y, bottom);
-        const pdf::Block* next = index + 1 < blocks.size() ? &blocks[index + 1] : nullptr;
+        const pdf::Block* next = index + 1 < blocks.size() ? &blocks[index + 1] : following;
         float gap_ems = kBlockGapEms;
         if (next != nullptr && next->kind == pdf::Block::Kind::Heading)
             gap_ems = kHeadingGapEms;
@@ -389,6 +395,154 @@ void draw_preview_layout(const PreviewLayout& layout, ImVec2 origin, float top, 
         // Çizim listesine yazılan metin ImGui günlüğüne (testler) de girsin; günlük kapalıyken iş yapmaz.
         ImGui::LogText("%.*s ", static_cast<int>(run.text.size()), run.text.data());
     }
+}
+
+void PreviewDocument::reset(std::string_view source) {
+    source_ = source;
+    chunks_.clear();
+    app::MarkdownScan scan = app::scan_markdown(source);
+    for (const app::MarkdownChunk& range : scan.chunks)
+        chunks_.push_back({.begin = range.begin, .end = range.end, .open_fence = range.open_fence});
+    definitions_ = chunks_.size() > 1 ? std::move(scan.definitions) : app::MarkdownDefinitions{};
+    pixels_per_byte_ = 0.0F;
+}
+
+void PreviewDocument::relayout() {
+    for (Chunk& chunk : chunks_)
+        chunk.layout.reset();
+}
+
+float PreviewDocument::height_of(const Chunk& chunk) const {
+    if (chunk.measured)
+        return *chunk.measured;
+    const auto bytes = static_cast<float>(chunk.end - chunk.begin);
+    if (pixels_per_byte_ > 0.0F)
+        return bytes * pixels_per_byte_;
+    return bytes / kEstimateBytesPerLine * font_size_ * kLineSpacing;
+}
+
+// Parçaların belge koordinatındaki üstleri; son eleman toplam yükseklik.
+std::vector<float> PreviewDocument::tops() const {
+    std::vector<float> tops;
+    tops.reserve(chunks_.size() + 1);
+    float y = 0.0F;
+    for (const Chunk& chunk : chunks_) {
+        tops.push_back(y);
+        y += height_of(chunk);
+    }
+    tops.push_back(y);
+    return tops;
+}
+
+const std::vector<pdf::Block>& PreviewDocument::parsed(std::size_t index) {
+    Chunk& chunk = chunks_[index];
+    if (!chunk.blocks) {
+        const std::string_view text = source_.substr(chunk.begin, chunk.end - chunk.begin);
+        // Başka parçadaki başvuru tanımı da çözülsün: tanımlar parçanın ardına eklenir (çıktı üretmezler).
+        chunk.blocks = definitions_.empty()
+                           ? pdf::parse_markdown(text, {.links = true})
+                           : pdf::parse_markdown(app::markdown_chunk_source(source_, {chunk.begin, chunk.end, 0,
+                                                                                      chunk.open_fence},
+                                                                            definitions_),
+                                                 {.links = true});
+        chunk.block_count = chunk.blocks->size();
+    }
+    return *chunk.blocks;
+}
+
+// Son bloğun ardındaki boşluk sonraki parçanın ilk bloğuna bağlı (başlık öncesi daha geniş): o da ayrıştırılır.
+void PreviewDocument::lay_out(std::size_t index, const LinkResolves& resolves) {
+    const pdf::Block* following = nullptr;
+    if (index + 1 < chunks_.size()) {
+        const std::vector<pdf::Block>& next = parsed(index + 1);
+        following = next.empty() ? nullptr : &next.front();
+    }
+    Chunk& chunk = chunks_[index];
+    chunk.layout = layout_preview(parsed(index), fonts_, font_size_, width_, resolves, following);
+    chunk.measured = chunk.layout->size.y;
+    chunk.right = chunk.layout->size.x;
+    if (pixels_per_byte_ == 0.0F && chunk.end > chunk.begin)
+        pixels_per_byte_ = *chunk.measured / static_cast<float>(chunk.end - chunk.begin);
+}
+
+// Yerleşim blokların metnine işaret eder: blok bırakılırken yerleşim de bırakılır. Ölçülen yükseklik kalır.
+void PreviewDocument::release_outside(const std::vector<float>& tops, float top, float bottom) {
+    for (std::size_t index = 0; index < chunks_.size(); ++index) {
+        if (tops[index + 1] > top && tops[index] < bottom)
+            continue;
+        chunks_[index].layout.reset();
+        chunks_[index].blocks.reset();
+    }
+}
+
+float PreviewDocument::update(float scroll, float view_height, const PreviewFonts& fonts, float font_size,
+                              float width, const LinkResolves& resolves, bool to_end, float end_slack) {
+    if (fonts != fonts_ || font_size != font_size_ || width != width_) {
+        relayout();
+        fonts_ = fonts;
+        font_size_ = font_size;
+        width_ = width;
+    }
+    std::vector<float> tops = this->tops();
+    // Sona atlama (End ya da ölçülmüş son parçanın dibi) sonda kalır: ölçüm toplamı değiştirse de. Tahmine göre
+    // "sonda" sayılmaz ve tahmine kenetlenmez: kısa satırlı notun tahmini gerçeğin çok altında kalabilir (ilk kare
+    // ya da geri yüklenen kaydırma sona kaçardı).
+    const auto last_scroll = [&] { return std::max(tops.back() + end_slack - view_height, 0.0F); };
+    const bool at_end = to_end || (chunks_.back().measured && scroll >= last_scroll());
+    scroll = at_end ? last_scroll() : std::max(scroll, 0.0F);
+    // Görünen parçalar [first, last): ilki kaydırmanın düştüğü parça.
+    const auto first_visible = [&](float at) {
+        const auto after = std::upper_bound(tops.begin(), tops.end() - 1, at);
+        return static_cast<std::size_t>(std::max<std::ptrdiff_t>(after - tops.begin() - 1, 0));
+    };
+    // Çapa: görünen ilk yerleşik parça, yoksa görünen ilk parça. Üstündeki tahminler ölçülünce ekrandaki yeri
+    // kaydırma düzeltilerek korunur.
+    std::size_t anchor = first_visible(scroll);
+    for (std::size_t index = anchor; index < chunks_.size() && tops[index] < scroll + view_height; ++index)
+        if (chunks_[index].layout) {
+            anchor = index;
+            break;
+        }
+    const float offset = tops[anchor] - scroll;
+    while (true) {
+        std::optional<std::size_t> missing;
+        for (std::size_t index = first_visible(scroll); index < chunks_.size() && tops[index] < scroll + view_height;
+             ++index)
+            if (!chunks_[index].layout) {
+                missing = index;
+                break;
+            }
+        if (!missing)
+            break;
+        lay_out(*missing, resolves);
+        tops = this->tops();
+        scroll = at_end ? last_scroll() : std::clamp(tops[anchor] - offset, 0.0F, last_scroll());
+    }
+    scroll = at_end ? last_scroll() : std::min(scroll, last_scroll());
+    release_outside(tops, scroll - (kKeptScreens * view_height), scroll + view_height + (kKeptScreens * view_height));
+    return scroll;
+}
+
+std::vector<PreviewDocument::Placed> PreviewDocument::visible(float top, float bottom) const {
+    std::vector<Placed> placed;
+    float y = 0.0F;
+    std::optional<std::size_t> block = 0;
+    for (std::size_t index = 0; index < chunks_.size() && y < bottom; ++index) {
+        const Chunk& chunk = chunks_[index];
+        const float height = height_of(chunk);
+        if (chunk.layout && y + height > top)
+            placed.push_back({y, &*chunk.layout, index, block});
+        block = block && chunk.block_count ? std::optional(*block + *chunk.block_count) : std::nullopt;
+        y += height;
+    }
+    return placed;
+}
+
+ImVec2 PreviewDocument::size() const {
+    float right = 0.0F;
+    for (const Chunk& chunk : chunks_)
+        right = std::max(right, chunk.right);
+    return {right, tops().back()};
 }
 
 }  // namespace noteapp::gui

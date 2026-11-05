@@ -5,9 +5,13 @@
 #include <ftxui/dom/elements.hpp>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace noteapp::tui {
+
+// Baştan `cells` hücreye sığan kod noktaları (geniş karakter iki hücre); işaret eklemez.
+std::string head_cells(std::string_view value, int cells);
 
 // Metin, imleç ve soluk öneri; `room` hücreye sığar, imleç görünür kalır. `width` kullanılan hücre sayısıdır.
 struct InputCells {

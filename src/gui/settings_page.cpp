@@ -49,6 +49,8 @@ void SettingsPage::set_field(const std::string& key, std::string value) {
 }
 
 bool SettingsPage::has_changes() const {
+    if (token_enabled_ && !token.empty())
+        return true;
     for (const auto& [key, saved_value] : core::config_entries(applied_)) {
         if (fields_.at(key).value != saved_value)
             return true;
@@ -75,6 +77,7 @@ void SettingsPage::refresh_token_row() {
 
 void SettingsPage::revert() {
     load(applied_);
+    token.clear();
 }
 
 void SettingsPage::browse_notes_dir() {
@@ -117,7 +120,9 @@ std::string SettingsPage::enable_sync(const core::Config& candidate) {
     if (!result && result.error().message_key == "sync.remote_mismatch") {
         std::string message = core::format_error(result.error());
         if (!deciders_.confirm_replace_origin(message))
-            return message;  // reddedildi: hiçbir şey kaydedilmez, açıklama alanın altında kalır
+            // Reddedildi: config yazılmaz, açıklama alanın altında kalır. Yazılmış token save()'de enable'dan
+            // önce kasaya gitti ve orada kalır (TUI submit ile aynı).
+            return message;
         deciders_.while_busy([&] { result = service.enable(candidate.sync.remote, true); });
     }
     return result ? std::string{} : core::format_error(result.error());
@@ -133,6 +138,7 @@ void SettingsPage::save() {
     core::Config live = applied_;  // canlı uygulanacak (tuning dahil, çalışan config)
     if (!apply_form(live))
         return;
+    app::adopt_live_limits(live, *fresh);
     core::Config persisted = *fresh;  // dosyaya yazılacak: diskteki ayarların üstüne aynı değişiklikler
     if (!apply_form(persisted))
         return;
@@ -141,6 +147,12 @@ void SettingsPage::save() {
     if (dir_changed && !host_.flush()) {
         global_error_ = core::tr("gui.settings_flush_failed");
         return;
+    }
+    // Yazılmış token enable'dan önce kasaya gider: enable onu kasadan okur (TUI submit ile aynı sıra).
+    if (token_enabled_ && !token.empty()) {
+        save_token();
+        if (!token.empty())
+            return;  // kasa hatası altbilgide; hiçbir şey kaydedilmez
     }
     if (live.sync.enabled && (live.sync != applied_.sync || dir_changed)) {
         if (std::string error = enable_sync(live); !error.empty()) {
@@ -157,9 +169,10 @@ void SettingsPage::save() {
     host_.applied(before, applied_);
 }
 
+// Boş token kasaya yazılmaz (TUI store_token ile aynı): kayıtlı token'ı silmek Sil'in işidir.
 void SettingsPage::save_token() {
     const std::string host = https_host(field("sync.remote"));
-    if (host.empty())
+    if (host.empty() || token.empty())
         return;
     if (const auto stored = tokens.store(host, token); !stored) {
         global_error_ = core::format_error(stored.error());

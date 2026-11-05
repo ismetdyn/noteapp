@@ -234,6 +234,10 @@ noteapp::tui::MouseInput to_mouse(const ftxui::Mouse& mouse) {
             return MouseButton::WheelUp;
         case ftxui::Mouse::WheelDown:
             return MouseButton::WheelDown;
+        case ftxui::Mouse::WheelLeft:
+            return MouseButton::WheelLeft;
+        case ftxui::Mouse::WheelRight:
+            return MouseButton::WheelRight;
         default:
             return MouseButton::Other;
         }
@@ -466,7 +470,14 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
       list_actions_(tui::ListHost{
           store_, list_mutex_, clipboard_, system_clipboard_, state_, preview_, status_,
           [this] { refresh_notes(); }, [this] { notify_changed(); }, &config_,
-          [this](const std::string& from, const std::string& to) { tabs_.follow_moved(from, to); }}),
+          [this](const std::string& from, const std::string& to) { tabs_.follow_moved(from, to); },
+          // Kapanış görevi kareyi geçersiz saymaz: çizimi ardından gelen özel olay tetikler.
+          [this](std::function<void()> work) {
+              app_.Post([this, work = std::move(work)] {
+                  work();
+                  app_.Post(redraw_event());
+              });
+          }}),
       tabs_([this](std::uint64_t id) { return make_editor(id); }, config_.limits.app.tabs),
       view_(ftxui::Renderer([this] { return render(); })),
       language_servers_(
@@ -476,6 +487,7 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
     state_.set_icon_style(core::terminal_icon_style(config_.icons));
     state_.set_recent_commands_limit(config_.limits.app.recent_commands);  // load_list_prefs'ten önce
     state_.set_map_node_limit(config_.limits.app.map_nodes);
+    state_.set_map_depth_limit(config_.limits.app.map_depth);
     state_.set_search_history_limits({.entries = config_.limits.tui.search_history.cap(),
                                       .entry_bytes = config_.limits.tui.search_entry_bytes.cap()});
     state_.set_fuzzy_candidate_chars(config_.limits.search.fuzzy_candidate_chars.cap());
@@ -714,7 +726,7 @@ const tui::Preview& TuiSession::sync_preview() {
     // Beklerken eski notun satır sayısı yeni notun kaydırmasını kırpmasın; erteleme bitince çizim (render'ın
     // uyanma anı) son seçimi okur.
     if (!preview_.deferred())
-        state_.set_preview_lines(&shown.lines, preview_.generation());
+        state_.set_preview_lines(&shown.lines, preview_.generation(), shown.partial);
     return shown;
 }
 
@@ -908,6 +920,10 @@ void TuiSession::apply_settings(const core::Config& next) {
     config_.icons = next.icons;
     state_.set_icon_style(core::terminal_icon_style(config_.icons));
     config_.sync = next.sync;
+    config_.limits.app.map_nodes = next.limits.app.map_nodes;  // app::adopt_live_limits: dosyadan gelir
+    config_.limits.app.map_depth = next.limits.app.map_depth;
+    state_.set_map_node_limit(config_.limits.app.map_nodes);
+    state_.set_map_depth_limit(config_.limits.app.map_depth);
     core::init_i18n(config_.language);
     spell_ = make_spell_checker();
     // AutoSync süreleri ve depo yolu kurulurken okunur: ilgili ayar değiştiyse yeniden kurulur;
@@ -953,13 +969,19 @@ void TuiSession::handle_settings_key(tui::SettingsState& settings, const Key key
         if (auto candidate = settings.begin_test(config_))
             start_connection_test(std::move(*candidate));
         break;
+    case tui::SettingsState::Outcome::Quit:
+        app_.Exit();
+        break;
     case tui::SettingsState::Outcome::Submit:
+    case tui::SettingsState::Outcome::SubmitAndQuit:
     case tui::SettingsState::Outcome::Replace:  // origin değiştirme onaylandı
-        // Hata formda satır içi gösterilir; origin farklıysa form onay penceresini açar.
+        // Hata formda satır içi gösterilir (çıkılmaz); origin farklıysa form onay penceresini açar.
         if (const auto saved = settings.submit(config_, outcome == tui::SettingsState::Outcome::Replace)) {
             apply_settings(*saved);
             settings_.reset();
             status_.message = core::tr("tui.settings_saved");
+            if (outcome == tui::SettingsState::Outcome::SubmitAndQuit)
+                app_.Exit();
         }
         break;
     }
@@ -981,10 +1003,12 @@ void TuiSession::start_connection_test(core::Config candidate) {
 }
 
 void TuiSession::handle_modal_key(const Key key, const std::string& text) {
-    // Çıkışta geçici dosya silinmez: yazılan metin state dizininde kalır.
-    if (tui::quits_from_modal(key, state_.focus()))
-        app_.Exit();
-    else if (help_) {
+    // Çıkışta geçici dosya silinmez: yazılan metin state dizininde kalır. Kaydedilmemiş Ayarlar önce sorar
+    // (GUI pencere kapanışı gibi); soru açıkken Ctrl+C onu açık tutar.
+    if (tui::quits_from_modal(key, state_.focus())) {
+        if (!settings_ || !settings_->ask_before_quit())
+            app_.Exit();
+    } else if (help_) {
         if (!help_->handle(key, text))
             help_.reset();
     } else if (settings_)
@@ -1043,6 +1067,8 @@ bool TuiSession::on_event(ftxui::Event event) {
         sync_preview();
         return true;
     }
+    if (list_actions_.cancel_import_on(*key, state_.focus()))  // durduruluyor iletisi kalsın
+        return true;
     status_.message.clear();
     status_.notice.clear();
     run_intent(state_.handle(*key, text), *key, text);

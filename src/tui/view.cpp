@@ -26,7 +26,7 @@ namespace {
 
 using Range = std::pair<std::size_t, std::size_t>;  // bayt aralığı [başlangıç, bitiş)
 
-constexpr int kFrameCells = 2;
+constexpr int kFrameCells = 2;     // modal çerçevesinin iki kenarı (paneller: kPaneChromeCells)
 constexpr int kMinPathCells = 16;  // sağ sütun yolu bundan fazla sıkıştırmaz
 constexpr std::string_view kColumnGap = "  ";
 constexpr std::string_view kEllipsis = "…";  // ContentIndex kesitlerinin kenar işareti
@@ -209,11 +209,11 @@ ftxui::Element breadcrumb_element(const TuiState& state) {
 constexpr std::string_view kGroupSeparator = " · ";
 
 // Senkron durumu rengiyle: ✓ yeşil, ⟳ mavi, ⚠ kırmızı, kapalı soluk. Renk tek sinyal değildir, ikon da
-// söyler. Metin uzak hata ayrıntısı taşıyabilir: çizim noktasında arınır.
-ftxui::Element sync_element(const StatusLine& status) {
+// söyler. `shown_text` arınmış ve sığdırılmış metindir.
+ftxui::Element sync_element(const std::string& shown_text, SyncIndicator::State state) {
     using namespace ftxui;
-    Element shown = text(terminal_safe(status.sync));
-    switch (status.sync_state) {
+    Element shown = text(shown_text);
+    switch (state) {
     case SyncIndicator::State::Running:
         return shown | color(Color::Blue);
     case SyncIndicator::State::Ok:
@@ -226,7 +226,7 @@ ftxui::Element sync_element(const StatusLine& status) {
     return shown | dim;
 }
 
-ftxui::Element top_bar(const TuiState& state, const StatusLine& status) {
+ftxui::Element top_bar(const TuiState& state, const StatusLine& status, int width) {
     using namespace ftxui;
     // Satır klasör de sayar: oran yalnız süzgeçte anlamlıdır (eşleşme / not), başka yerde not sayısı.
     const bool filtered = !state.query().empty() || state.mode() == Mode::Global;
@@ -238,9 +238,15 @@ ftxui::Element top_bar(const TuiState& state, const StatusLine& status) {
     // Sağ grup ikincil bilgidir: soluk, ` · ` ayraçlı; yalnız senkron durumu kendi rengindedir.
     std::string right = sort_label(state) + std::string(kGroupSeparator) + mode_label(state) +
                         std::string(kGroupSeparator) + counts;
-    if (!status.sync.empty())
+    // Dar pencerede yalnız senkron metni kısalır ("…"): sıra, mod ve sayaç tam kalır, satır kenardan taşmaz.
+    // Metin uzak hata ayrıntısı taşıyabilir: önce arınır, sonra hücreye göre kesilir.
+    left->ComputeRequirement();
+    const int room = width - left->requirement().min_x - ftxui::string_width(std::string(kTopBarGap)) -
+                     ftxui::string_width(right + std::string(kGroupSeparator));
+    const std::string sync = head_ellipsis(terminal_safe(status.sync), room);
+    if (!sync.empty())
         right += kGroupSeparator;
-    return hbox({std::move(left), filler(), text(right) | dim, sync_element(status)});
+    return hbox({std::move(left), filler(), text(right) | dim, sync_element(sync, status.sync_state)});
 }
 
 // `n` görünümünün üst satırı: liste ve sayaçlar gizli, kaydedildiyse notun yolu.
@@ -344,6 +350,9 @@ ftxui::Decorator edge_cells(void (*apply)(ftxui::Cell&)) {
 ftxui::Element framed_pane(ftxui::Element content, const std::optional<PaneMode>& mode,
                            const std::string& tabs = {}) {
     using namespace ftxui;
+    // İçerik sol kenara yapışmaz (§5.5): bir sütunluk boşluk (kPaneContentX) panel boyunca gerçek boşluk
+    // hücresidir. İçeriğin dışındadır: seçim tersi ve satır zemini onu boyamaz.
+    content = hbox({separatorEmpty(), std::move(content) | flex});
     Element framed = mode ? std::move(content) | borderStyled(ROUNDED, mode->color)
                           : std::move(content) | borderStyled(ROUNDED) |
                                 edge_cells([](Cell& cell) { cell.dim = true; });
@@ -473,6 +482,13 @@ std::string column_text(const core::NoteMeta& meta, ListColumn column) {
     return {};
 }
 
+// İçerik modunda adın ardındaki eşleşme sayısı; sütun hesabı da onu sayar, yoksa ad kısalırdı.
+std::string hit_count_text(const TuiState& state, const Row& row) {
+    if (state.mode() == Mode::Name || row.hit_count == 0)
+        return {};
+    return "  (" + std::to_string(row.hit_count) + ")";
+}
+
 // Boş dönerse sütun çizilmez; yol en az kMinPathCells hücre tutar.
 std::string fitted_column(const TuiState& state, const Row& row, const ListCells& cells) {
     const ListColumn column = state.list_column();
@@ -480,7 +496,8 @@ std::string fitted_column(const TuiState& state, const Row& row, const ListCells
         return {};
     const int after_prefix =
         cells.inner_width - row_prefix_cells(cells) - row_indent_cells(row, cells.inner_width) - 1;
-    const int free = after_prefix - ftxui::string_width(row.shown_text());
+    const int free = after_prefix - ftxui::string_width(row.shown_text()) -
+                     ftxui::string_width(hit_count_text(state, row));
     const int squeezed = after_prefix - kMinPathCells;
     if (row.is_folder) {
         const FolderNode* node = state.folder_tree().find(row.path.string());
@@ -520,8 +537,8 @@ ftxui::Element list_row(const TuiState& state, const Row& row, std::size_t index
     Element name = highlighted(path, ranges_from_positions(path, row.positions)) | flex_shrink;
     // cppcheck-suppress accessMoved ; araç yanılıyor: üçlünün yalnız bir kolu çalışır, tek taşıma olur
     cells.push_back(marked ? std::move(name) | color(Color::Yellow) : std::move(name));
-    if (state.mode() != Mode::Name && row.hit_count > 0)
-        cells.push_back(text("  (" + std::to_string(row.hit_count) + ")") | dim);
+    if (std::string hits = hit_count_text(state, row); !hits.empty())
+        cells.push_back(text(std::move(hits)) | dim);
     cells.push_back(filler());  // seçili satırın tersi tüm genişliği kaplasın
     if (const std::string column = fitted_column(state, row, list); !column.empty())
         cells.push_back(text(" " + column) | dim);
@@ -610,7 +627,7 @@ int name_row_lines(const NewRowState& row, int inner_width) {
 ftxui::Element note_list(const TuiState& state, int height, int width, const NewRowState* new_row) {
     using namespace ftxui;
     const auto& rows = state.rows();
-    const int inner_width = width - kFrameCells;
+    const int inner_width = width - kPaneChromeCells;
     const int reserved = new_row ? name_row_lines(*new_row, inner_width) : 0;
     const auto visible = static_cast<std::size_t>(std::max(height - reserved, 1));
     constexpr int kIconCells = 3;  // ikon, taşma hücresi, boşluk
@@ -740,21 +757,26 @@ ftxui::Element rendered_pane(const TuiState& state, const Preview& preview, int 
     return vbox(std::move(lines));
 }
 
-// Metni görüntü satırlarına çevirir: seçim kopyası `selected_text` ile ham metindeki yoldan geçer.
+// Görüntü satırlarını sona ekler; kaynak satırları `first_line` kadar kayar (parçanın notta başladığı satır).
+// Seçim kopyası `selected_text` ile ham metindeki yoldan geçer.
+void append_rendered(Preview& out, RenderedView view, std::size_t first_line) {
+    out.line_starts.reserve(out.line_starts.size() + view.lines.size());
+    for (std::size_t i = 0; i < view.lines.size(); ++i) {
+        out.line_starts.push_back(out.text.size());
+        out.text += view.lines[i];
+        out.text += '\n';
+        out.lines.push_back(std::move(view.lines[i]));
+        out.styled.push_back(std::move(view.spans[i]));
+        out.source_lines.push_back(first_line + view.source_lines[i]);
+    }
+}
+
 Preview rendered_preview(RenderedView view, ViewKind kind) {
     Preview out;
     out.kind = Preview::Kind::Text;
     out.view_kind = kind;
     out.rendered = true;
-    out.lines = std::move(view.lines);
-    out.styled = std::move(view.spans);
-    out.source_lines = std::move(view.source_lines);
-    out.line_starts.reserve(out.lines.size());
-    for (const std::string& line : out.lines) {
-        out.line_starts.push_back(out.text.size());
-        out.text += line;
-        out.text += '\n';
-    }
+    append_rendered(out, std::move(view), 0);
     return out;
 }
 
@@ -784,6 +806,38 @@ ftxui::Element folder_summary(const TuiState& state, const Row& row) {
 
 // `cat` gibi: uzun satır kırpılmaz, panele sarılır. Kaydırma birimi mantıksal satırdır; sarma, satır kaçış
 // baytları ve sekmeler editörle aynı yoldan geçer.
+// Bir hücrenin en çok baytı: 4 baytlık kod noktası ve ardından sıfır genişlikli birleşen işaretler. Daha
+// yoğun satırda (binlerce birleşen işaret) önek ekrandan erken biter: aşağıda boş satır kalır, metin bozulmaz.
+constexpr std::size_t kMaxBytesPerCell = 16;
+
+// `cells` hücreye sığabilecek önek, kod noktası sınırında.
+std::string_view visible_prefix(std::string_view line, std::size_t cells) {
+    std::size_t end = std::min(line.size(), cells * kMaxBytesPerCell);
+    while (end < line.size() && end > 0 && (static_cast<unsigned char>(line[end]) & 0xC0) == 0x80)
+        --end;
+    return line.substr(0, end);
+}
+
+// Satır başına göre aralıklar yana kaydırmada atlanan bayt kadar sola kayar; tamamen atlananlar düşer.
+std::vector<ByteRange> shift_ranges(std::vector<ByteRange> ranges, std::size_t skip) {
+    if (skip == 0)
+        return ranges;
+    std::erase_if(ranges, [skip](const ByteRange& range) { return range.end <= skip; });
+    for (ByteRange& range : ranges) {
+        range.begin = range.begin > skip ? range.begin - skip : 0;
+        range.end -= skip;
+    }
+    return ranges;
+}
+
+// Önekin dışındaki vurgu düşer, sınırı aşan kısa kesilir.
+std::vector<ByteRange> clamp_ranges(std::vector<ByteRange> ranges, std::size_t size) {
+    std::erase_if(ranges, [size](const ByteRange& range) { return range.begin >= size; });
+    for (ByteRange& range : ranges)
+        range.end = std::min(range.end, size);
+    return ranges;
+}
+
 ftxui::Element preview_pane(const TuiState& state, const Preview& preview, int height, int columns,
                             SpellChecker* spell) {
     using namespace ftxui;
@@ -805,21 +859,37 @@ ftxui::Element preview_pane(const TuiState& state, const Preview& preview, int h
     const auto wanted = static_cast<std::size_t>(std::max(height, 1));
     Elements lines;
     for (std::size_t i = state.preview_scroll(); i < preview.lines.size() && lines.size() < wanted; ++i) {
-        const EditorBuffer buffer(preview.lines[i], terminal_cell_width);
-        const std::vector<ByteRange> ranges = line_highlights(state, row, i, preview.lines[i]);
+        // Ham REVIEW satır içinde dikey kaydırmaz: satırın yana kaydırma ofsetinden (Shift+←/→) sonraki, kalan
+        // ekran satırlarına sığan kısmı işlenir. Kare başına iş satır boyuyla değil görünen hücreyle orantılı
+        // (20 MiB'lık tek satır 76 ms'ti). Durumun aralıkları satır başına göredir, atlanan bayt kadar kayar.
+        const std::size_t room = (wanted - lines.size()) * static_cast<std::size_t>(std::max(columns, 1));
+        const std::string_view full = preview.lines[i];
+        const std::size_t skip = state.preview_skip(full);
+        const std::string_view line = visible_prefix(full.substr(skip), room);
+        const EditorBuffer buffer(std::string(line), terminal_cell_width);
+        const std::vector<ByteRange> ranges = clamp_ranges(
+            shift_ranges(line_highlights(state, row, i, full.substr(0, skip + line.size())), skip), line.size());
         std::vector<SyntaxSpan> spans;
         if (preview.language != SyntaxLanguage::Plain) {
             const SyntaxState entry = preview.syntax.entry_state(
                 preview.language, i,
                 [&](std::size_t index) { return std::string_view(preview.lines[index]); },
                 preview.highlight_line_bytes);
-            highlight_line(preview.language, preview.lines[i], entry, &spans, preview.highlight_line_bytes);
+            highlight_line(preview.language, line, entry, &spans, preview.highlight_line_bytes);
         }
         const std::vector<ByteRange> misspelled =
-            spell && preview.spell_checked ? spell->misspelled(preview.lines[i]) : std::vector<ByteRange>{};
-        const std::vector<ByteRange> missing = missing_links_on(state, preview.lines[i]);
+            spell && preview.spell_checked ? spell->misspelled(line) : std::vector<ByteRange>{};
+        const std::vector<ByteRange> missing = missing_links_on(state, line);
+        std::optional<ByteRange> inverted;
+        if (const auto range = preview_inverted(state, i, full.size()))
+            if (const auto kept = shift_ranges({*range}, skip); !kept.empty())
+                inverted = kept.front();
+        if (inverted && inverted->begin >= line.size())
+            inverted.reset();
+        else if (inverted)
+            inverted->end = std::min(inverted->end, line.size());
         const RowPaint paint{.cursor = std::nullopt,
-                             .selection = preview_inverted(state, i, preview.lines[i].size()),
+                             .selection = inverted,
                              .highlights = ranges,
                              .syntax = spans,
                              .syntax_origin = 0,
@@ -1157,8 +1227,12 @@ ftxui::Element bottom_bar(const TuiState& state, const StatusLine& status, const
 ftxui::Element settings_box(const SettingsState& settings, int window_height) {
     using namespace ftxui;
     Elements body;
-    if (const ConfirmState* confirm = settings.discard_confirm()) {
-        body = confirm_body(confirm->message(), core::tr("tui.discard_yes"), confirm->yes_selected());
+    if (const std::optional<app::CloseChoice> leave = settings.leave_prompt()) {
+        body = {paragraph(core::tr("tui.settings_confirm_leave")) | bold, text(""),
+                hbox({discard_choice(core::tr("tui.settings_save"), *leave == app::CloseChoice::Save), text("   "),
+                      discard_choice(core::tr("tui.discard_yes"), *leave == app::CloseChoice::Discard), text("   "),
+                      discard_choice(core::tr("tui.discard_no"), *leave == app::CloseChoice::Cancel)}) |
+                    center};
     } else if (const ConfirmState* replace = settings.replace_confirm()) {
         body = confirm_body(replace->message(), core::tr("tui.replace_yes"), replace->yes_selected());
     } else {
@@ -1383,7 +1457,7 @@ ftxui::Element panes(const TuiState& state, const Preview& preview, const Editor
     if (geometry.list_visible) {
         // Harita listenin yerinde (SPEC-tui "Harita"); ad satırı açıkken liste görünür kalır.
         Element content = state.map_view() && !new_row
-                              ? map_pane(state, geometry.list_width - kFrameCells, height)
+                              ? map_pane(state, geometry.list_width - kPaneChromeCells, height)
                               : note_list(state, height, geometry.list_width, new_row);
         cells.push_back(framed_pane(std::move(content) | flex, state.focus() == Focus::List
                                                                    ? std::optional(list_mode())
@@ -1483,6 +1557,9 @@ void PreviewCache::build_rendered(int width) {
     rendered_width_ = width;
     rendered_note_.clear();
     rendered_ok_ = false;
+    rendered_chunks_.clear();
+    rendered_definitions_ = {};
+    rendered_next_ = 0;
     const std::string_view source = preview_.text;
     if (source.size() > view_limits_.source_bytes) {
         rendered_note_ =
@@ -1491,9 +1568,21 @@ void PreviewCache::build_rendered(int width) {
     }
     std::optional<RenderedView> view;
     switch (preview_.view_kind) {
-    case ViewKind::Markdown:
-        view = render_markdown(source, width, terminal_cell_width, view_limits_);
+    case ViewKind::Markdown: {
+        // Tek parçalık not bütün olarak üretilir (çıktı aynı); büyüğü parça parça (extend_rendered).
+        app::MarkdownScan scan = app::scan_markdown(source);
+        rendered_chunks_ = std::move(scan.chunks);
+        rendered_next_ = 1;
+        if (rendered_chunks_.size() > 1)
+            rendered_definitions_ = std::move(scan.definitions);
+        const std::string first =
+            rendered_definitions_.empty()
+                ? std::string{}
+                : app::markdown_chunk_source(source, rendered_chunks_.front(), rendered_definitions_);
+        view = render_markdown(first.empty() ? source.substr(0, rendered_chunks_.front().end) : std::string_view(first),
+                               width, terminal_cell_width, view_limits_);
         break;
+    }
     case ViewKind::Csv:
         view = render_csv(source, width, terminal_cell_width, view_limits_);
         rendered_note_ = view ? std::string{} : core::tr("tui.view_note_not_table");
@@ -1506,9 +1595,51 @@ void PreviewCache::build_rendered(int width) {
         return;
     }
     if (view) {
+        const bool truncated = view->lines.size() > view_limits_.lines;
         rendered_ = rendered_preview(std::move(*view), preview_.view_kind);
         rendered_ok_ = true;
+        if (truncated)
+            rendered_next_ = rendered_chunks_.size();
+        rendered_.partial = rendered_next_ < rendered_chunks_.size();
     }
+}
+
+// Parçanın kendi üretimi tek geçişle aynıdır; aradaki boş satır (üst düzey bloklar arası) ve satır sınırı
+// (limits.tui.view_lines) parçalar arasında sürer. Sınır aşan parçanın soluk notu onun üretiminden gelir.
+void PreviewCache::append_chunk() {
+    const app::MarkdownChunk& chunk = rendered_chunks_[rendered_next_++];
+    // Başka parçadaki başvuru tanımı da çözülsün: tanımlar ardına eklenir (çıktı ve satır eşlemesi değişmez).
+    const std::string source = app::markdown_chunk_source(preview_.text, chunk, rendered_definitions_);
+    // Boş satır da sınıra sayılır; sınır dolduysa tek geçişteki gibi düşer.
+    const bool gap = rendered_.lines.size() < view_limits_.lines;
+    ViewLimits limits = view_limits_;
+    limits.lines = view_limits_.lines - std::min(view_limits_.lines, rendered_.lines.size() + (gap ? 1 : 0));
+    RenderedView view = render_markdown(source, rendered_width_, terminal_cell_width, limits);
+    const bool truncated = view.lines.size() > limits.lines;
+    if (gap && !view.source_lines.empty()) {
+        rendered_.line_starts.push_back(rendered_.text.size());
+        rendered_.text += '\n';
+        rendered_.lines.emplace_back();
+        rendered_.styled.emplace_back();
+        rendered_.source_lines.push_back(chunk.first_line + view.source_lines.front());
+    }
+    append_rendered(rendered_, std::move(view), chunk.first_line);
+    if (truncated)
+        rendered_next_ = rendered_chunks_.size();
+    rendered_.partial = rendered_next_ < rendered_chunks_.size();
+}
+
+void PreviewCache::extend_rendered(const TuiState& state) {
+    if (!rendered_active_ || !rendered_.partial)
+        return;
+    const bool whole = state.wants_whole_preview();
+    const std::optional<std::size_t> pending = state.pending_source_line();
+    // Görünen pencerenin bir ekran ötesine dek: kaydırma çoğunlukla hazır satıra iner.
+    const std::size_t wanted = state.preview_scroll() + (2 * static_cast<std::size_t>(std::max(state.window_height(), 1)));
+    while (rendered_.partial &&
+           (whole || rendered_.lines.size() <= wanted ||
+            (pending && rendered_chunks_[rendered_next_].first_line <= *pending)))
+        append_chunk();
 }
 
 bool PreviewCache::resize_settling(int width, std::chrono::steady_clock::time_point now) {
@@ -1544,19 +1675,21 @@ const Preview& PreviewCache::publish(TuiState& state, std::chrono::steady_clock:
     const int width = editor_viewport({state.window_width(), state.window_height()}, state.layout()).columns;
     const bool wanted = state.review_rendered() && preview_.kind == Preview::Kind::Text &&
                         preview_.view_kind != ViewKind::None;
-    if (update_rendered(wanted, width, now))
+    if (update_rendered(wanted, width, now)) {
+        extend_rendered(state);
         state.set_preview_view(rendered_active_ ? &rendered_.source_lines : nullptr, generation_);
+    }
     else
         deferred_until_ = last_resize_ + std::chrono::milliseconds(kResizeSettleMs);  // önceki yerleşim kalır
     return shown();
 }
 
 int row_marker_column(const TuiState& state, std::size_t row) {
-    constexpr int kCellsBeforeNumber = 2;  // kenar, seçim işareti
-    constexpr int kCellsAfterNumber = 1;   // boşluk
+    constexpr int kCellsBeforeNumber = kPaneContentX + 1;  // kenar, iç boşluk, seçim işareti
+    constexpr int kCellsAfterNumber = 1;                   // boşluk
     const int inner_width =
         state.layout().geometry(state.window_width(), right_pane_focused(state.focus())).list_width -
-        kFrameCells;
+        kPaneChromeCells;
     const int indent = row < state.rows().size() ? row_indent_cells(state.rows()[row], inner_width) : 0;
     return kCellsBeforeNumber + indent + digit_count(state.max_row_number()) + kCellsAfterNumber;
 }
@@ -1660,6 +1793,14 @@ std::string tail_cells(const std::string& value, std::size_t limit) {
     return "…" + value.substr(begin);
 }
 
+std::string head_ellipsis(const std::string& value, int limit) {
+    if (ftxui::string_width(value) <= limit)
+        return value;
+    if (limit < 1)
+        return {};
+    return head_cells(value, limit - 1) + "…";
+}
+
 std::string fit_hints(std::string_view hints, int width) {
     std::string fitted;
     std::size_t start = 0;
@@ -1677,6 +1818,11 @@ std::string fit_hints(std::string_view hints, int width) {
         start = end + kHintSeparator.size();
     }
     return fitted;
+}
+
+int pinned_help_cells(std::string_view hints) {
+    const std::string help = split_help_hint(hints).second;
+    return help.empty() ? 0 : ftxui::string_width(help) + static_cast<int>(kHintSeparator.size());
 }
 
 ftxui::Element hint_bar(std::string_view hints, int width, ftxui::Color key_color) {
@@ -1744,7 +1890,7 @@ std::string tab_strip_text(std::span<const TabLabel> tabs, int width) {
 
 EditorViewport editor_viewport(ftxui::Dimensions window, const PaneLayout& layout) {
     const PaneGeometry geometry = layout.geometry(window.dimx, true);
-    return {std::max(geometry.right_width - kFrameCells, 1),
+    return {std::max(geometry.right_width - kPaneChromeCells, 1),
             std::max(window.dimy - TuiState::kChromeLines, 1)};
 }
 
@@ -1765,7 +1911,7 @@ ftxui::Element render(const TuiState& state, const Preview& preview, const Statu
     Element modal = open_modal(state, help, confirm, dialog, settings, window.dimy);
     const bool modal_open = modal != nullptr;
     Elements lines = {
-        editing && state.new_note_view() ? new_note_header(*editing) : top_bar(state, status),
+        editing && state.new_note_view() ? new_note_header(*editing) : top_bar(state, status, window.dimx),
         panes(state, preview, editing, new_row, window, panel_height, !modal_open, spell, tabs) | flex};
     // Biçimli görünüm olmadıysa neden burada: içerik satırlarını kaydırmaz, fare ve arama eşlemesi bozulmaz.
     const std::string note = preview.note.empty() ? std::string{} : preview.note + "  ";

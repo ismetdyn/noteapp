@@ -3,12 +3,16 @@
 #include "core/file_stat.hpp"
 #include "core/folder_tree.hpp"
 #include "core/i18n.hpp"
+#include "core/log.hpp"
 #include "core/text.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <expected>
 #include <fstream>
 #include <iterator>
+#include <new>
+#include <stdexcept>
 #include <system_error>
 #include <utility>
 
@@ -25,6 +29,10 @@ std::string utf8(const fs::path& path) {
 
 core::Error io_error(const std::string& source, const std::string& detail) {
     return {core::Error::Code::Io, "error.io", {{"path", source}, {"detail", detail}}};
+}
+
+core::Error out_of_memory(const std::string& source) {
+    return {core::Error::Code::Io, "error.out_of_memory", {{"path", source}}};
 }
 
 // Kaynağın adı: `docs/`, `.` ve `..` de adını verir (mutlak yoldan). Kök dizinin adı yoktur: "" döner, içi
@@ -49,10 +57,34 @@ std::expected<std::string, std::string> read_bytes(const fs::path& file) {
     return bytes;
 }
 
+bool is_hidden(const fs::path& entry) {
+    return entry.filename().u8string().starts_with(u8'.');
+}
+
+// import_entry'nin ele alacağı girdiler: kendisi ve klasörse gizli olmayan içi (bağ izlenmez). Okunamayan
+// klasör yalnız kendisidir; içe alma onu zaten hata yapar. Durdurulunca gezinti kısa keser: büyük ya da yavaş
+// ağaç durdurmayı ve kapanışı bekletmesin (sayı eksik kalır, içe alma zaten başlamaz).
+std::size_t count_entries(const fs::path& path, const std::stop_token& stop) {
+    const auto stat = core::stat_file(path);
+    if (!stat || stat->symlink || !stat->directory)
+        return 1;
+    std::size_t count = 1;
+    std::error_code ec;
+    for (fs::directory_iterator it(path, ec), end; !ec && it != end && !stop.stop_requested();
+         it.increment(ec))
+        if (!is_hidden(it->path()))
+            count += count_entries(it->path(), stop);
+    return count;
+}
+
 struct Run {
     core::NoteStore& store;
     const ImportOptions& options;
+    const ImportControl& control;
     ImportReport report = {};
+    std::size_t started = 0;
+    std::size_t total = 0;
+    bool aborted = false;  // beklenmeyen istisna: depo tutarlı kalsın diye kalan girdiler alınmaz
 
     void fail(const std::string& source, core::Error error) {
         report.failed.push_back({source, std::move(error)});
@@ -61,12 +93,24 @@ struct Run {
 
 void import_entry(Run& run, const fs::path& path, const std::string& folder, const std::string& name,
                   std::string_view given_name);
+void dispatch_entry(Run& run, const fs::path& path, const std::string& folder, const std::string& name,
+                    std::string_view given_name);
 
 // Ad seçimi: verilen adın uzantısı, `type`, dosyanın uzantısı, içerik tespiti; ilk dolu olan.
 void import_file(Run& run, const fs::path& path, const core::FileStat& stat, const std::string& folder,
                  std::string_view given_name) {
     std::string source = utf8(path);
-    auto bytes = read_bytes(path);
+    std::expected<std::string, std::string> bytes;
+    try {
+        bytes = run.control.read ? run.control.read(path) : read_bytes(path);
+    } catch (const std::bad_alloc&) {
+        // Belleğe sığmayan dosya süreci düşürmesin: yarım okuma bırakılır, kalanlar alınır.
+        run.fail(source, out_of_memory(source));
+        return;
+    } catch (const std::length_error&) {  // string'in en büyük boyutunu aştı: aynı durum
+        run.fail(source, out_of_memory(source));
+        return;
+    }
     if (!bytes) {
         run.fail(source, io_error(source, bytes.error()));
         return;
@@ -145,6 +189,31 @@ void import_directory(Run& run, const fs::path& directory, const std::string& fo
 // `name`: hedefteki ad (klasörde klasör adı); `given_name` dolu ise kullanıcı verdi, uzantısı tipi seçer.
 void import_entry(Run& run, const fs::path& path, const std::string& folder, const std::string& name,
                   std::string_view given_name) {
+    // Girdi sınırında: yarım not yazılmaz. Klasörün içine inilmez (bir girdi sayılır): durdurma beklemesin.
+    if (run.aborted || run.control.stop.stop_requested()) {
+        ++run.report.cancelled;
+        return;
+    }
+    if (run.control.progress) {
+        ++run.started;
+        run.total = std::max(run.total, run.started);  // ön sayımdan sonra eklenen girdi
+        run.control.progress({run.started, run.total, utf8(path)});
+    }
+    // Beklenmeyen istisna (depo, dosya sistemi) süreci düşürmez ve o ana dek alınanları raporsuz bırakmaz.
+    // Sürdürülmez: yarıda kalan yazmadan sonra deponun bellekteki görüntüsüne güvenilmez.
+    try {
+        dispatch_entry(run, path, folder, name, given_name);
+    } catch (const std::exception& error) {
+        const std::string source = utf8(path);
+        core::log_warn(std::string("event=import_failed detail=") + error.what());
+        run.fail(source, io_error(source, error.what()));
+        run.aborted = true;
+        run.report.wrote = true;  // yarıda kalan iş yazmış olabilir: yeniden tarama ve senkron
+    }
+}
+
+void dispatch_entry(Run& run, const fs::path& path, const std::string& folder, const std::string& name,
+                    std::string_view given_name) {
     const auto stat = core::stat_file(path);
     if (!stat) {
         std::string source = utf8(path);
@@ -167,8 +236,11 @@ void import_entry(Run& run, const fs::path& path, const std::string& folder, con
 }  // namespace
 
 ImportReport import_paths(core::NoteStore& store, std::span<const std::filesystem::path> sources,
-                          const ImportOptions& options) {
-    Run run{store, options};
+                          const ImportOptions& options, const ImportControl& control) {
+    Run run{store, options, control};
+    if (control.progress)
+        for (const fs::path& source : sources)
+            run.total += count_entries(source, control.stop);
     for (const fs::path& source : sources) {
         const std::string name = options.name.empty() ? base_name(source) : options.name;
         import_entry(run, source, options.folder, name, options.name);
@@ -189,6 +261,9 @@ std::vector<ImportLine> import_report_lines(const ImportReport& report) {
                                            : "cli.import_done";
         lines.push_back({core::tr(key, {{"source", item.source}, {"path", item.note.string()}})});
     }
+    if (report.cancelled > 0)  // tek satırlık durumda ilk sorun olarak görünsün
+        lines.push_back(
+            {core::tr("cli.import_cancelled", {{"count", std::to_string(report.cancelled)}}), true});
     for (const auto& item : report.skipped)
         lines.push_back({core::tr("cli.import_skipped",
                                   {{"source", item.source}, {"reason", core::tr("reason." + item.reason)}}),
@@ -210,6 +285,74 @@ std::string import_status(const ImportReport& report) {
     const auto problem = std::ranges::find_if(lines, &ImportLine::problem);
     // Özet son satırdır; sorun yoksa yalnız o.
     return problem == lines.end() ? lines.back().text : lines.back().text + " " + problem->text;
+}
+
+bool ImportJob::start(core::NoteStore store, std::vector<std::filesystem::path> sources,
+                      ImportOptions options, OnProgress on_progress, OnDone on_done) {
+    if (running_ || !post_)  // post yoksa işçi sonucu iletemez (boş std::function çağrısı süreci düşürürdü)
+        return false;
+    running_ = true;
+    on_progress_ = std::move(on_progress);
+    on_done_ = std::move(on_done);
+    try {
+        // Önceki işçi raporunu göndermişti; atama onu durdurup bekler (bitmiş iş parçacığı, anında).
+        worker_ = std::jthread([this, store = std::move(store), sources = std::move(sources),
+                                options = std::move(options)](const std::stop_token& stop) mutable {
+            work(store, sources, options, stop);
+        });
+    } catch (const std::exception& error) {  // iş parçacığı açılamadı (std::system_error): iş sürmüyor
+        core::log_warn(std::string("event=import_start_failed detail=") + error.what());
+        running_ = false;
+        return false;
+    }
+    return true;
+}
+
+void ImportJob::work(core::NoteStore& store, const std::vector<std::filesystem::path>& sources,
+                     const ImportOptions& options, const std::stop_token& stop) {
+    ImportReport report;
+    // Öğe istisnalarını import_paths kendisi rapora çevirir (alınanlar kalır). Burası son çare: istisna
+    // jthread'den kaçarsa std::terminate olurdu.
+    try {
+        report = import_paths(store, sources, options,
+                              {.stop = stop, .progress = [this](const ImportProgress& p) { publish(p); }});
+    } catch (const std::exception& error) {
+        core::log_warn(std::string("event=import_failed detail=") + error.what());
+        const std::string source = sources.empty() ? std::string() : utf8(sources.front());
+        report.failed.push_back({source, io_error(source, error.what())});
+        report.wrote = true;  // yarıda kalan iş yazmış olabilir: yeniden tarama ve senkron
+    }
+    post_([this, report = std::move(report)]() mutable {
+        running_ = false;
+        if (on_done_)
+            on_done_(std::move(report));
+    });
+}
+
+void ImportJob::publish(const ImportProgress& progress) {
+    {
+        const std::scoped_lock lock(mutex_);
+        const bool pending = latest_.has_value();
+        latest_ = progress;
+        if (pending)  // UI henüz öncekini almadı: o iş en son değeri okur
+            return;
+    }
+    post_([this] {
+        std::optional<ImportProgress> latest;
+        {
+            const std::scoped_lock lock(mutex_);
+            latest = std::exchange(latest_, std::nullopt);
+        }
+        // Durdurulduysa bekleyen ilerleme "durduruluyor" iletisini ezmesin.
+        if (latest && on_progress_ && !worker_.get_stop_token().stop_requested())
+            on_progress_(*latest);
+    });
+}
+
+std::string import_progress_text(const ImportProgress& progress) {
+    return core::tr("cli.import_progress_item", {{"done", std::to_string(progress.done)},
+                                                 {"total", std::to_string(progress.total)},
+                                                 {"name", progress.current}});
 }
 
 }  // namespace noteapp::app

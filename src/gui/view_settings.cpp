@@ -301,7 +301,7 @@ void View::draw_settings_tab() {
     const float row_height = ImGui::GetFrameHeight();
     ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);  // kısayolu var; Tab sırası uzamasın
     if (button("settings_back", "← " + core::tr("gui.tab_notes"), ButtonKind::Ghost))
-        queue([this] { state_.set_tab(Tab::Notes); });
+        queue([this] { state_.leave_settings(); });
     ImGui::PopItemFlag();
     ImGui::SetItemTooltip("%s", core::tr("gui.settings_back_tip").c_str());
     ImGui::SameLine();

@@ -1,10 +1,12 @@
 // Önizleme yerleşimi (markdown_preview, ImGui'den yalnız font ölçümü): sarma maliyeti ve görünen koşular.
+#include "app/data_preview.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/markdown_preview.hpp"
 #include "gui/theme.hpp"
 #include "window_fixture.hpp"
 
 #include <algorithm>
+#include <cfloat>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -126,6 +128,191 @@ TEST_CASE("preview layout: an unresolved [[target]] is dimmed and struck, with n
     for (const auto& hit : layout.hits)
         targets.emplace_back(hit.target);
     CHECK(targets == std::vector<std::string>{"b", "https://x.example"});
+}
+
+namespace {
+
+// Parçalara bölünen not: önce paragraf ağırlıklı, sonra kod ağırlıklı (bayt başına yükseklik değişir, tahmin
+// tutmaz).
+std::string chunked_markdown() {
+    const std::string prose = "## Bölüm\n\nBir paragraf *vurgu* ve **kalın** metin [[hedef]] ile; satır sarılsın diye "
+                              "biraz uzun yazılmış bir cümle daha ekleniyor burada.\n\n- madde bir\n- madde iki\n\n";
+    const std::string code = "> alıntı\n\n```\nkod\nkod\nkod\nkod\n```\n\n";
+    std::string text;
+    while (text.size() < 2 * noteapp::app::kMarkdownChunkBytes)
+        text += prose;
+    while (text.size() < 4 * noteapp::app::kMarkdownChunkBytes)
+        text += code;
+    return text;
+}
+
+
+// Kesim yerlerinin her türü: setext başlık, sıralı liste ve öğedeki girintili çit, alıntı, tablo, görev listesi,
+// yıldızlı çizgi, başvuru bağlantısı (tanımı sonda), sonda kapanmamış çit. `crlf`: satır sonları CRLF.
+std::string varied_markdown(std::size_t bytes, bool crlf) {
+    const std::string unit = "Başlık\n======\n\n1. bir\n2. iki\n   ```\n   kod\n   ```\n\n> alıntı\n> devam\n\n"
+                             "| a | b |\n|---|---|\n| 1 | 2 |\n\nAlt başlık\n---\n\n[bağ][r] ve *eğik*\n\n"
+                             "- [x] görev\n- [ ] kalan\n\n***\n\n- ```sh\n  echo\n  ```\n\n";
+    std::string text;
+    while (text.size() < bytes)
+        text += unit;
+    text += "[r]: https://r.example\n\n```\nkapanmamış\n";
+    if (!crlf)
+        return text;
+    std::string out;
+    for (const char c : text) {
+        if (c == '\n')
+            out += '\r';
+        out += c;
+    }
+    return out;
+}
+
+}  // namespace
+
+// NX-D: parça parça yerleşim tümü yerleşince bütün yerleşimle aynı yerde aynı koşuları ve bağlantıları çizer.
+TEST_CASE("preview document: chunks laid out together match the whole layout") {
+    const FontScene scene;
+    std::string text;
+    SUBCASE("prose and code") { text = chunked_markdown(); }
+    SUBCASE("every kind of block, LF") { text = varied_markdown(4 * noteapp::app::kMarkdownChunkBytes, false); }
+    SUBCASE("every kind of block, CRLF") { text = varied_markdown(4 * noteapp::app::kMarkdownChunkBytes, true); }
+    REQUIRE(noteapp::app::markdown_chunks(text).size() >= 4);
+    constexpr float kWidth = 500.0F;
+    const std::vector<pdf::Block> parsed = pdf::parse_markdown(text, {.links = true});
+    const PreviewLayout whole = layout_preview(parsed, scene.fonts(), kFontPixels, kWidth, resolve_all);
+    noteapp::gui::PreviewDocument document;
+    document.reset(text);
+    const float view = whole.size.y * 2.0F;  // her parça görünür
+    CHECK(document.update(0.0F, view, scene.fonts(), kFontPixels, kWidth, resolve_all) == 0.0F);
+    // Bütün yerleşim 600 bin pikselde float birikimiyle ~200 px kayar; parça yerel koordinatla daha az. Karşılaştırma
+    // ardışık koşular arası farkla: kaçan bir boşluk (≥ 2 px) yakalanır, birikim yakalanmaz.
+    constexpr float kStepTolerance = 0.5F;
+    CHECK(document.size().y == doctest::Approx(whole.size.y).epsilon(1e-3));
+    CHECK(document.size().x == doctest::Approx(whole.size.x));
+    std::size_t run = 0;
+    std::size_t blocks = 0;
+    float previous = 0.0F;
+    std::vector<std::string_view> targets;
+    for (const auto& placed : document.visible(0.0F, view)) {
+        REQUIRE(placed.first_block);
+        CHECK(*placed.first_block == blocks);
+        blocks += placed.layout->block_spans.size();
+        for (const auto& hit : placed.layout->hits)
+            targets.push_back(hit.target);
+        for (const PreviewRun& part : placed.layout->runs) {
+            REQUIRE(run < whole.runs.size());
+            CAPTURE(run);
+            REQUIRE(part.text == whole.runs[run].text);
+            REQUIRE(part.pos.x == doctest::Approx(whole.runs[run].pos.x));
+            const float step = placed.top + part.pos.y - previous;
+            const float whole_step = whole.runs[run].pos.y - (run == 0 ? 0.0F : whole.runs[run - 1].pos.y);
+            REQUIRE(std::abs(step - whole_step) < kStepTolerance);
+            previous = placed.top + part.pos.y;
+            ++run;
+        }
+    }
+    CHECK(run == whole.runs.size());
+    CHECK(blocks == parsed.size());
+    std::vector<std::string_view> whole_targets;
+    for (const auto& hit : whole.hits)
+        whole_targets.push_back(hit.target);
+    CHECK(targets == whole_targets);
+}
+
+// Kısa satırlı notun tahmini yüksekliği gerçeğin çok altındadır: tahmine göre "sonda" sayılmamalı. İlk kare başta,
+// geri yüklenen kaydırma yerinde kalır; sona yalnız istenince (End) ya da son parça ölçülmüşken gidilir.
+TEST_CASE("preview document: an estimated height does not pull the view to the end") {
+    const FontScene scene;
+    std::string text;
+    while (text.size() < 2 * 1024)
+        text += "- a\n";
+    constexpr float kWidth = 500.0F;
+    constexpr float kView = 600.0F;
+    noteapp::gui::PreviewDocument fresh;
+    fresh.reset(text);
+    CHECK(fresh.update(0.0F, kView, scene.fonts(), kFontPixels, kWidth, resolve_all) == 0.0F);
+    REQUIRE(fresh.size().y > 2.0F * kView);
+
+    noteapp::gui::PreviewDocument restored;
+    restored.reset(text);
+    CHECK(restored.update(300.0F, kView, scene.fonts(), kFontPixels, kWidth, resolve_all) == 300.0F);
+
+    noteapp::gui::PreviewDocument jumped;
+    jumped.reset(text);
+    const float end = jumped.update(100.0F, kView, scene.fonts(), kFontPixels, kWidth, resolve_all, true);
+    CHECK(end == doctest::Approx(jumped.size().y - kView));
+}
+
+// NX-E F1: aynı etiketin iki tanımında belge sırasıyla ilki kazanır (CommonMark), sonraki parçadaki tekrar da.
+TEST_CASE("preview document: the first definition of a label wins across chunks") {
+    const FontScene scene;
+    std::string text = "[a]: https://first.example\n\n";
+    // Tekrar ve kullanımı aynı parçanın ortasında: parçanın kendi tanımı eklenen tablodan önce gelir.
+    while (text.size() < 100 * 1024)
+        text += "## Bölüm\n\nBir paragraf metni burada.\n\n";
+    text += "[a]: https://second.example\n\n[son][a]\n\n";
+    while (text.size() < 200 * 1024)
+        text += "## Bölüm\n\nBir paragraf metni burada.\n\n";
+    REQUIRE(noteapp::app::markdown_chunks(text).size() > 2);
+    noteapp::gui::PreviewDocument document;
+    document.reset(text);
+    constexpr float kEverything = 1.0e9F;  // her parça görünür
+    document.update(0.0F, kEverything, scene.fonts(), kFontPixels, 500.0F, resolve_all);
+    std::vector<std::string> targets;
+    for (const auto& placed : document.visible(0.0F, kEverything))
+        for (const auto& hit : placed.layout->hits)
+            targets.emplace_back(hit.target);
+    CHECK(targets == std::vector<std::string>{"https://first.example"});
+}
+
+// Bağlantı başvuru tanımı notun her yerinde geçerlidir (CommonMark): sondaki tanım ilk parçadaki kullanımı çözer.
+TEST_CASE("preview document: a reference defined at the end of a chunked note resolves in the first chunk") {
+    const FontScene scene;
+    std::string text = "[başvuru][r] ile başlar.\n\n";
+    while (text.size() < 100 * 1024)
+        text += "## Bölüm\n\nBir paragraf metni burada.\n\n";
+    text += "[r]: https://example.org/r\n";
+    REQUIRE(noteapp::app::markdown_chunks(text).size() > 1);
+    noteapp::gui::PreviewDocument document;
+    document.reset(text);
+    constexpr float kView = 600.0F;
+    document.update(0.0F, kView, scene.fonts(), kFontPixels, 500.0F, resolve_all);
+    const auto placed = document.visible(0.0F, kView);
+    REQUIRE_FALSE(placed.empty());
+    std::vector<std::string> targets;
+    for (const auto& hit : placed.front().layout->hits)
+        targets.emplace_back(hit.target);
+    CHECK(targets == std::vector<std::string>{"https://example.org/r"});
+}
+
+// Yalnız görünen alan yerleşik kalır; yukarıdaki tahmini parça ölçülünce görünen metin ekranda yerinde durur.
+TEST_CASE("preview document: only the visible window stays laid out and a measured estimate keeps the view still") {
+    const FontScene scene;
+    const std::string text = chunked_markdown();
+    constexpr float kWidth = 500.0F;
+    constexpr float kView = 600.0F;
+    noteapp::gui::PreviewDocument document;
+    document.reset(text);
+    const float end = document.update(FLT_MAX, kView, scene.fonts(), kFontPixels, kWidth, resolve_all);
+    const auto at_end = document.visible(0.0F, document.size().y);
+    REQUIRE_FALSE(at_end.empty());
+    CHECK(at_end.front().chunk > 0);  // baştaki parçalar hiç yerleşmedi
+    CHECK(at_end.back().top + at_end.back().layout->size.y == doctest::Approx(document.size().y));
+    CHECK(end == doctest::Approx(document.size().y - kView));
+
+    // Görünen ilk parçanın yarım ekran üstü: üstteki parça ölçülür, görünen parça ekranda kıpırdamaz.
+    const auto& anchor = at_end.front();
+    const float requested = anchor.top - (kView / 2.0F);
+    const float on_screen = anchor.top - requested;
+    const float scroll = document.update(requested, kView, scene.fonts(), kFontPixels, kWidth, resolve_all);
+    bool found = false;
+    for (const auto& placed : document.visible(scroll, scroll + kView))
+        if (placed.chunk == anchor.chunk) {
+            found = true;
+            CHECK(placed.top - scroll == doctest::Approx(on_screen));
+        }
+    CHECK(found);
 }
 
 namespace {

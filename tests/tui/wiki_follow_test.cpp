@@ -81,7 +81,8 @@ struct Fixture {
     }
     // REVIEW'daki `line`. satırın `byte`. baytının hücresi.
     int cell_x(std::size_t byte) const {
-        return state.layout().geometry(kWidth, true).right_x + 1 + static_cast<int>(byte);
+        return state.layout().geometry(kWidth, true).right_x + 2 +
+               static_cast<int>(byte);  // kenar, iç boşluk
     }
     tui::MouseResult click(int x, int y) {
         tui::route_mouse({x, y, tui::MouseButton::Left, tui::MouseMotion::Press}, state, editor);

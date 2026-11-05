@@ -15,6 +15,9 @@ namespace noteapp::core {
 // Yol bileşeninin (dosya ya da klasör adı) en çok baytı: ext4 NAME_MAX ve NTFS'in 255 UTF-16 birimi; tek
 // sahip budur (NotePath kapısı, çakışma kopyası adları, senkron kopya dosyaları). OS sınırıdır, config değil.
 inline constexpr std::size_t kMaxFileNameBytes = 255;
+// Çakışma kopyası adında uzantı sayılan en uzun son ek (bayt); uzunu adın parçasıdır, damgaya yer kalsın.
+// Tek sahip budur (deponun çakışma notu, senkronun kopya dosyası). Ad biçimidir, kullanıcı sınırı değil.
+inline constexpr std::size_t kMaxExtensionBytes = 32;
 
 // notes_dir'e göre göreli, doğrulanmış yol: mutlak yol, "..", ayrılmış ad ve geçersiz karakter içeremez.
 // Ayırıcı yalnız '/' kabul edilir. Sembolik bağla kaçış denetimi NoteStore'un işidir (T07).

@@ -442,7 +442,10 @@ void GuiState::toggle_search_mode() {
     set_search_mode(search_mode_ == app::SearchMode::Name ? app::SearchMode::Content : app::SearchMode::Name);
 }
 
+// Ayarlar'dan çıkış sorusu önce: Vazgeç'te arama kipi ve sorgu değişmemiş kalır.
 void GuiState::search_global() {
+    if (!leave_settings())
+        return;
     set_search_mode(app::SearchMode::Global);
     focus_search();
 }
@@ -462,7 +465,7 @@ void GuiState::open_picker(Picker kind) {
 
 // TUI'deki `tag:`/`view:` tamamlamasının sonucu: ad araması, değer argüman olarak.
 void GuiState::pick(const std::string& value) {
-    if (picker_ == Picker::None)
+    if (picker_ == Picker::None || !leave_settings())
         return;
     std::string query = picker_ == Picker::Tag ? "tag:" : "view:";
     // Boşluklu değer tek sözcük kalsın; anahtar tırnağın dışında olmalı, yoksa argüman sayılmaz.
@@ -608,7 +611,7 @@ bool GuiState::search_key(tui::Key key, std::string_view typed) {
 // Kutu odakta değildir (fare listeye tıkladı): metin sorguya doğrudan yazılır, odak kutuya döner.
 void GuiState::pick_search_completion(std::size_t index) {
     const tui::InputLine::Popup* popup = search_popup();
-    if (popup == nullptr || index >= popup->items.size())
+    if (popup == nullptr || index >= popup->items.size() || !leave_settings())
         return;
     const std::size_t from = popup->selected;
     for (std::size_t step = from; step < index; ++step)
@@ -821,9 +824,10 @@ app::PreviewKind GuiState::preview_kind() const {
     return shown_ ? app::preview_kind_for(current_type()) : app::PreviewKind::None;
 }
 
-// Düzenlenemeyen metin (geçersiz UTF-8, NUL) ayrıştırılmaz: md4c ve tablo görünümü geçerli UTF-8 bekler.
+// Düzenlenemeyen metin (geçersiz UTF-8, NUL) ayrıştırılmaz: md4c ve tablo görünümü geçerli UTF-8 bekler. Boyut
+// reddetmez: view_bytes üstü ham metinle açılır (preview_too_large).
 bool GuiState::can_preview() const {
-    return previewable_type() && !binary() && editable_ && view_limits().view_bytes.allows(editor_.text().size());
+    return previewable_type() && !binary() && editable_;
 }
 
 void GuiState::toggle_preview() {
@@ -1178,7 +1182,8 @@ std::string GuiState::editor_fields() const {
 }
 
 void GuiState::focus_search() {
-    tab_ = Tab::Notes;
+    if (!leave_settings())
+        return;
     request_focus(FocusRequest::Search);
 }
 
@@ -1186,9 +1191,19 @@ void GuiState::show_settings_tab() {
     tab_ = Tab::Settings;
 }
 
-// Üst sekme satırı yok: aynı kısayol Ayarlar'dan geri de götürür. Kaydedilmemiş alanlar formda kalır.
+// Üst sekme satırı yok: aynı kısayol Ayarlar'dan geri de götürür.
 void GuiState::toggle_settings_tab() {
-    tab_ = tab_ == Tab::Settings ? Tab::Notes : Tab::Settings;
+    if (tab_ == Tab::Settings)
+        leave_settings();
+    else
+        tab_ = Tab::Settings;
+}
+
+bool GuiState::leave_settings() {
+    if (tab_ == Tab::Settings && !confirm_close_settings())
+        return false;
+    tab_ = Tab::Notes;
+    return true;
 }
 
 // Listede görünmeyen (arama/klasör süzgeci) bir notu kaydettikten sonra süzgeç gevşetilir; aksi hâlde yeni

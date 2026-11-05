@@ -259,6 +259,24 @@ TEST_CASE("Enter on the token row stores it under the lower-case host and wipes 
     CHECK(s.on_token());  // odak yerinde kalır
 }
 
+TEST_CASE("leaving with a typed token asks first; Cancel and Discard never reach the keychain") {
+    World w;
+    auto c = w.config();
+    c.sync.remote = "https://github.com/me/notes.git";
+    auto s = w.form(c);
+    focus_token(s);
+    type(s, kSecret);
+    CHECK(s.handle(Key::Escape) == Outcome::Editing);  // yalnız token yazılı: yine sorulur
+    REQUIRE(s.leave_prompt());
+    CHECK(s.handle(Key::Enter) == Outcome::Editing);  // Vazgeç
+    CHECK(s.token_length() == kSecret.size());
+    s.handle(Key::Escape);
+    s.handle(Key::Left);  // At
+    CHECK(s.handle(Key::Enter) == Outcome::Cancel);
+    CHECK(w.vault.calls.empty());
+    CHECK_FALSE(has(config_text(), "SECRET"));
+}
+
 TEST_CASE("Ctrl-D on the token row deletes the stored token") {
     World w;
     w.vault.tokens["github.com"] = std::string(kSecret);

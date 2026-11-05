@@ -21,8 +21,7 @@ namespace noteapp::app {
 
 // Harita kapsamı (SPEC-gui "Harita", SPEC-tui "Harita"): oturumluk, durum dosyasına yazılmaz.
 struct MapOptions {
-    static constexpr int kMinDepth = 1;
-    static constexpr int kMaxDepth = 6;
+    static constexpr int kMinDepth = 1;  // üst sınır config'te: limits.app.map_depth (MapModel::max_depth)
     static constexpr int kDefaultDepth = 2;
     bool whole_graph = false;  // false: gösterilen notun çevresi
     int depth = kDefaultDepth;
@@ -68,14 +67,20 @@ public:
     using EdgeReader = std::function<std::expected<std::vector<core::NoteEdge>, core::Error>()>;
 
     MapModel() = default;
-    explicit MapModel(core::Limit node_limit) : node_limit_(std::move(node_limit)) {}
+    MapModel(core::Limit node_limit, core::Limit depth_limit)
+        : node_limit_(std::move(node_limit)), depth_limit_(std::move(depth_limit)) {}
 
     const MapOptions& options() const { return options_; }
-    // Derinlik 1–6'ya kıstırılır; değiştiyse harita sonraki update'te yeniden kurulur.
+    // Derinlik 1..max_depth()'e kıstırılır; değiştiyse harita sonraki update'te yeniden kurulur.
     void set_options(const MapOptions& options);
     // limits.app.map_nodes (0 = sınırsız): çizilen en çok düğüm; değiştiyse harita yeniden kurulur.
     // Verilmezse sınırsız.
     void set_node_limit(core::Limit limit);
+    // limits.app.map_depth (0 = sınırsız): derinliğin üstü; küçülürse geçerli derinlik ona iner. Verilmezse
+    // sınırsız.
+    void set_depth_limit(core::Limit limit);
+    // Arayüzlerin derinlik denetiminin üstü (GUI adımlayıcısı, TUI tuşları); sınırsızda INT_MAX.
+    int max_depth() const;
     // Notlar ya da ilişkiler değişti: kenarlar sonraki update'te bir kez okunur.
     void edges_changed() { edges_stale_ = true; }
     // Harita güncel olur: kenarlar eskiyse okunur, seçenek ya da çevre merkezi değiştiyse bellekten kurulur
@@ -100,6 +105,7 @@ public:
 private:
     MapOptions options_;
     core::Limit node_limit_;
+    core::Limit depth_limit_;
     std::vector<core::NoteEdge> edges_;
     NoteMap map_;
     GraphLayout layout_;

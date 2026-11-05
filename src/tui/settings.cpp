@@ -8,6 +8,8 @@
 #include <array>
 #include <cstddef>
 #include <filesystem>
+#include <optional>
+#include <utility>
 
 namespace noteapp::tui {
 
@@ -67,12 +69,19 @@ std::string to_utf8(const std::filesystem::path& p) {
 
 }  // namespace
 
-bool user_config_broken() {
-    const core::LoadedConfig loaded = core::load_config();
+namespace {
+
+bool config_broken(const core::LoadedConfig& loaded) {
     for (const core::Error& warning : loaded.warnings)
         if (warning.message_key == "config.syntax_error" || warning.message_key == "config.unreadable")
             return true;
     return false;
+}
+
+}  // namespace
+
+bool user_config_broken() {
+    return config_broken(core::load_config());
 }
 
 SettingsState::SettingsState(const core::Config& config, SettingsServices services)
@@ -198,17 +207,8 @@ SettingsState::Outcome SettingsState::handle_key(Key key, std::string_view text)
             return Outcome::Replace;
         }
     }
-    if (discard_) {
-        switch (discard_->handle(key, text)) {
-        case ConfirmState::Outcome::Pending:
-            return Outcome::Editing;
-        case ConfirmState::Outcome::Cancelled:
-            discard_.reset();
-            return Outcome::Editing;
-        case ConfirmState::Outcome::Confirmed:
-            return Outcome::Cancel;
-        }
-    }
+    if (leave_)
+        return handle_leave_key(key);
     const std::size_t slots = slot_count();
     switch (key) {
     case Key::Up:
@@ -233,7 +233,8 @@ SettingsState::Outcome SettingsState::handle_key(Key key, std::string_view text)
     case Key::Escape:
         if (!changed())
             return Outcome::Cancel;
-        discard_.emplace(core::tr("tui.settings_confirm_discard"));  // varsayılan "Vazgeç": veri kaybı olmaz
+        leave_ = app::CloseChoice::Cancel;  // varsayılan "Vazgeç": formda kalınır, veri kaybı olmaz
+        quitting_ = false;
         return Outcome::Editing;
     default:
         break;
@@ -288,6 +289,56 @@ SettingsState::Outcome SettingsState::handle_key(Key key, std::string_view text)
     return Outcome::Editing;
 }
 
+// Kaydet / At / Vazgeç (GUI'nin Ayarlar'dan çıkış sorusu): oklar ve Tab düğmeler arasında döner. Kaydet,
+// Kaydet düğmesinin akışıdır (Submit): doğrulama hatası formda kalır, ekran kapanmaz. At formu kapatır;
+// yazılmış token yalnız bellekteydi, kasaya gitmez.
+bool SettingsState::ask_before_quit() {
+    if (!changed())
+        return false;
+    replace_.reset();  // origin sorusu açıksa yerini çıkış sorusu alır (Vazgeç: forma döner)
+    leave_ = app::CloseChoice::Cancel;
+    quitting_ = true;
+    return true;
+}
+
+SettingsState::Outcome SettingsState::handle_leave_key(Key key) {
+    constexpr int kChoices = 3;
+    const auto step = [this](int delta) {
+        const int next = (static_cast<int>(*leave_) + delta + kChoices) % kChoices;
+        leave_ = static_cast<app::CloseChoice>(next);
+    };
+    switch (key) {
+    case Key::Left:
+    case Key::Up:
+    case Key::ShiftTab:
+        step(-1);
+        return Outcome::Editing;
+    case Key::Right:
+    case Key::Down:
+    case Key::Tab:
+        step(+1);
+        return Outcome::Editing;
+    case Key::Escape:
+        leave_.reset();
+        quitting_ = false;
+        return Outcome::Editing;
+    case Key::Enter: {
+        const bool quit = std::exchange(quitting_, false);
+        switch (*std::exchange(leave_, std::nullopt)) {
+        case app::CloseChoice::Save:
+            return quit ? Outcome::SubmitAndQuit : Outcome::Submit;
+        case app::CloseChoice::Discard:
+            return quit ? Outcome::Quit : Outcome::Cancel;
+        case app::CloseChoice::Cancel:
+            return Outcome::Editing;
+        }
+        return Outcome::Editing;
+    }
+    default:
+        return Outcome::Editing;  // "s" gibi kısayol yok: yanlışlıkla atmayı önler (ConfirmState gibi)
+    }
+}
+
 std::optional<core::Config> SettingsState::build(const core::Config& base) {
     error_.clear();
     for (Row& row : rows_)
@@ -306,10 +357,12 @@ std::optional<core::Config> SettingsState::build(const core::Config& base) {
         }
 
     // Enable akışı depoyu kurmadan önce bakılır: yazılamayacak config için depo kurulmasın.
-    if (user_config_broken()) {
+    const core::LoadedConfig disk = core::load_config();
+    if (config_broken(disk)) {
         error_ = core::tr("tui.settings_config_broken", {{"path", to_utf8(core::config_file())}});
         return std::nullopt;
     }
+    app::adopt_live_limits(next, disk.config);  // çağıran haritaya uygular (apply_settings)
     return next;
 }
 

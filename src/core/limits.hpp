@@ -45,6 +45,7 @@ struct AppLimits {
     Limit trash_undo_steps;  // oturumluk çöp geri alma yığınının derinliği (TUI ve GUI)
     Limit tabs;              // aynı anda açık editör sekmesi (TUI ve GUI)
     Limit map_nodes;         // haritada çizilen en çok düğüm (TUI ve GUI); aşan kısım uyarıyla düşer
+    Limit map_depth;         // harita çevre kapsamının en çok adımı (TUI tuşları, GUI adımlayıcısı)
 
     bool operator==(const AppLimits&) const = default;
 };

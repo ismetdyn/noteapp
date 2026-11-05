@@ -3,6 +3,7 @@
 #include "app/document.hpp"
 #include "app/import_files.hpp"
 #include "core/file_stat.hpp"
+#include "core/i18n.hpp"
 #include "detect/detect.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
@@ -10,10 +11,19 @@
 #include <algorithm>
 #include <chrono>
 #include <doctest/doctest.h>
+#include <expected>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <iterator>
 #include <limits>
+#include <mutex>
+#include <new>
+#include <optional>
+#include <stdexcept>
+#include <stop_token>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -217,4 +227,198 @@ TEST_CASE("created_at and updated_at come from the file, not from the import tim
     // Doğum zamanı mtime'dan yeniyse (kopya) mtime kazanır: test dosyası az önce yazıldı.
     CHECK(time_point_cast<milliseconds>(noteapp::core::to_system_time(*metas[0].created_at)) ==
           time_point_cast<milliseconds>(then));
+}
+
+// Dosya belleğe sığmazsa okuma bad_alloc (ya da string'in sınırında length_error) atar; dev bellek ayırmadan
+// okuyucu benzetir. Süreç düşmez: o dosya alınamayanlardadır, sonrakiler alınır.
+TEST_CASE("a file too large for memory fails as an item; the rest of the import goes on") {
+    Scene scene;
+    const fs::path huge = scene.write("huge.bin", "x");
+    const fs::path longest = scene.write("longest.bin", "x");
+    const fs::path ok = scene.write("ok.md", "ok");
+    const noteapp::app::ImportControl control{
+        .read = [&](const fs::path& file) -> std::expected<std::string, std::string> {
+            if (file == huge)
+                throw std::bad_alloc();
+            if (file == longest)
+                throw std::length_error("basic_string::_M_create");
+            std::ifstream in(file, std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(in), {});
+        }};
+    ImportOptions options;
+    options.detect = kDetect;
+    const ImportReport report =
+        noteapp::app::import_paths(scene.store, std::vector{huge, longest, ok}, options, control);
+    CHECK(imported_notes(report) == std::vector<std::string>{"ok.md"});
+    REQUIRE(report.failed.size() == 2);
+    CHECK(report.failed[0].source == noteapp::test::utf8(huge));
+    CHECK(report.failed[0].error.message_key == "error.out_of_memory");
+    CHECK(report.failed[1].source == noteapp::test::utf8(longest));
+    CHECK(report.failed[1].error.message_key == "error.out_of_memory");
+    CHECK(scene.paths() == std::vector<std::string>{"ok.md"});
+    noteapp::core::init_i18n("en");
+    CHECK(noteapp::core::format_error(report.failed[0].error) ==
+          "Not enough memory to read '" + noteapp::test::utf8(huge) + "'; it was not imported");
+}
+
+TEST_CASE("progress names each entry with its number and the total; hidden entries do not count") {
+    Scene scene;
+    const fs::path a = scene.write("a.md", "a");
+    scene.write("dir/b.md", "b");
+    scene.write("dir/c.md", "c");
+    scene.write("dir/.hidden", "h");
+    std::vector<noteapp::app::ImportProgress> seen;
+    ImportOptions options;
+    options.detect = kDetect;
+    const noteapp::app::ImportControl control{
+        .progress = [&](const noteapp::app::ImportProgress& progress) { seen.push_back(progress); }};
+    const fs::path dir = scene.files.path() / "dir";
+    const ImportReport report =
+        noteapp::app::import_paths(scene.store, std::vector{a, dir}, options, control);
+    CHECK(report.complete());
+    REQUIRE(seen.size() == 4);
+    const std::vector<fs::path> order{a, dir, dir / "b.md", dir / "c.md"};
+    for (std::size_t i = 0; i < seen.size(); ++i) {
+        CAPTURE(i);
+        CHECK(seen[i].done == i + 1);
+        CHECK(seen[i].total == 4);
+        CHECK(seen[i].current == noteapp::test::utf8(order[i]));
+    }
+    noteapp::core::init_i18n("en");
+    CHECK(noteapp::app::import_progress_text(seen[1]) == "Importing 2/4: " + noteapp::test::utf8(dir));
+}
+
+// Durdurma girdi sınırında: şimdiki girdi biter, kalanlar alınmaz ve sayılır. Durdurulunca klasörün içine
+// inilmez (büyük ağaç durdurmayı bekletmesin): alınmayan klasör bir girdidir.
+TEST_CASE("a stop keeps what was imported and counts the entries left out, a folder once") {
+    Scene scene;
+    const fs::path a = scene.write("a.md", "a");
+    scene.write("dir/b.md", "b");
+    scene.write("dir/sub/c.md", "c");
+    const fs::path last = scene.write("z.md", "z");
+    std::stop_source stop;
+    ImportOptions options;
+    options.detect = kDetect;
+    const noteapp::app::ImportControl control{.stop = stop.get_token(),
+                                              .progress = [&](const noteapp::app::ImportProgress& progress) {
+                                                  if (progress.done == 2)  // klasöre başlarken
+                                                      stop.request_stop();
+                                              }};
+    const fs::path dir = scene.files.path() / "dir";
+    const ImportReport report =
+        noteapp::app::import_paths(scene.store, std::vector{a, dir, last}, options, control);
+    CHECK(imported_notes(report) == std::vector<std::string>{"a.md"});
+    CHECK(report.cancelled == 3);  // dir/b.md, dir/sub (içi sayılmaz), z.md
+    CHECK_FALSE(report.complete());
+    CHECK(scene.paths() == std::vector<std::string>{"a.md"});
+    noteapp::core::init_i18n("en");
+    CHECK(noteapp::app::import_status(report) ==
+          "Imported: 1, skipped: 0, not imported: 0 Stopped: 3 entries were not imported (a folder counts "
+          "once)");
+}
+
+// Açılışta istenen durdurma ön sayımı da kısa keser: hiçbir klasörün içi gezilmez.
+TEST_CASE("a stop before the start imports nothing and does not walk the folders") {
+    Scene scene;
+    scene.write("dir/b.md", "b");
+    scene.write("dir/sub/c.md", "c");
+    const fs::path last = scene.write("z.md", "z");
+    std::stop_source stop;
+    stop.request_stop();
+    ImportOptions options;
+    options.detect = kDetect;
+    int progress_calls = 0;
+    const noteapp::app::ImportControl control{
+        .stop = stop.get_token(), .progress = [&](const noteapp::app::ImportProgress&) { ++progress_calls; }};
+    const ImportReport report = noteapp::app::import_paths(
+        scene.store, std::vector{scene.files.path() / "dir", last}, options, control);
+    CHECK(report.imported.empty());
+    CHECK(report.cancelled == 2);
+    CHECK(progress_calls == 0);
+    CHECK_FALSE(report.wrote);
+}
+
+// Beklenmeyen istisna (okuma, depo) süreci düşürmez ve alınanları raporsuz bırakmaz: o girdi alınamayanlarda,
+// içe alma orada durur (depo tutarlı kalsın diye sürmez), kalanlar durdurulmuş sayılır.
+TEST_CASE("an unexpected exception stops the import and keeps the partial report") {
+    Scene scene;
+    const fs::path a = scene.write("a.md", "a");
+    const fs::path b = scene.write("b.md", "b");
+    const fs::path c = scene.write("c.md", "c");
+    const noteapp::app::ImportControl control{
+        .read = [&](const fs::path& file) -> std::expected<std::string, std::string> {
+            if (file == b)
+                throw std::runtime_error("disk vanished");
+            std::ifstream in(file, std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(in), {});
+        }};
+    ImportOptions options;
+    options.detect = kDetect;
+    ImportReport report;
+    REQUIRE_NOTHROW(report = noteapp::app::import_paths(scene.store, std::vector{a, b, c}, options, control));
+    CHECK(imported_notes(report) == std::vector<std::string>{"a.md"});
+    CHECK(report.wrote);
+    REQUIRE(report.failed.size() == 1);
+    CHECK(report.failed[0].source == noteapp::test::utf8(b));
+    CHECK(report.failed[0].error.message_key == "error.io");
+    CHECK(report.cancelled == 1);  // c.md
+    CHECK(scene.paths() == std::vector<std::string>{"a.md"});
+}
+
+// Arayüz post vermezse iş başlamaz (işçi boş std::function çağırıp süreci düşürmesin).
+TEST_CASE("an import job without a post function refuses to start") {
+    Scene scene;
+    noteapp::app::ImportJob job({});
+    ImportOptions options;
+    options.detect = kDetect;
+    CHECK_FALSE(job.start(scene.store, {scene.write("a.md", "a")}, options, {}, {}));
+    CHECK_FALSE(job.running());
+}
+
+// Arayüzlerin işçisi: rapor ve ilerleme `post` kuyruğundan, çağıran iş parçacığında gelir.
+TEST_CASE("an import job runs on a worker, posts progress and the report, and starts once at a time") {
+    Scene scene;
+    const fs::path a = scene.write("a.md", "a");
+    const fs::path b = scene.write("b.md", "b");
+    std::mutex mutex;
+    std::vector<std::function<void()>> queue;
+    noteapp::app::ImportJob job([&](std::function<void()> work) {
+        const std::scoped_lock lock(mutex);
+        queue.push_back(std::move(work));
+    });
+    const auto caller = std::this_thread::get_id();
+    std::optional<noteapp::app::ImportProgress> last_progress;
+    std::optional<ImportReport> report;
+    ImportOptions options;
+    options.detect = kDetect;
+    REQUIRE(job.start(
+        scene.store, {a, b}, options,
+        [&](const noteapp::app::ImportProgress& progress) {
+            CHECK(std::this_thread::get_id() == caller);
+            CHECK_FALSE(report.has_value());  // rapor son ilerlemeden sonra
+            last_progress = progress;
+        },
+        [&](ImportReport done) {
+            CHECK(std::this_thread::get_id() == caller);
+            report = std::move(done);
+        }));
+    CHECK(job.running());
+    CHECK_FALSE(job.start(scene.store, {a}, options, {}, {}));  // biri sürerken ikincisi yok
+    constexpr int kMaxWaitSteps = 3000;
+    for (int step = 0; step < kMaxWaitSteps && job.running(); ++step) {
+        std::vector<std::function<void()>> work;
+        {
+            const std::scoped_lock lock(mutex);
+            work.swap(queue);
+        }
+        for (const auto& task : work)
+            task();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE_FALSE(job.running());
+    REQUIRE(report.has_value());
+    CHECK(imported_notes(*report) == std::vector<std::string>{"a.md", "b.md"});
+    REQUIRE(last_progress.has_value());
+    CHECK(last_progress->done == 2);
+    CHECK(last_progress->total == 2);
 }

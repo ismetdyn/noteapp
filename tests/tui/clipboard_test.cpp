@@ -389,7 +389,7 @@ struct ListFixture {
         tui::ListHost{store, mutex, internal, system, state, preview, status, [] {}, [] {}}};
     std::optional<tui::ConfirmState> confirm;
 
-    int right_x() const { return state.layout().geometry(kWidth, true).right_x + 1; }
+    int right_x() const { return state.layout().geometry(kWidth, true).right_x + 2; }  // kenar, iç boşluk
     static constexpr int kTopRow = 2;
 
     void put(const std::string& name, std::string_view bytes) const {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/document.hpp"
+#include "app/settings.hpp"
 
 #include <cstddef>
 #include <optional>
@@ -40,7 +41,7 @@ struct SaveForm {
 };
 
 using ConflictChoice = app::ConflictChoice;  // çakışma seçenekleri iki arayüzde ortak
-enum class CloseChoice { Save, Discard, Cancel };
+using CloseChoice = app::CloseChoice;        // kapanış seçenekleri de (TUI Ayarlar Esc sorusu)
 
 // Düğmeli soru: varsayılan (Enter) ve Esc düğmesi veri olarak tutulur, böylece çizimsiz test edilir.
 template <typename Choice> struct ChoiceBox {
@@ -56,6 +57,7 @@ template <typename Choice> struct ChoiceBox {
 // Varsayılan düğme "benimkini kopya olarak kaydet" (veri kaybettirmeyen seçenek), Esc = vazgeç.
 ChoiceBox<ConflictChoice> make_conflict_box(const std::string& path);
 ChoiceBox<CloseChoice> make_close_box();
+// Ayarlar'dan çıkış ve pencere kapanışı: varsayılan ve Esc düğmesi Vazgeç (Ayarlar'da kalınır).
 ChoiceBox<CloseChoice> make_close_settings_box();
 // Silme onayı: varsayılan ve Esc düğmesi "Vazgeç" (geri alınamaz işlem; Enter'a basmak silmesin).
 ChoiceBox<bool> make_delete_box(const std::string& message);

@@ -3,6 +3,7 @@
 
 [error]
 invalid_path = "Invalid path '{path}': {reason}"
+out_of_memory = "Not enough memory to read '{path}'; it was not imported"
 io = "I/O error at '{path}': {detail}"
 not_found = "Not found: {path}"
 already_exists = "Already exists: {path}"
@@ -170,7 +171,7 @@ tab_closed_missing = "Tab closed: '{path}' no longer exists"
 map_whole = "whole graph"
 map_depth = "depth {depth}"
 map_tags = " · tags"
-map_status = "{scope}{tags}  Tab select  Enter open  C connect  arrows + - 0  w whole  t tags  1-6 depth"
+map_status = "{scope}{tags}  Tab select  Enter open  C connect  arrows + - 0  w whole  t tags  1-{max} depth"
 map_link = "{from} → {to}  Tab target  Enter connect  d remove edge  Esc cancel"
 map_choose = "{from} → {to}  r related  l link ([[wiki]] in {from})  Esc cancel"
 map_no_edge = "No edge between {from} and {to}"
@@ -302,6 +303,7 @@ Preview (read-only)
 k j  J K      1 line, 5 lines
 ^U ^D         half a page
 PgUp PgDn     scroll by page
+⇧← ⇧→         raw: long lines sideways
 F2            change path and name
 g G           top / bottom
 c             copy the whole note
@@ -343,7 +345,7 @@ Terminal paste arrives as typing.
 Map (palette view.map; view.tree returns)
 ← → ↑ ↓       pan  + -  zoom  0 fit
 Tab ⇧Tab      select a note, Enter opens it
-w t           whole graph, tags  1-6 depth
+w t           whole graph, tags  1-9 depth
 /             search lights matching notes
 C             connect from the selected note:
               Tab target, Enter connect (note:
@@ -397,7 +399,7 @@ test_failed = "⚠ {detail}"
 settings_hints = "↑/↓ move  ←/→ change  Enter save  Esc cancel"
 settings_saved = "Settings saved"
 settings_config_broken = "Config file unreadable, not saved: {path}"
-settings_confirm_discard = "Discard changes?"
+settings_confirm_leave = "There are unsaved changes. Save them?"
 settings_sync_token = "Access token"
 token_stored = "in keychain ✓"
 token_none = "none"
@@ -458,6 +460,7 @@ moved_to = "Moved to: {to}"
 rename_hints = "Enter save  Esc cancel  Tab complete"
 export_label = "PDF to:"
 import_label = "Import file or folder:"
+import_cancel_hint = "Esc cancels"
 export_exists = "'{path}' exists; Enter again replaces it"
 export_binary = "Binary note cannot be exported: {path}"
 exported = "Exported: {path}"
@@ -528,6 +531,7 @@ import_folder = "Import folder…"
 toolbar_import = "Import"
 toolbar_import_tip = "Import files or folders as notes into the current folder (you can also drop them on the window)"
 import_dialog_failed = "The file dialog could not be opened: {detail}"
+import_cancel = "Cancel import"
 tab_notes = "Notes"
 links_title = "Links ({count})"
 links_hint = "Ctrl+L open or close"
@@ -732,7 +736,8 @@ preview = "Preview"
 edit = "Edit"
 preview_tip = "Show the formatted Markdown, read-only; [[links]] open their note (Ctrl+Shift+V)"
 edit_tip = "Back to editing the text (Ctrl+Shift+V)"
-preview_unavailable = "Preview needs a text note of at most {size}"
+preview_unavailable = "Preview needs an editable text note"
+preview_too_large = "Too large for the rendered preview (limit {limit}, limits.tui.view_bytes), raw text"
 preview_rows_cut = "… {count} more rows not shown (limits.tui.table_rows)"
 preview_columns_cut = "… {count} more columns not shown (limits.tui.table_columns)"
 preview_lines_cut = "… {count} more lines not shown (limits.tui.view_lines)"
@@ -830,13 +835,18 @@ binary_note = "Binary note cannot be shown: {path}"
 ls_usage = "Usage: note ls [QUERY] [-f FOLDER] [-n N] [-l | -0 | --json]"
 tags_usage = "Usage: note tags [--json]"
 import_usage = "Usage: note import PATH... [--folder FOLDER] [--type TYPE] [--name NAME (one PATH only)] [--overwrite] [--json]"
-import_progress = "Importing..."
+import_progress = "Importing {done}/{total}..."
+import_progress_item = "Importing {done}/{total}: {name}"
 import_done = "Imported: {source} -> {path}"
 import_renamed = "Imported: {source} -> {path} (the name was taken)"
 import_overwritten = "Overwritten: {path} <- {source}"
 import_skipped = "Skipped: {source} ({reason})"
 import_failed = "NOT imported: {source}: {error}"
 import_hidden = "Left out {count} hidden entries (names starting with '.'); give a hidden path by name to import it"
+import_cancelled = "Stopped: {count} entries were not imported (a folder counts once)"
+import_cancelling = "Cancelling the import…"
+import_busy = "An import is already running; wait for it or cancel it"
+import_start_failed = "The import could not start; see the log"
 import_summary = "Imported: {imported}, skipped: {skipped}, not imported: {failed}"
 view_usage = "Usage: note view save NAME CYPHER [--force] | ls [--json] | run NAME [--json] | rm NAME | show NAME"
 view_saved = "Saved view: {name}"

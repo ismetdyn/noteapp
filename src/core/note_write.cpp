@@ -23,8 +23,7 @@ using graph::NodeId;
 
 namespace {
 
-constexpr unsigned kHlcCounterBits = 16;        // hlc = ms << 16 | sayaç (SPEC-graph, tasarım)
-constexpr std::size_t kMaxExtensionBytes = 32;  // bundan uzunu uzantı sayılmaz: damgayı sığdırmak gerekir
+constexpr unsigned kHlcCounterBits = 16;  // hlc = ms << 16 | sayaç (SPEC-graph, tasarım)
 
 std::int64_t to_ms(std::chrono::system_clock::time_point when) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(when.time_since_epoch()).count();

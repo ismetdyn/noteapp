@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/import_files.hpp"
 #include "app/item_ops.hpp"
 #include "app/trash_ops.hpp"
 #include "core/config.hpp"
@@ -55,13 +56,16 @@ struct ListHost {
     core::Config* config = nullptr;  // palet `icons.toggle` günceller; yalnız UI iş parçacığı yazar
     // Not ya da klasör taşındı (F2, `m`, klasör adı): açık sekmeler yeni yolu izler. Listeden önce çağrılır.
     std::function<void(const std::string& from, const std::string& to)> on_moved = {};
+    // İşçiden UI iş parçacığına iş (main: app_.Post ve çizim isteği); içe alma ilerlemesi ve raporu.
+    std::function<void(std::function<void()>)> post = {};
 };
 
 class ListActions {
 public:
     explicit ListActions(ListHost host)
         : host_(std::move(host)),
-          trash_(host_.config ? host_.config->limits.app.trash_undo_steps : core::Limit{}) {}
+          trash_(host_.config ? host_.config->limits.app.trash_undo_steps : core::Limit{}),
+          import_(host_.post) {}
 
     void run(Intent intent, std::optional<ConfirmState>& confirm);
     // `L` yol girdisi açar: main'e dal eklemeden aynı yoldan yürür.
@@ -77,9 +81,14 @@ public:
     void begin_move_to(std::optional<RenameState>& rename);
     // `L`: boş girdi, Tab not yollarını önerir; Enter NoteStore::add_relation, hata girdide kalır.
     void begin_link(std::optional<RenameState>& rename);
-    // Palet `import`: boş yol girdisi; Enter app::import_paths'le `folder`a alır (GUI ile aynı kural). Hiçbir
-    // şey alınamazsa neden girdide kalır; alınınca özet durum satırında, ilk not REVIEW'da açılır.
+    // Palet `import`: boş yol girdisi; Enter app::import_paths'le `folder`a alır (GUI ile aynı kural). İçe
+    // alma işçide (app::ImportJob, host_.post): girdi kapanır, ilerleme durum satırında. Hiçbir şey
+    // alınamazsa girdi yazılanla ve nedeniyle geri açılır; alınınca özet durum satırında, ilk not REVIEW'da
+    // açılır (editördeyken odak çalınmaz). Biri sürerken ikincisi girdide reddedilir.
     void begin_import(std::optional<RenameState>& rename, std::string folder);
+    bool importing() const { return import_.running(); }
+    // İçe alma sürerken Esc ve Ctrl+C (editör dışında) onu durdurur: alınanlar kalır. Tüketildiyse true.
+    bool cancel_import_on(Key key, Focus focus);
     // `a` Enter: `/` ile biten ad klasördür, Listede kalır; değilse boş not oluşur ve `open` çağrılır. Ad
     // klasör görünümünde geçerli klasöre göredir. Hata satırda kalır.
     void submit_new_row(std::optional<NewRowState>& row, const NewRowDefaults& defaults,
@@ -109,6 +118,8 @@ private:
     void submit_move_to(std::optional<RenameState>& rename);
     void submit_link(std::optional<RenameState>& rename);
     void submit_import(std::optional<RenameState>& rename);
+    // UI iş parçacığında, rapor gelince; `rename` main'in girdisidir (ListActions'tan uzun yaşar).
+    void finish_import(std::optional<RenameState>& rename, const app::ImportReport& report);
     // `P`: GUI gibi `<ad>.pdf` önerir; PDF diskteki baytlardan noteapp_pdf ile üretilir. Var olan dosya ancak
     // aynı yolda ikinci Enter'la ezilir.
     void begin_export(std::optional<RenameState>& rename);
@@ -149,6 +160,10 @@ private:
     // Açık onay ilişki için (seçili not, satırdaki not). Vazgeçilirse sonraki run() düşürür.
     std::optional<std::pair<core::NotePath, core::NotePath>> relation_target_;
     std::filesystem::path export_replace_;  // uyarısı gösterilmiş var olan çıktı; sıradaki Enter onu ezer
+    // Sürmekte olan içe almanın girdisi: hiçbir şey alınamazsa yazılanla geri açılır.
+    std::optional<RenameState> import_prompt_;
+    // Son üye: işçi ilk durur ve katılır; post'u yukarıdaki üyelere dokunan işler gönderir.
+    app::ImportJob import_;
 };
 
 }  // namespace noteapp::tui

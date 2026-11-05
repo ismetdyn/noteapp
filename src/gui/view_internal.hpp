@@ -114,15 +114,12 @@ struct View::Platform {
     std::vector<ImWchar> icon_ranges = icon_glyph_ranges();
 };
 
-// Önizlemenin ayrıştırma ve yerleşim önbelleği: kare başına yalnız görünen koşular çizilir. Bloklar metin
-// değişince, yerleşim genişlik ya da yazı boyu değişince yeniden kurulur.
+// Önizlemenin ayrıştırma ve yerleşim önbelleği: kare başına yalnız görünen parçalar ve koşular çizilir.
+// Parçalar metin değişince, yerleşim genişlik ya da yazı boyu değişince yeniden kurulur.
 struct View::PreviewCache {
-    std::string source;
-    std::vector<pdf::Block> blocks;
-    PreviewLayout layout;
-    float width = -1.0F;
-    float font_size = 0.0F;
-    PreviewFonts fonts;  // Ayarlar'da aile değişince yerleşimin yüzleri de değişir
+    std::string source;  // `document` buna işaret eder
+    // Parça parça yerleşim; yazı ailesi (Ayarlar), boy ya da genişlik değişince kendisi yeniden yerleştirir.
+    PreviewDocument document;
     // Yerleşimin kurulduğu andaki eksik hedefler: senkron ya da kayıt hedefi oluşturunca bağlantı canlanır.
     std::vector<std::string> missing;
     // csv/json: metin, tür ya da tablo sınırı değişince yeniden ayrıştırılır; nullopt = geçersiz, ham metin.

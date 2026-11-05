@@ -103,6 +103,8 @@ void GuiState::show_sync_status(const sync::SyncStatus& status, bool running) {
 void GuiState::apply_settings(const core::Config& before, const core::Config& after) {
     config_ = after;
     autosave_.set_delay(std::chrono::milliseconds(config_.tuning.autosave_ms));
+    map_.set_node_limit(config_.limits.app.map_nodes);  // app::adopt_live_limits: dosyadan gelir
+    map_.set_depth_limit(config_.limits.app.map_depth);
     if (before.notes_dir != after.notes_dir) {
         // SettingsPage kaydetmeden önce flush ettirdi: tampon temiz, eski dizinin notu bırakılır.
         store_ = core::NoteStore::for_config(config_);

@@ -400,11 +400,11 @@ TEST_CASE("row look: no selection marker, the highlight is the row, notes have n
     select_label(s, "c.md");
     const auto screen = draw(s);
     const std::string row = row_of(screen, kFirstRowY + 2);
-    CHECK(row.find("│ 3   c.md") == 0);
-    CHECK(screen.PixelAt(1, kFirstRowY + 2).inverted);
+    CHECK(row.find("│  3   c.md") == 0);
+    CHECK(screen.PixelAt(tui::kPaneContentX, kFirstRowY + 2).inverted);
     CHECK(screen.PixelAt(tui::row_marker_column(s, 2), kFirstRowY + 2).character == " ");  // notta ok yok
     CHECK_FALSE(has(screen.ToString(), ">3"));
-    CHECK_FALSE(screen.PixelAt(1, kFirstRowY).inverted);
+    CHECK_FALSE(screen.PixelAt(tui::kPaneContentX, kFirstRowY).inverted);
     CHECK(ftxui::string_width("▸") == 1);
     CHECK(ftxui::string_width("▾") == 1);
 }
@@ -415,8 +415,9 @@ TEST_CASE("row look: with the right pane focused the selection keeps a dim highl
     s.handle(Key::Right);
     REQUIRE(s.focus() == Focus::Preview);
     const auto screen = draw(s);
-    CHECK_FALSE(screen.PixelAt(1, kFirstRowY + 2).inverted);
-    CHECK(screen.PixelAt(1, kFirstRowY + 2).background_color == ftxui::Color(ftxui::Color::GrayDark));
+    CHECK_FALSE(screen.PixelAt(tui::kPaneContentX, kFirstRowY + 2).inverted);
+    CHECK(screen.PixelAt(tui::kPaneContentX, kFirstRowY + 2).background_color ==
+          ftxui::Color(ftxui::Color::GrayDark));
 }
 
 TEST_CASE("row look: note details are an indented block with no marker, also at depth") {
@@ -426,7 +427,7 @@ TEST_CASE("row look: note details are an indented block with no marker, also at 
     s.handle(Key::Char, " ");
     const auto screen = draw(s);
     const int y = kFirstRowY + static_cast<int>(s.selected()) + 1;
-    CHECK(row_of(screen, y).find("│      size:") == 0);
+    CHECK(row_of(screen, y).find("│       size:") == 0);
     CHECK(screen.PixelAt(tui::row_marker_column(s, s.selected()), y - 1).character == " ");
 }
 

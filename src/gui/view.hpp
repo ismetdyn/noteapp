@@ -27,6 +27,7 @@ namespace noteapp::gui {
 struct GuiCommand;
 enum class CommandScope;
 struct PreviewFonts;
+struct PreviewLayout;
 
 // Düğme dili (.engineering/design/ui-redesign.md §3.4): ikincil dolgu, hayalet (zeminsiz; GhostDanger üzerine
 // gelince yıkıcı renkte), birincil (accent_fill) ve yıkıcı (danger_fill).
@@ -200,7 +201,10 @@ private:
     };
     StatusMessage editor_notice() const;  // editörün iletisi; yoksa metni boş
     void draw_preview(float reserved_height);
-    void draw_markdown_preview();
+    // request: bu karede istenen klavye kaydırması (piksel); to_end: sona atlama (End).
+    void draw_markdown_preview(float request, bool to_end);
+    void draw_preview_links(const PreviewLayout& layout, ImVec2 origin, float top, float bottom);
+    void draw_raw_preview();  // limits.tui.view_bytes üstü: neden + ham metin (TUI REVIEW gibi)
     void draw_data_preview();  // csv ve json: TUI REVIEW'un ayrıştırması (app::parse_csv, app::pretty_json)
     void draw_csv_table(const app::CsvTable& table);
     void draw_json_lines(const std::vector<app::JsonLine>& lines);

@@ -123,10 +123,14 @@ int run_import(const ParsedArgs& args, const core::Config& config) {
     core::NoteStore store = core::NoteStore::for_config(config);
     if (const auto health = store.health())
         return fail(*health);
-    // ponytail: tek "içe alınıyor" satırı; n/m sayacı app::import_paths'e ilerleme geri çağrısı ister.
+    // Eşzamanlı: sayaç her girdide aynı satırı yeniler (adsız: uzun yol satırı kaydırıp silmeyi bozardı).
     const app::ImportReport report = [&] {
-        const ProgressLine progress(core::tr("cli.import_progress"));
-        return app::import_paths(store, sources, options);
+        ProgressLine line({});
+        return app::import_paths(
+            store, sources, options, {.progress = [&line](const app::ImportProgress& progress) {
+                line.update(core::tr("cli.import_progress", {{"done", std::to_string(progress.done)},
+                                                             {"total", std::to_string(progress.total)}}));
+            }});
     }();
     if (json)
         print_json(report);

@@ -114,7 +114,7 @@ NoteMap build_note_map(std::span<const core::NoteMeta> notes, std::span<const co
 
 void MapModel::set_options(const MapOptions& options) {
     MapOptions clamped = options;
-    clamped.depth = std::clamp(options.depth, MapOptions::kMinDepth, MapOptions::kMaxDepth);
+    clamped.depth = std::clamp(options.depth, MapOptions::kMinDepth, max_depth());
     if (clamped == options_)
         return;
     options_ = clamped;
@@ -126,6 +126,15 @@ void MapModel::set_node_limit(core::Limit limit) {
         return;
     node_limit_ = std::move(limit);
     stale_ = true;
+}
+
+void MapModel::set_depth_limit(core::Limit limit) {
+    depth_limit_ = std::move(limit);
+    set_options(options_);
+}
+
+int MapModel::max_depth() const {
+    return static_cast<int>(std::min<std::size_t>(depth_limit_.cap(), std::numeric_limits<int>::max()));
 }
 
 void MapModel::update(const EdgeReader& read, std::span<const core::NoteMeta> notes,

@@ -1,6 +1,7 @@
 #include "app/import_files.hpp"
 #include "app/item_ops.hpp"
 #include "core/i18n.hpp"
+#include "edit/display_text.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/gui_state_internal.hpp"
 
@@ -244,14 +245,35 @@ void GuiState::paste() {
 void GuiState::import_files(std::span<const std::filesystem::path> sources) {
     if (sources.empty())
         return;
-    const std::string dest = target_folder();
-    const app::ImportReport report = app::import_paths(store_, sources, app::import_options(config_, dest));
-    if (report.wrote)
-        changed();
-    rescan();
-    if (!report.imported.empty())
-        open_note(report.imported.front().note);  // sekme kuralı: tutulan ya da kirli sekme yerinde kalır
-    status_ = app::import_status(report);         // açılış durum yazabilir: özet en son
+    if (import_.running()) {
+        status_ = core::tr("cli.import_busy");
+        return;
+    }
+    // store_ kopyası aynı bağlantıyı paylaşır (thread-safe): yazmalar deponun kilidiyle sıralanır. Yollar
+    // dosya sisteminden gelir, durum çubuğu tek satırdır: denetim karakterleri TUI'deki gibi arınır.
+    const bool started = import_.start(
+        store_, {sources.begin(), sources.end()}, app::import_options(config_, target_folder()),
+        [this](const app::ImportProgress& progress) {
+            status_ = tui::terminal_safe(app::import_progress_text(progress));
+        },
+        [this](const app::ImportReport& report) {
+            if (report.wrote)
+                changed();
+            rescan();
+            // Sekme kuralı: tutulan ya da kirli sekme yerinde kalır. Açılış durum yazabilir: özet en son.
+            if (!report.imported.empty())
+                open_note(report.imported.front().note);
+            status_ = tui::terminal_safe(app::import_status(report));
+        });
+    if (!started)
+        error_status_ = status_ = core::tr("cli.import_start_failed");
+}
+
+void GuiState::cancel_import() {
+    if (!import_.running())
+        return;
+    import_.cancel();
+    status_ = core::tr("cli.import_cancelling");
 }
 
 void GuiState::import_dialog_failed(const std::string& detail) {

@@ -53,7 +53,8 @@ void append_runs(ftxui::Elements& out, std::string_view text, std::size_t begin,
     plain(at, end);
 }
 
-// Baştan `cells` hücreye sığan kod noktaları.
+}  // namespace
+
 std::string head_cells(std::string_view value, int cells) {
     std::string shown;
     std::size_t at = 0;
@@ -69,8 +70,6 @@ std::string head_cells(std::string_view value, int cells) {
     }
     return shown;
 }
-
-}  // namespace
 
 InputCells input_text_cells(const InputLine& line, std::span<const InputSpan> spans, const std::string& ghost,
                             int room) {

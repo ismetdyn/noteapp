@@ -69,7 +69,8 @@ void GuiState::open_palette() {
         run_palette_command(*id);
 }
 
-// Çalışamayan komut çalıştırılmaz, son kullanılanlara da girmez: nedeni durum çubuğunda.
+// Çalışamayan komut çalıştırılmaz, son kullanılanlara da girmez: nedeni durum çubuğunda. Ayarlar'dan çıkış
+// sorusunda Vazgeç de komutu koşturmaz, kaydı da yazılmaz.
 void GuiState::run_palette_command(std::string_view id) {
     const app::CommandSpec* spec = app::find_command(id);
     const auto command = std::ranges::find(kGuiCommands, id, &GuiCommand::id);
@@ -79,6 +80,8 @@ void GuiState::run_palette_command(std::string_view id) {
         status_ = core::tr(reason);
         return;
     }
+    if (!leave_settings_for(*this, *command))
+        return;
     app::remember_command(recent_commands_, spec->id, config_.limits.app.recent_commands);
     save_gui_state();
     command->run(*this);

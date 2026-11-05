@@ -247,7 +247,14 @@ config'tedir.
   (`tui::view_limits_of`, `syntax_limits_of`, `completion_limits_of`, `lsp_limits_of`); bir test bu struct'ların
   kod varsayılanlarının defaults.toml ile aynı olduğunu denetler. `note graph status`, `migrate --new` ve TUI
   açılış ipucu depoyu config'le açar (`limits.core.folder_path_bytes`). OSC 52'nin 75.000 baytı terminal protokolü
-  sınırıdır, config'te değildir.
+  sınırıdır, config'te değildir. `view_bytes` GUI önizlemesinin de sınırıdır: üstündeki not iki arayüzde de
+  reddedilmez, biçimlenmeden ham metinle ve nedeniyle (anahtar adı dahil) gösterilir.
+- **Uygulama (L1):** `[limits.app]` `recent_commands` (20), `trash_undo_steps` (0), `tabs` (0), `map_nodes` (2.000) ve
+  `map_depth` (6; harita çevre kapsamının en çok adımı, `MapOptions::kMaxDepth` sabiti yerine; TUI `1`–`9` tuşları ve GUI
+  adımlayıcısı `app::MapModel::max_depth`'ten okur, sınır küçülürse geçerli derinlik ona iner). İki arayüz aynı değeri
+  kullanır (SPEC-gui/SPEC-tui "Harita", "Sekmeler"). İki arayüzde Ayarlar'da Kaydet `map_nodes` ve `map_depth`'i dosyadan
+  okuyup çalışan haritaya hemen uygular (`app::adopt_live_limits`; uygulama açıkken `note config set` ile değişmiş olabilir);
+  öteki sınırlar açılışta kurulan modüllere verilir, yeniden başlatınca geçerli olur.
 
 ### i18n
 - Kataloglar `resources/i18n/{en,tr}.toml` (düz anahtarlar, `{ad}` yer tutucuları), derlemede gömülür.

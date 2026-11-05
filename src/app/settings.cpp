@@ -43,4 +43,9 @@ bool sync_restart_needed(const core::Config& before, const core::Config& after) 
            before.notes_dir != after.notes_dir;
 }
 
+void adopt_live_limits(core::Config& live, const core::Config& on_disk) {
+    live.limits.app.map_nodes = on_disk.limits.app.map_nodes;
+    live.limits.app.map_depth = on_disk.limits.app.map_depth;
+}
+
 }  // namespace noteapp::app

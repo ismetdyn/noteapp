@@ -83,6 +83,7 @@ ChoiceBox<CloseChoice> make_close_settings_box() {
     ChoiceBox<CloseChoice> box = make_close_box();
     box.title = core::tr("gui.close_settings_title");
     box.message = core::tr("gui.close_settings_text");
+    box.default_button = box.escape_button;  // Vazgeç: Enter Ayarlar'da bırakır (TUI Esc sorusuyla aynı)
     return box;
 }
 

@@ -3,6 +3,7 @@
 #include "app/commands.hpp"
 #include "app/data_preview.hpp"
 #include "app/document.hpp"
+#include "app/import_files.hpp"
 #include "app/item_ops.hpp"
 #include "app/listing.hpp"
 #include "app/note_map.hpp"
@@ -340,10 +341,14 @@ public:
     void paste();
 
     // --- Dosya içe alma (`import`: dosya/klasör diyaloğu, sürükle-bırak; TUI paleti ve CLI aynı kural) ---
-    // Yollar target_folder()'a app::import_paths'le alınır; özet durum çubuğunda, ilk not sekme kuralıyla
-    // açılır (tutulan ya da kirli sekme kalır, not yeni sekmede).
+    // Yollar target_folder()'a app::import_paths'le işçide alınır (app::ImportJob; pencere beklemez):
+    // ilerleme durum çubuğunda (post ile, boşta kare yok), Durdur düğmesiyle. Bitince özet durum çubuğunda,
+    // ilk not sekme kuralıyla açılır (tutulan ya da kirli sekme kalır, not yeni sekmede). Biri sürerken
+    // ikincisi reddedilir.
     void import_files(std::span<const std::filesystem::path> sources);
     void import_dialog_failed(const std::string& detail);  // SDL diyaloğu açamadı (SDL_GetError)
+    bool importing() const { return import_.running(); }
+    void cancel_import();  // alınanlar kalır; özet durdurulan girdi sayısını söyler
     // Komut ve menü yalnız ister; yerel diyaloğu View açar (SDL), seçilenler post ile import_files'a gelir.
     enum class ImportRequest { None, Files, Folders };
     void request_import(ImportRequest request) { import_request_ = request; }
@@ -360,6 +365,7 @@ public:
     // --- Not haritası (Harita görünümü, SPEC-gui "Harita") ---
     const MapOptions& map_options() const { return map_.options(); }
     void set_map_options(const MapOptions& options);
+    int map_max_depth() const { return map_.max_depth(); }  // limits.app.map_depth: adımlayıcının üstü
     // Görünür harita ve yerleşimi; gerekirse kurulur. Depo yalnız taramada değişiklik görülünce okunur
     // (kenarlar tek okumada); kare başına okunmaz.
     const NoteMap& note_map();
@@ -441,10 +447,12 @@ public:
     // Tür TUI REVIEW'la aynı kuraldan (app::preview_kind_for); önizleme düğmesi yalnız bu türlerde görünür.
     app::PreviewKind preview_kind() const;
     bool previewable_type() const { return preview_kind() != app::PreviewKind::None; }
-    // Sınırlar TUI'nin biçimli görünümüyle aynı anahtarlar: limits.tui.view_bytes (üstündeki not ham metinle
-    // düzenlenir), view_lines, table_rows, table_columns.
+    // Sınırlar TUI'nin biçimli görünümüyle aynı anahtarlar: limits.tui.view_bytes, view_lines, table_rows,
+    // table_columns.
     const core::TuiLimits& view_limits() const { return config_.limits.tui; }
-    bool can_preview() const;  // önizlenen tür, düzenlenebilir metin ve view_bytes'ın altında
+    bool can_preview() const;  // önizlenen tür ve düzenlenebilir metin
+    // limits.tui.view_bytes'ın üstü: önizleme reddedilmez, TUI REVIEW gibi ham metin ve nedeni gösterilir.
+    bool preview_too_large() const { return !view_limits().view_bytes.allows(buffer().size()); }
     // Oturum boyunca tüm önizlenen notlarda (TUI'deki `R`); not önizlenemiyorsa editör görünür.
     bool showing_preview() const { return preview_ && can_preview(); }
     void toggle_preview();  // Ctrl+Shift+V; düzenlemeye dönünce odak editöre
@@ -482,9 +490,12 @@ public:
     void open_in_new_tab(const core::NotePath& path);
 
     // --- Eylemler (kısayollar) ---
-    void focus_search();       // Ctrl+K / Ctrl+P
+    void focus_search();       // Ctrl+K / Ctrl+P; Ayarlar'dan çıkış sorusu Vazgeç'le biterse odak değişmez
     void show_settings_tab();
     void toggle_settings_tab();  // Ctrl+, ve palet: Notlar ↔ Ayarlar
+    // Ayarlar'dan Notlar'a (←, Ctrl+, , arama): kaydedilmemiş form pencere kapanışının sorusunu sorar
+    // (confirm_close_settings). false = Ayarlar'da kalındı.
+    bool leave_settings();
     void set_tab(Tab tab) { tab_ = tab; }
     Tab tab() const { return tab_; }
     void new_note(const std::string& first_line = {});  // Ctrl+N; nvALT: arama kutusunda Enter
@@ -750,7 +761,7 @@ private:
     // Harita: depodan okunan kenarlar (taramada değişiklik görülünce bayatlar) ve onlardan kurulan görünür
     // harita (seçenek ya da merkez değişince). Konumlar GraphLayout'ta anahtarla korunur. Model TUI ile
     // ortak.
-    app::MapModel map_{config_.limits.app.map_nodes};  // config_ önce kurulur (bildirim sırası)
+    app::MapModel map_{config_.limits.app.map_nodes, config_.limits.app.map_depth};  // config_ önce kurulur
     std::uint64_t data_version_ = 0;
     bool rows_stale_ = true;
     std::size_t browser_rebuilds_ = 0;
@@ -841,6 +852,7 @@ private:
     // kapanmasını bekler: request_close editör açıkken kapanmaz.
     std::jthread external_;
     std::jthread stray_probe_;  // açılıştaki geçiş dışı dosya taraması (app::count_stray_files)
+    app::ImportJob import_{[this](std::function<void()> work) { post(std::move(work)); }};  // post çağırır
     // Kendi depo bağlantısıyla arka planda okur; post çağırmaz, yine de UI üyelerinden önce yıkılır.
     static constexpr std::chrono::seconds kWordTableIdle{1};  // TUI ile aynı tempo
     tui::WordTableBuilder word_tables_{

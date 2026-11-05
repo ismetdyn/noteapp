@@ -3,6 +3,7 @@
 
 [error]
 invalid_path = "Geçersiz yol '{path}': {reason}"
+out_of_memory = "'{path}' okunamadı: bellek yetmiyor; içe alınmadı"
 io = "'{path}' için G/Ç hatası: {detail}"
 not_found = "Bulunamadı: {path}"
 already_exists = "Zaten var: {path}"
@@ -170,7 +171,7 @@ tab_closed_missing = "Sekme kapandı: '{path}' artık yok"
 map_whole = "bütün çizge"
 map_depth = "derinlik {depth}"
 map_tags = " · etiketler"
-map_status = "{scope}{tags}  Tab seç  Enter aç  C bağla  oklar + - 0  w bütün  t etiket  1-6 derinlik"
+map_status = "{scope}{tags}  Tab seç  Enter aç  C bağla  oklar + - 0  w bütün  t etiket  1-{max} derinlik"
 map_link = "{from} → {to}  Tab hedef  Enter bağla  d kenarı kaldır  Esc vazgeç"
 map_choose = "{from} → {to}  r ilişkili  l bağlantı ({from} içine [[wiki]])  Esc vazgeç"
 map_no_edge = "{from} ile {to} arasında kenar yok"
@@ -302,6 +303,7 @@ sync:modified senkron durumuna göre
 k j  J K      1 satır, 5 satır
 ^U ^D         yarım sayfa
 PgUp PgDn     sayfa sayfa kaydır
+⇧← ⇧→         ham: uzun satırı yana kaydır
 F2            yol ve adı değiştir
 g G           baş / son
 c             notun tamamını kopyala
@@ -343,7 +345,7 @@ Terminalden yapıştırma yazar gibi gelir.
 Harita (palet view.map; view.tree döner)
 ← → ↑ ↓       kaydır  + -  yakınlaş  0 sığdır
 Tab ⇧Tab      not seç, Enter açar
-w t           bütün çizge, etiket  1-6 derinlik
+w t           bütün çizge, etiket  1-9 derinlik
 /             arama eşleşen notları yakar
 C             seçili nottan bağla: Tab hedef,
               Enter bağlar (not: r ilişkili,
@@ -398,7 +400,7 @@ test_failed = "⚠ {detail}"
 settings_hints = "↑/↓ gez  ←/→ değiştir  Enter kaydet  Esc iptal"
 settings_saved = "Ayarlar kaydedildi"
 settings_config_broken = "Ayar dosyası okunamıyor, kaydedilmedi: {path}"
-settings_confirm_discard = "Değişiklikler atılsın mı?"
+settings_confirm_leave = "Kaydedilmemiş değişiklikler var. Kaydedilsin mi?"
 settings_sync_token = "Erişim token'ı"
 token_stored = "kasada kayıtlı ✓"
 token_none = "yok"
@@ -459,6 +461,7 @@ moved_to = "Taşındı: {to}"
 rename_hints = "Enter kaydet  Esc vazgeç  Tab tamamla"
 export_label = "PDF yolu:"
 import_label = "İçe alınacak dosya ya da klasör:"
+import_cancel_hint = "Esc durdurur"
 export_exists = "'{path}' var; yeniden Enter üzerine yazar"
 export_binary = "İkili not dışa aktarılamaz: {path}"
 exported = "Dışa aktarıldı: {path}"
@@ -529,6 +532,7 @@ import_folder = "Klasör içe al…"
 toolbar_import = "İçe al"
 toolbar_import_tip = "Dosyaları ya da klasörleri geçerli klasöre not olarak alır (pencereye sürükleyip de bırakabilirsiniz)"
 import_dialog_failed = "Dosya diyaloğu açılamadı: {detail}"
+import_cancel = "İçe almayı durdur"
 tab_notes = "Notlar"
 links_title = "Bağlantılar ({count})"
 links_hint = "Ctrl+L aç ya da kapat"
@@ -733,7 +737,8 @@ preview = "Önizleme"
 edit = "Düzenle"
 preview_tip = "Biçimli Markdown'ı salt okunur gösterir; [[bağlantılar]] notunu açar (Ctrl+Shift+V)"
 edit_tip = "Metni düzenlemeye dön (Ctrl+Shift+V)"
-preview_unavailable = "Önizleme en çok {size} boyutundaki metin notunda açılır"
+preview_unavailable = "Önizleme yalnız düzenlenebilir metin notunda açılır"
+preview_too_large = "Biçimli önizleme için büyük (en çok {limit}, limits.tui.view_bytes), ham metin"
 preview_rows_cut = "… {count} satır daha gösterilmiyor (limits.tui.table_rows)"
 preview_columns_cut = "… {count} sütun daha gösterilmiyor (limits.tui.table_columns)"
 preview_lines_cut = "… {count} satır daha gösterilmiyor (limits.tui.view_lines)"
@@ -831,13 +836,18 @@ binary_note = "İkili not gösterilemez: {path}"
 ls_usage = "Kullanım: note ls [SORGU] [-f KLASÖR] [-n N] [-l | -0 | --json]"
 tags_usage = "Kullanım: note tags [--json]"
 import_usage = "Kullanım: note import YOL... [--folder KLASÖR] [--type TİP] [--name AD (yalnız tek YOL)] [--overwrite] [--json]"
-import_progress = "İçe alınıyor..."
+import_progress = "İçe alınıyor {done}/{total}..."
+import_progress_item = "İçe alınıyor {done}/{total}: {name}"
 import_done = "İçe alındı: {source} -> {path}"
 import_renamed = "İçe alındı: {source} -> {path} (ad doluydu)"
 import_overwritten = "Üzerine yazıldı: {path} <- {source}"
 import_skipped = "Atlandı: {source} ({reason})"
 import_failed = "İçe ALINMADI: {source}: {error}"
 import_hidden = "{count} gizli girdi ('.' ile başlayan) dışarıda bırakıldı; gizli bir yolu almak için adıyla verin"
+import_cancelled = "Durdu: {count} girdi içe alınmadı (klasör bir sayılır)"
+import_cancelling = "İçe alma durduruluyor…"
+import_busy = "Bir içe alma sürüyor; bitmesini bekleyin ya da durdurun"
+import_start_failed = "İçe alma başlatılamadı; ayrıntı günlükte"
 import_summary = "İçe alınan: {imported}, atlanan: {skipped}, alınamayan: {failed}"
 view_usage = "Kullanım: note view save AD CYPHER [--force] | ls [--json] | run AD [--json] | rm AD | show AD"
 view_saved = "Görünüm kaydedildi: {name}"

@@ -6,10 +6,12 @@
 #include "pdf/markdown_blocks.hpp"
 
 #include <algorithm>
+#include <cfloat>
 #include <climits>
 #include <cmath>
 #include <imgui.h>
 #include <imgui_internal.h>  // IMGUI_TABLE_MAX_COLUMNS
+#include <optional>
 #include <string_view>
 
 namespace noteapp::gui {
@@ -22,6 +24,47 @@ constexpr std::size_t kPanelMaxRows = 8;
 constexpr float kPanelMaxShare = 0.4F;
 constexpr float kInfoPairGapEms = 1.5F;  // bilgi panelinde yan yana iki alan çifti arası
 constexpr float kPreviewMeasureEms = 46.0F;
+
+// Ham önizlemede bir görüntü satırının en çok baytı. Uzun satır (base64, küçültülmüş JSON) bu boyda parçalara
+// bölünür, hiçbir bayt düşmez; ImGui görünen satırı her karede baştan ölçtüğü için kare işi satır boyuyla
+// değil bununla sınırlıdır (20 MiB'lık tek satır parçasız ~80 ms/kare). Kapasite sınırı değil, çizim parçası.
+constexpr std::size_t kRawRowBytes = 4096;
+constexpr std::size_t kRawHookBytes = 32;  // test kancası adına giren satır başı
+
+// Ham metnin görüntü satırları sırayla: '\n' satır sonu, uzun satır kod noktası sınırında kRawRowBytes'lık
+// parçalar. Boş satır da bir satırdır.
+class RawRows {
+public:
+    explicit RawRows(std::string_view text) : rest_(text) {}
+
+    std::optional<std::string_view> next() {
+        if (line_.empty()) {
+            if (done_)
+                return std::nullopt;
+            const std::size_t eol = rest_.find('\n');
+            line_ = rest_.substr(0, eol);
+            if (eol == std::string_view::npos)
+                done_ = true;
+            else
+                rest_.remove_prefix(eol + 1);
+            if (line_.empty())
+                return std::string_view{};
+        }
+        std::size_t cut = std::min(line_.size(), kRawRowBytes);
+        while (cut < line_.size() && cut > 0 && (static_cast<unsigned char>(line_[cut]) & 0xC0) == 0x80)
+            --cut;
+        if (cut == 0)  // geçerli UTF-8'de olmaz (önizleme düzenlenebilir metindedir); yine de ilerle
+            cut = std::min(line_.size(), kRawRowBytes);
+        const std::string_view row = line_.substr(0, cut);
+        line_.remove_prefix(cut);
+        return row;
+    }
+
+private:
+    std::string_view rest_;
+    std::string_view line_;
+    bool done_ = false;
+};
 
 // Sessiz bölüm başlığı (G6): çerçevesiz, seçili satırın zeminini almaz; üstünde 1 px ayraç. Yüksekliği
 // CollapsingHeader'ınki (FramePadding): panel payları (panel_height) değişmez.
@@ -264,12 +307,10 @@ void View::draw_header_row() {
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
                          std::max(0.0F, ImGui::GetContentRegionAvail().x - (trailing - spacing)));
     if (previewable) {
-        // Önizlenemeyen md (çok büyük ya da metin değil) düğmeyi kapalı gösterir, nedeni ipucunda.
+        // Önizlenemeyen md (metin değil) düğmeyi kapalı gösterir, nedeni ipucunda.
         const bool can = state_.can_preview();
-        const std::string tip =
-            !can ? core::tr("gui.preview_unavailable",
-                            {{"size", core::human_size(state_.view_limits().view_bytes.cap())}})
-                 : core::tr(state_.showing_preview() ? "gui.edit_tip" : "gui.preview_tip");
+        const std::string tip = !can ? core::tr("gui.preview_unavailable")
+                                     : core::tr(state_.showing_preview() ? "gui.edit_tip" : "gui.preview_tip");
         ImGui::BeginDisabled(!can);
         ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);  // kısayolu var; Tab sırası uzamasın
         if (button("preview_toggle", toggle_label))
@@ -309,27 +350,33 @@ void View::draw_preview(float reserved_height) {
     state_.set_preview_rows(ImGui::GetWindowHeight() / line);
     if (ImGui::IsWindowFocused())
         run_scope_commands(CommandScope::Preview);
-    if (const float lines = state_.take_preview_scroll(); lines != 0.0F)
-        ImGui::SetScrollY(std::clamp(ImGui::GetScrollY() + (lines * line), 0.0F, ImGui::GetScrollMaxY()));
-    if (state_.preview_kind() == app::PreviewKind::Markdown)
-        draw_markdown_preview();
+    // Klavye isteği piksel olarak; ImGui onu sonraki karede uygular.
+    float request = 0.0F;
+    const float lines = state_.take_preview_scroll();
+    if (lines != 0.0F) {
+        request = std::clamp(ImGui::GetScrollY() + (lines * line), 0.0F, ImGui::GetScrollMaxY()) - ImGui::GetScrollY();
+        ImGui::SetScrollY(ImGui::GetScrollY() + request);
+    }
+    if (state_.preview_too_large())
+        draw_raw_preview();
+    else if (state_.preview_kind() == app::PreviewKind::Markdown)
+        draw_markdown_preview(request, lines >= FLT_MAX);  // End: scroll_preview(FLT_MAX)
     else
         draw_data_preview();
     ImGui::EndChild();
     remember_item_center("preview");
 }
 
-void View::draw_markdown_preview() {
+void View::draw_markdown_preview(float request, bool to_end) {
     ImGui::PushFont(nullptr, kPreviewFontPixels);  // okuma metni bir kademe büyük; ölçek PushFont'ta
     PreviewCache& cache = *preview_;
     if (cache.source != state_.buffer()) {
         cache.source = state_.buffer();
-        cache.blocks = pdf::parse_markdown(cache.source, {.links = true});
-        cache.width = -1.0F;
+        cache.document.reset(cache.source);
     }
     if (cache.missing != state_.links().missing) {
         cache.missing = state_.links().missing;
-        cache.width = -1.0F;
+        cache.document.relayout();
     }
     // Okuma ölçüsü (G10): satır en çok 46 em (UI boyu; 15 px'te ≈ 690 px, 65–75 karakter), geniş pencerede
     // ortalı; dar pencerede tam genişlik. Kod ve tablo bunu aşarsa yatay kaydırılır.
@@ -337,22 +384,44 @@ void View::draw_markdown_preview() {
     const float width =
         std::min(available, kPreviewMeasureEms * kFontPixels * ImGui::GetStyle().FontScaleDpi);
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::floor((available - width) / 2.0F));
-    const float font_size = ImGui::GetFontSize();
-    const PreviewFonts faces = fonts();
-    if (width != cache.width || font_size != cache.font_size || faces.regular != cache.fonts.regular ||
-        faces.mono != cache.fonts.mono) {
-        cache.layout = layout_preview(cache.blocks, faces, font_size, width, [this](std::string_view target) {
-            return state_.resolves_link(target);
-        });
-        cache.width = width;
-        cache.font_size = font_size;
-        cache.fonts = faces;
+    const ImVec2 start = ImGui::GetCursorScreenPos();
+    const float scrolled = ImGui::GetScrollY();
+    // Görünen yükseklik kaydırma çubuğu ve kenarlıksız (InnerRect): ImGui'nin en büyük kaydırması da ona göredir,
+    // geniş kod bloğu yatay çubuk açınca End onun yüksekliği kadar eksik kalmasın.
+    const float height = ImGui::GetCurrentWindow()->InnerRect.GetHeight();
+    // Ölçülen parça yukarıdaki tahmini değiştirdiyse görünen metin yerinde kalsın: bu kare düzeltilmiş kaydırmayla
+    // çizilir, ImGui'ye sonraki kare için bildirilir.
+    const float top = cache.document.update(
+        scrolled, height, fonts(), ImGui::GetFontSize(), width,
+        [this](std::string_view target) { return state_.resolves_link(target); }, to_end,
+        2.0F * ImGui::GetStyle().WindowPadding.y);
+    if (top != scrolled)  // aynı karedeki klavye isteği düzeltmenin üstüne eklenir, kaybolmaz (End'de sonun kendisi)
+        ImGui::SetScrollY(to_end ? top : top + request);
+    const float bottom = top + height;
+    const ImVec2 origin(start.x, start.y + scrolled - top);
+    for (const PreviewDocument::Placed& placed : cache.document.visible(top, bottom)) {
+        const ImVec2 chunk_origin(origin.x, origin.y + placed.top);
+        draw_preview_layout(*placed.layout, chunk_origin, top - placed.top, bottom - placed.top);
+        ImGui::PushID(static_cast<int>(placed.chunk));
+        draw_preview_links(*placed.layout, chunk_origin, top - placed.top, bottom - placed.top);
+        ImGui::PopID();
+        if (!placed.first_block)
+            continue;
+        const auto& spans = placed.layout->block_spans;
+        for (std::size_t index = 0; index < spans.size(); ++index) {  // test kancası
+            const auto [block_top, block_bottom] = spans[index];
+            if (placed.top + block_bottom >= top && placed.top + block_top <= bottom)
+                item_rects_["preview_block:" + std::to_string(*placed.first_block + index)] = {
+                    origin.x, chunk_origin.y + block_top, origin.x + width, chunk_origin.y + block_bottom, false};
+        }
     }
-    const PreviewLayout& layout = cache.layout;
-    const ImVec2 origin = ImGui::GetCursorScreenPos();
-    const float top = ImGui::GetScrollY();
-    const float bottom = top + ImGui::GetWindowHeight();
-    draw_preview_layout(layout, origin, top, bottom);
+    ImGui::SetCursorScreenPos(start);
+    ImGui::Dummy(cache.document.size());
+    ImGui::PopFont();
+}
+
+// Yerleşimin [top, bottom] aralığındaki bağlantıları tıklanır yapar; `origin` yerleşimin ekrandaki sol üstü.
+void View::draw_preview_links(const PreviewLayout& layout, ImVec2 origin, float top, float bottom) {
     for (std::size_t index = 0; index < layout.hits.size(); ++index) {
         const PreviewHit& hit = layout.hits[index];
         if (hit.max.y < top || hit.min.y > bottom)
@@ -374,14 +443,44 @@ void View::draw_markdown_preview() {
         if (clicked || new_tab)
             queue([this, target, new_tab] { state_.open_wiki_link(target, new_tab); });
     }
-    for (std::size_t index = 0; index < layout.block_spans.size(); ++index) {  // test kancası
-        const auto [block_top, block_bottom] = layout.block_spans[index];
-        if (block_bottom >= top && block_top <= bottom)
-            item_rects_["preview_block:" + std::to_string(index)] = {origin.x, origin.y + block_top, origin.x + width,
-                                                                    origin.y + block_bottom, false};
+}
+
+// limits.tui.view_bytes üstü (TUI REVIEW'un kuralı): biçimlenmez; nedeni ve ham metin. Ayrıştırma, yerleşim
+// ve kopya yok: satırlar karede iki kez sayılır (toplam ve görünene kadar, memchr hızında), yalnız görünenler
+// ölçülüp çizilir.
+void View::draw_raw_preview() {
+    const std::string limit = core::human_size(state_.view_limits().view_bytes.cap());
+    ImGui::TextDisabled("%s", core::tr("gui.preview_too_large", {{"limit", limit}}).c_str());
+    const std::string_view text = state_.buffer();
+    std::size_t total = 0;
+    for (RawRows counter(text); counter.next();)
+        ++total;
+    ImGui::PushFont(fonts().mono, 0.0F);
+    // Satırlar tek metin bloğu gibi bitişik (TextUnformatted'in çok satırlı çizimi gibi).
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.0F));
+    RawRows rows(text);
+    int index = 0;  // `rows`un sıradaki satırı
+    ImGuiListClipper clipper;
+    clipper.Begin(static_cast<int>(std::min<std::size_t>(total, INT_MAX)));
+    while (clipper.Step()) {
+        if (clipper.DisplayStart < index) {  // aralıklar artan sıradadır; değilse baştan say
+            rows = RawRows(text);
+            index = 0;
+        }
+        for (; index < clipper.DisplayStart; ++index)
+            rows.next();
+        for (; index < clipper.DisplayEnd; ++index) {
+            const std::string_view row = rows.next().value_or(std::string_view{});
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            if (row.empty())
+                ImGui::TextUnformatted("");
+            else
+                ImGui::TextUnformatted(row.data(), row.data() + row.size());
+            // Test kancası: ImGui günlüğü açıkken kırpıcı kırpmaz, çizilen satırlar buradan görülür.
+            remember_rect("preview_raw:" + std::string(row.substr(0, kRawHookBytes)), at, ImGui::GetItemRectMax());
+        }
     }
-    ImGui::SetCursorScreenPos(origin);
-    ImGui::Dummy(layout.size);
+    ImGui::PopStyleVar();
     ImGui::PopFont();
 }
 

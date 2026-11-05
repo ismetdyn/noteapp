@@ -133,8 +133,8 @@ TEST_CASE("x marks the row, moves down, shows a marker and a count; X clears") {
     CHECK(f.state.marked_count() == 1);
     CHECK(f.state.is_marked(f.state.rows()[0]));
     const auto screen = draw(f.state);
-    CHECK(row_of(screen, 2).find("│*") == 0);
-    CHECK(screen.PixelAt(1, 2).foreground_color == ftxui::Color(ftxui::Color::Yellow));
+    CHECK(row_of(screen, 2).find("│ *") == 0);
+    CHECK(screen.PixelAt(tui::kPaneContentX, 2).foreground_color == ftxui::Color(ftxui::Color::Yellow));
     CHECK(has(row_of(screen, kHeight - 1), "selected: 1"));
     f.press("x");
     f.press("k");

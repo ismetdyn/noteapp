@@ -181,10 +181,14 @@ TEST_CASE("sync and import show a progress line on a terminal and clear it when 
     const TempDir source;
     {
         std::ofstream(source.path() / "a.txt", std::ios::binary) << "a";
+        std::ofstream(source.path() / "b.txt", std::ios::binary) << "b";
     }
-    const auto imported = run_in_pty(NOTEAPP_NOTE_EXE, {"import", utf8(source.path() / "a.txt")});
+    // Sayaç app::import_paths'in ilerleme geri çağrısından: her girdi aynı satırı yeniler.
+    const auto imported = run_in_pty(
+        NOTEAPP_NOTE_EXE, {"import", utf8(source.path() / "a.txt"), utf8(source.path() / "b.txt")});
     CHECK(imported.exit_code == 0);
-    CHECK(contains(imported.terminal, std::string("Importing...") + std::string(kClear)));
+    CHECK(contains(imported.terminal, std::string("Importing 1/2...") + std::string(kClear) +
+                                          "Importing 2/2..." + std::string(kClear)));
 
     // stderr terminal değilse ya da TERM=dumb ise ara çıktı yok.
     for (const PtyOptions& options : {PtyOptions{.stderr_to_file = true}, PtyOptions{.env = {{"TERM", "dumb"}}}}) {

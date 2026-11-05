@@ -11,6 +11,11 @@
 
 namespace noteapp::app {
 
+// Kaydedilmemiş değişiklikle kapanışta kullanıcının seçimi; sıra iki arayüzde düğme sırasıdır. Ayarlar'dan
+// çıkışta (TUI Esc; GUI ←, ⚙, Ctrl+, ve pencere kapanışı) varsayılan Vazgeç'tir: ekranda kalınır, hiçbir şey
+// yazılmaz ya da atılmaz.
+enum class CloseChoice { Save, Discard, Cancel };
+
 // Token kasası dikişi: testler gerçek OS kasasına dokunmaz, üretimde sync/auth.hpp'ye gider.
 struct TokenStore {
     std::function<bool(std::string_view host)> has;
@@ -38,5 +43,10 @@ std::string config_warnings_message(const std::vector<core::Error>& warnings);
 // süresi/notes_dir) sayılır. Yazar adı/e-postasını `note sync --background` config'ten taze okur; editör gibi
 // ilgisiz bir ayar için süren birleştirmeyi öldürmek gerekmez.
 bool sync_restart_needed(const core::Config& before, const core::Config& after);
+
+// Ayarlar kaydında dosyadan çalışan config'e geçen sınırlar (TUI ve GUI aynı küme): haritanın düğüm ve
+// derinlik sınırı, uygulama açıkken `note config set limits.app.map_*` ile değişmiş olabilir; arayüz onları
+// haritaya hemen uygular. Diğer sınırlar açılışta kurulan modüllere verilir, yeniden başlatınca geçer.
+void adopt_live_limits(core::Config& live, const core::Config& on_disk);
 
 }  // namespace noteapp::app

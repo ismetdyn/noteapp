@@ -49,8 +49,10 @@ std::string status_text(const app::MapModel& model, int columns) {
     const std::string scope = options.whole_graph
                                   ? core::tr("tui.map_whole")
                                   : core::tr("tui.map_depth", {{"depth", std::to_string(options.depth)}});
-    std::string text = core::tr(
-        "tui.map_status", {{"scope", scope}, {"tags", options.show_tags ? core::tr("tui.map_tags") : ""}});
+    constexpr int kDigitKeys = 9;  // derinlik tek haneli tuşla seçilir
+    std::string text = core::tr("tui.map_status", {{"scope", scope},
+                                                   {"tags", options.show_tags ? core::tr("tui.map_tags") : ""},
+                                                   {"max", std::to_string(std::min(model.max_depth(), kDigitKeys))}});
     const app::NoteMap& map = model.map();
     if (map.capped())
         text = core::tr("tui.map_capped",

@@ -669,27 +669,72 @@ void ListActions::submit_import(std::optional<RenameState>& rename) {
     const std::string& typed = input.text();
     if (typed.empty())
         return;
-    const std::filesystem::path source(std::u8string(typed.begin(), typed.end()));
+    if (import_.running()) {
+        input.set_error(core::tr("cli.import_busy"));
+        return;
+    }
+    std::vector<std::filesystem::path> sources{
+        std::filesystem::path(std::u8string(typed.begin(), typed.end()))};
     const core::Config defaults;
-    const app::ImportReport report = [&] {
+    app::ImportOptions options =
+        app::import_options(host_.config ? *host_.config : defaults, input.import_folder());
+    // Kopya aynı bağlantıyı paylaşır (thread-safe); kilit yalnız notes_dir değişiminde yeniden kurulan
+    // optional'a karşı.
+    core::NoteStore store = [&] {
         const std::scoped_lock lock(host_.store_mutex);
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
-        return app::import_paths(
-            *host_.store, std::span(&source, 1),
-            app::import_options(host_.config ? *host_.config : defaults, input.import_folder()));
+        return *host_.store;
     }();
+    // `rename` main'in (ya da testin) girdisidir, ListActions'tan uzun yaşar; rapor onu geri açabilir. Rapor
+    // UI iş parçacığına post ile gelir: girdiyi start'tan sonra taşımak yarışmaz.
+    const bool started = import_.start(
+        std::move(store), std::move(sources), std::move(options),
+        [this](const app::ImportProgress& progress) {
+            host_.status.message = terminal_safe(app::import_progress_text(progress) + "  " +
+                                                 core::tr("tui.import_cancel_hint"));
+        },
+        [this, &rename](const app::ImportReport& report) { finish_import(rename, report); });
+    if (!started) {
+        input.set_error(core::tr("cli.import_start_failed"));
+        return;
+    }
+    import_prompt_ = std::move(rename);
+    rename.reset();
+}
+
+void ListActions::finish_import(std::optional<RenameState>& rename, const app::ImportReport& report) {
+    std::optional<RenameState> prompt = std::exchange(import_prompt_, std::nullopt);
     if (report.wrote) {  // hiçbir not alınmasa da klasör kurulmuş olabilir
         host_.refresh_notes();
         host_.notify_changed();
     }
     const std::string status = terminal_safe(app::import_status(report));
-    if (report.imported.empty()) {  // girdi açık kalır: yol düzeltilebilsin
-        input.set_error(status);
+    // Hiçbir şey alınamadı: yol düzeltilebilsin diye girdi yazılanla geri açılır (başka girdi açık değilse).
+    // Depo değiştiyse (klasör kuruldu) açılmaz: yeniden deneme ikinci bir `-2` kopyası kurardı.
+    if (report.imported.empty() && report.cancelled == 0 && !report.wrote && prompt && !rename) {
+        rename = std::move(prompt);
+        rename->set_error(status);
+        host_.status.message.clear();  // ilerleme satırı kalmasın
         return;
     }
-    rename.reset();
-    host_.state.open_note_in_review(report.imported.front().note);
+    if (!report.imported.empty() && host_.state.focus() != Focus::Editor)  // yazan kullanıcının odağı kalır
+        host_.state.open_note_in_review(report.imported.front().note);
     host_.status.message = status;
+}
+
+bool ListActions::cancel_import_on(Key key, Focus focus) {
+    if (!import_.running())
+        return false;
+    // Ctrl+C editör dışında uygulamayı kapatırdı: önce içe almayı durdurur. Esc yalnız liste ve önizleme
+    // odağında; girdide (arama, bul) kendi işi sürer.
+    const bool esc =
+        key == Key::Escape && (focus == Focus::List || focus == Focus::Preview || focus == Focus::Links);
+    const bool ctrl_c = key == Key::CtrlC && focus != Focus::Editor;
+    if (!esc && !ctrl_c)
+        return false;
+    import_.cancel();
+    host_.status.message = core::tr("cli.import_cancelling");
+    return true;
 }
 
 void ListActions::submit_link(std::optional<RenameState>& rename) {

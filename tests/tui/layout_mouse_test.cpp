@@ -11,6 +11,8 @@
 
 #include <doctest/doctest.h>
 #include <fstream>
+#include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/screen.hpp>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -96,6 +98,45 @@ TEST_CASE("pane layout: zoom shows only the focused pane; the divider is gone") 
     CHECK(right.right_visible);
     CHECK(right.right_width == 100);
     CHECK_FALSE(layout.on_divider(40, 100));
+}
+
+namespace {
+
+ftxui::Screen draw(const tui::TuiState& state, const tui::Preview& preview, int width, int height) {
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width), ftxui::Dimension::Fixed(height));
+    ftxui::Render(screen, tui::render(state, preview, {"", ""}, {width, height}));
+    return screen;
+}
+
+tui::Preview text_preview(std::string line) {
+    tui::Preview preview;
+    preview.kind = tui::Preview::Kind::Text;
+    preview.lines = {std::move(line)};
+    return preview;
+}
+
+}  // namespace
+
+// ui-redesign §5.5: içerik çerçeveye yapışmaz; sol kenarın içinde bir boş sütun kalır.
+TEST_CASE("layout: list and right pane content start one blank column inside the left frame") {
+    Fixture f;
+    const tui::Preview preview = text_preview("metin");
+    for (const auto& [width, height] :
+         {std::pair{kWidth, kHeight}, std::pair{tui::kMinWidth, tui::kMinHeight}}) {
+        CAPTURE(width);
+        f.state.set_window(width, height);
+        const ftxui::Screen screen = draw(f.state, preview, width, height);
+        const int right_x = f.state.layout().list_width(width);
+        CHECK(screen.PixelAt(0, kRowY).character == "│");
+        CHECK(screen.PixelAt(1, kRowY).character == " ");
+        CHECK(screen.PixelAt(2, kRowY).character == " ");  // işaret sütunu
+        CHECK(screen.PixelAt(3, kRowY).character == "1");  // satır numarası
+        CHECK(screen.PixelAt(right_x, kRowY).character == "│");
+        CHECK(screen.PixelAt(right_x + 1, kRowY).character == " ");
+        CHECK(screen.PixelAt(right_x + 2, kRowY).character == "m");
+        // Sağ kenar yerinde: panel taşmaz, 60 sütunda da sığar.
+        CHECK(screen.PixelAt(width - 1, kRowY).character == "│");
+    }
 }
 
 TEST_CASE("find_folded: Turkish folding, byte offsets in the original text, across lines") {
@@ -257,6 +298,50 @@ TEST_CASE("mouse: clicking the list keeps the editor open and focuses the list, 
     CHECK(f.store.read(opened)->text == "xmetin\n");
 }
 
+// Liste satırına tıklama gibi: bekleyen düzenleme notuna yazılır, tuşlar sonra listeye gider.
+TEST_CASE("mouse: a breadcrumb click from the editor saves the note and moves keyboard focus to the list") {
+    Fixture f;
+    f.open_editor();
+    const core::NotePath opened = f.state.selected_row()->path;
+    f.editor.handle(Key::Char, "x");
+    int x = 0;
+    while (x < kWidth && !tui::breadcrumb_folder_at(f.state, x))
+        ++x;
+    REQUIRE(x < kWidth);
+    f.mouse(x, 0, MouseButton::Left);
+    CHECK(f.editor.is_open());
+    CHECK_FALSE(f.editor.dirty());
+    CHECK(f.store.read(opened)->text == "xmetin\n");
+    CHECK(f.state.focus() == Focus::List);
+}
+
+TEST_CASE(
+    "mouse: a trash indicator click from the editor saves the note and moves keyboard focus to the list") {
+    Fixture f;
+    f.state.set_trash_count(2);
+    f.open_editor();
+    const core::NotePath opened = f.state.selected_row()->path;
+    f.editor.handle(Key::Char, "x");
+    REQUIRE_FALSE(tui::trash_indicator(f.state).empty());
+    CHECK(tui::route_mouse({0, 0, MouseButton::Left, MouseMotion::Press}, f.state, f.editor) ==
+          tui::MouseResult::OpenTrash);
+    CHECK(f.editor.is_open());
+    CHECK_FALSE(f.editor.dirty());
+    CHECK(f.store.read(opened)->text == "xmetin\n");
+    // Çöp okunamasa da (ListActions iletiyi gösterir) tuşlar editöre dönmez.
+    CHECK(f.state.focus() == Focus::List);
+
+    // Kaydedilemeyen tampon (soru açık) tıklamayı yutar: odak editörde kalır.
+    Fixture busy;
+    busy.state.set_trash_count(1);
+    busy.open_editor();
+    busy.editor.handle(Key::CtrlF);
+    REQUIRE(busy.editor.mode() != tui::EditorSession::Mode::Editing);
+    CHECK(tui::route_mouse({0, 0, MouseButton::Left, MouseMotion::Press}, busy.state, busy.editor) ==
+          tui::MouseResult::None);
+    CHECK(busy.state.focus() == Focus::Editor);
+}
+
 TEST_CASE("mouse: an open prompt or input ignores the pointer") {
     Fixture f;
     f.open_editor();
@@ -284,14 +369,18 @@ TEST_CASE("mouse: a click in the editor puts the cursor at that cell, the gutter
     REQUIRE(f.state.focus() == Focus::Editor);
     const auto viewport = tui::editor_viewport({kWidth, kHeight}, f.state.layout());
     f.editor.layout(viewport.columns, viewport.rows);
-    const int text_x = f.divider() + 1 + f.editor.gutter_width();
+    const int text_x = f.divider() + 2 + f.editor.gutter_width();  // kenar ve iç boşluk
     f.mouse(text_x + 2, kRowY + 1, MouseButton::Left);
     CHECK(f.editor.buffer()->position().line == 1);
     CHECK(f.editor.buffer()->position().column == 2);
     CHECK(f.state.focus() == Focus::Editor);
     // Numara sütununa tıklama satır başıdır, sayı metin sütunu sayılmaz.
-    f.mouse(f.divider() + 1, kRowY + 2, MouseButton::Left);
+    f.mouse(f.divider() + 2, kRowY + 2, MouseButton::Left);
     CHECK(f.editor.buffer()->position().line == 2);
+    CHECK(f.editor.buffer()->position().column == 0);
+    // Kenarın içindeki boşluk da satır başıdır, tıklama yutulmaz.
+    f.mouse(f.divider() + 1, kRowY, MouseButton::Left);
+    CHECK(f.editor.buffer()->position().line == 0);
     CHECK(f.editor.buffer()->position().column == 0);
     // Dosya sonunun ötesi son satıra iner, metin değişmez.
     f.mouse(text_x + 40, kRowY + 20, MouseButton::Left);

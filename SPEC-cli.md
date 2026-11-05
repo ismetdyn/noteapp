@@ -78,7 +78,8 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
   Pager PATH'te yoksa ya da başlamazsa düz çıktı, çıkış kodu komutunki. Pager erken kapanırsa (EPIPE) sessiz biter.
   Terminal temizliği pager'dan önce yapılır. Windows'ta pager yok.
 - **İlerleme:** `note sync` ve `note import` stderr TTY iken (`TERM=dumb` değil) tek satır `Syncing...` /
-  `Importing...` yazar, iş bitince satırı siler (`\r` + `ESC[K`). Boru ve dosya hiçbir ara çıktı görmez.
+  `Importing n/m...` yazar (içe almada sayaç her girdide aynı satırı yeniler; payda girdilerin ön sayımı, gizliler
+  hariç), iş bitince satırı siler (`\r` + `ESC[K`). Boru ve dosya hiçbir ara çıktı görmez.
 - `show` TTY'de son satır sonu yoksa ekler (istem yapışmasın); boruya baytlar aynen. `tags` TTY'de sayıları tek
   sütunda hizalar; boruda TSV aynen.
 
@@ -165,7 +166,13 @@ metne (yoksa `pdf.image_placeholder`) iner; hiçbir görsel/bağlantı hedefine 
   Klasör içindeki `.` ile başlayan girdi dışarıda kalır ve sayılır (eksik sayılmaz); açıkça verilen gizli yol denenir
   (`.` ile başlayan not adı geçersizdir, `--name` ile alınır).
 - **Sınır:** boyut ve sayı tavanı yok; depolamanın tek değer sınırını aşan dosya öğe hatasıdır. `tuning.max_note_bytes`
-  içe almayı engellemez, yalnız notu salt okunur açtırır. Her not kendi yazma işlemindedir.
+  içe almayı engellemez, yalnız notu salt okunur açtırır. Her not kendi yazma işlemindedir. Belleğe sığmayan dosya
+  (`bad_alloc`, `length_error`) süreci düşürmez: `error.out_of_memory` öğe hatasıdır, kalanlar alınır.
+- **Arayüzler:** TUI ve GUI aynı kuralı işçide koşar (`app::ImportJob`): ilerleme `n/m` ve şimdiki yol, durdurma girdi
+  sınırında (alınanlar kalır, raporda `cancelled`, satırı `cli.import_cancelled`). Durdurulunca ne ön sayım ne
+  kalanların sayımı klasörlere iner: alınmayan klasör bir girdi sayılır, durdurma ve kapanış büyük ağacı beklemez.
+  Beklenmeyen istisna (depo, dosya sistemi) o girdiyi alınamayanlara yazar ve içe almayı orada durdurur (kalanlar
+  `cancelled`); o ana dek alınanlar raporda kalır. CLI eşzamanlıdır, durdurma yok.
 - **Hedef:** `--folder` yoksa `default_folder`. Geçersiz `--folder`/`--type` çıkış 2, hiçbir şey yazılmaz.
 - **Çıktı:** her not stdout'ta `kaynak -> yol`, atlanan/alınamayan stderr'de, sonda özet. `--json`:
   `{"imported":[{"source","note","renamed","overwritten"}],"skipped":[{"source","reason"}],"failed":[{"source","error"}],"hidden":N}`.
@@ -283,5 +290,5 @@ Etkileşimli seçici (fzf benzeri seçim TUI'nin işi), `mkdir/rmdir` komutları
   kodları aynı.
 - **MODIFIED** `find` vurgusu artık "stdout TTY" yerine `color_enabled` ile karar verir.
 - **Kapsam dışı (bilinçli):** `--color` bayrağı (env yeter), kısa/uzun yardım ayrımı, alt komut kısaltması,
-  `-v/--verbose`, hata başlığının kırmızı renklendirilmesi, `config list --json` ve `sync status --json`, `import`
-  için `n/m` sayacı (app::import_paths'e ilerleme geri çağrısı gerekir; şimdilik tek satır), Windows pager.
+  `-v/--verbose`, hata başlığının kırmızı renklendirilmesi, `config list --json` ve `sync status --json`, Windows
+  pager. (`import` `n/m` sayacı NX-C'de geldi: "İlerleme".)

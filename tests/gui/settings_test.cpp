@@ -374,6 +374,39 @@ TEST_CASE_FIXTURE(SettingsFixture, "an origin mismatch asks before replacing and
     CHECK(page.field_error("sync.remote").empty());
 }
 
+// enable token'ı kasadan okur: yazılmış token enable'dan önce kasaya gider ve enable düşse de orada kalır (TUI
+// submit ile aynı); config yazılmaz. Uyuşmazlığı reddetmek ağa çıkmadan enable'ı düşürür.
+TEST_CASE_FIXTURE(SettingsFixture, "a typed token reaches the keychain even when enabling sync then fails") {
+    const fs::path first = make_bare("first.git");
+    {
+        git_repository* repo = nullptr;
+        REQUIRE(git_repository_init(&repo, config.notes_dir.string().c_str(), 0) == 0);
+        git_remote* remote = nullptr;
+        REQUIRE(git_remote_create(&remote, repo, "origin", first.string().c_str()) == 0);
+        git_remote_free(remote);
+        git_repository_free(repo);
+    }
+    auto state = make_state_wired();
+    SettingsPage& page = state->settings();
+    page.set_field("sync.enabled", "true");
+    page.set_field("sync.remote", "https://github.com/kisi/notlar.git");
+    page.set_field("sync.author_name", "Test Yazar");
+    page.set_field("sync.author_email", "test@noteapp.invalid");
+    REQUIRE(page.token_enabled());
+    page.token = std::string(kSecretToken);
+
+    replace_answer = false;
+    page.save();
+    CHECK(replace_asked == 1);
+    CHECK_FALSE(page.field_error("sync.remote").empty());
+    CHECK(stored_tokens == std::vector<std::string>{std::string(kSecretToken)});
+    CHECK(stored_hosts == std::vector<std::string>{"github.com"});
+    CHECK(page.token.empty());
+    CHECK(get("sync.enabled") == "false");
+    CHECK(config_text().find("github.com") == std::string::npos);
+    CHECK(config_text().find(kSecretToken) == std::string::npos);
+}
+
 TEST_CASE_FIXTURE(SettingsFixture,
                   "the test connection button enables and runs one sync, showing the outcome") {
     add_note("a.md", "# a\n");
@@ -791,18 +824,224 @@ TEST_CASE_FIXTURE(SettingsFixture, "editor, remote and idle fields carry a hint"
     CHECK(rendered.contains("$EDITOR"));
 }
 
-TEST_CASE_FIXTURE(SettingsFixture, "leaving the settings tab keeps unsaved values") {
+// Pencere kapanışıyla aynı soru (deciders.close_unsaved_settings) Ayarlar'dan her çıkışta sorulur.
+TEST_CASE_FIXTURE(SettingsFixture, "leaving Settings with unsaved values asks on every exit and honours each answer") {
     auto state = make_state_wired();
     auto view = make_view(*state);
     SettingsPage& page = state->settings();
+    int asked = 0;
+    auto answer = noteapp::gui::CloseChoice::Cancel;
+    state->deciders.close_unsaved_settings = [&] {
+        ++asked;
+        return answer;
+    };
+    const std::string saved = get("editor");
+    std::function<void()> leave;
+    SUBCASE("back button") { leave = [&] { click_button(*view, "settings_back"); }; }
+    SUBCASE("Ctrl+comma") { leave = [&] { press(*view, ImGuiMod_Ctrl | ImGuiKey_Comma); }; }
+    SUBCASE("search shortcut") { leave = [&] { press(*view, ImGuiMod_Ctrl | ImGuiKey_K); }; }
+    REQUIRE(leave);
+
+    show_settings(*state, *view);
+    leave();
+    CHECK(asked == 0);  // değişiklik yok: soru yok
+    CHECK(state->tab() == Tab::Notes);
+
     show_settings(*state, *view);
     page.set_field("editor", "nano");
-    state->focus_search();
-    gui_test::settle(*view);
-    REQUIRE(state->tab() == Tab::Notes);
-    show_settings(*state, *view);
+    page.token = std::string(kSecretToken);
+    leave();  // Vazgeç: Ayarlar'da kalınır, hiçbir şey yazılmaz
+    CHECK(asked == 1);
+    CHECK(state->tab() == Tab::Settings);
     CHECK(page.field("editor") == "nano");
-    CHECK(view->item_rects().contains("settings_unsaved"));
+    CHECK(get("editor") == saved);
+    CHECK(stored_tokens.empty());
+
+    answer = noteapp::gui::CloseChoice::Save;
+    page.set_field("default_type", "bad.type");
+    leave();  // Kaydet düğmesinin doğrulaması: hata alanın altında, kalınır
+    CHECK(asked == 2);
+    CHECK(state->tab() == Tab::Settings);
+    CHECK_FALSE(page.field_error("default_type").empty());
+    CHECK(get("editor") == saved);
+
+    answer = noteapp::gui::CloseChoice::Discard;
+    leave();  // At: alanlar config'ten yeniden yüklenir, yazılmış token silinir
+    CHECK(asked == 3);
+    CHECK(state->tab() == Tab::Notes);
+    CHECK(page.field("editor") == saved);
+    CHECK_FALSE(page.has_changes());
+    CHECK(page.token.empty());
+    CHECK(stored_tokens.empty());
+    CHECK(get("editor") == saved);
+
+    show_settings(*state, *view);
+    answer = noteapp::gui::CloseChoice::Save;
+    page.set_field("editor", "nano");
+    leave();
+    CHECK(asked == 4);
+    CHECK(state->tab() == Tab::Notes);
+    CHECK(get("editor") == "nano");
+}
+
+// Uygulama açıkken `note config set limits.app.map_*`: Ayarlar'da Kaydet çalışan haritaya da uygular.
+TEST_CASE_FIXTURE(SettingsFixture, "saving Settings applies map limits changed on disk to the running map") {
+    add_note("a.md", "[[b]]\n", 20);
+    add_note("b.md", "b\n", 10);
+    auto state = make_state_wired();
+    state->set_browser_view(noteapp::gui::BrowserView::Map);
+    state->set_map_options(noteapp::gui::MapOptions{.whole_graph = true});
+    REQUIRE(state->map_max_depth() == 6);
+    REQUIRE(state->note_map().nodes.size() == 2);
+    noteapp::core::Config disk = noteapp::core::load_config().config;
+    REQUIRE(noteapp::core::set_config_value(disk, "limits.app.map_depth", "3"));
+    REQUIRE(noteapp::core::set_config_value(disk, "limits.app.map_nodes", "1"));
+    REQUIRE(noteapp::core::save_config(disk));
+    state->settings().set_field("editor", "nano");
+    state->settings().save();
+    REQUIRE(get("editor") == "nano");
+    CHECK(state->map_max_depth() == 3);  // adımlayıcının üstü
+    CHECK(state->note_map().nodes.size() == 1);
+}
+
+// TUI ile aynı: yazılmış ama kasaya gitmemiş token kaydedilmemiş değişikliktir.
+TEST_CASE_FIXTURE(SettingsFixture, "a typed token is an unsaved change: leaving asks, Revert drops it, Save stores it") {
+    auto state = make_state_wired();
+    SettingsPage& page = state->settings();
+    page.set_field("sync.remote", "https://github.com/kisi/notlar.git");
+    page.save();
+    REQUIRE_FALSE(page.has_changes());
+    REQUIRE(page.token_enabled());
+
+    page.token = std::string(kSecretToken);
+    CHECK(page.has_changes());
+    int asked = 0;
+    state->deciders.close_unsaved_settings = [&] {
+        ++asked;
+        return noteapp::gui::CloseChoice::Cancel;
+    };
+    state->show_settings_tab();
+    CHECK_FALSE(state->leave_settings());
+    CHECK(asked == 1);
+
+    page.revert();
+    CHECK(page.token.empty());
+    CHECK_FALSE(page.has_changes());
+
+    page.token = std::string(kSecretToken);
+    page.save();
+    REQUIRE(stored_tokens.size() == 1);
+    CHECK(stored_tokens.front() == kSecretToken);
+    CHECK(page.token.empty());
+    CHECK_FALSE(page.has_changes());
+    CHECK(config_text().find(kSecretToken) == std::string::npos);
+}
+
+TEST_CASE_FIXTURE(SettingsFixture, "saving an empty token never calls the keychain, like the TUI") {
+    auto state = make_state_wired();
+    SettingsPage& page = state->settings();
+    page.set_field("sync.remote", "https://github.com/kisi/notlar.git");
+    REQUIRE(page.token_enabled());
+    page.save_token();
+    CHECK(stored_tokens.empty());
+    CHECK(stored_hosts.empty());
+}
+
+TEST_CASE_FIXTURE(SettingsFixture, "a search command cancelled at the leave prompt changes neither mode nor query") {
+    auto state = make_state_wired();
+    state->deciders.close_unsaved_settings = [] { return noteapp::gui::CloseChoice::Cancel; };
+    state->show_settings_tab();
+    state->settings().set_field("editor", "nano");
+    const auto mode = state->search_mode();
+    const std::string query = state->query();
+    state->search_global();
+    CHECK(state->tab() == Tab::Settings);
+    CHECK(state->search_mode() == mode);
+    state->open_picker(noteapp::gui::Picker::Tag);
+    state->pick("proje");
+    CHECK(state->tab() == Tab::Settings);
+    CHECK(state->query() == query);
+}
+
+// Notları değiştiren kısayol ve palet komutu önce Ayarlar'dan çıkar; Ayarlar'ın arkasında not açılmaz.
+TEST_CASE_FIXTURE(SettingsFixture, "a notes command from Settings leaves first; Cancel runs nothing, F5 stays") {
+    auto state = make_state_wired();
+    auto view = make_view(*state);
+    int asked = 0;
+    auto answer = noteapp::gui::CloseChoice::Cancel;
+    state->deciders.close_unsaved_settings = [&] {
+        ++asked;
+        return answer;
+    };
+    show_settings(*state, *view);
+    state->settings().set_field("editor", "nano");
+    press(*view, ImGuiKey_F5);  // görünmeyen iş: Ayarlar'da kalınır, soru yok
+    CHECK(asked == 0);
+    CHECK(state->tab() == Tab::Settings);
+
+    press(*view, ImGuiMod_Ctrl | ImGuiKey_N);
+    CHECK(asked == 1);
+    CHECK(state->tab() == Tab::Settings);
+    CHECK_FALSE(state->is_new_note());
+
+    state->deciders.palette = [] { return std::optional<std::string>("new"); };
+    state->open_palette();
+    CHECK(asked == 2);
+    CHECK_FALSE(state->is_new_note());
+
+    answer = noteapp::gui::CloseChoice::Discard;
+    press(*view, ImGuiMod_Ctrl | ImGuiKey_N);
+    CHECK(asked == 3);
+    CHECK(state->tab() == Tab::Notes);
+    CHECK(state->is_new_note());
+}
+
+// Alanın içindeki düzenleme tuşları (tümünü seç, kopyala, yapıştır, geri al) metne aittir: aynı kısayolların not
+// komutları (mark.all, copy, paste, undo) Ayarlar'dan çıkış sorusunu açmaz.
+TEST_CASE_FIXTURE(SettingsFixture, "editing keys inside a Settings field do not ask to leave Settings") {
+    auto state = make_state_wired();
+    auto view = make_view(*state);
+    int asked = 0;
+    state->deciders.close_unsaved_settings = [&] {
+        ++asked;
+        return noteapp::gui::CloseChoice::Cancel;
+    };
+    show_settings(*state, *view);
+    click_button(*view, "setting:editor");
+    type_text(*view, "x");
+    REQUIRE(state->settings().has_changes());
+    for (const ImGuiKey key : {ImGuiKey_A, ImGuiKey_C, ImGuiKey_V, ImGuiKey_Z}) {
+        CAPTURE(static_cast<int>(key));
+        press(*view, ImGuiMod_Ctrl | key);
+        CHECK(asked == 0);
+        CHECK(state->tab() == Tab::Settings);
+    }
+}
+
+// NX-D: Vazgeç'te koşmayan palet komutu "son kullanılanlar"a girmez, GUI durumuna da yazılmaz.
+TEST_CASE_FIXTURE(SettingsFixture, "a palette command cancelled at the leave prompt is not recorded as recent") {
+    auto state = make_state_wired();
+    auto answer = noteapp::gui::CloseChoice::Cancel;
+    state->deciders.close_unsaved_settings = [&] { return answer; };
+    state->deciders.palette = [] { return std::optional<std::string>("go.root"); };
+    state->show_settings_tab();
+    state->settings().set_field("editor", "nano");
+    state->open_palette();
+    CHECK(state->tab() == Tab::Settings);
+    CHECK(state->recent_commands().empty());
+    CHECK(make_state()->recent_commands().empty());
+
+    answer = noteapp::gui::CloseChoice::Discard;
+    state->open_palette();
+    CHECK(state->tab() == Tab::Notes);
+    CHECK(state->recent_commands() == std::vector<std::string>{"go.root"});
+    CHECK(make_state()->recent_commands() == std::vector<std::string>{"go.root"});
+}
+
+TEST_CASE("the unsaved settings prompt defaults to Cancel, which is also its Escape answer") {
+    const auto box = noteapp::gui::make_close_settings_box();
+    CHECK(box.buttons.at(box.default_button).second == noteapp::gui::CloseChoice::Cancel);
+    CHECK(box.escape_button == box.default_button);
 }
 
 TEST_CASE_FIXTURE(SettingsFixture, "closing with unsaved settings asks and honours each answer") {

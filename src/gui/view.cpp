@@ -305,7 +305,7 @@ void View::queue(std::function<void()> intent) {
 }
 
 void View::queue_command(const GuiCommand& command) {
-    queue([this, run = command.run] { run(state_); });
+    queue([this, command] { run_gui_command(state_, command); });
 }
 
 void View::run_intents() {
@@ -607,6 +607,8 @@ void View::draw_status_bar() {
     const std::string count = state_.count_label();
     const bool can_undo = state_.can_undo_trash();
     const std::string undo_label = core::tr("gui.undo_trash");
+    const bool importing = state_.importing();  // ilerleme iletidedir; Durdur yanında
+    const std::string cancel_label = core::tr("gui.import_cancel");
     const std::string fields = editor_drawn_ ? state_.editor_fields() : std::string{};
     // Senkron hatası iletilerdedir; sağda yalnız işareti kalır (sığar, ipucunda tamamı).
     const std::string sync_short = sync_error ? warning_mark : sync;
@@ -619,7 +621,8 @@ void View::draw_status_bar() {
     }
     const float right_width = (fields.empty() ? 0.0F : text_width(fields) + spacing) + text_width(sync_short);
     const float fixed = text_width(count) + (more.empty() ? 0.0F : text_width(more) + spacing) +
-                        (can_undo ? button_width(undo_label) + spacing : 0.0F) + right_width + spacing;
+                        (can_undo ? button_width(undo_label) + spacing : 0.0F) +
+                        (importing ? button_width(cancel_label) + spacing : 0.0F) + right_width + spacing;
     const float message_room = ImGui::GetContentRegionAvail().x - fixed - spacing;
 
     ImGui::AlignTextToFramePadding();
@@ -653,6 +656,13 @@ void View::draw_status_bar() {
         ImGui::PushStyleColor(ImGuiCol_Text, colors.text);
         if (button("status_undo", undo_label, ButtonKind::Ghost))
             queue([this] { state_.undo_trash(); });
+        ImGui::PopStyleColor();
+    }
+    if (importing) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, colors.text);
+        if (button("status_cancel_import", cancel_label, ButtonKind::Ghost))
+            queue([this] { state_.cancel_import(); });
         ImGui::PopStyleColor();
     }
     const float right = ImGui::GetContentRegionMax().x;

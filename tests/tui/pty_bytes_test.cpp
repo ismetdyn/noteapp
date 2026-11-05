@@ -112,6 +112,17 @@ public:
 
     void signal(int number) const { REQUIRE(kill(pid_, number) == 0); }
 
+    // Süreç kendiliğinden bitti mi (read_until_exit zaman aşımında da döner). Yıkıcının waitpid'i sonra boşa döner.
+    bool exited() const {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kReadTimeoutMs);
+        while (waitpid(pid_, nullptr, WNOHANG) != pid_) {
+            if (std::chrono::steady_clock::now() > deadline)
+                return false;
+            poll(nullptr, 0, 10);
+        }
+        return true;
+    }
+
     // Süreç bitene dek (terminal kapanınca read EIO döner) kalan tüm çıktı.
     std::string read_until_exit() const {
         std::string seen;
@@ -607,4 +618,122 @@ TEST_CASE("the mode pill is black on cyan, and inverted and bold under NO_COLOR"
         }
         CHECK_FALSE(screen.at(kPillCells, status_row).inverse);
     }
+}
+
+// NX-B: Ayarlar kirliyken Ctrl+C hemen çıkmaz; GUI pencere kapanışı gibi Kaydet / At / Vazgeç sorulur.
+TEST_CASE("Ctrl+C with unsaved Settings asks first; Cancel stays, Discard quits without writing") {
+    noteapp::test::TempDir home;
+    noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
+    english_config(home.path());
+    const std::filesystem::path config = home.path() / "config" / "config.toml";
+    const std::string before = noteapp::test::slurp(config);
+    PtyApp app(NOTEAPP_NOTES_EXE);
+    app.read_frame();
+    app.send(",");  // Ayarlar
+    app.read_frame();
+    app.send("\x1B[B");  // notes_dir satırı
+    app.read_frame();
+    app.send("x");
+    app.read_frame();
+    app.send("\x03");
+    CHECK(app.read_frame_text().find("Save them?") != std::string::npos);
+    app.send("\r");  // varsayılan Vazgeç: uygulama açık kalır
+    app.read_frame();
+    app.send("\x03");
+    app.read_frame();
+    app.send("\x1B[D");  // At
+    app.read_frame();
+    app.send("\r");
+    app.read_until_exit();
+    CHECK(noteapp::test::slurp(config) == before);
+}
+
+namespace {
+
+constexpr int kEditorRow = 2;        // config_entries sırası: language, notes_dir, editor…
+constexpr int kIdleSecondsRow = 10;  // sync.idle_seconds
+
+// Ayarlar açık, `down` satır aşağıdaki alana "x" yazılmış.
+void dirty_settings(const PtyApp& app, int down) {
+    app.read_frame();
+    app.send(",");
+    app.read_frame();
+    for (int row = 0; row < down; ++row) {
+        app.send("\x1B[B");
+        app.read_frame();
+    }
+    app.send("x");
+    app.read_frame();
+}
+
+}  // namespace
+
+// NX-D: soru açıkken ikinci Ctrl+C soruyu kapatmaz, çıkmaz da: ok yine düğmeler arasında gezer.
+TEST_CASE("a second Ctrl+C keeps the unsaved Settings prompt open") {
+    noteapp::test::TempDir home;
+    noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
+    english_config(home.path());
+    const std::filesystem::path config = home.path() / "config" / "config.toml";
+    const std::string before = noteapp::test::slurp(config);
+    PtyApp app(NOTEAPP_NOTES_EXE);
+    dirty_settings(app, kEditorRow);
+    app.send("\x03");
+    CHECK(app.read_frame_text().find("Save them?") != std::string::npos);
+    app.send("\x03");
+    app.read_for(std::chrono::milliseconds(200));
+    app.send("\x1B[D");  // soru açıksa At düğmesine geçer
+    CHECK(app.read_frame_text().find("Discard") != std::string::npos);
+    app.send("\r");
+    app.read_until_exit();
+    CHECK(app.exited());
+    CHECK(noteapp::test::slurp(config) == before);
+}
+
+// Ctrl+C sorusunda Kaydet kaydeder ve çıkar (TuiSession: SubmitAndQuit -> Exit).
+TEST_CASE("Save at the Ctrl+C prompt writes the settings and quits") {
+    noteapp::test::TempDir home;
+    noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
+    english_config(home.path());
+    const std::filesystem::path config = home.path() / "config" / "config.toml";
+    PtyApp app(NOTEAPP_NOTES_EXE);
+    dirty_settings(app, kEditorRow);
+    app.send("\x03");
+    CHECK(app.read_frame_text().find("Save them?") != std::string::npos);
+    app.send("\x1B[D");
+    app.read_frame();
+    app.send("\x1B[D");  // Kaydet
+    app.read_frame();
+    app.send("\r");
+    app.read_until_exit();
+    CHECK(app.exited());
+    const std::string written = noteapp::test::slurp(config);
+    CAPTURE(written);
+    CHECK(written.find("editor = 'x'") != std::string::npos);
+}
+
+// Kaydet doğrulamadan geçmezse uygulama açık kalır ve hiçbir şey yazılmaz; Ctrl+C soruyu yeniden açar.
+TEST_CASE("a Save that fails validation at the Ctrl+C prompt keeps the app open") {
+    noteapp::test::TempDir home;
+    noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
+    english_config(home.path());
+    const std::filesystem::path config = home.path() / "config" / "config.toml";
+    const std::string before = noteapp::test::slurp(config);
+    PtyApp app(NOTEAPP_NOTES_EXE);
+    dirty_settings(app, kIdleSecondsRow);  // "…x" sayı değil
+    app.send("\x03");
+    CHECK(app.read_frame_text().find("Save them?") != std::string::npos);
+    app.send("\x1B[D");
+    app.read_frame();
+    app.send("\x1B[D");
+    app.read_frame();
+    app.send("\r");
+    app.read_frame();
+    app.send("\x03");
+    CHECK(app.read_frame_text().find("Save them?") != std::string::npos);
+    CHECK(noteapp::test::slurp(config) == before);
+    app.send("\x1B[D");
+    app.read_frame();
+    app.send("\r");
+    app.read_until_exit();
+    CHECK(app.exited());
 }

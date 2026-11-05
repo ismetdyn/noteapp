@@ -448,6 +448,7 @@ std::span<const LimitKey> limit_keys() {
          [](Limits& l) -> Limit& { return l.app.trash_undo_steps; }},
         {"app.tabs", LimitUnit::Count, [](Limits& l) -> Limit& { return l.app.tabs; }},
         {"app.map_nodes", LimitUnit::Count, [](Limits& l) -> Limit& { return l.app.map_nodes; }},
+        {"app.map_depth", LimitUnit::Count, [](Limits& l) -> Limit& { return l.app.map_depth; }},
         {"core.folder_path_bytes", LimitUnit::Bytes,
          [](Limits& l) -> Limit& { return l.core.folder_path_bytes; }},
         {"search.content_results", LimitUnit::Count,

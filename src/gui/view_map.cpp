@@ -322,7 +322,7 @@ void View::draw_map_controls(const NoteMap& map) {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(depth_text.c_str());
     ImGui::SameLine(0.0F, spacing);
-    ImGui::BeginDisabled(options.depth >= MapOptions::kMaxDepth);
+    ImGui::BeginDisabled(options.depth >= state_.map_max_depth());
     if (button("map_depth_more", "+", ButtonKind::Ghost)) {
         ++options.depth;
         changed = true;

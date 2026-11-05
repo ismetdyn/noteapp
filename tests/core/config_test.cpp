@@ -963,6 +963,34 @@ TEST_CASE("limits.app.tabs defaults to 0 (unlimited), limits.app.map_nodes to 20
     CHECK_FALSE(set_config_value(config, "limits.app.tabs", "2s"));
 }
 
+// NX-B (L1): harita çevre derinliğinin sabit tavanı (MapOptions::kMaxDepth = 6) config'e taşındı.
+TEST_CASE("limits.app.map_depth defaults to 6, takes a count, accepts 0 as unlimited and round-trips") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+    const Config defaults = parse_config("").config;
+    CHECK(defaults.limits.app.map_depth == Limit{6, "6"});
+
+    const LoadedConfig zero = parse_config("[limits.app]\nmap_depth = 0\n");
+    CHECK(zero.warnings.empty());
+    CHECK(zero.config.limits.app.map_depth.unlimited());
+    const LoadedConfig bad = parse_config("[limits.app]\nmap_depth = \"5MiB\"\n");
+    CHECK(bad.config.limits.app.map_depth == Limit{6, "6"});
+    CHECK(has_warning_about(bad, "limits.app.map_depth", "config.invalid_value"));
+
+    Config config = defaults;
+    CHECK_FALSE(set_config_value(config, "limits.app.map_depth", "2s"));
+    REQUIRE(set_config_value(config, "limits.app.map_depth", "12"));
+    const auto entries = limit_entries(config);
+    const auto listed =
+        std::ranges::find(entries, std::string_view("limits.app.map_depth"), &std::pair<std::string, std::string>::first);
+    REQUIRE(listed != entries.end());
+    CHECK(listed->second == "12");
+    REQUIRE(save_config(config).has_value());
+    const LoadedConfig reloaded = load_config();
+    CHECK(reloaded.warnings.empty());
+    CHECK(reloaded.config.limits.app.map_depth == Limit{12, "12"});
+}
+
 TEST_CASE("an invalid [limits] value warns through the config path and keeps the default") {
     for (const std::string value : {"-1", "\"lots\"", "\"5MiB\"", "true", "1.5"}) {
         CAPTURE(value);

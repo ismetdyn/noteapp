@@ -146,6 +146,31 @@ TEST_CASE("map: the neighbourhood, the depth keys, whole graph and tags follow t
     CHECK(f.state.map_model().options().show_tags);
 }
 
+// NX-B (L1): derinlik tuşlarının üstü limits.app.map_depth (varsayılan 6, GUI adımlayıcısıyla aynı model
+// sınırı); 0'da tek haneli her derinlik. Sınır küçülürse geçerli derinlik ona iner.
+TEST_CASE("map: limits.app.map_depth bounds the depth keys and 0 lets every digit through") {
+    MapFixture f;
+    const auto depth = [&f] { return f.state.map_model().options().depth; };
+    f.state.set_map_depth_limit({6, "6"});
+    f.state.handle(Key::Char, "7");  // sınırın üstü derinlik tuşu değildir
+    CHECK(depth() == app::MapOptions::kDefaultDepth);
+    f.state.set_map_depth_limit({3, "3"});
+    f.state.handle(Key::Char, "4");
+    CHECK(depth() == app::MapOptions::kDefaultDepth);
+    f.state.handle(Key::Char, "3");
+    CHECK(depth() == 3);
+    CHECK(f.state.map_model().max_depth() == 3);
+    f.state.set_map_depth_limit({0, "0"});
+    f.state.handle(Key::Char, "9");
+    f.update();
+    CHECK(depth() == 9);
+    CHECK(f.keys().size() == 4);  // a'dan 3 adımda d
+    f.state.set_map_depth_limit({2, "2"});
+    CHECK(depth() == 2);
+    f.update();
+    CHECK(f.keys() == std::vector<std::string>{"a.md", "b.md", "c.md"});
+}
+
 TEST_CASE("map: the layout settles and then a frame does no layout work") {
     MapFixture f;
     REQUIRE(f.state.step_map());  // yeni çizge: yerleşim çalışır

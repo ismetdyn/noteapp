@@ -23,6 +23,7 @@ class ProgressLine {
 public:
     explicit ProgressLine(std::string_view text);
     ~ProgressLine();
+    void update(std::string_view text);  // satırı silip yeni metni yazar (sayaç)
     ProgressLine(const ProgressLine&) = delete;
     ProgressLine& operator=(const ProgressLine&) = delete;
 

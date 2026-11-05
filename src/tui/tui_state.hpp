@@ -206,6 +206,8 @@ public:
     const app::MapModel& map_model() const { return map_; }
     // limits.app.map_nodes: uygulama config'ten verir; verilmezse 0 = sınırsız.
     void set_map_node_limit(core::Limit limit) { map_.set_node_limit(std::move(limit)); }
+    // limits.app.map_depth: derinlik tuşlarının üstü (tek hane: 1–9); verilmezse 0 = sınırsız.
+    void set_map_depth_limit(core::Limit limit) { map_.set_depth_limit(std::move(limit)); }
     // Taramada değişiklik görüldü (yalnız ilişki değişse de): kenarlar sonraki çizimde okunur.
     void map_edges_changed() { map_.edges_changed(); }
     // Çizimden önce: kenarlar yalnız eskiyince okunur (taramada değişiklik), harita görünür değilken hiç.
@@ -347,8 +349,13 @@ public:
     // ona bağlanmaz.
     void set_preview_view(const std::vector<std::size_t>* source_lines, std::size_t generation);
     // Önizleme metni (PreviewCache'e ait; önbellekten uzun yaşamaz). Üretim değişince not içi eşleşmeler
-    // yenilenir.
-    void set_preview_lines(const std::vector<std::string>* lines, std::size_t generation);
+    // yenilenir. `partial`: biçimli görünüm parça parça üretiliyor, devamı var. O sürece kaydırma son üretilen
+    // satıra kenetlenmez (`G` sona gider); aynı üretimde uzayan metinde eşleşmeler yenilenir, seçim kalır.
+    void set_preview_lines(const std::vector<std::string>* lines, std::size_t generation, bool partial = false);
+    // Parça parça üretimin istekleri (PreviewCache okur): gösterilmesi beklenen kaynak satırı (EDIT dönüşü,
+    // içerik araması) ve tüm görünümü isteyen not içi arama.
+    std::optional<std::size_t> pending_source_line() const { return pending_source_line_; }
+    bool wants_whole_preview() const { return !preview_find_.query().empty(); }
 
     // Seçili notun bağlantıları, önizlemeyle aynı ertelenmiş okumadan; üretim değişmedikçe kopyalanmaz.
     void set_links(const core::NoteLinks& links, std::size_t generation,
@@ -372,6 +379,8 @@ public:
     void scroll_preview(int delta);
     void move_selection(int delta);
     void click_row(std::size_t row);
+    // Tuşlar listeye gider, seçim değişmez (click_row gibi): üst satırdaki çöp göstergesine tıklama.
+    void focus_list() { leave_preview(); }
     // Tıklama sonrası: aynı klasör satırına kısa aralıkla ikinci tıklama içeri girer.
     void note_row_click(std::size_t row);
     void focus_preview();
@@ -428,6 +437,14 @@ public:
     const Row* selected_entry() const { return rows_.empty() ? nullptr : &rows_[selected_]; }
     // Önizlemenin ilk görünen satırı (0 tabanlı).
     std::size_t preview_scroll() const { return preview_scroll_; }
+    // Ham REVIEW'da satırların baştan atlanan baytı (yana kaydırma); biçimli görünümde 0.
+    std::size_t preview_column() const { return view_source_lines_.empty() ? preview_column_ : 0; }
+    // `line`ın çizimde atlanan baytı: preview_column, kod noktası başına geri çekilmiş, satır boyunu geçmez.
+    std::size_t preview_skip(std::string_view line) const;
+    // Shift+←/→, Shift+tekerlek: panel genişliği kadar bayt; görünen en uzun satırın son baytını geçmez.
+    void scroll_preview_columns(int direction);
+    // Gösterilen önizleme ham metin mi (yana kaydırılır); biçimli görünüm satırları panele sığar.
+    bool preview_scrolls_sideways() const { return preview_text_ && view_source_lines_.empty(); }
 
     // Çoklu seçim (`x`): klasörler arasında kalır, yeniden taramada kaybolan öğe düşer. Çöpün ayrı kümesi
     // vardır: çöp ve canlı ağaç ayrı ad uzayıdır.
@@ -616,7 +633,9 @@ private:
     std::vector<Row> rows_;
     std::size_t selected_ = 0;
     std::size_t preview_scroll_ = 0;
+    std::size_t preview_column_ = 0;
     std::size_t preview_lines_ = static_cast<std::size_t>(-1);  // bilinmiyor: üst sınır yok
+    bool preview_partial_ = false;
     const std::vector<std::string>* preview_text_ = nullptr;
     std::size_t preview_generation_ = 0;
     PreviewFind preview_find_;

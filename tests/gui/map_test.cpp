@@ -479,6 +479,33 @@ TEST_CASE("map: a node with more links is drawn larger and the controls are a ch
     CHECK(scene.state->map_options().whole_graph);
 }
 
+// NX-B (L1): adımlayıcının üstü limits.app.map_depth (TUI derinlik tuşlarıyla aynı model sınırı).
+TEST_CASE("map: the depth stepper stops at limits.app.map_depth and 0 lets it go past 6") {
+    MapScene scene;
+    MapOptions options;
+    SUBCASE("a limit of 3") {
+        scene.fixture.config.limits.app.map_depth = {3, "3"};
+        scene.open(false);
+        options = scene.state->map_options();
+        options.depth = 5;
+        scene.state->set_map_options(options);
+        CHECK(scene.state->map_options().depth == 3);  // sınıra iner
+        scene.settle_layout();
+        CHECK(scene.view->item_rects().at("map_depth_more").disabled);
+    }
+    SUBCASE("unlimited") {
+        scene.fixture.config.limits.app.map_depth = {0, "0"};
+        scene.open(false);
+        options = scene.state->map_options();
+        options.depth = 6;
+        scene.state->set_map_options(options);
+        scene.settle_layout();
+        REQUIRE_FALSE(scene.view->item_rects().at("map_depth_more").disabled);
+        click_button(*scene.view, "map_depth_more");
+        CHECK(scene.state->map_options().depth == 7);
+    }
+}
+
 // G13: büyüyen düğüm çizildiği boyda tıklanır; kenarına yakın tık da o notu açar.
 TEST_CASE("map: a click near the rim of a node grown by its links opens that note") {
     MapScene scene;

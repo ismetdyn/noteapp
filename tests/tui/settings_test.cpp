@@ -203,7 +203,9 @@ TEST_CASE("text rows edit with UTF-8 aware backspace") {
     CHECK(s.changed());
 }
 
-TEST_CASE("Esc without changes cancels at once; with changes it asks, defaulting to keep editing") {
+// GUI'nin Ayarlar'dan çıkış sorusuyla aynı seçenekler (app::CloseChoice), düğme sırası Kaydet, At, Vazgeç.
+TEST_CASE("Esc without changes cancels at once; with changes it asks Save, Discard or Cancel, defaulting to Cancel") {
+    using noteapp::app::CloseChoice;
     const Home home;
     SettingsState clean(defaults());
     CHECK(clean.handle(Key::Escape) == Outcome::Cancel);
@@ -212,15 +214,50 @@ TEST_CASE("Esc without changes cancels at once; with changes it asks, defaulting
     focus_row(s, "editor");
     type(s, "x");
     CHECK(s.handle(Key::Escape) == Outcome::Editing);
-    REQUIRE(s.discard_confirm());
-    CHECK_FALSE(s.discard_confirm()->yes_selected());
+    REQUIRE(s.leave_prompt());
+    CHECK(*s.leave_prompt() == CloseChoice::Cancel);
     CHECK(s.handle(Key::Enter) == Outcome::Editing);  // varsayılan "Vazgeç": forma döner
-    CHECK(s.discard_confirm() == nullptr);
+    CHECK_FALSE(s.leave_prompt());
     CHECK(row(s, "editor").value == "x");
 
     s.handle(Key::Escape);
-    s.handle(Key::Right);  // "At"
-    CHECK(s.handle(Key::Enter) == Outcome::Cancel);
+    CHECK(s.handle(Key::Escape) == Outcome::Editing);  // soruda Esc de Vazgeç
+    CHECK_FALSE(s.leave_prompt());
+
+    s.handle(Key::Escape);
+    s.handle(Key::Left);
+    CHECK(*s.leave_prompt() == CloseChoice::Discard);
+    s.handle(Key::Left);
+    CHECK(*s.leave_prompt() == CloseChoice::Save);
+    s.handle(Key::Left);  // döner
+    CHECK(*s.leave_prompt() == CloseChoice::Cancel);
+    s.handle(Key::Right);  // döner
+    CHECK(*s.leave_prompt() == CloseChoice::Save);
+    s.handle(Key::Right);
+    CHECK(*s.leave_prompt() == CloseChoice::Discard);
+    CHECK(s.handle(Key::Enter) == Outcome::Cancel);  // At: çağıran formu kapatır, hiçbir şey yazılmaz
+}
+
+// Kaydet seçimi Kaydet düğmesiyle aynı akış (Outcome::Submit -> submit): hata formda kalır, ekran kapanmaz.
+TEST_CASE("Save in the leave prompt submits like the Save button; an invalid value keeps the form open") {
+    using noteapp::app::CloseChoice;
+    const Home home;
+    write_config("editor = \"vim\"\n");
+    const std::string before = noteapp::test::slurp(core::config_file());
+    const core::Config base = core::load_config().config;
+    SettingsState s(base);
+    focus_row(s, "sync.idle_seconds");
+    clear_field(s);
+    type(s, "0");
+    s.handle(Key::Escape);
+    s.handle(Key::Left);
+    s.handle(Key::Left);
+    REQUIRE(*s.leave_prompt() == CloseChoice::Save);
+    CHECK(s.handle(Key::Enter) == Outcome::Submit);
+    CHECK_FALSE(s.leave_prompt());
+    CHECK_FALSE(s.submit(base));
+    CHECK_FALSE(row(s, "sync.idle_seconds").error.empty());
+    CHECK(noteapp::test::slurp(core::config_file()) == before);
 }
 
 TEST_CASE("Enter on a field only advances; Enter on the button submits") {
@@ -358,14 +395,62 @@ TEST_CASE("the focused row scrolls into view and errors render inline") {
     CHECK(has(render_settings(bad, 60, 15), row(bad, "sync.idle_seconds").error.substr(0, 10)));
 }
 
-TEST_CASE("the discard confirmation replaces the form body") {
+// Ctrl+C (çıkış) GUI'nin pencere kapanışı gibi: kirli formda aynı soru, At çıkar, Kaydet kaydedip çıkar.
+TEST_CASE("Ctrl+C with unsaved changes asks; Cancel stays, Discard quits, Save submits and quits") {
+    using noteapp::app::CloseChoice;
+    const Home home;
+    SettingsState clean(defaults());
+    CHECK_FALSE(clean.ask_before_quit());  // değişiklik yok: çağıran hemen çıkar
+
+    SettingsState s(defaults());
+    focus_row(s, "editor");
+    type(s, "x");
+    CHECK(s.ask_before_quit());
+    REQUIRE(s.leave_prompt());
+    CHECK(*s.leave_prompt() == CloseChoice::Cancel);
+    CHECK(s.handle(Key::Enter) == Outcome::Editing);  // Vazgeç: formda kalınır
+    CHECK_FALSE(s.leave_prompt());
+    CHECK(s.handle(Key::Escape) == Outcome::Editing);  // sonraki Esc sorusu çıkış değil
+    s.handle(Key::Left);
+    CHECK(s.handle(Key::Enter) == Outcome::Cancel);
+
+    CHECK(s.ask_before_quit());
+    s.handle(Key::Left);
+    CHECK(s.handle(Key::Enter) == Outcome::Quit);
+    CHECK(s.ask_before_quit());
+    s.handle(Key::Left);
+    s.handle(Key::Left);
+    CHECK(s.handle(Key::Enter) == Outcome::SubmitAndQuit);
+}
+
+// Uygulama açıkken `note config set limits.app.map_*`: Kaydet dönen config'te dosyadaki harita sınırları gelir,
+// çağıran onları çalışan haritaya uygular.
+TEST_CASE("submit carries the map limits from the file so the caller applies them live") {
+    const Home home;
+    write_config("[limits.app]\nmap_depth = 3\nmap_nodes = 7\n");
+    const core::Config base = defaults();
+    REQUIRE(base.limits.app.map_depth.value == 6);
+    SettingsState s(base);
+    focus_row(s, "editor");
+    type(s, "x");
+    const auto saved = s.submit(base);
+    REQUIRE(saved);
+    CHECK(saved->limits.app.map_depth == core::Limit{3, "3"});
+    CHECK(saved->limits.app.map_nodes == core::Limit{7, "7"});
+}
+
+TEST_CASE("the leave prompt replaces the form body with its three buttons") {
     const Home home;
     SettingsState s(defaults());
     type(s, "");
     focus_row(s, "editor");
     type(s, "x");
     s.handle(Key::Escape);
-    CHECK(has(render_settings(s, 60, 15), core::tr("tui.settings_confirm_discard")));
+    const ftxui::Screen screen = render_settings(s, 60, 15);
+    CHECK(has(screen, core::tr("tui.settings_confirm_leave")));
+    CHECK(has(screen, "[ " + core::tr("tui.settings_save") + " ]"));
+    CHECK(has(screen, "[ " + core::tr("tui.discard_yes") + " ]"));
+    CHECK(has(screen, "[ " + core::tr("tui.discard_no") + " ]"));
 }
 
 TEST_CASE("config warnings become one translated status line, empty when there are none") {

@@ -53,6 +53,7 @@ struct Preview {
     // Biçimli görünümde `lines`/`text` görüntülenen metindir (seçim onu kopyalar, arama onda çalışır);
     // satırlar zaten panele sığar. `styled` ve `source_lines` `lines` ile paraleldir.
     bool rendered = false;
+    bool partial = false;  // büyük md parça parça üretiliyor: devamı var (TuiState::set_preview_lines)
     std::vector<std::vector<StyledSpan>> styled;
     std::vector<std::size_t> source_lines;
     std::string note;  // biçimli görünüm istendi, olmadı: toplamlar satırında soluk neden
@@ -102,6 +103,10 @@ private:
     // Görünümü gerekirse üretir; false: boyutlandırma sürüyor, önceki yerleşim kalır.
     bool update_rendered(bool wanted, int width, std::chrono::steady_clock::time_point now);
     void build_rendered(int width);
+    // Büyük md (app::markdown_chunks) parça parça: görünen pencere, bekleyen kaynak satırı ya da (arama) tümü
+    // üretilene dek sıradaki parçalar eklenir.
+    void extend_rendered(const TuiState& state);
+    void append_chunk();
 
     ViewLimits view_limits_;
     SyntaxLimits syntax_limits_;
@@ -122,6 +127,9 @@ private:
     int rendered_width_ = 0;
     bool rendered_ok_ = false;
     bool rendered_active_ = false;
+    std::vector<app::MarkdownChunk> rendered_chunks_;
+    app::MarkdownDefinitions rendered_definitions_;  // birden çok parçada notun başvuru tanımları
+    std::size_t rendered_next_ = 0;  // sıradaki üretilecek parça
     std::string rendered_note_;
     std::optional<int> settling_width_;
     std::chrono::steady_clock::time_point last_resize_{};
@@ -183,8 +191,12 @@ std::string fit_hints(std::string_view hints, int width);
 // Kısayol çubuğu (SPEC-tui "Yerleşim"): tuş kalın ve `key_color` renginde, açıklama varsayılan renkte. `F1`
 // yardım ipucu sağ kenara sabitlenir, kalanlar sırayla `fit_hints` kuralıyla soldan dolar.
 ftxui::Element hint_bar(std::string_view hints, int width, ftxui::Color key_color);
+// `hint_bar`ın sağa sabitlediği `F1` ipucunun ayracıyla kapladığı hücre; katalogda yoksa 0.
+int pinned_help_cells(std::string_view hints);
 
 // Değerin son `limit` kod noktası; kesilen başa "…" konur (imleç sonda, görünür kalsın).
 std::string tail_cells(const std::string& value, std::size_t limit);
+// Değerin baştan en çok `limit` hücresi; kesilirse sona "…" konur (iletinin başı okunur). Hiç yer yoksa boş.
+std::string head_ellipsis(const std::string& value, int limit);
 
 }  // namespace noteapp::tui

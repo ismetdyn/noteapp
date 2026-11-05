@@ -5,7 +5,7 @@
 
 namespace noteapp::tui {
 
-enum class MouseButton { Left, Right, WheelUp, WheelDown, Other };
+enum class MouseButton { Left, Right, WheelUp, WheelDown, WheelLeft, WheelRight, Other };
 enum class MouseMotion { Press, Release, Move };
 
 struct MouseInput {

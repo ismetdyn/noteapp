@@ -660,7 +660,7 @@ struct ReviewFixture {
         now += std::chrono::seconds(1);
         shown = &preview.throttled(state, *store, now);
         if (!preview.deferred())
-            state.set_preview_lines(&shown->lines, preview.generation());
+            state.set_preview_lines(&shown->lines, preview.generation(), shown->partial);
     }
     void press(Key key, std::string_view text = {}) {
         const tui::Intent intent = state.handle(key, text);
@@ -677,7 +677,7 @@ struct ReviewFixture {
             press(Key::Char, std::string_view(&c, 1));
         press(Key::Enter);
     }
-    int right_x() const { return state.layout().geometry(kWidth, true).right_x + 1; }
+    int right_x() const { return state.layout().geometry(kWidth, true).right_x + 2; }  // kenar, iç boşluk
     static constexpr int kTopRow = 2;
     void mouse(int x, int y, tui::MouseButton button, tui::MouseMotion motion) {
         actions.on_mouse({x, y, button, motion}, editor);
@@ -1027,6 +1027,239 @@ TEST_CASE("a note above the old 256 KiB view limit renders when limits.tui.view_
     f.open("a.md", repeated("# a\n", tui::ViewLimits{}.source_bytes / 4 + 1));
     CHECK(f.shown->rendered);
     CHECK(f.shown->note.empty());
+}
+
+namespace {
+
+// Parçalara bölünen büyük not: başlık, sarılan paragraf, wiki bağlantısı, liste, kuşatılmış kod.
+std::string large_markdown(std::size_t bytes) {
+    const std::string_view unit = "## Bölüm\n\nBir paragraf *vurgu* ve **kalın** metin [[hedef]] ile; satır sarılsın "
+                                  "diye biraz uzun yazılmış bir cümle daha ekleniyor burada.\n\n"
+                                  "- madde bir\n- madde iki\n\n```\nkod satırı\n```\n\n";
+    return repeated(unit, bytes / unit.size() + 1);
+}
+
+tui::ViewLimits unlimited_view() {
+    return tui::view_limits_of(
+        core::parse_config("[limits.tui]\nview_bytes = 0\nview_lines = 0\n").config.limits.tui);
+}
+
+void check_same_view(const tui::Preview& shown, const tui::RenderedView& whole) {
+    CHECK(shown.lines == whole.lines);
+    CHECK(shown.source_lines == whole.source_lines);
+    REQUIRE(shown.styled.size() == whole.spans.size());
+    for (std::size_t line = 0; line < whole.spans.size(); ++line) {
+        REQUIRE(shown.styled[line].size() == whole.spans[line].size());
+        for (std::size_t i = 0; i < whole.spans[line].size(); ++i) {
+            CHECK(shown.styled[line][i].begin == whole.spans[line][i].begin);
+            CHECK(shown.styled[line][i].end == whole.spans[line][i].end);
+            CHECK(shown.styled[line][i].look == whole.spans[line][i].look);
+        }
+    }
+}
+
+
+// Kesim yerlerinin her türü: setext başlık, sıralı liste ve öğedeki girintili çit, alıntı, tablo, görev listesi,
+// yıldızlı çizgi, başvuru bağlantısı (tanımı sonda), sonda kapanmamış çit. `crlf`: satır sonları CRLF.
+std::string varied_markdown(std::size_t bytes, bool crlf) {
+    const std::string unit = "Başlık\n======\n\n1. bir\n2. iki\n   ```\n   kod\n   ```\n\n> alıntı\n> devam\n\n"
+                             "| a | b |\n|---|---|\n| 1 | 2 |\n\nAlt başlık\n---\n\n[bağ][r] ve *eğik*\n\n"
+                             "- [x] görev\n- [ ] kalan\n\n***\n\n- ```sh\n  echo\n  ```\n\n";
+    std::string text;
+    while (text.size() < bytes)
+        text += unit;
+    text += "[r]: https://r.example\n\n```\nkapanmamış\n";
+    if (!crlf)
+        return text;
+    std::string out;
+    for (const char c : text) {
+        if (c == '\n')
+            out += '\r';
+        out += c;
+    }
+    return out;
+}
+
+}  // namespace
+
+// NX-D: büyük md parça parça üretilir (yalnız görünen pencere); `G` tümünü üretir ve sonuç tek geçişle aynıdır.
+TEST_CASE("a large markdown note renders chunk by chunk and ends identical to the whole rendering") {
+    const std::string note = large_markdown(3 * noteapp::app::kMarkdownChunkBytes);
+    ReviewFixture f;
+    f.preview = tui::PreviewCache(unlimited_view(), {});
+    f.open("big.md", note);
+    REQUIRE(f.shown->rendered);
+    CHECK(f.shown->partial);
+    const int width = tui::editor_viewport({kWidth, kHeight}, f.state.layout()).columns;
+    const tui::RenderedView whole = tui::render_markdown(note, width, tui::terminal_cell_width, unlimited_view());
+    CHECK(f.shown->lines.size() < whole.lines.size() / 2);
+    f.state.focus_preview();
+    f.letter("G");
+    CHECK_FALSE(f.shown->partial);
+    check_same_view(*f.shown, whole);
+    CHECK(f.state.preview_scroll() == whole.lines.size() - 1);
+}
+
+// Her blok türü, LF ve CRLF: tümü üretilince tek geçişle aynı (başvuru tanımı sonda, sonda kapanmamış çit).
+TEST_CASE("a chunked note of every block kind renders like the whole note, LF and CRLF") {
+    for (const bool crlf : {false, true}) {
+        CAPTURE(crlf);
+        const std::string note = varied_markdown(3 * noteapp::app::kMarkdownChunkBytes, crlf);
+        ReviewFixture f;
+        f.preview = tui::PreviewCache(unlimited_view(), {});
+        f.open("big.md", note);
+        REQUIRE(f.shown->partial);
+        f.state.focus_preview();
+        f.letter("G");
+        REQUIRE_FALSE(f.shown->partial);
+        const int width = tui::editor_viewport({kWidth, kHeight}, f.state.layout()).columns;
+        check_same_view(*f.shown, tui::render_markdown(note, width, tui::terminal_cell_width, unlimited_view()));
+    }
+}
+
+// Not içi arama tüm görünümde çalışır; satır sınırı (view_lines) parçalar arasında sürer.
+TEST_CASE("find over a chunked markdown note sees every chunk and the line limit spans chunks") {
+    const std::string note = large_markdown(3 * noteapp::app::kMarkdownChunkBytes) + "## sonuncu\n";
+    ReviewFixture f;
+    f.preview = tui::PreviewCache(unlimited_view(), {});
+    f.open("big.md", note);
+    REQUIRE(f.shown->partial);
+    f.state.focus_preview();
+    f.find("sonuncu");
+    CHECK_FALSE(f.shown->partial);
+    CHECK(f.state.preview_find().count() == 1);
+    REQUIRE(f.state.preview_find().current_line());
+    CHECK(f.shown->lines[*f.state.preview_find().current_line()] == "## sonuncu");
+
+    tui::ViewLimits limited = unlimited_view();
+    limited.lines = 5000;
+    ReviewFixture g;
+    g.preview = tui::PreviewCache(limited, {});
+    g.open("big.md", note);
+    g.state.focus_preview();
+    g.letter("G");
+    const int width = tui::editor_viewport({kWidth, kHeight}, g.state.layout()).columns;
+    check_same_view(*g.shown, tui::render_markdown(note, width, tui::terminal_cell_width, limited));
+}
+
+// NX-E F1: aynı etiketin iki tanımında belge sırasıyla ilki kazanır, sonraki parçadaki tekrar da.
+TEST_CASE("the first definition of a label wins across chunks") {
+    std::string note = "[a]: https://first.example\n\n";
+    // Tekrar ve kullanımı aynı parçanın ortasında: parçanın kendi tanımı eklenen tablodan önce gelir.
+    while (note.size() < 100 * 1024)
+        note += "## Bölüm\n\nBir paragraf metni burada.\n\n";
+    note += "[a]: https://second.example\n\n[son][a]\n\n";
+    while (note.size() < 200 * 1024)
+        note += "## Bölüm\n\nBir paragraf metni burada.\n\n";
+    ReviewFixture f;
+    f.preview = tui::PreviewCache(unlimited_view(), {});
+    f.open("big.md", note);
+    REQUIRE(f.shown->partial);
+    f.state.focus_preview();
+    f.letter("G");
+    REQUIRE_FALSE(f.shown->partial);
+    CHECK(contains(f.shown->text, "first.example"));
+    CHECK_FALSE(contains(f.shown->text, "second.example"));
+}
+
+// Bağlantı başvuru tanımı notun her yerinde geçerlidir: sondaki tanım ilk parçadaki kullanımı çözer (metin + URL).
+TEST_CASE("a reference defined at the end of a chunked note resolves in the first chunk") {
+    std::string note = "[başvuru][r] ile başlar.\n\n";
+    while (note.size() < 100 * 1024)
+        note += "## Bölüm\n\nBir paragraf metni burada.\n\n";
+    note += "[r]: https://example.org/r\n";
+    ReviewFixture f;
+    f.preview = tui::PreviewCache(unlimited_view(), {});
+    f.open("big.md", note);
+    REQUIRE(f.shown->partial);
+    CHECK(contains(f.shown->lines.front(), "example.org/r"));
+}
+
+// EDIT'ten dönüş ve içerik araması üretilmemiş parçadaki kaynak satırına iner.
+TEST_CASE("scrolling to a source line in an unrendered chunk renders up to it") {
+    const std::string note = large_markdown(3 * noteapp::app::kMarkdownChunkBytes);
+    ReviewFixture f;
+    f.preview = tui::PreviewCache(unlimited_view(), {});
+    f.open("big.md", note);
+    REQUIRE(f.shown->partial);
+    const std::size_t total_lines = static_cast<std::size_t>(std::ranges::count(note, '\n'));
+    const std::size_t target = total_lines - 3;  // son birimin kod bloğu
+    f.state.leave_editor(target);
+    f.sync();
+    REQUIRE(f.state.preview_scroll() < f.shown->source_lines.size());
+    CHECK(f.shown->source_lines[f.state.preview_scroll()] <= target);
+    CHECK(f.shown->source_lines[f.state.preview_scroll()] + 3 >= target);
+}
+
+// NX-D: ham REVIEW uzun satırın ilk ekranından sonrasını yana kaydırarak gösterir (GUI ham önizlemesi tüm satırı
+// gösterir). Adım panelin genişliği kadar bayttır; görünen en uzun satırın sonunu geçmez.
+TEST_CASE("Shift+Right scrolls a long raw REVIEW line sideways a pane width at a time, Shift+Left back") {
+    ReviewFixture f;
+    std::string line;
+    for (int i = 0; line.size() < 6000; ++i)
+        line += std::to_string(i % 10);
+    line += "SON";
+    f.open("uzun.txt", line + "\nkısa\n");
+    f.state.focus_preview();
+    const auto step =
+        static_cast<std::size_t>(f.state.layout().geometry(kWidth, true).right_width - tui::kPaneChromeCells);
+    CHECK(f.state.preview_column() == 0);
+    CHECK_FALSE(contains(f.screen_text(), "SON"));
+    f.press(Key::ShiftRight);
+    CHECK(f.state.preview_column() == step);
+    // Fare seçimi kaydırılmış satırın gösterilen baytlarını kopyalar.
+    const int x = f.right_x();
+    f.drag(x, ReviewFixture::kTopRow, x + 3, ReviewFixture::kTopRow);
+    CHECK(f.internal == line.substr(step, 4));
+    for (int i = 0; i < 300 && !contains(f.screen_text(), "SON"); ++i)
+        f.press(Key::ShiftRight);
+    CHECK(contains(f.screen_text(), "SON"));
+    for (int i = 0; i < 300; ++i)
+        f.press(Key::ShiftRight);
+    CHECK(f.state.preview_column() < line.size());
+    CHECK(contains(f.screen_text(), "N"));
+    for (int i = 0; i < 300; ++i)
+        f.press(Key::ShiftLeft);
+    CHECK(f.state.preview_column() == 0);
+    CHECK_FALSE(contains(f.screen_text(), "SON"));
+}
+
+// Biçimli görünümde yana kaydırma yok: Shift+tekerlek eskisi gibi dikey kaydırır.
+TEST_CASE("Shift+wheel scrolls the rendered REVIEW vertically") {
+    ReviewFixture f;
+    f.open("a.md", repeated("# Başlık\n\nparagraf\n\n", 200));
+    f.state.focus_preview();
+    REQUIRE(f.shown->rendered);
+    f.actions.on_mouse({f.right_x(), f.kTopRow + 1, tui::MouseButton::WheelDown, tui::MouseMotion::Press, true},
+                       f.editor);
+    f.sync();
+    CHECK(f.state.preview_scroll() > 0);
+    CHECK(f.state.preview_column() == 0);
+}
+
+// Yana kaydırma yalnız ham görünümündür (biçimli satırlar panele sığar); başka not baştan başlar. Shift+tekerlek
+// ve yatay tekerlek (terminal bildirirse) aynı adımı atar.
+TEST_CASE("sideways scroll is raw only, resets on another note and follows Shift+wheel") {
+    ReviewFixture f;
+    f.put("b.txt", "b\n");
+    f.open("a.md", "# Başlık\n\n" + std::string(6000, 'a') + "\n");
+    f.state.focus_preview();
+    f.press(Key::ShiftRight);
+    CHECK(f.state.preview_column() == 0);  // biçimli görünüm
+    f.letter("R");
+    f.press(Key::ShiftRight);
+    const std::size_t step = f.state.preview_column();
+    CHECK(step > 0);
+    const int x = f.right_x();
+    f.actions.on_mouse({x, f.kTopRow + 1, tui::MouseButton::WheelDown, tui::MouseMotion::Press, true}, f.editor);
+    f.sync();
+    CHECK(f.state.preview_column() == 2 * step);
+    f.actions.on_mouse({x, f.kTopRow + 1, tui::MouseButton::WheelLeft, tui::MouseMotion::Press}, f.editor);
+    f.sync();
+    CHECK(f.state.preview_column() == step);
+    REQUIRE(f.state.select_note(core::NotePath::parse("b.txt").value()));
+    f.sync();
+    CHECK(f.state.preview_column() == 0);
 }
 
 TEST_CASE("a sample rendering is written when asked") {

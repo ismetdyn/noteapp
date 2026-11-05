@@ -63,7 +63,6 @@ constexpr std::size_t kLogNameBytes = kLogHexBytes + std::string_view(".oplog").
 constexpr std::size_t kMaxReportedIssues = 20;  // durum dosyası büyümesin; kalanı sayı olarak bildirilir
 constexpr std::string_view kBranchPrefix = "refs/heads/";
 constexpr std::string_view kPushRejected = "sync.push_rejected";
-constexpr std::size_t kMaxExtensionBytes = 32;  // bundan uzunu uzantı sayılmaz: kopyanın adını doldururdu
 // OS kullanıcı/makine adı okunamazsa yazarda boş alan kalmasın diye son çare değerler.
 constexpr std::string_view kUnknownUser = "noteapp";
 constexpr std::string_view kUnknownHost = "localhost";
@@ -410,7 +409,7 @@ std::expected<std::string, core::Error> write_conflict_copy(git_repository* repo
     const fs::path original = path_from_utf8(path);
     std::string stem = utf8(original.stem());
     std::string extension = utf8(original.extension());  // uzantısız dosyada boş: nokta eklenmez
-    if (extension.size() > kMaxExtensionBytes) {         // gerçek uzantı değil; damgaya yer kalsın
+    if (extension.size() > core::kMaxExtensionBytes) {   // gerçek uzantı değil; damgaya yer kalsın
         stem += extension;
         extension.clear();
     }

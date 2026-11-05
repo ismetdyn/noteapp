@@ -747,6 +747,62 @@ TEST_CASE("top line: the right group is dim and split by middle dots, the sync s
     }
 }
 
+// En dar pencerede uzun senkron hatası sağ grubu kenardan itmez: önce senkron metni "…" ile kısalır; sıra,
+// kip ve sayaç tam kalır. Geniş (CJK) karakter iki hücredir, kesim hücreye göre yapılır.
+TEST_CASE("top line: a long sync error is cut with an ellipsis at 60 columns, sort, mode and counts stay") {
+    constexpr int kNotes = 1000;
+    constexpr int kHits = 100;
+    std::vector<core::NoteInfo> notes;
+    for (int i = 0; i < kNotes; ++i)
+        notes.push_back(note("n" + std::to_string(i) + ".md", i));
+    const std::string errors[] = {"⚠ 同步失败：无法连接到远程服务器，请检查网络设置后再试一次",
+                                  "⚠ remote rejected the push: the repository is locked by another client"};
+    for (const auto& [language, fixed] : {std::pair{"tr", "oluşturma↑ · [içerik] · 100/1000"},
+                                          std::pair{"en", "created↑ · [content] · 100/1000"}}) {
+        core::init_i18n(language);
+        tui::TuiState state;
+        state.set_notes(notes);
+        tui::ListPrefs prefs;
+        prefs.sort = {search::SortField::Created, false};
+        state.set_list_prefs(prefs);
+        state.set_content_searcher([&notes](std::string_view) {
+            std::vector<search::ContentResult> results;
+            for (int i = 0; i < kHits; ++i)
+                results.push_back({notes[static_cast<std::size_t>(i)].path, 1, {}});
+            return results;
+        });
+        state.handle(Key::Tab);
+        state.handle(Key::Char, "/");
+        state.handle(Key::Char, "x");
+        CHECK(state.rows().size() == kHits);
+        for (const std::string& error : errors) {
+            CAPTURE(language);
+            CAPTURE(error);
+            auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(tui::kMinWidth),
+                                                ftxui::Dimension::Fixed(tui::kMinHeight));
+            const tui::StatusLine status{
+                .sync = error, .message = {}, .notice = {}, .sync_state = tui::SyncIndicator::State::Failed};
+            ftxui::Render(screen,
+                          tui::render(state, text_preview({}), status, {tui::kMinWidth, tui::kMinHeight}));
+            // REQUIRE değil: test yarıda kalırsa dil Türkçe kalır, sonraki testler İngilizce katalog bekler.
+            const std::string top = row_text(screen, 0);
+            CAPTURE(top);
+            const auto group = find_text(screen, fixed);
+            const auto sync = find_text(screen, error.substr(0, error.find(' ') + 1));
+            CHECK(group);
+            CHECK(sync);
+            if (!group || !sync)
+                continue;
+            CHECK(group->second == 0);
+            CHECK(sync->second == 0);
+            CHECK(sync->first > group->first);
+            CHECK(row_text(screen, 0).ends_with("…"));
+            CHECK(screen.PixelAt(sync->first, 0).foreground_color == ftxui::Color(ftxui::Color::Red));
+        }
+    }
+    core::init_i18n("en");
+}
+
 TEST_CASE("the top line shows a non-empty trash as text, at the far left") {
     auto state = sample_state();
     CHECK_FALSE(contains(render_screen(state, text_preview({})), "trash:"));
@@ -1033,7 +1089,7 @@ TEST_CASE("list rows show the icon in one cell before the name, keeping the arro
     const std::string md = core::icon_text(core::file_icon("a.md"), core::IconStyle::Nerd);
     const std::string java = core::icon_text(core::file_icon("a.java"), core::IconStyle::Nerd);
     CHECK(contains(screen, " 1   " + md + "  work-meeting.md"));
-    CHECK(contains(screen, " 3   " + java + "  snippets-sort.java"));
+    CHECK(contains(screen, " 3   " + java + "  snippets-sort.ja"));  // dar panelde boyut sütunu adı kısaltır
     CHECK(screen.PixelAt(marker, kFirstRowY).character == " ");  // notta ok yok
     CHECK(screen.PixelAt(marker + 2, kFirstRowY).character == md);
     CHECK(screen.PixelAt(marker + 5, kFirstRowY).character == "w");

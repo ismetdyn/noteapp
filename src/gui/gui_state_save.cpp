@@ -252,6 +252,7 @@ bool GuiState::confirm_close_settings() {
         break;
     case CloseChoice::Discard:
         settings_.revert();
+        settings_.token.clear();  // yazılmış ama kasaya gitmemiş token da atılır
         return true;
     case CloseChoice::Cancel:
         break;

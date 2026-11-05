@@ -46,7 +46,7 @@ public:
     const std::string& field_error(const std::string& key) const { return fields_.at(key).error; }
     const std::string& global_error() const { return global_error_; }
     const std::vector<std::string>& types() const { return applied_.types; }
-    // Form kayıtlı değerlerden farklı mı. Token dahil değil: kendi düğmesiyle anında kasaya gider.
+    // Form kayıtlı değerlerden farklı mı ya da kasaya gitmemiş token yazılı mı (TUI changed() ile aynı).
     bool has_changes() const;
 
     bool token_enabled() const { return token_enabled_; }
@@ -54,8 +54,8 @@ public:
     const std::string& test_result() const { return test_result_; }
     bool testing() const { return testing_; }
 
-    void save();             // Kaydet
-    void revert();           // Geri al: alanlar kaydedilmiş değerlere döner
+    void save();             // Kaydet; yazılmış token da kasaya gider (TUI Kaydet gibi)
+    void revert();           // Geri al: alanlar kaydedilmiş değerlere döner, yazılmış token silinir
     void test_connection();  // app::run_connection_test (enable + tek senkron), işçi iş parçacığında
     void browse_notes_dir();
     void save_token();

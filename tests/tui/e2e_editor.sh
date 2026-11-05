@@ -545,22 +545,22 @@ printf 'birinci\nikinci\n' | put_note v.md
 start_app
 keys Enter
 wait_screen "Ctrl+S save"
-# Sol panel 40, kenar 1, numara sütunu 3: metnin ilk hücresi 44, ilk satır 2.
-check "the terminal cursor is at the first text cell after the gutter" cursor_at 44 2
+# Sol panel 40, kenar 1, iç boşluk 1, numara sütunu 3: metnin ilk hücresi 45, ilk satır 2.
+check "the terminal cursor is at the first text cell after the gutter" cursor_at 45 2
 keys Down
 keys End
 sleep 0.3
-check "the terminal cursor follows after motion" cursor_at 50 3
+check "the terminal cursor follows after motion" cursor_at 51 3
 check "the gutter shows the line number" screen_has " 2 ikinci"
 check "rows past the end show a tilde" screen_has "~"
 check "the status bar names the file and format" screen_has "UTF-8  LF"
-mouse_press 0 47 3
-mouse_release 0 47 3
+mouse_press 0 48 3
+mouse_release 0 48 3
 sleep 0.3
-check "a click lands on the text cell, the gutter is not text" cursor_at 46 2
+check "a click lands on the text cell, the gutter is not text" cursor_at 47 2
 keys C-q
 wait_screen "← list"
-check "REVIEW has no gutter" screen_has "│birinci"
+check "REVIEW has no gutter" screen_has "│ birinci"
 check "REVIEW has no tilde" screen_lacks "~"
 check "REVIEW hides the terminal cursor" test "$(tmux display-message -p -t "$session" '#{cursor_flag}')" = 0
 keys q
@@ -680,8 +680,8 @@ keys g
 keys g
 keys Right
 wait_screen "← list"
-# Sol panel 40 sütun, kenar 1; SGR 1 tabanlı: metnin ilk hücresi 42, ilk satır 3.
-screen_x=42
+# Sol panel 40 sütun, kenar 1, iç boşluk 1; SGR 1 tabanlı: metnin ilk hücresi 43, ilk satır 3.
+screen_x=43
 mouse_press 0 "$screen_x" 3
 mouse_press 32 "$((screen_x + 6))" 3
 mouse_release 0 "$((screen_x + 6))" 3
@@ -1031,7 +1031,7 @@ keys a
 wait_screen "Enter oluştur"
 literal 'deneme.cpp'
 check "a: the name row is the first row of the list pane" bar_has 3 "│ " "+ deneme.cpp▏"
-check "a: the row number column stays aligned" bar_has 4 "│ 1   ilk.md"
+check "a: the row number column stays aligned" bar_has 4 "│  1   ilk.md"
 check "a: the bottom line holds no input" test "$(bottom_line 30 | grep -c deneme)" = 0
 check "a: nothing is created while typing" test "$(note_tool count)" = 1
 keys Escape
@@ -1096,7 +1096,7 @@ keys Enter
 sleep 0.3
 check "a: a taken name keeps the row open with the text" screen_has "+ yalin.md▏"
 check "a: a taken name is an inline error, not -2" screen_lacks "yalin-2.md"
-check "a: the error is in the list pane" bar_has 4 "│Zaten"
+check "a: the error is in the list pane" bar_has 4 "│ Zaten"
 keys Escape
 sleep 0.2
 keys a

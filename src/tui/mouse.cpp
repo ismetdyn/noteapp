@@ -15,7 +15,6 @@ namespace {
 constexpr int kFirstPaneRow = 2;      // üst çubuk + panel kenarı
 constexpr int kBottomChromeRows = 3;  // panel kenarı, toplamlar ya da editör durumu, alt çubuk
 constexpr int kWheelStep = 3;
-constexpr int kFrameCells = 1;     // panel kenarı
 constexpr int kMapStatusRows = 1;  // haritanın kapsam satırı (map_pane)
 
 bool in_pane_rows(const TuiState& state, int y) {
@@ -45,7 +44,18 @@ bool editor_busy(const TuiState& state, const EditorSession& editor) {
 }
 
 void handle_wheel(const MouseInput& input, TuiState& state, EditorSession& editor, bool right) {
-    const int direction = input.button == MouseButton::WheelUp ? -1 : 1;
+    const bool back = input.button == MouseButton::WheelUp || input.button == MouseButton::WheelLeft;
+    const int direction = back ? -1 : 1;
+    // Yatay tekerlek ya da Shift+tekerlek (terminal bildirirse) ham REVIEW'u yana kaydırır.
+    const bool sideways =
+        input.shift || input.button == MouseButton::WheelLeft || input.button == MouseButton::WheelRight;
+    if (sideways && right && state.focus() != Focus::Editor && !over_links(state, input.y) &&
+        state.preview_scrolls_sideways()) {
+        state.scroll_preview_columns(direction);
+        return;
+    }
+    if (input.button == MouseButton::WheelLeft || input.button == MouseButton::WheelRight)
+        return;  // başka yerde yatay tekerlek yok; Shift+tekerlek orada (biçimli görünüm dahil) eskisi gibi dikey
     if (state.focus() == Focus::Editor) {
         if (right)
             for (int i = 0; i < kWheelStep; ++i)
@@ -99,9 +109,9 @@ void open_list_menu(const MouseInput& input, TuiState& state, EditorSession& edi
     state.open_row_menu();
 }
 
-// Haritanın tuval hücresi: liste paneli kenarının ve kapsam satırının içi.
+// Haritanın tuval hücresi: liste paneli kenarının, iç boşluğun ve kapsam satırının içi.
 std::pair<int, int> map_cell(const MouseInput& input) {
-    return {input.x - kFrameCells, input.y - kFirstPaneRow - kMapStatusRows};
+    return {input.x - kPaneContentX, input.y - kFirstPaneRow - kMapStatusRows};
 }
 
 // MAP-R: düğümden sürükleme başlar; sağ tık düğüm dışındaysa yakındaki kenarı seçer. Editör önce park edilir
@@ -133,8 +143,14 @@ MouseResult continue_map_drag(const MouseInput& input, TuiState& state) {
 MouseResult click_top_line(const MouseInput& input, TuiState& state, EditorSession& editor) {
     if (state.new_note_view())
         return MouseResult::None;
-    if (input.x < ftxui::string_width(trash_indicator(state)))
-        return leave_editor(state, editor) ? MouseResult::OpenTrash : MouseResult::None;
+    if (input.x < ftxui::string_width(trash_indicator(state))) {
+        if (!leave_editor(state, editor))
+            return MouseResult::None;
+        // Çöp okunamasa da (ListActions iletiyi gösterir) tuşlar park edilen editöre dönmez.
+        state.focus_list();
+        return MouseResult::OpenTrash;
+    }
+    // Klasöre gitmek odağı zaten listeye alır (go_to_folder).
     if (const auto folder = breadcrumb_folder_at(state, input.x); folder && leave_editor(state, editor))
         state.go_to_folder(*folder);
     return MouseResult::None;
@@ -148,7 +164,9 @@ std::optional<PreviewPoint> preview_point_at(const TuiState& state, int cell, in
         return std::nullopt;
     auto remaining = static_cast<std::size_t>(std::max(row, 0));
     for (std::size_t line = state.preview_scroll(); line < lines->size(); ++line) {
-        EditorBuffer buffer((*lines)[line], terminal_cell_width);
+        const std::string_view full = (*lines)[line];
+        const std::size_t skip = state.preview_skip(full);  // ham görünümde yana kaydırma
+        EditorBuffer buffer(std::string(full.substr(skip)), terminal_cell_width);
         const std::vector<VisualRow> rows = buffer.rows_of_line(0, columns);
         const bool last_line = line + 1 == lines->size();
         if (remaining < rows.size() || last_line) {
@@ -157,7 +175,7 @@ std::optional<PreviewPoint> preview_point_at(const TuiState& state, int cell, in
             buffer.move_to_cell(visual, past_text ? std::numeric_limits<int>::max() : cell);
             const std::size_t begin = buffer.cursor();
             buffer.move_right(false);
-            return PreviewPoint{line, begin, buffer.cursor()};
+            return PreviewPoint{line, skip + begin, skip + buffer.cursor()};
         }
         remaining -= rows.size();
     }
@@ -172,9 +190,9 @@ struct PaneCell {
 };
 
 PaneCell clamped_pane_cell(const MouseInput& input, const TuiState& state, const PaneGeometry& geometry) {
-    const int columns = std::max(geometry.right_width - 2 * kFrameCells, 1);
+    const int columns = std::max(geometry.right_width - kPaneChromeCells, 1);
     const int rows = std::max(pane_rows(state) - state.links_reserved_rows(pane_rows(state)), 1);
-    return {std::clamp(input.x - geometry.right_x - kFrameCells, 0, columns - 1),
+    return {std::clamp(input.x - geometry.right_x - kPaneContentX, 0, columns - 1),
             std::clamp(input.y - kFirstPaneRow, 0, rows - 1), columns};
 }
 
@@ -196,7 +214,7 @@ MouseResult continue_selection(const MouseInput& input, TuiState& state, const P
     if (wheel) {
         // Çapa mantıksal konumdur; uç kayan pencerede aynı hücreye gelir.
         state.scroll_preview((input.button == MouseButton::WheelUp ? -1 : 1) * kWheelStep);
-        const int columns = std::max(geometry.right_width - 2 * kFrameCells, 1);
+        const int columns = std::max(geometry.right_width - kPaneChromeCells, 1);
         const int x = state.preview_selection_x();
         const int y = state.preview_selection_y();
         if (const auto point = preview_point_at(state, x, y, columns))
@@ -217,7 +235,8 @@ MouseResult continue_selection(const MouseInput& input, TuiState& state, const P
 void click_right(const MouseInput& input, TuiState& state, EditorSession& editor,
                  const PaneGeometry& geometry) {
     if (state.focus() == Focus::Editor) {
-        editor.click_at(input.x - geometry.right_x - kFrameCells, input.y - kFirstPaneRow);
+        // İç boşluğa tıklama satır başıdır (numara sütunu gibi), yok sayılmaz.
+        editor.click_at(std::max(input.x - geometry.right_x - kPaneContentX, 0), input.y - kFirstPaneRow);
         return;
     }
     if (state.trash_view())
@@ -277,6 +296,8 @@ MouseResult route_mouse(const MouseInput& input, TuiState& state, EditorSession&
     switch (input.button) {
     case MouseButton::WheelUp:
     case MouseButton::WheelDown:
+    case MouseButton::WheelLeft:
+    case MouseButton::WheelRight:
         handle_wheel(input, state, editor, right);
         break;
     case MouseButton::Left:

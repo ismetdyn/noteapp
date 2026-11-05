@@ -85,7 +85,7 @@ bool contains(const ftxui::Screen& screen, std::string_view needle) {
 // satır.
 constexpr int kTestGutter = 3;
 int pane_x(int width) {
-    return width * 2 / 5 + 1 + kTestGutter;
+    return width * 2 / 5 + 2 + kTestGutter;
 }
 constexpr int kPaneY = 2;
 
@@ -245,6 +245,34 @@ bool screen_has_raw(const ftxui::Screen& screen) {
             return true;
     }
     return false;
+}
+
+// Uzun ileti (çoğu kez yol taşır) yardımı ekrandan itmez: ileti "…" ile kısalır, F1 sağ kenarda kalır.
+TEST_CASE("editor view: a long notice is cut with an ellipsis and F1 help stays at the right at 60 columns") {
+    const std::pair<const char*, std::string> helps[] = {{"en", "F1 help"}, {"tr", "F1 yardım"}};
+    const std::string path = "quarterly-planning-meeting-notes-with-the-whole-team-and-guests.md";
+    for (const auto& [language, help] : helps) {
+        CAPTURE(language);
+        Fixture f("x", language, path);
+        f.session.handle(Key::Char, "y");
+        test::upsert_note(f.dir.path(), path, "dış");
+        f.session.handle(Key::CtrlS);
+        REQUIRE(f.session.mode() == EditorSession::Mode::ConflictPrompt);
+        f.session.handle(Key::Enter);  // kopya olarak kaydet: ileti yeni yolu söyler
+        const std::string message = f.session.message();
+        REQUIRE(ftxui::string_width(message) > tui::kMinWidth);
+        const auto screen = f.frame(tui::kMinWidth, tui::kMinHeight);
+        std::string bottom;
+        for (int x = 0; x < screen.dimx(); ++x) {
+            const std::string& glyph = screen.PixelAt(x, tui::kMinHeight - 1).character;
+            bottom += glyph.empty() ? std::string(" ") : glyph;
+        }
+        CAPTURE(bottom);
+        CHECK(bottom.ends_with(help));
+        CHECK(bottom.starts_with(message.substr(0, 10)));
+        CHECK(bottom.find("…") != std::string::npos);
+        CHECK(ftxui::string_width(bottom) == tui::kMinWidth);
+    }
 }
 
 TEST_CASE("editor view: a hostile note path never reaches the info bar, messages or the prompts raw") {
@@ -432,7 +460,7 @@ TEST_CASE("new note view: the blank editor takes the whole terminal, list and to
     CHECK(screen.PixelAt(tui::kMinWidth - 1, 1).character == "╮");
     CHECK_FALSE(screen.PixelAt(0, 1).dim);
     CHECK(contains(screen, core::tr("tui.frame_edit")));
-    CHECK(f.session.columns() == tui::kMinWidth - 2 - f.session.gutter_width());
+    CHECK(f.session.columns() == tui::kMinWidth - 3 - f.session.gutter_width());
     CHECK(row_text(screen, tui::kMinHeight - 1).find("Ctrl+S save") != std::string::npos);
 }
 
@@ -510,7 +538,7 @@ TEST_CASE("editor view: zoom gives the focused pane the whole width and the edit
     CHECK_FALSE(screen.PixelAt(0, 1).dim);  // tek panel, odaklı
     CHECK(contains(screen, "SON"));
     CHECK_FALSE(contains(screen, "▸"));  // liste gizli
-    CHECK(tui::editor_viewport({kWidth, kHeight}, f.state.layout()).columns == kWidth - 2);
+    CHECK(tui::editor_viewport({kWidth, kHeight}, f.state.layout()).columns == kWidth - 3);
 }
 
 TEST_CASE("editor view: every bottom bar stays usable at 60x15") {
@@ -781,7 +809,7 @@ namespace {
 constexpr int kGutterTwoDigits = 3;  // iki basamak + boşluk
 
 int frame_x(int width) {
-    return tui::PaneLayout{}.list_width(width) + 1;  // sağ panelin ilk iç sütunu
+    return tui::PaneLayout{}.list_width(width) + 2;  // sağ panelin ilk metin sütunu (kenar, iç boşluk)
 }
 
 std::string cell_text(const ftxui::Screen& screen, int x, int y, int count) {
@@ -948,18 +976,18 @@ TEST_CASE("edit view: gutter, cursor, status and hints work at the minimum size,
 
     f.state.layout().toggle_zoom();
     screen = f.frame(tui::kMinWidth, tui::kMinHeight);
-    CHECK(cell_text(screen, 1, kPaneY, kGutterTwoDigits) == " 1 ");
-    CHECK(screen.cursor().x == 1 + kGutterTwoDigits);
+    CHECK(cell_text(screen, 2, kPaneY, kGutterTwoDigits) == " 1 ");
+    CHECK(screen.cursor().x == 2 + kGutterTwoDigits);
     f.state.layout().toggle_zoom();
 
     f.session.handle(Key::CtrlQ);
     f.state.open_new_note_view();
     f.session.begin_new_note("");
     screen = f.frame(tui::kMinWidth, tui::kMinHeight);
-    CHECK(cell_text(screen, 1, kPaneY, kGutterTwoDigits) == " 1 ");
-    CHECK(screen.cursor().x == 1 + kGutterTwoDigits);
-    CHECK(screen.PixelAt(1, kPaneY + 1).character == "~");
-    CHECK(f.session.columns() == tui::kMinWidth - 2 - kGutterTwoDigits);
+    CHECK(cell_text(screen, 2, kPaneY, kGutterTwoDigits) == " 1 ");
+    CHECK(screen.cursor().x == 2 + kGutterTwoDigits);
+    CHECK(screen.PixelAt(2, kPaneY + 1).character == "~");
+    CHECK(f.session.columns() == tui::kMinWidth - 3 - kGutterTwoDigits);
 }
 
 TEST_CASE("edit view: a long file name is cut in the status bar, the fields stay at 60 columns") {

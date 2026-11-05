@@ -38,7 +38,9 @@ public:
     enum class Kind { Choice, Toggle, Text, Token };
     // Replace: origin değiştirme onayı "evet" ile bitti; çağıran submit(config, true) çağırır. Test:
     // "Bağlantıyı test et"e basıldı; çağıran begin_test ile adayı alır, senkronu işçide koşar.
-    enum class Outcome { Editing, Cancel, Submit, Replace, Test };
+    // Quit / SubmitAndQuit: çıkış sorusunda (ask_before_quit) At / Kaydet; çağıran uygulamadan çıkar (Kaydet
+    // yalnız başarılıysa).
+    enum class Outcome { Editing, Cancel, Submit, Replace, Test, Quit, SubmitAndQuit };
 
     struct Row {
         std::string key;  // config anahtarı ("sync.enabled")
@@ -89,11 +91,16 @@ public:
     std::size_t slot_count() const { return rows_.size() + (token_visible() ? 1 : 0) + 2; }
     bool changed() const;
     const std::string& error() const { return error_; }  // forma ait (satıra değil) hata
-    const ConfirmState* discard_confirm() const { return discard_ ? &*discard_ : nullptr; }
+    // Değişiklikle Esc'te açılan Kaydet / At / Vazgeç sorusunun seçili düğmesi; kapalıysa nullopt.
+    std::optional<app::CloseChoice> leave_prompt() const { return leave_; }
+    // Ctrl+C (çıkış), GUI pencere kapanışı gibi: değişiklik yoksa false, çağıran hemen çıkar; varsa aynı soru
+    // çıkış için açılır (At -> Quit, Kaydet -> SubmitAndQuit, Vazgeç -> formda kalınır).
+    bool ask_before_quit();
     const ConfirmState* replace_confirm() const { return replace_ ? &*replace_ : nullptr; }
 
 private:
     Outcome handle_key(Key key, std::string_view text);
+    Outcome handle_leave_key(Key key);
     void cycle(int delta);
     // Doğrulayıp `base` kopyasına uygular; dosyaya yazmaz.
     std::optional<core::Config> build(const core::Config& base);
@@ -106,7 +113,8 @@ private:
     std::vector<Row> rows_;
     std::size_t focus_ = 0;
     std::string error_;
-    std::optional<ConfirmState> discard_;
+    std::optional<app::CloseChoice> leave_;
+    bool quitting_ = false;  // açık soru Ctrl+C'den geldi
     std::optional<ConfirmState> replace_;
     SettingsServices services_;
     std::string token_;        // yazılan, henüz kasaya gitmemiş token; yalnız bellekte

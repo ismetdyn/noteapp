@@ -4,6 +4,11 @@
 
 namespace noteapp::tui {
 
+// Panel içeriği çerçeveye yapışmaz (ui-redesign §5.5): sol kenarın içinde bir boş sütun. Çizim, fare ve
+// editör görüş alanı bu iki sayıyı paylaşır; biri değişirse hepsi birlikte kayar.
+inline constexpr int kPaneContentX = 2;     // panelin x'inden içeriğin ilk sütununa: sol kenar ve iç boşluk
+inline constexpr int kPaneChromeCells = 3;  // içeriğe kalmayan sütunlar: iki kenar ve iç boşluk
+
 // Panellerin ekrandaki yeri; görünmeyen panel çizilmez.
 struct PaneGeometry {
     bool list_visible = true;
