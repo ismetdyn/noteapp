@@ -1059,16 +1059,19 @@ void check_same_view(const tui::Preview& shown, const tui::RenderedView& whole) 
 }
 
 
-// Kesim yerlerinin her türü: setext başlık, sıralı liste ve öğedeki girintili çit, alıntı, tablo, görev listesi,
-// yıldızlı çizgi, başvuru bağlantısı (tanımı sonda), sonda kapanmamış çit. `crlf`: satır sonları CRLF.
+// Kesim yerlerinin her türü: setext başlık, sıralı liste ve öğedeki girintili çit (imden sonra sekmeli de), alıntı,
+// tablo, görev listesi, yıldızlı çizgi, başvuru bağlantısı (tanımı sonda; etiketi satır sonlu, `\]` kaçışlı ya da
+// Unicode büyük/küçük harf farklı, ß = ss), sonda kapanmamış çit. `crlf`: satır sonları CRLF.
 std::string varied_markdown(std::size_t bytes, bool crlf) {
     const std::string unit = "Başlık\n======\n\n1. bir\n2. iki\n   ```\n   kod\n   ```\n\n> alıntı\n> devam\n\n"
                              "| a | b |\n|---|---|\n| 1 | 2 |\n\nAlt başlık\n---\n\n[bağ][r] ve *eğik*\n\n"
-                             "- [x] görev\n- [ ] kalan\n\n***\n\n- ```sh\n  echo\n  ```\n\n";
+                             "- [x] görev\n- [ ] kalan\n\n***\n\n- ```sh\n  echo\n  ```\n\n-\t```\n\tsekme\n```\n\n"
+                             "[çok satırlı][my\nlink] ve [kaçış][a\\]b] ve [dış][STRASSE] ve [Çağ][]\n\n";
     std::string text;
     while (text.size() < bytes)
         text += unit;
-    text += "[r]: https://r.example\n\n```\nkapanmamış\n";
+    text += "[r]: https://r.example\n[my link]: https://ml.example\n[a\\]b]: https://esc.example\n"
+            "[straße]: https://ss.example\n[ÇAĞ]: https://cag.example\n\n```\nkapanmamış\n";
     if (!crlf)
         return text;
     std::string out;
@@ -1143,12 +1146,13 @@ TEST_CASE("find over a chunked markdown note sees every chunk and the line limit
 }
 
 // NX-E F1: aynı etiketin iki tanımında belge sırasıyla ilki kazanır, sonraki parçadaki tekrar da.
+// NX-F: Unicode büyük/küçük harf farkıyla yazılmış tekrar da (ÇAĞ = çağ, md4c katlaması).
 TEST_CASE("the first definition of a label wins across chunks") {
-    std::string note = "[a]: https://first.example\n\n";
+    std::string note = "[a]: https://first.example\n\n[ÇAĞ]: https://first-cag.example\n\n";
     // Tekrar ve kullanımı aynı parçanın ortasında: parçanın kendi tanımı eklenen tablodan önce gelir.
     while (note.size() < 100 * 1024)
         note += "## Bölüm\n\nBir paragraf metni burada.\n\n";
-    note += "[a]: https://second.example\n\n[son][a]\n\n";
+    note += "[a]: https://second.example\n\n[son][a]\n\n[çağ]: https://second-cag.example\n\n[son][Çağ]\n\n";
     while (note.size() < 200 * 1024)
         note += "## Bölüm\n\nBir paragraf metni burada.\n\n";
     ReviewFixture f;
@@ -1160,6 +1164,8 @@ TEST_CASE("the first definition of a label wins across chunks") {
     REQUIRE_FALSE(f.shown->partial);
     CHECK(contains(f.shown->text, "first.example"));
     CHECK_FALSE(contains(f.shown->text, "second.example"));
+    CHECK(contains(f.shown->text, "first-cag.example"));
+    CHECK_FALSE(contains(f.shown->text, "second-cag.example"));
 }
 
 // Bağlantı başvuru tanımı notun her yerinde geçerlidir: sondaki tanım ilk parçadaki kullanımı çözer (metin + URL).

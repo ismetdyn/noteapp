@@ -1,5 +1,6 @@
 #include "app/data_preview.hpp"
 
+#include "app/label_fold.hpp"
 #include "detect/detect.hpp"
 
 #include <algorithm>
@@ -356,26 +357,46 @@ bool is_blank(std::string_view row) {
     return row.find_first_not_of(" \t\r") == std::string_view::npos;
 }
 
-// Liste imli satırda (`- `, `* `, `+ `, `12. `, `3) `; en çok 3 boşluk girinti) öğe içeriğinin başladığı sütun;
-// değilse 0. İçerik aynı satırda çit olabilir (`- ```bash`).
-std::size_t list_content_column(std::string_view row) {
+// Satırın `at`ten başlayan boşluğunun bittiği bayt ve ulaştığı sütun (`column`dan sayılır). Sekme bir sonraki 4'ün
+// katına ilerler (CommonMark sekme durağı, md4c md_line_indentation): girinti bayt değil sütun karşılaştırılır.
+struct Indent {
+    std::size_t bytes = 0;
+    std::size_t columns = 0;
+};
+
+Indent indentation(std::string_view row, std::size_t at = 0, std::size_t column = 0) {
+    constexpr std::size_t kTabStop = 4;
+    for (; at < row.size() && (row[at] == ' ' || row[at] == '\t'); ++at)
+        column = row[at] == '\t' ? (column / kTabStop + 1) * kTabStop : column + 1;
+    return {at, column};
+}
+
+// Liste imli satırda (`- `, `* `, `+ `, `12. `, `3) `; en çok 3 boşluk girinti) aynı satırda başlayan öğe içeriğinin
+// yeri; değilse nullopt. İçerik çit olabilir (`- ```bash`). İmden sonra 5 ya da daha çok sütun boşluk varsa içerik
+// imden bir sütun sonradır ve satırın kalanı girintili koddur: çit olamaz, nullopt.
+std::optional<Indent> list_item_content(std::string_view row) {
     constexpr std::size_t kMaxIndent = 3;
     constexpr std::size_t kMaxDigits = 9;
+    constexpr std::size_t kMaxGap = 4;
     std::size_t at = row.find_first_not_of(' ');
     if (at == std::string_view::npos || at > kMaxIndent)
-        return 0;
+        return std::nullopt;
     if (row[at] == '-' || row[at] == '*' || row[at] == '+') {
         ++at;
     } else {
         const std::size_t digits_end = std::min(row.find_first_not_of("0123456789", at), row.size());
         if (digits_end == at || digits_end - at > kMaxDigits || digits_end >= row.size() ||
             (row[digits_end] != '.' && row[digits_end] != ')'))
-            return 0;
+            return std::nullopt;
         at = digits_end + 1;
     }
     if (at >= row.size() || (row[at] != ' ' && row[at] != '\t'))
-        return 0;
-    return std::min(row.find_first_not_of(" \t", at), row.size());
+        return std::nullopt;
+    // İme dek boşluk ve ASCII: imin bittiği bayt, bittiği sütundur.
+    const Indent content = indentation(row, at, at);
+    if (content.columns - at > kMaxGap)
+        return std::nullopt;
+    return content;
 }
 
 // Satırdaki çit: satır başında ya da liste iminden sonra. Girinti mutlak sütundur.
@@ -386,11 +407,11 @@ FenceRun fence_in(std::string_view row) {
             return fence;
     if (first != '-' && first != '*' && first != '+' && first != ' ' && (first < '0' || first > '9'))
         return {};
-    const std::size_t content = list_content_column(row);
-    if (content == 0)
+    const std::optional<Indent> content = list_item_content(row);
+    if (!content)
         return {};
-    FenceRun fence = fence_run(row.substr(content));
-    fence.indent += content;
+    FenceRun fence = fence_run(row.substr(content->bytes));
+    fence.indent += content->columns;
     fence.in_list = true;
     return fence;
 }
@@ -402,26 +423,99 @@ bool starts_top_level_block(std::string_view row) {
     return !is_blank(row) && kContinuers.find(row.front()) == std::string_view::npos;
 }
 
-// Satır başında `[`ten sonra etiket: kaçışlı karakter dahil, iç içe `[` yok, boş değil, en çok 999 karakter.
-// Etiketin `]`inden sonraki konum; değilse npos.
-std::size_t label_end(std::string_view row, std::size_t at) {
-    constexpr std::size_t kMaxLabel = 999;
-    const std::size_t begin = at;
+// Etiket kuralları md4c 0.6.0'ınkiyle aynı (md4c.c: md_is_link_label, md_decode_utf8__, ISUNICODEWHITESPACE_):
+// parça ile bütün belgenin aynı bağlantıyı çözmesi buna bağlı.
+bool is_ascii_punct(char c) {
+    return (c >= '!' && c <= '/') || (c >= ':' && c <= '@') || (c >= '[' && c <= '`') || (c >= '{' && c <= '~');
+}
+
+// Geçersiz dizide tek bayt, değeri md4c gibi `char`ın işaretiyle: geçersiz bayt geçerli bir harfle eşleşmez.
+char32_t decode_utf8(std::string_view text, std::size_t at, std::size_t& size) {
+    const auto byte = [&](std::size_t i) { return static_cast<char32_t>(static_cast<unsigned char>(text[at + i])); };
+    const auto tails = [&](std::size_t count) {
+        for (std::size_t i = 1; i <= count; ++i)
+            if (at + i >= text.size() || (byte(i) & 0xC0) != 0x80)
+                return false;
+        return true;
+    };
+    const char32_t lead = byte(0);
+    if ((lead & 0xE0) == 0xC0 && tails(1)) {
+        size = 2;
+        return ((lead & 0x1F) << 6) | (byte(1) & 0x3F);
+    }
+    if ((lead & 0xF0) == 0xE0 && tails(2)) {
+        size = 3;
+        return ((lead & 0x0F) << 12) | ((byte(1) & 0x3F) << 6) | (byte(2) & 0x3F);
+    }
+    if ((lead & 0xF8) == 0xF0 && tails(3)) {
+        size = 4;
+        return ((lead & 0x07) << 18) | ((byte(1) & 0x3F) << 12) | ((byte(2) & 0x3F) << 6) | (byte(3) & 0x3F);
+    }
+    size = 1;
+    return static_cast<char32_t>(static_cast<unsigned>(text[at]));
+}
+
+// ASCII boşluk, sekme, \v, \f ve Unicode Zs.
+bool is_unicode_whitespace(char32_t c) {
+    if (c <= 0x7F)
+        return c == ' ' || c == '\t' || c == '\v' || c == '\f';
+    return c == 0xA0 || c == 0x1680 || (c >= 0x2000 && c <= 0x200A) || c == 0x202F || c == 0x205F || c == 0x3000;
+}
+
+bool is_line_break(char c) {
+    return c == '\n' || c == '\r';
+}
+
+// `[`ten sonraki `at`ten başlayan etiketi kapatan `]`in konumu; değilse npos. Kaçışlı ayraç (`\]`) etikettendir,
+// kaçışsız `[` etiketi bozar, içerik boşluktan ibaret olamaz. Etiket paragraf içinde satır sonuyla sürer, boş
+// satırda biter. md4c en çok 999 birim sayar (karakter, kaçış çifti, satır sonu); devam satırının girintisi ve
+// alıntı imleri (`>`) sayılmaz, md4c satırı onlardan sonra başlatır.
+std::size_t label_close(std::string_view text, std::size_t at) {
+    constexpr std::size_t kMaxUnits = 999;
+    std::size_t units = 0;
     bool blank = true;
-    while (at < row.size() && row[at] != ']') {
-        if (row[at] == '[')
+    while (at < text.size()) {
+        const char c = text[at];
+        if (c == ']')
+            return blank ? std::string_view::npos : at;
+        if (c == '[')
             return std::string_view::npos;
-        if (row[at] == '\\' && at + 1 < row.size()) {
-            blank = false;
-            at += 2;
+        if (is_line_break(c)) {
+            at += c == '\r' && at + 1 < text.size() && text[at + 1] == '\n' ? 2 : 1;
+            ++units;  // md4c sınırı satır sonunda değil, sonraki karakterde denetler
+            at = std::min(text.find_first_not_of(" \t>", at), text.size());
+            if (at < text.size() && is_line_break(text[at]))
+                return std::string_view::npos;
             continue;
         }
-        blank = blank && (row[at] == ' ' || row[at] == '\t');
-        ++at;
+        std::size_t size = 1;
+        if (c == '\\' && at + 1 < text.size() && is_ascii_punct(text[at + 1])) {
+            size = 2;
+            blank = false;
+        } else {
+            const char32_t codepoint =
+                static_cast<unsigned char>(c) < 0x80 ? static_cast<char32_t>(c) : decode_utf8(text, at, size);
+            blank = blank && is_unicode_whitespace(codepoint);
+        }
+        at += size;
+        if (++units > kMaxUnits)
+            return std::string_view::npos;
     }
-    if (at >= row.size() || blank || at - begin > kMaxLabel)
-        return std::string_view::npos;
-    return at + 1;
+    return std::string_view::npos;
+}
+
+// Alıntıdaki çok satırlı etiket: md4c satırları alıntı imleri olmadan birleştirir.
+std::string without_quote_marks(std::string_view label) {
+    std::string out;
+    for (std::size_t at = 0; at < label.size();) {
+        const std::size_t eol = std::min(label.find('\n', at), label.size());
+        out += label.substr(at, eol - at);
+        if (eol == label.size())
+            break;
+        out += '\n';
+        at = std::min(label.find_first_not_of(" \t>", eol + 1), label.size());
+    }
+    return out;
 }
 
 // Hedef: `<...>` ya da boşluksuz, parantezleri dengeli, denetim karakteri olmayan dizi. Sonrası; değilse npos.
@@ -467,47 +561,56 @@ bool is_title(std::string_view rest) {
     return at < rest.size() && is_blank(rest.substr(at + 1));
 }
 
-// Etiketin karşılaştırma biçimi (CommonMark: büyük/küçük harf ve boşluk dizisi fark etmez), karakter karakter
-// `emit`e. Yalnız ASCII katlanır (yerel ayara bakan std::tolower yavaştı): md4c Unicode katlar, ASCII dışı harfte
-// büyük/küçük farklı yazılmış tekrar ilk tanımı ezebilir.
+// Etiketin karşılaştırma biçimi, kod noktası kod noktası `emit`e. md4c gibi (md_label_hash, md_label_cmp) baştaki
+// ve sondaki boşluk atılır, iç boşluk dizisi (Unicode boşluk ve satır sonu) tek boşluk olur, harfler md4c'nin
+// tablosuyla katlanır (label_fold.hpp). ASCII yerel ayara bakmadan, tablo aramasız katlanır: çoğu etiket ASCII.
 template <typename Emit>
 void for_each_normalized(std::string_view label, const Emit& emit) {
     bool started = false;
     bool space = false;
-    for (const char c : label) {
-        if (c == ' ' || c == '\t') {
+    for (std::size_t at = 0; at < label.size();) {
+        std::size_t size = 1;
+        const char c = label[at];
+        const bool ascii = static_cast<unsigned char>(c) < 0x80;
+        const char32_t codepoint = ascii ? static_cast<char32_t>(c) : decode_utf8(label, at, size);
+        at += size;
+        if (is_unicode_whitespace(codepoint) || is_line_break(c)) {
             space = started;
             continue;
         }
         if (space)
-            emit(' ');
+            emit(U' ');
         space = false;
         started = true;
-        emit(c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c);
+        if (ascii) {
+            emit(c >= 'A' && c <= 'Z' ? codepoint + ('a' - 'A') : codepoint);
+            continue;
+        }
+        const FoldedCodepoints folded = fold_codepoint(codepoint);
+        for (std::size_t i = 0; i < folded.count; ++i)
+            emit(folded.codepoints[i]);
     }
 }
 
-std::string normalized_label(std::string_view label) {
-    std::string key;
+std::u32string normalized_label(std::string_view label) {
+    std::u32string key;
     key.reserve(label.size());
-    for_each_normalized(label, [&](char c) { key += c; });
+    for_each_normalized(label, [&](char32_t c) { key += c; });
     return key;
 }
 
-// Normalleşmiş etiketin FNV-1a özeti, ayırma yapmadan; boş etiket 0 (aranmaz).
+// Normalleşmiş etiketin FNV-1a özeti (kod noktası başına bir adım), ayırma yapmadan; boş etiket 0 (aranmaz).
 std::uint64_t label_hash(std::string_view label) {
     constexpr std::uint64_t kOffset = 14695981039346656037ULL;
     constexpr std::uint64_t kPrime = 1099511628211ULL;
     std::uint64_t hash = kOffset;
     bool any = false;
-    for_each_normalized(label, [&](char c) {
-        hash = (hash ^ static_cast<unsigned char>(c)) * kPrime;
+    for_each_normalized(label, [&](char32_t c) {
+        hash = (hash ^ c) * kPrime;
         any = true;
     });
     return any ? hash : 0;
 }
-
-
 
 // Tek satırlık bağlantı başvuru tanımı (CommonMark): en çok 3 boşluk girinti, [etiket]: hedef, isteğe bağlı başlık.
 // Şüphede tanım sayılmaz: eklenen satır tanım olmasaydı parçanın sonunda metin olarak görünürdü.
@@ -519,11 +622,11 @@ std::optional<std::string_view> link_definition_label(std::string_view row) {
     const std::size_t indent = row.find_first_not_of(' ');
     if (indent == std::string_view::npos || indent > kMaxIndent || row[indent] != '[')
         return std::nullopt;
-    std::size_t at = label_end(row, indent + 1);
-    if (at == std::string_view::npos || at >= row.size() || row[at] != ':')
+    const std::size_t close = label_close(row, indent + 1);
+    if (close == std::string_view::npos || close + 1 >= row.size() || row[close + 1] != ':')
         return std::nullopt;
-    const std::string_view label = row.substr(indent + 1, at - indent - 2);
-    at = row.find_first_not_of(" \t", at + 1);
+    const std::string_view label = row.substr(indent + 1, close - indent - 1);
+    std::size_t at = row.find_first_not_of(" \t", close + 2);
     if (at == std::string_view::npos)
         return std::nullopt;  // hedef sonraki satırda: çok satırlı tanım
     const std::size_t after = destination_end(row, at);
@@ -568,14 +671,16 @@ bool walk_lines(std::string_view text, const Visit& visit) {
             next_line();
             continue;
         }
-        // Liste öğesindeki çitin kapanışı öğe içeriğine göre en çok 3 boşluk girintilidir.
-        const std::size_t leading = std::min(row.find_first_not_of(' '), row.size());
-        const std::string_view relative = open.in_list ? row.substr(std::min(leading, open.indent)) : row;
-        const char lead = relative.empty() ? '\0' : relative.front();
-        const FenceRun fence = lead == '`' || lead == '~' || lead == ' ' ? fence_run(relative) : FenceRun{};
+        // Kapanış en çok 3 sütun girintilidir: liste öğesindeki çitte öğe içeriğine göre, içerikten az girintili
+        // satırda satır başına göre (md4c kapanışı kaba bakmadan önce dener).
+        constexpr std::size_t kMaxFenceIndent = 3;
+        const Indent leading = indentation(row);
+        const std::size_t relative =
+            open.in_list && leading.columns >= open.indent ? leading.columns - open.indent : leading.columns;
+        const FenceRun fence = relative <= kMaxFenceIndent ? fence_run(row.substr(leading.bytes)) : FenceRun{};
         if (fence.mark == open.mark && fence.length >= open.length && is_blank(fence.rest)) {
             open = {};
-        } else if (open.indent > 0 && !is_blank(row) && leading < open.indent) {
+        } else if (open.indent > 0 && !is_blank(row) && leading.columns < open.indent) {
             // Öğe içeriğinden az girintili dolu satır öğeyi ve çiti kapatır. Liste imli satırda açılan çitin kabı
             // kesindir; girintili çitin kabı bilinmez (üst düzeyde içerik olurdu).
             if (open.in_list) {
@@ -590,32 +695,39 @@ bool walk_lines(std::string_view text, const Visit& visit) {
     return unsure || open.mark != '\0';
 }
 
-// Tanımlar belge sırasıyla gelir: özete göre kararlı sıralanır, aynı etiketin ilki kalır, sonrakiler tekrar olur.
-// Aynı özetin farklı etiketleri (çakışma) metinle ayrılır.
+// Tanım satırının normalleşmiş etiketi (satır toplanırken tanım olduğu doğrulandı).
+std::u32string definition_label(std::string_view text, const MarkdownDefinition& definition) {
+    return normalized_label(*link_definition_label(text.substr(definition.begin, definition.end - definition.begin)));
+}
+
+}  // namespace
+
+// Tanımlar belge sırasıyla gelir: özete göre kararlı sıralanır. Tek tanımlı özet (çoğu) metne bakmaz, ayırma
+// yapmaz. Aynı özetli grup (tekrar ya da çakışma) normalleşmiş etiketiyle bir kez kararlı sıralanır: aynı etiketin
+// ilki (belge sırası korunur) kalır, sonrakiler tekrar olur; grup etikete göre sıralı kalır, arama ikili yapılır.
+// Grup başına O(k log k): her tanımı öncekilerle karşılaştırmak, özeti çakışacak biçimde üretilmiş notta O(k²) idi.
 void keep_first_definitions(std::string_view text, MarkdownDefinitions& definitions) {
     std::vector<MarkdownDefinition>& all = definitions.first;
     std::ranges::stable_sort(all, {}, &MarkdownDefinition::hash);
     std::vector<MarkdownDefinition> kept;
     kept.reserve(all.size());
+    std::vector<std::pair<std::u32string, std::size_t>> group_labels;  // (etiket, all içindeki yer)
     for (std::size_t group = 0; group < all.size();) {
-        std::size_t next = group;
+        std::size_t next = group + 1;
         while (next < all.size() && all[next].hash == all[group].hash)
             ++next;
-        if (next == group + 1) {  // tek tanımlı etiket (çoğu): metne bakılmaz
+        if (next == group + 1) {
             kept.push_back(all[group]);
             group = next;
             continue;
         }
-        const std::size_t first_kept = kept.size();
-        for (std::size_t i = group; i < next; ++i) {
-            const MarkdownDefinition& entry = all[i];
-            const std::string label = normalized_label(*link_definition_label(text.substr(entry.begin, entry.end - entry.begin)));
-            const bool repeat = std::any_of(kept.begin() + static_cast<std::ptrdiff_t>(first_kept), kept.end(),
-                                            [&](const MarkdownDefinition& other) {
-                                                return normalized_label(*link_definition_label(
-                                                           text.substr(other.begin, other.end - other.begin))) == label;
-                                            });
-            if (repeat)
+        group_labels.clear();
+        for (std::size_t i = group; i < next; ++i)
+            group_labels.emplace_back(definition_label(text, all[i]), i);
+        std::ranges::stable_sort(group_labels, {}, &std::pair<std::u32string, std::size_t>::first);
+        for (std::size_t i = 0; i < group_labels.size(); ++i) {
+            const MarkdownDefinition& entry = all[group_labels[i].second];
+            if (i > 0 && group_labels[i].first == group_labels[i - 1].first)
                 definitions.repeats.emplace_back(entry.begin, entry.end);
             else
                 kept.push_back(entry);
@@ -625,8 +737,6 @@ void keep_first_definitions(std::string_view text, MarkdownDefinitions& definiti
     all = std::move(kept);
     std::ranges::sort(definitions.repeats);
 }
-
-}  // namespace
 
 MarkdownScan scan_markdown(std::string_view text, std::size_t target_bytes) {
     MarkdownScan scan{{{0, text.size(), 0}}, {}};
@@ -675,23 +785,44 @@ std::string markdown_chunk_source(std::string_view text, const MarkdownChunk& ch
     // Başvurunun her biçimi ([metin][etiket], [etiket][], [etiket]) köşeli ayraç içinde etiketi taşır: parçadaki
     // ayraç içleri aranır, başka parçada tanımlı olanların ilk tanımı belge sırasıyla eklenir.
     std::vector<std::pair<std::size_t, std::size_t>> wanted;
-    for (std::size_t open = source.find('['); open != std::string::npos; open = source.find('[', open + 1)) {
-        const std::size_t close = source.find_first_of("[]\n", open + 1);
-        if (close == std::string::npos || source[close] != ']')
-            continue;
-        const std::string_view label = std::string_view(source).substr(open + 1, close - open - 1);
+    const auto want = [&](std::string_view label) {
         const std::uint64_t hash = label_hash(label);
         if (hash == 0)
-            continue;
-        const auto [from, to] = std::ranges::equal_range(definitions.first, hash, {}, &MarkdownDefinition::hash);
-        for (auto entry = from; entry != to; ++entry) {
-            if (entry->begin >= chunk.begin && entry->begin < chunk.end)
-                continue;  // kendi parçasında: md4c yerinde çözer
-            const std::string_view row = text.substr(entry->begin, entry->end - entry->begin);
-            // Tek aday metinle doğrulanmaz: özet çakışmasında eklenen, parçanın anmadığı tanım etkisizdir.
-            if (from + 1 == to || normalized_label(*link_definition_label(row)) == normalized_label(label))
-                wanted.emplace_back(entry->begin, entry->end);
+            return;
+        auto [entry, to] = std::ranges::equal_range(definitions.first, hash, {}, &MarkdownDefinition::hash);
+        if (entry == to)
+            return;
+        // Tek aday metinle doğrulanmaz: özet çakışmasında eklenen, parçanın anmadığı tanım etkisizdir. Çakışan grup
+        // etikete göre sıralıdır (keep_first_definitions): ikili arama.
+        if (to - entry > 1) {
+            const std::u32string key = normalized_label(label);
+            const auto label_less = [&](const MarkdownDefinition& definition, const std::u32string& wanted_label) {
+                return definition_label(text, definition) < wanted_label;
+            };
+            entry = std::lower_bound(entry, to, key, label_less);
+            if (entry == to || definition_label(text, *entry) != key)
+                return;
         }
+        if (entry->begin < chunk.begin || entry->begin >= chunk.end)  // kendi parçasındakini md4c yerinde çözer
+            wanted.emplace_back(entry->begin, entry->end);
+    };
+    for (std::size_t open = source.find('['); open != std::string::npos; open = source.find('[', open + 1)) {
+        // Tek sayıda ters bölüden sonraki `[` kaçışlıdır, etiket açmaz (md4c). Atlanmazsa `\[` dolu satırda her biri
+        // 999 birimlik tarama başlatırdı; kaçışsız `[` taramaları birbirini aşmaz, parça başına doğrusal kalır.
+        if (open > 0) {
+            const std::size_t run_start = source.find_last_not_of('\\', open - 1);  // npos: satır başına dek ters bölü
+            const std::size_t backslashes = run_start == std::string::npos ? open : open - run_start - 1;
+            if (backslashes % 2 == 1)
+                continue;
+        }
+        const std::size_t close = label_close(source, open + 1);
+        if (close == std::string::npos)
+            continue;
+        const std::string_view label = std::string_view(source).substr(open + 1, close - open - 1);
+        want(label);
+        // Fazladan eklenen tanım çıktı üretmez: alıntı imli ve imsiz biçimin ikisi de aranır.
+        if (label.find('\n') != std::string_view::npos)
+            want(without_quote_marks(label));
     }
     std::ranges::sort(wanted);
     const auto [last, end] = std::ranges::unique(wanted);

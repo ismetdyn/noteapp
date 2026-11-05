@@ -147,16 +147,19 @@ std::string chunked_markdown() {
 }
 
 
-// Kesim yerlerinin her türü: setext başlık, sıralı liste ve öğedeki girintili çit, alıntı, tablo, görev listesi,
-// yıldızlı çizgi, başvuru bağlantısı (tanımı sonda), sonda kapanmamış çit. `crlf`: satır sonları CRLF.
+// Kesim yerlerinin her türü: setext başlık, sıralı liste ve öğedeki girintili çit (imden sonra sekmeli de), alıntı,
+// tablo, görev listesi, yıldızlı çizgi, başvuru bağlantısı (tanımı sonda; etiketi satır sonlu, `\]` kaçışlı ya da
+// Unicode büyük/küçük harf farklı, ß = ss), sonda kapanmamış çit. `crlf`: satır sonları CRLF.
 std::string varied_markdown(std::size_t bytes, bool crlf) {
     const std::string unit = "Başlık\n======\n\n1. bir\n2. iki\n   ```\n   kod\n   ```\n\n> alıntı\n> devam\n\n"
                              "| a | b |\n|---|---|\n| 1 | 2 |\n\nAlt başlık\n---\n\n[bağ][r] ve *eğik*\n\n"
-                             "- [x] görev\n- [ ] kalan\n\n***\n\n- ```sh\n  echo\n  ```\n\n";
+                             "- [x] görev\n- [ ] kalan\n\n***\n\n- ```sh\n  echo\n  ```\n\n-\t```\n\tsekme\n```\n\n"
+                             "[çok satırlı][my\nlink] ve [kaçış][a\\]b] ve [dış][STRASSE] ve [Çağ][]\n\n";
     std::string text;
     while (text.size() < bytes)
         text += unit;
-    text += "[r]: https://r.example\n\n```\nkapanmamış\n";
+    text += "[r]: https://r.example\n[my link]: https://ml.example\n[a\\]b]: https://esc.example\n"
+            "[straße]: https://ss.example\n[ÇAĞ]: https://cag.example\n\n```\nkapanmamış\n";
     if (!crlf)
         return text;
     std::string out;
@@ -245,13 +248,14 @@ TEST_CASE("preview document: an estimated height does not pull the view to the e
 }
 
 // NX-E F1: aynı etiketin iki tanımında belge sırasıyla ilki kazanır (CommonMark), sonraki parçadaki tekrar da.
+// NX-F: Unicode büyük/küçük harf farkıyla yazılmış tekrar da (ÇAĞ = çağ, md4c katlaması).
 TEST_CASE("preview document: the first definition of a label wins across chunks") {
     const FontScene scene;
-    std::string text = "[a]: https://first.example\n\n";
+    std::string text = "[a]: https://first.example\n\n[ÇAĞ]: https://first-cag.example\n\n";
     // Tekrar ve kullanımı aynı parçanın ortasında: parçanın kendi tanımı eklenen tablodan önce gelir.
     while (text.size() < 100 * 1024)
         text += "## Bölüm\n\nBir paragraf metni burada.\n\n";
-    text += "[a]: https://second.example\n\n[son][a]\n\n";
+    text += "[a]: https://second.example\n\n[son][a]\n\n[çağ]: https://second-cag.example\n\n[son][Çağ]\n\n";
     while (text.size() < 200 * 1024)
         text += "## Bölüm\n\nBir paragraf metni burada.\n\n";
     REQUIRE(noteapp::app::markdown_chunks(text).size() > 2);
@@ -263,7 +267,7 @@ TEST_CASE("preview document: the first definition of a label wins across chunks"
     for (const auto& placed : document.visible(0.0F, kEverything))
         for (const auto& hit : placed.layout->hits)
             targets.emplace_back(hit.target);
-    CHECK(targets == std::vector<std::string>{"https://first.example"});
+    CHECK(targets == std::vector<std::string>{"https://first.example", "https://first-cag.example"});
 }
 
 // Bağlantı başvuru tanımı notun her yerinde geçerlidir (CommonMark): sondaki tanım ilk parçadaki kullanımı çözer.

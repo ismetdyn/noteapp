@@ -10,6 +10,7 @@ add_library(noteapp_app
     import_files.cpp
     ui_args.cpp
     item_ops.cpp
+    label_fold.cpp
     listing.cpp
     map_relations.cpp
     note_map.cpp

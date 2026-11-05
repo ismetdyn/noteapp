@@ -5,6 +5,7 @@ noteapp_add_test(app
     graph_layout_test.cpp
     import_files_test.cpp
     item_ops_test.cpp
+    label_fold_test.cpp
     listing_test.cpp
     map_relations_test.cpp
     settings_test.cpp

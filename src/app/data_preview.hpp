@@ -94,6 +94,11 @@ struct MarkdownDefinitions {
 };
 MarkdownDefinitions markdown_link_definitions(std::string_view text);
 
+// scan_markdown'ın son adımı; özet çakışması testte elle kurulabilsin diye açık. Girdi: `first`te belge sırasıyla
+// toplanmış tanım satırları (`text`in baytları). Çıktı: her etiketin ilk tanımı (özet, normalleşmiş etiket) sırasıyla
+// `first`te, sonraki tanımları sıralı `repeats`te.
+void keep_first_definitions(std::string_view text, MarkdownDefinitions& definitions);
+
 // Parçalar ve tanımlar tek satır geçişinde (20 MiB'ta iki ayrı geçiş ilk kareye ~7 ms ekliyordu).
 struct MarkdownScan {
     std::vector<MarkdownChunk> chunks;
