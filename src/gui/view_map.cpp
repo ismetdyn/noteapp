@@ -8,6 +8,7 @@
 #include <cmath>
 #include <imgui.h>
 #include <imgui_impl_sdlrenderer3.h>
+#include <limits>
 #include <utility>
 
 namespace noteapp::gui {
@@ -36,21 +37,20 @@ constexpr float kMapArrowLengthEms = 0.6F;
 constexpr float kMapArrowHalfWidthEms = 0.3F;
 constexpr float kMapRingGapEms = 0.2F;  // geçerli notun halkası ve etiket boşluğu
 constexpr float kMapRingThickness = 2.0F;
-constexpr float kMapEdgeAlpha = 0.35F;
+// Kenar metin renginin bu kadarı (G13): koyuda daha soluk, açıkta zeminle karışmasın diye biraz koyu.
+constexpr float kMapEdgeAlphaDark = 0.18F;
+constexpr float kMapEdgeAlphaLight = 0.25F;
 constexpr float kMapRelatedAlpha = 0.8F;  // ilişki yönsüzdür: oksuz, renkli ve bağlantıdan belirgin
-constexpr float kMapDimAlpha = 0.2F;      // aramada eşleşmeyen düğüm ve kenar
+constexpr float kMapDimAlpha = 0.2F;      // aramada eşleşmeyen ya da üzerine gelinen düğüme komşu olmayan
 constexpr float kMapLabelBackgroundAlpha = 0.8F;
-constexpr int kMapNodeSegments = 12;  // 2.000 dairede köşe sayısı sınırlı kalsın
-constexpr float kMapDepthSliderEms = 7.0F;
+// Düğüm bağlantı sayısıyla büyür (Obsidian kalıbı): r = taban × (1 + 0,25 √derece), en çok 2 × taban.
+constexpr float kMapDegreeGrowth = 0.25F;
+constexpr float kMapMaxRadiusShare = 2.0F;
 
 ImU32 with_alpha(ImU32 color, float alpha) {
     ImVec4 value = ImGui::ColorConvertU32ToFloat4(color);
     value.w *= alpha;
     return ImGui::ColorConvertFloat4ToU32(value);
-}
-
-float checkbox_width(const std::string& label) {
-    return ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + text_width(label);
 }
 
 void fit_camera(MapCamera& camera, const std::vector<LayoutPoint>& positions, ImVec2 size) {
@@ -62,6 +62,11 @@ void fit_camera(MapCamera& camera, const std::vector<LayoutPoint>& positions, Im
         low = {std::min(low.x, p.x), std::min(low.y, p.y)};
         high = {std::max(high.x, p.x), std::max(high.y, p.y)};
     }
+    // Düğüm derecesiyle iki katına dek büyür (G13): kenardaki büyük düğüm de tuvale sığsın, sınırlar o kadar
+    // açılır.
+    constexpr float kLargestNode = kMapNodeWorldRadius * kMapMaxRadiusShare;
+    low = {low.x - kLargestNode, low.y - kLargestNode};
+    high = {high.x + kLargestNode, high.y + kLargestNode};
     const float margin = kMapFitMarginEms * ImGui::GetFontSize();
     const float room_x = std::max(size.x - 2.0F * margin, 1.0F);
     const float room_y = std::max(size.y - 2.0F * margin, 1.0F);
@@ -111,6 +116,21 @@ void draw_arrow(ImDrawList* draw, ImVec2 from, ImVec2 to, float gap, ImU32 color
                             ImVec2(base.x + uy * half, base.y - ux * half), color);
 }
 
+// Düğümün çizilen ekran yarıçapı. Derece büyümesi (`size`) yerleşim yarıçapına uygulanır, en küçük ekran
+// yarıçapına değil: uzaktan bakınca (2.000 düğüm) düğümler en küçük boyda kalır, dolgu alanı ve kare süresi
+// büyümez; yakınlaşınca boylar ayrışır. Etiket nottan küçük karedir.
+float drawn_radius(bool tag, float size, float zoom, float font) {
+    const float sized = std::max(kMapNodeWorldRadius * zoom * size, kMapNodeMinRadiusEms * font);
+    return tag ? sized * kMapTagRadiusShare : sized;
+}
+
+// Fareyle erişim: çizilen boy, küçük düğümde en az yarım em; etikette aynı 0,7 payla (kare çizilenden geniş
+// yakalanmasın, yanındaki notu örtmesin).
+float hit_radius(bool tag, float size, float zoom, float font) {
+    const float least = kMapHitMinRadiusEms * font * (tag ? kMapTagRadiusShare : 1.0F);
+    return std::max(drawn_radius(tag, size, zoom, font), least);
+}
+
 std::string map_label(const MapNode& node) {
     if (node.kind == MapNodeKind::Tag)
         return printable("#" + node.key);
@@ -148,6 +168,13 @@ void View::draw_map() {
         map_cache_.names.clear();
         map_cache_.labels.clear();
         map_cache_.colors.clear();
+        map_cache_.sizes.assign(map.nodes.size(), 0.0F);
+        for (const MapEdge& edge : map.edges) {
+            map_cache_.sizes[edge.from] += 1.0F;
+            map_cache_.sizes[edge.to] += 1.0F;
+        }
+        for (float& size : map_cache_.sizes)
+            size = std::min(1.0F + (kMapDegreeGrowth * std::sqrt(size)), kMapMaxRadiusShare);
         for (const MapNode& node : map.nodes) {
             const bool tag = node.kind == MapNodeKind::Tag;
             map_cache_.names.push_back((tag ? "map:#" : "map:") + node.key);
@@ -164,13 +191,15 @@ void View::draw_map() {
     if (ImGui::IsItemHovered()) {
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         const float font = ImGui::GetFontSize();
-        const float reach = std::max(kMapNodeWorldRadius * map_camera_.zoom, kMapHitMinRadiusEms * font);
-        float best = reach * reach;
+        float best = std::numeric_limits<float>::max();  // en yakın düğüm kazanır
         for (std::size_t i = 0; i < positions.size(); ++i) {
             const float dx = origin.x + map_camera_.offset_x + positions[i].x * map_camera_.zoom - mouse.x;
             const float dy = origin.y + map_camera_.offset_y + positions[i].y * map_camera_.zoom - mouse.y;
-            if (dx * dx + dy * dy <= best) {
-                best = dx * dx + dy * dy;
+            const float reach = hit_radius(map.nodes[i].kind == MapNodeKind::Tag, map_cache_.sizes[i],
+                                           map_camera_.zoom, font);
+            const float distance = (dx * dx) + (dy * dy);
+            if (distance <= reach * reach && distance < best) {
+                best = distance;
                 hovered = static_cast<int>(i);
             }
         }
@@ -260,28 +289,53 @@ void View::draw_map_controls(const NoteMap& map) {
     bool changed = false;
     const float row_start_x = ImGui::GetCursorScreenPos().x;
     const float row_width = ImGui::GetContentRegionAvail().x;
-    const std::string whole = core::tr("gui.map_whole");
-    changed |= ImGui::Checkbox((whole + "###map_whole").c_str(), &options.whole_graph);
-    ImGui::SetItemTooltip("%s", core::tr("gui.map_whole_tip").c_str());
-    remember_item_center("map_whole");
+    // Açma/kapama çipi (G13): seçiliyken seçili satırın tonu, değilken hayalet ve soluk metin.
+    const auto chip = [&](const char* name, const std::string& label, bool& on, const char* tip_key) {
+        const theme::Theme& colors = theme::current();
+        ImGui::PushStyleColor(ImGuiCol_Button, on ? colors.selected : 0);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, on ? colors.selected : colors.hover);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, on ? colors.selected : colors.control_active);
+        ImGui::PushStyleColor(ImGuiCol_Text, on ? colors.text : colors.muted);
+        if (button(name, label)) {
+            on = !on;
+            changed = true;
+        }
+        ImGui::PopStyleColor(4);
+        ImGui::SetItemTooltip("%s", core::tr(tip_key).c_str());
+    };
+    chip("map_whole", core::tr("gui.map_whole"), options.whole_graph, "gui.map_whole_tip");
 
-    const float depth_width = kMapDepthSliderEms * ImGui::GetFontSize();
-    flow_after_previous(depth_width, row_start_x, row_width);
+    // Adımlı derinlik: [−] Derinlik 2 [+]; bir kademe sürgüden okunaklı, uçlarda düğme kapanır.
+    const std::string depth_text = core::tr("gui.map_depth", {{"depth", std::to_string(options.depth)}});
+    const float step_width = button_width("−");
+    const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+    flow_after_previous((2.0F * (step_width + spacing)) + text_width(depth_text), row_start_x, row_width);
     ImGui::BeginDisabled(options.whole_graph);
-    ImGui::SetNextItemWidth(depth_width);
-    // Biçim katalogdan gelir ama içine yalnız "%d" konur: ImGui biçim dizgisi çevirmen metninden kurulmaz.
-    const std::string depth_format = core::tr("gui.map_depth", {{"depth", "%d"}});
-    changed |= ImGui::SliderInt("##map_depth", &options.depth, MapOptions::kMinDepth, MapOptions::kMaxDepth,
-                                depth_format.c_str(), ImGuiSliderFlags_AlwaysClamp);
+    ImGui::BeginGroup();
+    ImGui::BeginDisabled(options.depth <= MapOptions::kMinDepth);
+    if (button("map_depth_less", "−", ButtonKind::Ghost)) {
+        --options.depth;
+        changed = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine(0.0F, spacing);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(depth_text.c_str());
+    ImGui::SameLine(0.0F, spacing);
+    ImGui::BeginDisabled(options.depth >= MapOptions::kMaxDepth);
+    if (button("map_depth_more", "+", ButtonKind::Ghost)) {
+        ++options.depth;
+        changed = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::EndGroup();
     ImGui::SetItemTooltip("%s", core::tr("gui.map_depth_tip").c_str());
     remember_item_center("map_depth");
     ImGui::EndDisabled();
 
     const std::string tags = core::tr("gui.map_tags");
-    flow_after_previous(checkbox_width(tags), row_start_x, row_width);
-    changed |= ImGui::Checkbox((tags + "###map_tags").c_str(), &options.show_tags);
-    ImGui::SetItemTooltip("%s", core::tr("gui.map_tags_tip").c_str());
-    remember_item_center("map_tags");
+    flow_after_previous(button_width(tags), row_start_x, row_width);
+    chip("map_tags", tags, options.show_tags, "gui.map_tags_tip");
     if (changed)
         queue([this, options] { state_.set_map_options(options); });
 
@@ -414,22 +468,43 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
         return ImVec2(origin.x + camera.offset_x + positions[node].x * camera.zoom,
                       origin.y + camera.offset_y + positions[node].y * camera.zoom);
     };
-    const auto lit = [&](std::size_t node) { return !filtering || matches[node] != 0; };
+    // Üzerine gelinen düğüm ve komşuları tam opak, ötekiler aramadaki eşleşmeyenler gibi soluk (G13).
+    // Komşular yalnız üzerine gelinirken, kenar listesinden (doğrusal) bulunur.
+    std::vector<char> near_hovered;
+    if (hovered >= 0) {
+        near_hovered.assign(map.nodes.size(), 0);
+        near_hovered[static_cast<std::size_t>(hovered)] = 1;
+        for (const MapEdge& edge : map.edges) {
+            if (static_cast<int>(edge.from) == hovered)
+                near_hovered[edge.to] = 1;
+            else if (static_cast<int>(edge.to) == hovered)
+                near_hovered[edge.from] = 1;
+        }
+    }
+    const auto lit = [&](std::size_t node) {
+        return (!filtering || matches[node] != 0) && (near_hovered.empty() || near_hovered[node] != 0);
+    };
+    const auto edge_lit = [&](const MapEdge& edge) {
+        return lit(edge.from) && lit(edge.to) &&
+               (hovered < 0 || static_cast<int>(edge.from) == hovered ||
+                static_cast<int>(edge.to) == hovered);
+    };
     const ImVec2 clip_min = draw->GetClipRectMin();
     const ImVec2 clip_max = draw->GetClipRectMax();
     const float spacing = GraphLayout::kIdealEdge * camera.zoom;
     const bool all_labels = spacing >= kMapLabelSpacingEms * font;
     const bool arrows = spacing >= kMapArrowSpacingEms * font;
-    const float radius = std::max(kMapNodeWorldRadius * camera.zoom, kMapNodeMinRadiusEms * font);
     const auto node_radius = [&](std::size_t node) {
-        return map.nodes[node].kind == MapNodeKind::Tag ? radius * kMapTagRadiusShare : radius;
+        return drawn_radius(map.nodes[node].kind == MapNodeKind::Tag, map_cache_.sizes[node], camera.zoom,
+                            font);
     };
 
     // Kenar türü başına (MapEdgeKind sırası) iki toplu çizgi: aramada eşleşen ve soluk.
     const ImU32 text = ImGui::GetColorU32(ImGuiCol_Text);
+    const float edge_alpha = theme::current().dark ? kMapEdgeAlphaDark : kMapEdgeAlphaLight;
     const std::array<ImU32, 3> kind_colors = {
-        with_alpha(text, kMapEdgeAlpha), with_alpha(icon_color(core::IconColor::Magenta), kMapRelatedAlpha),
-        ImGui::GetColorU32(ImGuiCol_TextDisabled, kMapEdgeAlpha)};
+        with_alpha(text, edge_alpha), with_alpha(icon_color(core::IconColor::Magenta), kMapRelatedAlpha),
+        ImGui::GetColorU32(ImGuiCol_TextDisabled, edge_alpha)};
     map_lines_.resize(2 * kind_colors.size());
     for (std::size_t kind = 0; kind < kind_colors.size(); ++kind) {
         map_lines_[2 * kind].color = kind_colors[kind];
@@ -438,7 +513,7 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
     for (MapLineBatch& batch : map_lines_)
         batch.coords.clear();  // kapasite kareler arası kalır
     const auto batch_of = [&](const MapEdge& edge) -> MapLineBatch& {
-        return map_lines_[2 * static_cast<std::size_t>(edge.kind) + (lit(edge.from) && lit(edge.to) ? 0 : 1)];
+        return map_lines_[2 * static_cast<std::size_t>(edge.kind) + (edge_lit(edge) ? 0 : 1)];
     };
     const auto visible = [&](ImVec2 a, ImVec2 b) {
         return std::max(a.x, b.x) >= clip_min.x && std::min(a.x, b.x) <= clip_max.x &&
@@ -476,7 +551,7 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
         if (tag)
             draw->AddRectFilled(ImVec2(at.x - r, at.y - r), ImVec2(at.x + r, at.y + r), color);
         else
-            draw->AddCircleFilled(at, r, color, kMapNodeSegments);
+            draw->AddCircleFilled(at, r, color, 0);  // 0: ImGui'nin önbellekli tessellasyonu, küçükte az köşe
         const bool is_current = !tag && map.nodes[i].key == current_key;
         if (is_current)
             draw->AddCircle(at, r + kMapRingGapEms * font, accent, 0, kMapRingThickness * ui_scale_);
@@ -502,7 +577,11 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
     // Önce geçerli ve üstündeki not; başka bir adın üstüne binecek ad çizilmez (ipucunda, yakınlaşınca
     // görünür). ponytail: çizilen adlarla doğrusal karşılaştırma; tuvale sığan ad sayısı aralıkla sınırlı
     // (~yüz).
-    const ImU32 label_background = ImGui::GetColorU32(ImGuiCol_WindowBg, kMapLabelBackgroundAlpha);
+    // Etiketler ikincil boyda ve soluk; üzerine gelinen ve gösterilen not metin renginde (G13).
+    ImGui::PushFont(nullptr, kSmallFontPixels);
+    const float label_font = ImGui::GetFontSize();
+    const ImU32 label_background = theme::with_alpha(theme::current().canvas, kMapLabelBackgroundAlpha);
+    const ImU32 label_muted = ImGui::GetColorU32(ImGuiCol_TextDisabled);
     const float max_width =
         std::clamp(spacing * kMapLabelSpacingShare, kMapLabelMinEms * font, kMapLabelMaxEms * font);
     std::vector<ImVec4> placed;  // (min x, min y, max x, max y)
@@ -515,15 +594,19 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
         const float left =
             std::clamp(at.x - width / 2.0F, clip_min.x, std::max(clip_min.x, clip_max.x - width));
         const float top = at.y + node_radius(i) + kMapRingGapEms * font;
-        const ImVec4 box(left, top, left + width, top + font);
+        const ImVec4 box(left, top, left + width, top + label_font);
         if (std::ranges::any_of(placed, [&](const ImVec4& other) {
                 return box.x < other.z && other.x < box.z && box.y < other.w && other.y < box.w;
             }))
             continue;
         placed.push_back(box);
         draw->AddRectFilled(ImVec2(box.x, box.y), ImVec2(box.z, box.w), label_background);
-        draw->AddText(ImVec2(box.x, box.y), lit(i) ? text : with_alpha(text, kMapDimAlpha), label.c_str());
+        const bool emphasised = static_cast<int>(i) == hovered ||
+                                (map.nodes[i].kind == MapNodeKind::Note && map.nodes[i].key == current_key);
+        const ImU32 ink = emphasised ? text : label_muted;
+        draw->AddText(ImVec2(box.x, box.y), lit(i) ? ink : with_alpha(ink, kMapDimAlpha), label.c_str());
     }
+    ImGui::PopFont();
     if (hovered >= 0 && ImGui::IsItemHovered()) {
         const MapNode& node = map.nodes[static_cast<std::size_t>(hovered)];
         ImGui::SetTooltip("%s", printable(node.kind == MapNodeKind::Tag ? "#" + node.key : node.key).c_str());

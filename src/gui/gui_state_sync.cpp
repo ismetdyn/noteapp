@@ -77,19 +77,26 @@ void GuiState::stop_sync(std::chrono::seconds timeout) {
 }
 
 void GuiState::show_sync_status(const sync::SyncStatus& status, bool running) {
-    if (!auto_sync_ && !running && !status.last_success && !status.last_error)
+    if (!auto_sync_ && !running && !status.last_success && !status.last_error) {
         sync_label_ = core::tr("gui.sync_off");
-    else if (running)
+        sync_indicator_ = SyncIndicator::Off;
+    } else if (running) {
         // NOLINTNEXTLINE(bugprone-branch-clone) -- hata ve son başarı denetiminden önce gelmeli
         sync_label_ = core::tr("gui.sync_running");
-    else if (status.last_error)
+        sync_indicator_ = SyncIndicator::Running;
+    } else if (status.last_error) {
         sync_label_ = core::tr("gui.sync_error", {{"detail", core::format_error(*status.last_error)}});
-    else if (!status.log_issues.empty())  // başarılı ama bir cihazın günlüğü duruyor: sessiz kalmaz
+        sync_indicator_ = SyncIndicator::Error;
+    } else if (!status.log_issues.empty()) {  // başarılı ama bir cihazın günlüğü duruyor: sessiz kalmaz
         sync_label_ = core::tr("gui.sync_error", {{"detail", core::format_error(status.log_issues.front())}});
-    else if (status.last_success)
+        sync_indicator_ = SyncIndicator::Error;
+    } else if (status.last_success) {
         sync_label_ = core::tr("gui.sync_ok", {{"time", local_hh_mm(*status.last_success)}});
-    else
+        sync_indicator_ = SyncIndicator::Ok;
+    } else {
         sync_label_ = core::tr("gui.sync_running");  // açıldı, henüz sonuç yok
+        sync_indicator_ = SyncIndicator::Running;
+    }
 }
 
 // Kaydedilen ayarları canlı uygular. Dil değişimi canlı çevrilmez (SPEC-gui kapsam dışı): yalnız bildirilir.
@@ -129,13 +136,14 @@ void GuiState::apply_settings(const core::Config& before, const core::Config& af
 void GuiState::show_config_warnings(const std::vector<core::Error>& warnings) {
     std::string messages = app::config_warnings_message(warnings);
     // Geçiş bekleyen ya da açılamayan depoda liste boştur: kullanıcı bunu notların kaybı sanmasın.
-    if (const auto issue = store_.health()) {
+    store_issue_ = store_.health();
+    if (store_issue_) {
         if (!messages.empty())
             messages += "; ";
-        messages += core::format_error(*issue);
+        messages += core::format_error(*store_issue_);
     }
     if (!messages.empty())
-        status_ = std::move(messages);
+        error_status_ = status_ = std::move(messages);
 }
 
 }  // namespace noteapp::gui

@@ -64,7 +64,8 @@ ChoiceBox<ConflictChoice> make_conflict_box(const std::string& path) {
                         {core::tr("gui.conflict_copy"), ConflictChoice::SaveCopy},
                         {core::tr("gui.cancel"), ConflictChoice::Cancel}},
             .default_button = 2,
-            .escape_button = 3};
+            .escape_button = 3,
+            .danger_button = 1};  // diskteki sürümün üstüne yaz
 }
 
 ChoiceBox<CloseChoice> make_close_box() {
@@ -74,7 +75,8 @@ ChoiceBox<CloseChoice> make_close_box() {
                         {core::tr("gui.close_discard"), CloseChoice::Discard},
                         {core::tr("gui.cancel"), CloseChoice::Cancel}},
             .default_button = 0,
-            .escape_button = 2};
+            .escape_button = 2,
+            .danger_button = 1};  // kaydetmeden kapat
 }
 
 ChoiceBox<CloseChoice> make_close_settings_box() {
@@ -89,7 +91,8 @@ ChoiceBox<bool> make_delete_box(const std::string& message) {
             .message = message,
             .buttons = {{core::tr("gui.delete"), true}, {core::tr("gui.cancel"), false}},
             .default_button = 1,
-            .escape_button = 1};
+            .escape_button = 1,
+            .danger_button = 0};
 }
 
 }  // namespace noteapp::gui

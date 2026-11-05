@@ -365,7 +365,7 @@ ftxui::Element editor_info_bar(const EditorSession& session, int width) {
     return hbox({text(" " + shown), filler(), text(fields + " ")}) | inverted;
 }
 
-ftxui::Element editor_status_bar(const EditorSession& session, int width) {
+ftxui::Element editor_status_bar(const EditorSession& session, int width, ftxui::Color key_color) {
     using namespace ftxui;
     if (session.mode() == EditorSession::Mode::NamePrompt) {
         // Klasörsüz ad buraya yazılır: kullanıcı nereye kaydedeceğini görsün.
@@ -399,12 +399,12 @@ ftxui::Element editor_status_bar(const EditorSession& session, int width) {
         cells.push_back(severity_styled(text(message), mark->severity));
         used += string_width(message) + static_cast<int>(kHintGap.size());
     }
-    const bool has_notice = !cells.empty();
     // Hata ya da ileti varken kısayol sığdığı kadar yanında kalır; kelime ortasında kesilmez.
-    const std::string hints = fit_hints(
-        core::tr(read_only ? "tui.key_hints_editor_readonly" : "tui.key_hints_editor"), width - used);
-    if (!hints.empty())
-        cells.push_back(text((has_notice ? std::string(kHintGap) : "") + hints) | dim);
+    if (!cells.empty())
+        cells.push_back(text(std::string(kHintGap)));
+    cells.push_back(hint_bar(core::tr(read_only ? "tui.key_hints_editor_readonly" : "tui.key_hints_editor"),
+                             width - used, key_color) |
+                    flex);
     return hbox(std::move(cells));
 }
 

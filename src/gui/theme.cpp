@@ -1,5 +1,7 @@
 #include "gui/theme.hpp"
 
+#include <algorithm>
+
 namespace noteapp::gui::theme {
 
 namespace {
@@ -120,6 +122,14 @@ void apply_colors(ImGuiStyle& style, const Theme& theme) {
     set(ImGuiCol_NavWindowingHighlight, theme.accent);
     set(ImGuiCol_NavWindowingDimBg, modal_dim);
     set(ImGuiCol_ModalWindowDimBg, modal_dim);
+}
+
+ImU32 scaled(ImU32 color, float factor) {
+    ImVec4 value = ImGui::ColorConvertU32ToFloat4(color);
+    value.x = std::min(value.x * factor, 1.0F);
+    value.y = std::min(value.y * factor, 1.0F);
+    value.z = std::min(value.z * factor, 1.0F);
+    return ImGui::ColorConvertFloat4ToU32(value);
 }
 
 const Theme& current() {

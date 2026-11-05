@@ -364,22 +364,34 @@ TEST_CASE("T shows the trash: u restores the selected, D purges after confirming
 }
 
 TEST_CASE("the trash view has a clear title and its own hints at 60 columns in both languages") {
-    const std::pair<const char*, std::array<const char*, 5>> expected[] = {
-        {"en", {"TRASH", "u restore", "D delete forever", "E empty", "Esc/q back"}},
-        {"tr", {"ÇÖP KUTUSU", "u geri getir", "D kalıcı sil", "E boşalt", "Esc/q geri"}},
+    // 60 sütunda sağa sabit F1 yardım `Esc/q` ipucunun yerini alır; o 80 sütunda görünür.
+    const std::pair<const char*, std::array<const char*, 6>> expected[] = {
+        {"en", {"TRASH", "u restore", "D delete forever", "E empty", "F1 help", "Esc/q back"}},
+        {"tr", {"ÇÖP KUTUSU", "u geri getir", "D kalıcı sil", "E boşalt", "F1 yardım", "Esc/q geri"}},
     };
     for (const auto& [language, parts] : expected) {
         core::init_i18n(language);
         tui::TuiState s;
         s.enter_trash({core::TrashItem{core::NotePath::parse("a.md").value(), {}, 1}});
-        auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(60), ftxui::Dimension::Fixed(15));
-        ftxui::Render(screen, tui::render(s, {}, {"", ""}, {60, 15}));
-        const std::string shown = screen.ToString();
-        for (const char* part : parts) {
+        // Tuş ve açıklama ayrı biçimdedir (ToString arada kaçış taşır): düz hücre metni.
+        const auto shown_at = [&](int width) {
+            auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width), ftxui::Dimension::Fixed(15));
+            ftxui::Render(screen, tui::render(s, {}, {"", ""}, {width, 15}));
+            std::string text;
+            for (int y = 0; y < screen.dimy(); ++y) {
+                for (int x = 0; x < screen.dimx(); ++x)
+                    text += screen.PixelAt(x, y).character;
+                text += '\n';
+            }
+            return text;
+        };
+        const std::string narrow = shown_at(60);
+        for (std::size_t i = 0; i + 1 < parts.size(); ++i) {
             CAPTURE(language);
-            CAPTURE(part);
-            CHECK(has(shown, part));
+            CAPTURE(parts[i]);
+            CHECK(has(narrow, parts[i]));
         }
+        CHECK(has(shown_at(80), parts.back()));
     }
     core::init_i18n("en");
 }

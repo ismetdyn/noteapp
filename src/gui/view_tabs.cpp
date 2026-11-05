@@ -69,7 +69,7 @@ void View::draw_note_tabs() {
             flags |= ImGuiTabItemFlags_SetSelected;
         const bool replaceable = !tab.pinned && !tab.kept;  // sonra açılan not bunun yerine geçer: eğik yazı
         if (replaceable)
-            ImGui::PushFont(platform_->preview_fonts.italic, 0.0F);
+            ImGui::PushFont(fonts().italic, 0.0F);
         // Kaydırmalı çubuk sekmeyi daraltmaz: dar bölmede tek sekme çubuktan geniş olup etkin sekme taşardı.
         // Sınır yalnız taşan sekmede; başlık ImGui'nin üç noktasıyla kısalır, tam adı ipucunda.
         const bool has_marker = !tab.pinned || tab.unsaved;  // kapatma düğmesi ya da kaydedilmedi işareti

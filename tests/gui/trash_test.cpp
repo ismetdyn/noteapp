@@ -1,3 +1,4 @@
+#include "core/file_icons.hpp"
 #include "graph/graph.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/view.hpp"
@@ -52,6 +53,12 @@ struct TrashScene {
     }
     bool has_item(const std::string& name) const { return view->item_rects().contains(name); }
 };
+
+// K3: simgeler açıkken çöp düğmesi simge ve sayıdır; "Çöp (n)" adı ipucundadır.
+std::string trash_button(std::size_t count) {
+    return noteapp::core::icon_text(noteapp::core::trash_icon(), noteapp::core::IconStyle::Nerd) + " " +
+           std::to_string(count);
+}
 
 bool shows(View& view, const std::string& text) {
     const gui_test::RenderedText rendered;
@@ -134,10 +141,10 @@ TEST_CASE("the selection stays on a neighbour after Delete, and the shown note f
 
 TEST_CASE("the trash button shows the count and opens the trash view") {
     TrashScene scene;
-    CHECK(shows(*scene.view, "Trash (0)"));
+    CHECK(shows(*scene.view, trash_button(0)));
     click_button(*scene.view, kDelete);
     CHECK(scene.state->trash_count() == 1);
-    CHECK(shows(*scene.view, "Trash (1)"));
+    CHECK(shows(*scene.view, trash_button(1)));
     click_button(*scene.view, kTrash);
     CHECK(scene.state->trash_view());
     settle(*scene.view);
@@ -291,7 +298,7 @@ TEST_CASE("the trash view is labelled in Turkish") {
     CHECK(shows(*scene.view, "Geri getir"));
     CHECK(shows(*scene.view, "Kalıcı sil"));
     CHECK(shows(*scene.view, "Boşalt"));
-    CHECK(shows(*scene.view, "Çöp (1)"));
+    CHECK(shows(*scene.view, trash_button(1)));
 }
 
 TEST_CASE("a failed undo keeps the offer; the next undo brings the note back") {

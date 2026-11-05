@@ -678,6 +678,7 @@ noteapp::search::ContentIndex& TuiSession::ensure_content_index() {
 
 void TuiSession::show_sync() {
     status_.sync = sync_indicator_.text();
+    status_.sync_state = sync_indicator_.state();
     state_.set_sync_enabled(config_.sync.enabled);
 }
 

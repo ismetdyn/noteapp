@@ -21,7 +21,7 @@ GitHub reposuyla senkron kalır (Windows ↔ Linux).
 ## Kaynaktan kurulum
 
 Gerekenler: C++23 derleyici, CMake ≥ 3.28, Ninja, `patch` (FTXUI yaması). FTXUI, libgit2, toml++, SDL3, Dear ImGui, libharu, md4c, doctest
-vb. derleme sırasında otomatik indirilir (`cmake/Dependencies.cmake`); ağ erişimi gerekir. Fontlar (DejaVu) depoda gömülüdür.
+vb. derleme sırasında otomatik indirilir (`cmake/Dependencies.cmake`); ağ erişimi gerekir. Fontlar (DejaVu; `notes-gui` için ayrıca Inter ve JetBrains Mono, OFL-1.1) depoda gömülüdür; yeniden çıkarma: `scripts/fetch-ui-fonts.sh`.
 
 CMake seçenekleri: `NOTEAPP_BUILD_GUI` (varsayılan ON; "notes-gui (SDL3 + Dear ImGui) derlensin") ve `NOTEAPP_BUILD_TESTS`
 (varsayılan ON). GUI'siz derleme için `-DNOTEAPP_BUILD_GUI=OFF`: `note` (PDF dışa aktarma dahil) ve `notes` derlenir.
@@ -319,11 +319,11 @@ Pencerenin üstünde tek araç çubuğu, dosya yöneticisindeki gibi gruplu: `Ye
 | Oklar / `+` `-` / `0` (harita odaktayken) | Kaydır / yakınlaştır, uzaklaştır / sığdır |
 | `Shift`+sürükleme / kenara sağ tık (haritada) | İki düğümü ilişkilendir, bağla ya da etiketle / ilişkiyi ya da etiketi kaldır |
 | `F5` | Şimdi senkronla |
-| `Ctrl+,` | Ayarlar sekmesi |
+| `Ctrl+,` (ya da araç çubuğunda ⚙) | Ayarlar; yeniden basınca Notlar |
 
 Mevcut notlar yazmayı bıraktıktan 3 sn sonra otomatik kaydedilir (`tuning.autosave_ms`, her kayıt günlüğe gövde kadar yer tutar; kapanış ve not geçişi hemen kaydeder). Dış değişiklikler `rescan_seconds` aralığında ve
 pencereye dönünce algılanır. `Ctrl+E` bir yol alanı açar (elle yaz ya da Browse); başsız/betik PDF için `note export --pdf`.
-Sınırlar: ekran okuyucu desteği yok; yalnız gömülü DejaVu fontu var (CJK ve renkli emoji `?` kutusu çıkar, dosya bozulmaz);
+Sınırlar: ekran okuyucu desteği yok; yalnız gömülü fontlar var (DejaVu varsayılan; Ayarlar → Görünüm'den arayüz için Inter, editör için JetBrains Mono seçilir; CJK ve renkli emoji `?` kutusu çıkar, dosya bozulmaz);
 PDF yalnız soldan sağa yazar (Arapça/İbranice yok). Pencere yerleşimi `gui-state.toml`'da tutulur (durum dizini).
 
 ## Eski sürümden geçiş

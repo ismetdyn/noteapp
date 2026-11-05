@@ -818,42 +818,69 @@ TEST_CASE("recent commands reach tui-state.toml through the host") {
 
 // ---- Çizim ----
 
-TEST_CASE("render: a row is id, label, key at the right; unavailable rows are dim with the reason") {
+namespace {
+
+// Palet satırının sağ ucu: kimlik, varsa tuşlar (takma harf yanında), kenarlık.
+std::string row_tail(const Command& command) {
+    std::string keys{command.keys};
+    if (!command.alias.empty())
+        keys += " " + std::string(command.alias);
+    return " " + std::string(command.id) + (keys.empty() ? std::string{} : "  " + keys) + " │";
+}
+
+// `needle`ın `y` satırındaki ilk hücresi (bayt ofseti değil).
+std::optional<int> cell_of(const ftxui::Screen& screen, int y, const std::string& needle) {
+    for (int x = 0; x < screen.dimx(); ++x) {
+        std::string run;
+        for (int i = x; i < screen.dimx() && run.size() < needle.size(); ++i)
+            run += screen.PixelAt(i, y).character;
+        if (run == needle)
+            return x;
+    }
+    return std::nullopt;
+}
+
+}  // namespace
+
+TEST_CASE("render: a row is the label, then id and key dim at the right; unavailable rows are dim") {
     tui::TuiState state = sample_state();
     state.handle(Key::Char, ":");
     type(state, "move");
-    const std::string shown = screen_text(state);
-    CHECK(has(shown, "move — Move"));
-
+    const Command& move = *state.palette_selected();
+    REQUIRE(std::string_view(move.id) == "move");
     const ftxui::Screen screen = draw(state);
     bool found = false;
     for (int y = 0; y < kHeight; ++y) {
         const std::string row = row_of(screen, y);
-        if (!has(row, "move — Move"))
+        if (!has(row, row_tail(move)))
             continue;
         found = true;
-        CHECK(has(row, " m │"));  // tuş sağ kenarda
+        const auto label = cell_of(screen, y, core::tr(move.label_key));
+        const auto id = cell_of(screen, y, "move  m");
+        REQUIRE(label);
+        REQUIRE(id);
+        CHECK(*label < *id);  // etiket solda, kimlik ve tuş sağ kenarda
+        CHECK_FALSE(screen.PixelAt(*label, y).dim);
+        CHECK(screen.PixelAt(*id, y).dim);
+        CHECK(screen.PixelAt(*id + 6, y).dim);  // tuş
     }
     CHECK(found);
 
     state.handle(Key::Escape);
     state.handle(Key::Char, ":");
     type(state, "links.focus");
+    const Command& links = *state.palette_selected();
     const ftxui::Screen dim_screen = draw(state);
     bool found_dim = false;
     for (int y = 0; y < kHeight; ++y) {
         const std::string row = row_of(dim_screen, y);
-        const std::size_t at = row.find("links.focus — ");
-        if (at == std::string::npos)
+        if (!has(row, row_tail(links)))
             continue;
         found_dim = true;
-        CHECK(has(row, core::tr("tui.cmd_why_review")));
-        // Bayt ofseti değil hücre: satırın ilk harfini ara.
-        for (int x = 0; x < kWidth; ++x)
-            if (dim_screen.PixelAt(x, y).character == "—") {
-                CHECK(dim_screen.PixelAt(x, y).dim);
-                break;
-            }
+        CHECK(has(row, core::tr(links.label_key) + " (" + core::tr("tui.cmd_why_review") + ")"));
+        const auto label = cell_of(dim_screen, y, core::tr(links.label_key));
+        REQUIRE(label);
+        CHECK(dim_screen.PixelAt(*label, y).dim);
     }
     CHECK(found_dim);
 }
@@ -881,7 +908,7 @@ TEST_CASE("render: the selected row stays visible while walking a list longer th
     for (std::size_t i = 0; i + 1 < count; ++i) {
         state.handle(Key::Down);
         CAPTURE(state.palette_selected()->id);
-        CHECK(has(screen_text(state, 60, 15), std::string(state.palette_selected()->id) + " — "));
+        CHECK(has(screen_text(state, 60, 15), row_tail(*state.palette_selected())));
     }
 }
 
@@ -969,7 +996,7 @@ TEST_CASE("every key in the dispatch table appears in the palette and in F1, in 
                 const Command& command = *state.palette_selected();
                 CAPTURE(command.id);
                 const std::string shown = screen_text(state);
-                CHECK(has(shown, std::string(command.id) + " — "));
+                CHECK(has(shown, row_tail(command)));
                 // Alias'lı satır `gt T` gibi: tuşlar bir arada, satır sonunda.
                 std::string keys{command.keys};
                 if (!command.alias.empty())

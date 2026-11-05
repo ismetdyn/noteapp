@@ -31,6 +31,13 @@ add_library(noteapp_gui
 # noteapp_embed_fonts pdf::embedded_font'u üretir ve noteapp_pdf'te zaten tanımlıdır; ikon fontu kendi işlevini alır ki
 # `note` (noteapp_pdf'e bağlı) bu veriyi taşımasın.
 noteapp_embed_files(noteapp_gui gui/icon_font.hpp noteapp::gui embedded_icon_font fonts/NoteappIcons.ttf)
+# Ayarlar → Görünüm'deki seçilebilir aileler (OFL-1.1, scripts/fetch-ui-fonts.sh); DejaVu PDF ile ortak kalır.
+noteapp_embed_files(noteapp_gui gui/icon_font.hpp noteapp::gui embedded_ui_font
+    fonts/Inter-Regular.ttf
+    fonts/Inter-Bold.ttf
+    fonts/Inter-Italic.ttf
+    fonts/Inter-BoldItalic.ttf
+    fonts/JetBrainsMono-Regular.ttf)
 target_include_directories(noteapp_gui PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(noteapp_gui
     PUBLIC noteapp_app noteapp_edit noteapp_core noteapp_search noteapp_sync imgui

@@ -46,6 +46,13 @@ inline int shorten_wait(int timeout_ms, std::optional<std::chrono::steady_clock:
     const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - now).count();
     return static_cast<int>(std::clamp<decltype(left)>(left, 0, timeout_ms));
 }
+// Tipografi, ölçek 1 pikseli (.engineering/design/ui-redesign.md §3.2): gövde 15; bilgi yoğun metin (durum
+// çubuğu, satırdaki boyut ve tarih, ipucu) bir kademe küçük; önizlemenin gövdesi okuma için bir kademe büyük.
+// İkincil boy PushFont(nullptr, kSmallFontPixels) ile alınır: aynı font, ek atlas yok.
+inline constexpr float kFontPixels = 15.0F;
+inline constexpr float kSmallFontPixels = 13.0F;
+inline constexpr float kPreviewFontPixels = 16.0F;
+inline constexpr float kTitleFontPixels = 17.0F;  // sayfa başlığı (Ayarlar)
 // ImGui bir etkileşimi birkaç karede tamamlar (fare üzerinde, odak, açılır kutu).
 inline constexpr int kFramesAfterEvent = 3;
 inline constexpr float kFormWidth = 420.0F;
@@ -99,9 +106,11 @@ struct View::Platform {
     std::optional<ImguiSession> imgui;
     std::optional<SdlBackend> sdl_backend;
     std::optional<RendererBackend> renderer_backend;
-    ImFont* ui_font = nullptr;
-    ImFont* mono_font = nullptr;
-    PreviewFonts preview_fonts;
+    // Seçilebilir aileler (View::fonts seçer): DejaVu'nun eş aralıklısı kendi `mono`'sudur, Inter'inki
+    // boştur.
+    PreviewFonts dejavu;
+    PreviewFonts inter;
+    ImFont* jetbrains_mono = nullptr;
     std::vector<ImWchar> icon_ranges = icon_glyph_ranges();
 };
 
@@ -113,6 +122,7 @@ struct View::PreviewCache {
     PreviewLayout layout;
     float width = -1.0F;
     float font_size = 0.0F;
+    PreviewFonts fonts;  // Ayarlar'da aile değişince yerleşimin yüzleri de değişir
     // Yerleşimin kurulduğu andaki eksik hedefler: senkron ya da kayıt hedefi oluşturunca bağlantı canlanır.
     std::vector<std::string> missing;
     // csv/json: metin, tür ya da tablo sınırı değişince yeniden ayrıştırılır; nullopt = geçersiz, ham metin.
@@ -131,6 +141,8 @@ struct ImportInbox {
 };
 
 void wake_event_loop();
+// UTF-8 öncü baytına göre kod noktasının bayt sayısı (devam baytında 1).
+std::size_t utf8_length(char lead);
 void draw_error(const std::string& message);
 float text_width(std::string_view text);
 float button_width(const std::string& label);
@@ -139,6 +151,8 @@ std::string keep_end(std::string_view text, float width);
 float dialog_content_width();
 void full_text_tooltip(const std::string& text);
 bool flow_after_previous(float next_width, float row_start_x, float row_width);
+// Satırı sağa yaslar: `width` genişliğindeki öğeler `room` içinde sağda biter; sığmazsa satır soldan başlar.
+void align_right(float width, float room);
 void draw_hint(const std::string& text);
 std::string printable(std::string_view raw);
 ImU32 icon_color(core::IconColor color);

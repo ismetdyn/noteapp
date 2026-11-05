@@ -321,7 +321,15 @@ TEST_CASE("folder view: the top line shows the breadcrumb, also shortened for a 
     select_label(s, "work/");
     s.handle(Key::Enter);
     s.handle(Key::Enter);
-    CHECK(row_of(draw(s), 0).find("notes/work/sub") == 0);
+    const ftxui::Screen crumbs = draw(s);
+    CHECK(row_of(crumbs, 0).find("notes/work/sub") == 0);
+    // Klasör adları kalın, ayırıcı soluk: yol bir bakışta okunur.
+    CHECK(crumbs.PixelAt(0, 0).bold);
+    CHECK(crumbs.PixelAt(6, 0).bold);
+    CHECK_FALSE(crumbs.PixelAt(6, 0).dim);
+    CHECK(crumbs.PixelAt(5, 0).character == "/");
+    CHECK(crumbs.PixelAt(5, 0).dim);
+    CHECK_FALSE(crumbs.PixelAt(5, 0).bold);
 
     tui::TuiState deep;
     deep.set_window(60, kHeight);
@@ -383,14 +391,17 @@ TEST_CASE("folder view: icons and the marker column stay aligned") {
     CHECK(draw(s).PixelAt(marker + 1, kFirstRowY).character == "▸");
 }
 
-TEST_CASE("folder view: the hint bar names folder creation and rename on a folder row, at 60 columns") {
+TEST_CASE("folder view: the hint bar names folder creation at 60 columns and rename from 70") {
     tui::TuiState s = nav_state();
     tui::TuiState narrow = nav_state();
     narrow.set_window(60, kHeight);
     const std::string bar = row_of(draw(narrow, 60), kHeight - 1);
     CHECK(bar.find("a add, name/ = folder") != std::string::npos);
-    CHECK(bar.find("F2 rename") != std::string::npos);
     CHECK(bar.find("← up") != std::string::npos);
+    CHECK(bar.ends_with("F1 help"));  // yardım sağa sabit: `F2` 60 sütunda ona yer bırakır
+    tui::TuiState wider = nav_state();
+    wider.set_window(70, kHeight);
+    CHECK(row_of(draw(wider, 70), kHeight - 1).find("F2 rename") != std::string::npos);
     select_label(s, "c.md");
     CHECK(row_of(draw(s), kHeight - 1).find("a add") != std::string::npos);
 }
@@ -466,7 +477,7 @@ TEST_CASE("hostile names are sanitized in the row, breadcrumb, details and summa
     type(s, "i");
     const std::string inner = draw(s).ToString();
     CHECK(inner.find("\xE2\x80\xAE") == std::string::npos);
-    CHECK(inner.find("notes/") != std::string::npos);
+    CHECK(row_of(draw(s), 0).find("notes/") != std::string::npos);
 }
 
 TEST_CASE("mouse: click selects, double click enters, a breadcrumb segment jumps") {

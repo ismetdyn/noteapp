@@ -1,7 +1,10 @@
+#include "gui/theme.hpp"
 #include "layout_scenes.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <doctest/doctest.h>
 #include <format>
 #include <functional>
@@ -29,6 +32,7 @@ const char* const kNotesItems[] = {"search",
                                    "toolbar_view_tree",
                                    "toolbar_view_details",
                                    "toolbar_view_map",
+                                   "settings_open",
                                    "note_list",
                                    "header",
                                    "preview_toggle",
@@ -275,7 +279,7 @@ void check_sizes_not_negative(const ItemRects& rects) {
 
 // ImGui::GetFontSize kare dışında ölçeği görmez.
 float font_pixels() {
-    constexpr float kBaseFontPixels = 16.0F;
+    constexpr float kBaseFontPixels = 15.0F;
     return kBaseFontPixels * ImGui::GetStyle().FontScaleDpi;
 }
 
@@ -762,4 +766,174 @@ TEST_CASE("settings labels come from the catalog") {
     scene.show_tab(Tab::Settings);
     CHECK(rendered.contains("Senkron ve geçiş klasörü"));
     CHECK_FALSE(rendered.contains("gui_setting"));
+}
+
+// G3: bilgi yoğun metin (durum çubuğu, Ayrıntılar'ın boyut ve tarih hücresi) gövdeden bir kademe küçük.
+TEST_CASE("the status bar and the Details cells use the secondary type size at every scale") {
+    constexpr float kSmallPixels = 13.0F;
+    for (const float scale : {1.0F, 2.0F}) {
+        CAPTURE(scale);
+        LayoutScene scene(1000, 650, scale);
+        scene.show_details_view();
+        const ItemRects rects = scene.view->item_rects();
+        const float small = kSmallPixels * scale;
+        CHECK(rect_height(rects.at("count")) == doctest::Approx(small));
+        int cells = 0;
+        for (const auto& [name, rect] : rects) {
+            if (!name.starts_with("details_cell:"))
+                continue;
+            ++cells;
+            CHECK(rect_height(rect) == doctest::Approx(small));
+        }
+        CHECK(cells > 0);  // hücresiz tablo yanlış yeşil olmasın
+        CHECK(rect_height(rects.at("header")) > small);  // gövde boyu küçülmedi
+    }
+}
+
+// G5 (K3): eylemler simgeli hayalet düğme, "Yeni not" birincil; araç çubuğu 1000 px'te tek satırdır.
+TEST_CASE("the toolbar fits one row at 1000 px and only New note keeps its label next to the icon") {
+    LayoutScene scene(1000, 650, 1.0F);
+    const ItemRects rects = scene.view->item_rects();
+    std::vector<std::string> names = {"settings_open"};
+    for (const auto& [name, rect] : rects) {
+        if (name.starts_with("toolbar_"))
+            names.push_back(name);
+    }
+    REQUIRE(names.size() >= 12);  // sekiz eylem, üç görünüm ve ⚙: boş liste yanlış yeşil olmasın
+    for (const std::string& name : names) {
+        CAPTURE(name);
+        CHECK(rects.at(name).min_y == doctest::Approx(rects.at("toolbar_new_note").min_y));
+    }
+    const float icon_only = 2.5F * font_pixels();
+    for (const char* name : {"toolbar_new_folder", "toolbar_import", "toolbar_rename", "toolbar_move",
+                             "toolbar_delete", "toolbar_export", "settings_open"}) {
+        CAPTURE(name);
+        CHECK(rect_width(rects.at(name)) < icon_only);
+    }
+    CHECK(rect_width(rects.at("toolbar_new_note")) > 2.0F * icon_only);  // simge ve "Yeni not"
+}
+
+// Simgeler kapalıyken (`icons = off`) düğmeler adlarıyla kalır.
+TEST_CASE("with icons off every toolbar button shows its label") {
+    gui_test::WindowFixture fixture;
+    fixture.config.icons = "off";
+    fixture.add_note("a.md", "a\n");
+    auto state = fixture.make_state();
+    auto view = gui_test::make_view(*state);
+    gui_test::settle(*view);
+    const ItemRects rects = view->item_rects();
+    CHECK(rect_width(rects.at("toolbar_rename")) > 3.0F * font_pixels());  // "Rename"
+    CHECK(rect_width(rects.at("settings_open")) > 3.0F * font_pixels());   // "Settings"
+}
+
+
+// G6: kutu içinde kutu yok. Sol bölme krom, sağ içerik tuval tonunda ve aralarında 1 px ayraç; Bilgi ve
+// Bağlantılar başlıkları seçili satırın zeminini almayan sessiz başlıklardır.
+TEST_CASE("the right pane sits on the canvas tone and the panel headers are not framed") {
+    LayoutScene scene(1000, 650, 1.0F);
+    noteapp::gui::theme::apply_colors(ImGui::GetStyle(), noteapp::gui::theme::kDark);
+    ImGui::GetIO().AddMousePosEvent(-1.0F, -1.0F);  // üzerine gelme rengi karışmasın
+    gui_test::settle(*scene.view);
+    const ItemRects rects = scene.view->item_rects();
+    constexpr std::uint32_t kCanvas = 0x1C1F24;
+    constexpr std::uint32_t kChrome = 0x15171B;
+    const View::ItemRect& left = rects.at("left_pane");
+    const View::ItemRect& header = rects.at("header");
+    const View::ItemRect& links = rects.at("links_header");
+    // Başlık satırı ile sol bölme arasındaki boşluk ve başlıkların sağ ucu: metin yok, yalnız zemin.
+    CHECK(gui_test::pixel_at(header.min_x - 2.0F, (header.min_y + header.max_y) / 2.0F) == kCanvas);
+    CHECK(gui_test::pixel_at(links.max_x - 2.0F, (links.min_y + links.max_y) / 2.0F) == kCanvas);
+    CHECK(gui_test::pixel_at(rects.at("info_header").max_x - 2.0F, rects.at("info_header").min_y + 2.0F) ==
+          kCanvas);
+    CHECK(gui_test::pixel_at(left.min_x + 2.0F, left.max_y - 2.0F) == kChrome);
+}
+
+// G7: tek durum çubuğu. Editörün altındaki ayrı satır kalktı: editör alanları ve iletisi durum çubuğundadır,
+// editör bir satır uzar.
+TEST_CASE("the editor fields and notice live in the one status bar at every scale") {
+    for (const float scale : {1.0F, 2.0F}) {
+        CAPTURE(scale);
+        LayoutScene scene(1000, 650, scale);
+        const ItemRects rects = scene.view->item_rects();
+        const View::ItemRect frame = window_frame();
+        std::vector<std::string> bar = {"count", "status", "editor_status", "sync"};
+        for (const std::string& name : bar) {
+            REQUIRE_MESSAGE(rects.contains(name), name);
+            CHECK_MESSAGE(std::abs(rects.at(name).max_y - rects.at("count").max_y) <= kTolerance, name);
+            check_inside_x(rects, name, frame);
+            check_inside_y(rects, name, frame);
+        }
+        check_no_pair_overlaps(rects, bar);
+    }
+    gui_test::WindowFixture fixture;
+    fixture.add_note("a.md", "a\n");
+    auto state = fixture.make_state();
+    auto view = gui_test::make_view(*state);
+    gui_test::settle(*view);
+    const ItemRects rects = view->item_rects();
+    // Bağlantısız notta editörün altında yalnız kapalı Bilgi başlığı var: ondan sonra durum çubuğu gelir, arada
+    // ayrı bir editör satırı yok.
+    REQUIRE(rects.contains("info_header"));
+    CHECK(rects.at("info_header").min_y - rects.at("editor").max_y < ImGui::GetFrameHeight());
+    CHECK(rects.at("count").min_y - rects.at("info_header").max_y < ImGui::GetFrameHeight());
+}
+
+// G10: önizlemenin okuma ölçüsü 46 em (UI boyu), geniş pencerede ortalı; dar pencerede tam genişlik.
+TEST_CASE("the preview keeps a 46 em reading measure, centred in a wide window") {
+    const float measure = 46.0F * 15.0F;  // ölçek 1, UI gövdesi 15 px
+    {
+        LayoutScene scene(2000, 1000, 1.0F);
+        scene.state->toggle_preview();
+        gui_test::settle(*scene.view);
+        const ItemRects rects = scene.view->item_rects();
+        const View::ItemRect& preview = rects.at("preview");
+        const View::ItemRect& block = rects.at("preview_block:0");
+        CHECK(rect_width(block) == doctest::Approx(measure).epsilon(0.01));
+        const float left = block.min_x - preview.min_x;
+        const float right = preview.max_x - block.max_x;
+        CHECK(left > 4.0F * font_pixels());
+        CHECK(std::abs(left - right) <= 3.0F * font_pixels());  // iç boşluk ve kaydırma çubuğu payı
+    }
+    LayoutScene scene(1000, 650, 1.0F);
+    scene.state->toggle_preview();
+    gui_test::settle(*scene.view);
+    const ItemRects rects = scene.view->item_rects();
+    CHECK(rect_width(rects.at("preview_block:0")) < measure);
+    CHECK(rects.at("preview_block:0").min_x - rects.at("preview").min_x < font_pixels());  // tam genişlik
+}
+
+// İnceleme 3: durum çubuğu öncelikli. Solda sayaç ve tek ileti (en önemlisi), öbür iletiler "⚠ n" çipinde
+// (tam metinleri ipucunda); sağda editör alanları hiç kısalmaz. Sahnede genel hata (config uyarısı) ve
+// senkron hatası var.
+TEST_CASE("the status bar shows the most important message and folds the others into a count chip") {
+    for (const float scale : {1.0F, 1.25F, 1.5F, 2.0F}) {
+        for (const ViewSize size : {ViewSize{1000, 650}, ViewSize{1, 1}}) {
+            CAPTURE(scale);
+            CAPTURE(size.width);
+            LayoutScene scene(size.width, size.height, scale);
+            gui_test::RenderedText rendered;
+            scene.view->draw_frame();
+            const ItemRects rects = scene.view->item_rects();
+            const std::vector<std::string> bar = {"count", "status", "status_more", "editor_status", "sync"};
+            for (const std::string& name : bar) {
+                REQUIRE_MESSAGE(rects.contains(name), name);
+                check_inside_x(rects, name, window_frame());
+            }
+            check_no_pair_overlaps(rects, bar);
+            // Editör alanları tam: kısaltılmış metin günlüğe "…" ile yazılırdı.
+            CHECK(rendered.contains(scene.state->editor_fields()));
+            // Gösterilen ileti genel hatadır (eşit önemde ilk), senkron hatası çipte.
+            CHECK(rendered.contains(scene.state->status().substr(0, 8)));
+            CHECK_FALSE(rendered.contains("Hem"));  // senkron hatasının metni çubukta değil
+        }
+    }
+    LayoutScene scene(1000, 650, 1.0F);
+    const auto [x, y] = scene.view->button_center("status_more");
+    ImGui::GetIO().AddMousePosEvent(x, y);
+    gui_test::RenderedText rendered;
+    for (int frame = 0; frame < 60 && !rendered.contains("Hem"); ++frame) {
+        SDL_Delay(10);
+        scene.view->draw_frame();
+    }
+    CHECK(rendered.contains("Hem"));  // çipin ipucunda senkron hatasının tamamı
 }

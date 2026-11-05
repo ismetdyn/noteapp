@@ -19,6 +19,7 @@ namespace noteapp::gui {
 namespace {
 
 const SDL_DialogFileFilter kPdfFilters[] = {{"PDF", "pdf"}};
+constexpr float kModalPadPixels = 16.0F;  // diyaloğun iç boşluğu, ölçek 1 pikseli
 
 // Yerel diyaloğun sonucu: SDL geri çağrısı başka iş parçacığından ve modal kapandıktan sonra da gelebilir.
 struct NativeDialogResult {
@@ -111,10 +112,11 @@ void View::install_deciders() {
                             message,
                             {{core::tr("gui.replace_origin"), true}, {core::tr("gui.cancel"), false}},
                             1,
-                            1});
+                            1,
+                            0});
     };
     state_.deciders.info = [this](const std::string& message) {
-        ask_choice(ChoiceBox<bool>{"noteapp", message, {{core::tr("gui.ok"), true}}, 0, 0});
+        ask_choice(ChoiceBox<bool>{"noteapp", message, {{core::tr("gui.ok"), true}}, 0, 0, std::nullopt});
     };
     state_.deciders.while_busy = [](const std::function<void()>& work) {
         // Arka uç imleci yalnız değişince kurar: önceki imleç elle geri konur, yoksa bekleme imleci takılı
@@ -139,7 +141,8 @@ void View::install_deciders() {
     };
 }
 
-void View::run_modal(const std::string& title, const std::function<bool()>& body) {
+void View::run_modal(const std::string& title, const std::function<bool()>& body,
+                     std::optional<float> top_share) {
     const bool was_editing = editor_active_;
     // Diyalog akışını istisnaya karşı sayaçla korur: modal_depth_ takılırsa kısayollar ölü kalırdı.
     struct Depth {
@@ -183,8 +186,14 @@ void View::run_modal(const std::string& title, const std::function<bool()>& body
         render([&] {
             if (!ImGui::IsPopupOpen(id.c_str()))
                 ImGui::OpenPopup(id.c_str());
-            const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-            ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5F, 0.5F));
+            const ImGuiViewport* viewport = ImGui::GetMainViewport();
+            const ImVec2 center = viewport->GetCenter();
+            if (top_share)
+                ImGui::SetNextWindowPos(
+                    ImVec2(center.x, viewport->WorkPos.y + (viewport->WorkSize.y * *top_share)),
+                    ImGuiCond_Appearing, ImVec2(0.5F, 0.0F));
+            else
+                ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5F, 0.5F));
             // Kısa pencerede içerik taşarsa diyalog büyümez, kaydırma çubuğu çıkar.
             const float margin = 2.0F * ImGui::GetStyle().WindowPadding.x;
             const ImVec2 work_size = ImGui::GetMainViewport()->WorkSize;
@@ -192,7 +201,11 @@ void View::run_modal(const std::string& title, const std::function<bool()>& body
             ImGui::SetNextWindowSizeConstraints(
                 ImVec2(0.0F, 0.0F),
                 ImVec2(std::max(0.0F, work_size.x - margin), std::max(0.0F, work_size.y - margin)));
-            if (ImGui::BeginPopupModal(id.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                ImVec2(kModalPadPixels * ui_scale_, kModalPadPixels * ui_scale_));
+            const bool open = ImGui::BeginPopupModal(id.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+            ImGui::PopStyleVar();
+            if (open) {
                 finished = body();
                 keep_window_in_viewport();
                 const ImVec2 modal_pos = ImGui::GetWindowPos();
@@ -225,9 +238,9 @@ std::optional<std::string> View::ask_folder_name(const std::string& title, const
         remember_item_center("dialog_folder_name");
         ImGui::SameLine();
         ImGui::TextUnformatted(label.c_str());
-        submitted |= button("dialog_ok", core::tr("gui.ok"));
-        ImGui::SameLine();
-        if (button("dialog_cancel", core::tr("gui.cancel")) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        const DialogAnswer answer = dialog_ok_cancel();
+        submitted |= answer.ok;
+        if (answer.cancel || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
             return true;  // result boş: vazgeçti
         if (!submitted)
             return false;
@@ -272,9 +285,9 @@ std::optional<std::string> View::ask_path(const std::string& title, const std::s
                 SDL_ShowSaveFileDialog(native_dialog_done, userdata.release(), window, kPdfFilters, 1,
                                        path.c_str());
         }
-        submitted |= button("dialog_ok", core::tr("gui.ok"));
-        ImGui::SameLine();
-        if (button("dialog_cancel", core::tr("gui.cancel")) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        const DialogAnswer answer = dialog_ok_cancel();
+        submitted |= answer.ok;
+        if (answer.cancel || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
             return true;  // result boş: vazgeçti
         if (!submitted)
             return false;
@@ -332,7 +345,8 @@ std::optional<std::string> View::ask_export_path(const std::string& suggested) {
                                    core::tr("gui.confirm_overwrite", {{"path", *chosen}}),
                                    {{core::tr("gui.overwrite"), true}, {core::tr("gui.cancel"), false}},
                                    1,
-                                   1});
+                                   1,
+                                   0});
     return replace ? chosen : std::nullopt;
 }
 
@@ -345,16 +359,27 @@ template <typename Choice> Choice View::ask_choice(const ChoiceBox<Choice>& box)
         ImGui::PopTextWrapPos();
         ImGui::Spacing();
         const float row_start_x = ImGui::GetCursorScreenPos().x;
+        float row_width = -ImGui::GetStyle().ItemSpacing.x;
+        for (const auto& [label, value] : box.buttons)
+            row_width += button_width(label) + ImGui::GetStyle().ItemSpacing.x;
+        align_right(row_width, content_width);
         bool answered = false;
         for (std::size_t i = 0; i < box.buttons.size(); ++i) {
             if (i > 0)
                 flow_after_previous(button_width(box.buttons[i].first), row_start_x, content_width);
             ImGui::PushID(static_cast<int>(i));
-            if (ImGui::Button(box.buttons[i].first.c_str())) {
+            // Rol (G11): yıkıcı dolgu, vazgeç hayalet, varsayılan birincil; tek düğme birincildir.
+            ButtonKind kind = ButtonKind::Secondary;
+            if (box.danger_button == i)
+                kind = ButtonKind::Danger;
+            else if (i == box.escape_button && box.buttons.size() > 1)
+                kind = ButtonKind::Ghost;
+            else if (i == box.default_button)
+                kind = ButtonKind::Primary;
+            if (button("choice:" + std::to_string(i), box.buttons[i].first, kind)) {
                 chosen = i;
                 answered = true;
             }
-            remember_item_center("choice:" + std::to_string(i));
             // Enter görünür gezinme imlecindeki düğmeyi etkinleştirir: imleç ilk karede varsayılan düğmeye
             // konur.
             if (i == box.default_button && ImGui::IsWindowAppearing()) {
@@ -412,9 +437,9 @@ std::optional<SaveDetails> View::ask_save_details(const SaveDialogRequest& reque
         draw_error(form.error);
         first_frame = false;
 
-        submitted |= button("dialog_ok", core::tr("gui.ok"));
-        ImGui::SameLine();
-        if (button("dialog_cancel", core::tr("gui.cancel")) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        const DialogAnswer answer = dialog_ok_cancel();
+        submitted |= answer.ok;
+        if (answer.cancel || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
             return true;  // result boş kalır: vazgeçti
         // Tek satırlı alanda Enter EnterReturnsTrue ile gelir; alan etkin değilken de Enter kabul sayılır.
         submitted |= !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Enter, false);

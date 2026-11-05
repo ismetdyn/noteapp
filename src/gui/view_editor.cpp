@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <imgui.h>
 #include <imgui_internal.h>  // IMGUI_TABLE_MAX_COLUMNS
 #include <string_view>
@@ -20,17 +21,43 @@ namespace {
 constexpr std::size_t kPanelMaxRows = 8;
 constexpr float kPanelMaxShare = 0.4F;
 constexpr float kInfoPairGapEms = 1.5F;  // bilgi panelinde yan yana iki alan çifti arası
+constexpr float kPreviewMeasureEms = 46.0F;
+
+// Sessiz bölüm başlığı (G6): çerçevesiz, seçili satırın zeminini almaz; üstünde 1 px ayraç. Yüksekliği
+// CollapsingHeader'ınki (FramePadding): panel payları (panel_height) değişmez.
+bool quiet_header(const std::string& label) {
+    constexpr ImGuiTreeNodeFlags kFlags = ImGuiTreeNodeFlags_SpanAvailWidth |
+                                          ImGuiTreeNodeFlags_NoTreePushOnOpen |
+                                          ImGuiTreeNodeFlags_FramePadding;
+    const bool open = ImGui::TreeNodeEx(label.c_str(), kFlags);
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    const float y = std::floor(min.y - (ImGui::GetStyle().ItemSpacing.y / 2.0F));
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(min.x, y), ImVec2(max.x, y),
+                                        ImGui::GetColorU32(ImGuiCol_Separator));
+    return open;
+}
 
 }  // namespace
 
-void View::draw_right_pane() {
+void View::draw_right_pane(float canvas_left) {
+    // İçerik tuval tonundadır (sekme şeridi kromda kalır, etkin sekme tuvalle birleşir); zemin kutudan önce
+    // çizilir, öğeler ve çocuk pencereler üstüne gelir.
+    const auto fill_canvas = [canvas_left] {
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const ImVec2 room = ImGui::GetContentRegionAvail();
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            ImVec2(canvas_left, at.y), ImVec2(at.x + room.x, at.y + room.y), theme::current().canvas);
+    };
     ImGui::BeginGroup();
     if (state_.trash_view()) {  // çöp notu salt okunur önizlenir; sekmeler canlı notlarındır
+        fill_canvas();
         draw_trash_preview();
         ImGui::EndGroup();
         return;
     }
     draw_note_tabs();
+    fill_canvas();
     if (state_.selected_folder()) {  // klasör satırı: düzenlenecek not yok, özet
         draw_folder_summary();
         ImGui::EndGroup();
@@ -117,7 +144,7 @@ View::InfoColumns View::info_columns() const {
 void View::draw_info_panel(const InfoColumns& columns, float list_height) {
     const std::string label = core::tr("gui.info_title") + "###info";
     ImGui::SetNextItemOpen(state_.info_open());
-    const bool open = ImGui::CollapsingHeader(label.c_str());
+    const bool open = quiet_header(label);
     ImGui::SetItemTooltip("%s", core::tr("gui.info_hint").c_str());
     remember_item_center("info_header");
     if (open != state_.info_open())
@@ -154,7 +181,7 @@ void View::draw_links_panel() {
         static_cast<std::size_t>(std::ranges::count_if(state_.link_lines(), &core::LinkLine::is_header));
     const std::string label = core::tr("gui.links_title", {{"count", std::to_string(items)}}) + "###links";
     ImGui::SetNextItemOpen(state_.links_open());
-    const bool open = ImGui::CollapsingHeader(label.c_str());
+    const bool open = quiet_header(label);
     ImGui::SetItemTooltip("%s", core::tr("gui.links_hint").c_str());
     remember_item_center("links_header");
     if (open != state_.links_open())
@@ -293,6 +320,7 @@ void View::draw_preview(float reserved_height) {
 }
 
 void View::draw_markdown_preview() {
+    ImGui::PushFont(nullptr, kPreviewFontPixels);  // okuma metni bir kademe büyük; ölçek PushFont'ta
     PreviewCache& cache = *preview_;
     if (cache.source != state_.buffer()) {
         cache.source = state_.buffer();
@@ -303,13 +331,22 @@ void View::draw_markdown_preview() {
         cache.missing = state_.links().missing;
         cache.width = -1.0F;
     }
-    const float width = ImGui::GetContentRegionAvail().x;
+    // Okuma ölçüsü (G10): satır en çok 46 em (UI boyu; 15 px'te ≈ 690 px, 65–75 karakter), geniş pencerede
+    // ortalı; dar pencerede tam genişlik. Kod ve tablo bunu aşarsa yatay kaydırılır.
+    const float available = ImGui::GetContentRegionAvail().x;
+    const float width =
+        std::min(available, kPreviewMeasureEms * kFontPixels * ImGui::GetStyle().FontScaleDpi);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::floor((available - width) / 2.0F));
     const float font_size = ImGui::GetFontSize();
-    if (width != cache.width || font_size != cache.font_size) {
-        cache.layout = layout_preview(cache.blocks, platform_->preview_fonts, font_size, width,
-                                      [this](std::string_view target) { return state_.resolves_link(target); });
+    const PreviewFonts faces = fonts();
+    if (width != cache.width || font_size != cache.font_size || faces.regular != cache.fonts.regular ||
+        faces.mono != cache.fonts.mono) {
+        cache.layout = layout_preview(cache.blocks, faces, font_size, width, [this](std::string_view target) {
+            return state_.resolves_link(target);
+        });
         cache.width = width;
         cache.font_size = font_size;
+        cache.fonts = faces;
     }
     const PreviewLayout& layout = cache.layout;
     const ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -345,6 +382,7 @@ void View::draw_markdown_preview() {
     }
     ImGui::SetCursorScreenPos(origin);
     ImGui::Dummy(layout.size);
+    ImGui::PopFont();
 }
 
 void View::draw_data_preview() {
@@ -377,7 +415,7 @@ void View::draw_data_preview() {
     ImGui::TextDisabled(
         "%s", core::tr(kind == app::PreviewKind::Csv ? "gui.preview_not_table" : "gui.preview_invalid_json")
                   .c_str());
-    ImGui::PushFont(platform_->mono_font, 0.0F);
+    ImGui::PushFont(fonts().mono, 0.0F);
     ImGui::TextUnformatted(cache.data_source.data(), cache.data_source.data() + cache.data_source.size());
     ImGui::PopFont();
 }
@@ -424,7 +462,7 @@ void View::draw_csv_table(const app::CsvTable& table) {
 void View::draw_json_lines(const std::vector<app::JsonLine>& lines) {
     const std::size_t shown =
         std::min({lines.size(), state_.view_limits().view_lines.cap(), static_cast<std::size_t>(INT_MAX)});
-    ImGui::PushFont(platform_->mono_font, 0.0F);
+    ImGui::PushFont(fonts().mono, 0.0F);
     const float indent_width = ImGui::CalcTextSize("  ").x;
     const float max_indent = ImGui::GetContentRegionAvail().x / 2.0F;
     const std::size_t line_bytes = state_.view_limits().highlight_line_bytes.cap();

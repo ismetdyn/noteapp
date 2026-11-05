@@ -118,6 +118,8 @@ add_static_component_licenses() {
     add_wayland_protocol_notices "$deps"
     add_license dejavu /src/resources/fonts/LICENSE-DejaVu.txt
     add_license noteapp-icons /src/resources/fonts/LICENSE-NoteappIcons.txt
+    add_license inter /src/resources/fonts/LICENSE-Inter.txt
+    add_license jetbrains-mono /src/resources/fonts/LICENSE-JetBrainsMono.txt
     add_license sdl3 "$deps/sdl3-src/LICENSE.txt"
     add_license sdl3-yuv2rgb "$deps/sdl3-src/src/video/yuv2rgb/LICENSE"
     add_license imgui "$deps/imgui-src/LICENSE.txt"

@@ -2,9 +2,12 @@
 // gerçek kareler, gerçek tuş ve fare olaylarıyla çalışır; veri bütünlüğü diske yazılan baytlardan okunur.
 #include "core/i18n.hpp"
 #include "gui/gui_state.hpp"
+#include "gui/theme.hpp"
 #include "gui/view.hpp"
 #include "window_fixture.hpp"
 
+#include <cmath>
+#include <cstdint>
 #include <doctest/doctest.h>
 #include <imgui.h>
 #include <string>
@@ -273,4 +276,35 @@ TEST_CASE_FIXTURE(WindowFixture, "editor: a focused editor asks the platform for
     CHECK(ImGui::GetIO().WantTextInput);
     type_text(*view, "ğüşİı");
     CHECK(state->buffer() == "ğüşİıa");
+}
+
+// G9: geçerli satır doygun mavi bant değil, metin renginin %4'ü; oluk ile metin arasında 12 px; metin tuvalin
+// kenarına yapışmaz (üstte 8, solda 4 px).
+TEST_CASE_FIXTURE(WindowFixture,
+                  "editor: the current line is a faint tint and the gutter keeps 12 px to the text") {
+    add_note("a.txt", "first\nsecond\n");
+    auto state = make_state();
+    auto view = make_view(*state);
+    noteapp::gui::theme::apply_colors(ImGui::GetStyle(), noteapp::gui::theme::kDark);
+    ImGui::GetIO().AddMousePosEvent(-1.0F, -1.0F);
+    settle(*view);
+    const auto& rects = view->item_rects();
+    const View::ItemRect editor = rects.at("editor");
+    const View::ItemRect cursor = rects.at("editor_cursor");
+    const View::ItemRect line = rects.at("editor_line:1");
+    const float cell = cursor.max_x - cursor.min_x;
+    CHECK(line.max_x - line.min_x - cell == doctest::Approx(12.0F));  // tek rakam ve 12 px boşluk
+    CHECK(cursor.min_y - editor.min_y == doctest::Approx(8.0F));
+    CHECK(line.min_x - editor.min_x >= 4.0F);
+    // Satır sonundan sonra yalnız zemin: tuval (#1C1F24) üstünde metin (#DDE1E7) %4 ≈ #23262B.
+    const std::uint32_t tint =
+        gui_test::pixel_at((cursor.max_x + editor.max_x) / 2.0F, (cursor.min_y + cursor.max_y) / 2.0F);
+    constexpr std::uint32_t kTint = 0x23262B;  // 8 bitlik karışım (yazılımsal çizici) aşağı yuvarlar
+    constexpr int kChannelTolerance = 1;
+    for (const int shift : {16, 8, 0}) {
+        CAPTURE(shift);
+        const int got = static_cast<int>((tint >> shift) & 0xFFU);
+        const int want = static_cast<int>((kTint >> shift) & 0xFFU);
+        CHECK(std::abs(got - want) <= kChannelTolerance);
+    }
 }

@@ -383,16 +383,16 @@ TEST_CASE("the top line counts notes in the folder view, matches over the total 
     tui::TuiState s = tree_state();
     REQUIRE(s.rows().size() == 3);
     std::string top = row_of(draw(s), 0);
-    CHECK(has(top, "[name] 5 notes"));
+    CHECK(has(top, "[name] · 5 notes"));
     CHECK_FALSE(has(top, "3/5"));
     open_folder(s, "work/");
-    CHECK(has(row_of(draw(s), 0), "[name] 5 notes"));  // açık ağaç sayıyı değiştirmez
+    CHECK(has(row_of(draw(s), 0), "[name] · 5 notes"));  // açık ağaç sayıyı değiştirmez
     s.handle(Key::Char, "/");
     s.handle(Key::Char, "o");
     s.handle(Key::Char, "l");
     s.handle(Key::Char, "d");
     top = row_of(draw(s), 0);
-    CHECK(has(top, "[name] 1/5"));
+    CHECK(has(top, "[name] · 1/5"));
 }
 
 TEST_CASE("row look: no selection marker, the highlight is the row, notes have no arrow") {

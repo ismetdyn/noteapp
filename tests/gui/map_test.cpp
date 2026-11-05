@@ -9,8 +9,10 @@
 #include <algorithm>
 #include <cmath>
 #include <doctest/doctest.h>
+#include <limits>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 using gui_test::click_button;
@@ -448,4 +450,112 @@ TEST_CASE("map: right-clicking a tag edge removes the tag from the note's text")
     CHECK(scene.fixture.read_note("e.md") == "proje ayrı\n");
     CHECK(scene.state->status() == "Tag #proje removed from e.md");
     CHECK_FALSE(has_map_edge(*scene.state, "e.md", "proje", noteapp::gui::MapEdgeKind::Tag));
+}
+
+// G13: düğüm bağlantı sayısıyla büyür (en çok iki kat); denetimler açma/kapama çipi ve adımlı derinlik.
+TEST_CASE("map: a node with more links is drawn larger and the controls are a chip and a depth stepper") {
+    MapScene scene;
+    scene.open();
+    const auto width = [&](const std::string& name) {
+        const View::ItemRect r = scene.rect(name);
+        return r.max_x - r.min_x;
+    };
+    // a.md: b'ye bağlantı, c'den bağlantı, #proje etiketi; d.md'nin bağlantısı yok.
+    CHECK(width("map:a.md") > width("map:d.md") * 1.2F);
+    CHECK(width("map:a.md") <= width("map:d.md") * 2.0F + 1.0F);
+
+    MapOptions options = scene.state->map_options();
+    options.whole_graph = false;
+    options.depth = 1;
+    scene.state->set_map_options(options);
+    scene.settle_layout();
+    REQUIRE(scene.view->item_rects().contains("map_depth_more"));
+    click_button(*scene.view, "map_depth_more");
+    CHECK(scene.state->map_options().depth == 2);
+    click_button(*scene.view, "map_depth_less");
+    CHECK(scene.state->map_options().depth == 1);
+    CHECK(scene.view->item_rects().at("map_depth_less").disabled);  // en küçük derinlikte
+    click_button(*scene.view, "map_whole");
+    CHECK(scene.state->map_options().whole_graph);
+}
+
+// G13: büyüyen düğüm çizildiği boyda tıklanır; kenarına yakın tık da o notu açar.
+TEST_CASE("map: a click near the rim of a node grown by its links opens that note") {
+    MapScene scene;
+    scene.open();
+    scene.state->open_note(np("d.md"));
+    scene.settle_layout();
+    const View::ItemRect node = scene.rect("map:a.md");
+    const float radius = (node.max_x - node.min_x) / 2.0F;
+    const float x =
+        ((node.min_x + node.max_x) / 2.0F) + (0.9F * radius);  // tabanın ötesi, çizilen dairenin içi
+    const float y = (node.min_y + node.max_y) / 2.0F;
+    ImGui::GetIO().AddMousePosEvent(x, y);
+    scene.view->draw_frame();
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    scene.view->draw_frame();
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    settle(*scene.view);
+    REQUIRE(scene.state->current_path());
+    CHECK(scene.state->current_path()->string() == "a.md");
+}
+
+// İnceleme 1: etiket küçük karedir (0,7 pay); erişimi de aynı payla küçülür. Uzakta (en küçük ekran boyunda)
+// kare yarıçapının ötesine düşen fare, notun erişim payı kadar uzakta olsa da etiketi yakalamaz.
+TEST_CASE("map: a tag is hovered within its drawn square, not within a note's reach") {
+    MapScene scene;
+    scene.open();
+    scene.state->open_note(np("d.md"));  // gösterilen notun başlığında #proje yazmasın: metin ipucundan gelir
+    scene.state->set_map_options(MapOptions{.whole_graph = true, .show_tags = true});
+    scene.settle_layout();
+    REQUIRE(scene.view->item_rects().contains("map:#proje"));
+    const float font = ImGui::GetFontSize();
+    const float smallest = 0.25F * font * 0.7F;  // etiketin en küçük çizilen yarıçapı
+    const auto half = [&] {
+        const View::ItemRect r = scene.rect("map:#proje");
+        return (r.max_x - r.min_x) / 2.0F;
+    };
+    // Kare en küçük boyuna inene dek uzaklaşılır (tekerlek tuvalin ortasında).
+    const View::ItemRect canvas = scene.rect("map_canvas");
+    ImGui::GetIO().AddMousePosEvent((canvas.min_x + canvas.max_x) / 2.0F,
+                                    (canvas.min_y + canvas.max_y) / 2.0F);
+    scene.view->draw_frame();
+    for (int notch = 0; notch < 40 && half() > smallest + 0.5F; ++notch) {
+        ImGui::GetIO().AddMouseWheelEvent(0.0F, -1.0F);
+        scene.view->draw_frame();
+        scene.view->draw_frame();
+    }
+    REQUIRE(half() <= smallest + 0.5F);
+    const View::ItemRect tag = scene.rect("map:#proje");
+    const float cx = (tag.min_x + tag.max_x) / 2.0F;
+    const float cy = (tag.min_y + tag.max_y) / 2.0F;
+    // Komşu düğümlerden uzak yön: dört köşegenden en uzağı.
+    float best_dx = 1.0F;
+    float best_dy = 0.0F;
+    float best_room = -1.0F;
+    for (const auto& [dx, dy] :
+         {std::pair{1.0F, 0.0F}, std::pair{-1.0F, 0.0F}, std::pair{0.0F, 1.0F}, std::pair{0.0F, -1.0F}}) {
+        float room = std::numeric_limits<float>::max();
+        for (const auto& [name, rect] : scene.view->item_rects()) {
+            if (!name.starts_with("map:") || name == "map:#proje")
+                continue;
+            const float ox = ((rect.min_x + rect.max_x) / 2.0F) - (cx + (dx * font));
+            const float oy = ((rect.min_y + rect.max_y) / 2.0F) - (cy + (dy * font));
+            room = std::min(room, std::hypot(ox, oy));
+        }
+        if (room > best_room) {
+            best_room = room;
+            best_dx = dx;
+            best_dy = dy;
+        }
+    }
+    const auto hovered_at = [&](float distance) {
+        const gui_test::RenderedText rendered;
+        ImGui::GetIO().AddMousePosEvent(cx + (best_dx * distance), cy + (best_dy * distance));
+        scene.view->draw_frame();
+        scene.view->draw_frame();
+        return rendered.contains("#proje");
+    };
+    CHECK(hovered_at(0.0F));                // karenin ortası
+    CHECK_FALSE(hovered_at(0.45F * font));  // notun erişimi (0,5 em) içinde, etiketinkinin dışında
 }

@@ -1,4 +1,4 @@
-NoteappIcons.ttf: 30 glyph subset of Symbols Nerd Font, used only by notes-gui
+NoteappIcons.ttf: 50 glyph subset of Symbols Nerd Font, used only by notes-gui
 
 Source
   https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.1/NerdFontsSymbolsOnly.tar.xz
@@ -23,6 +23,26 @@ at d72e30826e6797c1b3a2976e71d0d2f790c1a2eb. Authors from @mdi/svg 7.0.96 meta.j
   U+F024B  folder  (Google)
   U+F0770  folder-open  (Austin Andrews)
   U+F0A79  trash-can  (GreenTurtwig)
+  U+F0752  file-plus  (Simran)
+  U+F0257  folder-plus  (Austin Andrews)
+  U+F02FA  import  (Austin Andrews)
+  U+F0455  rename-box  (Google)
+  U+F0252  folder-move  (Google)
+  U+F01B4  delete  (Google)
+  U+F0226  file-pdf-box  (Simran)
+  U+F08BB  cog-outline  (Google)
+  U+F0349  magnify  (Google)
+  U+F04E2  swap-vertical  (Google)
+  U+F0645  file-tree  (Kai Faust)
+  U+F021A  text-box  (Google)
+  U+F1049  graph  (Simran)
+  U+F0142  chevron-right  (Google)
+  U+F0140  chevron-down  (Google)
+  U+F04E6  sync  (Google)
+  U+F012C  check  (Google)
+  U+F0026  alert  (Google)
+  U+F018F  content-copy  (Google)
+  U+F082E  notebook  (Gabriel Grant)
 
 Seti UI (Jesse Weed), MIT License. Upstream https://github.com/jesseweed/seti-ui at
 2d6c5e68b4ded73c92dac291845ee44e1182d511. Path to Nerd Fonts source: src/svgs/ at tag v3.5.1. "*" marks a file that

@@ -1,3 +1,4 @@
+#include "core/file_icon_table.hpp"
 #include "core/i18n.hpp"
 #include "core/text.hpp"
 #include "gui/commands.hpp"
@@ -7,10 +8,13 @@
 #include <array>
 #include <cfloat>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <imgui.h>
 #include <imgui_internal.h>  // IsKeyChordPressed: yineleme bayrağı
 #include <imgui_stdlib.h>
+#include <optional>
+#include <string_view>
 #include <utility>
 
 namespace noteapp::gui {
@@ -30,6 +34,10 @@ constexpr std::size_t kDayKeyLength = 10;  // "2026-11-02": kısa tarih biçimi 
 constexpr const char* kNoValue = "—";
 constexpr const char* kExpandedMark = "▾";
 constexpr const char* kCollapsedMark = "▸";
+constexpr float kSelectionBarPixels = 2.0F;  // ölçek 1 pikseli
+constexpr float kEmptyIconPixels = 32.0F;    // boş liste bloğunun simgesi, ölçek 1 pikseli
+constexpr float kBannerAlpha = 0.12F;        // geçiş şeridinin zemini: uyarı renginin bu kadarı
+constexpr std::string_view kMigrateCommand = "note graph migrate";
 
 // Satırın kalıcı adı (test kancası ve ImGui kimliği): sıra değil yol, liste değişince tıklama başka satıra
 // kaymasın.
@@ -196,6 +204,8 @@ void View::draw_trash_rows(bool focus_row) {
             if (plain_selectable(path, row == current, {}, state_.icon_style(), nullptr,
                                  state_.is_marked(path, false)))
                 queue([this, row] { state_.select_trash_row(row); });
+            if (row == current)
+                draw_selection_bar();
             if (row == current && current != scrolled_row_) {
                 ImGui::SetScrollHereY();
                 scrolled_row_ = current;
@@ -203,6 +213,80 @@ void View::draw_trash_rows(bool focus_row) {
             ImGui::PopID();
         }
     }
+}
+
+// Hiç not yok (G14): liste alanında ortalanmış blok; simge, başlık, ipucu ve iki eylem (yeni not birincil,
+// içe al hayalet). Arama sonucu boşsa bu değil, kısa ipucu görünür.
+void View::draw_empty_notes() {
+    const theme::Theme& colors = theme::current();
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float icon_size = kEmptyIconPixels * style.FontScaleDpi;
+    const std::string glyph = core::icon_text(core::icon_table::kEmptyNotes, state_.icon_style());
+    const std::string title = core::tr("gui.empty_title");
+    const std::string new_label =
+        core::tr("gui.toolbar_new_note") + "  " + ImGui::GetKeyChordName(gui_command("new").chord);
+    const std::string import_label = core::tr("gui.toolbar_import");
+    const float buttons = button_width(new_label) + style.ItemSpacing.x + button_width(import_label);
+    const float center = ImGui::GetCursorPosX() + (width / 2.0F);
+    ImGui::Dummy(ImVec2(0.0F, ImGui::GetFontSize()));  // üstte nefes payı
+    if (!glyph.empty()) {
+        const ImVec2 at(ImGui::GetCursorScreenPos().x + ((width - icon_size) / 2.0F),
+                        ImGui::GetCursorScreenPos().y);
+        ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(), icon_size, at, colors.faint, glyph.c_str());
+        ImGui::Dummy(ImVec2(width, icon_size));
+    }
+    ImGui::SetCursorPosX(std::max(center - (text_width(title) / 2.0F), ImGui::GetCursorPosX()));
+    ImGui::TextUnformatted(title.c_str());
+    remember_item_center("empty_title");
+    draw_hint(core::tr("gui.empty_body"));
+    ImGui::SetCursorPosX(std::max(center - (buttons / 2.0F), ImGui::GetCursorPosX()));
+    const float row_start_x = ImGui::GetCursorScreenPos().x;
+    if (button("empty_new_note", new_label, ButtonKind::Primary))
+        queue_command(gui_command("new"));
+    flow_after_previous(button_width(import_label), row_start_x, width);
+    if (button("empty_import", import_label, ButtonKind::Ghost))
+        queue([this] { state_.request_import(GuiState::ImportRequest::Files); });
+}
+
+// Eski düzende not var (G14): durum çubuğunda kırpılmasın diye liste üstünde uyarı şeridi. Komut seçilebilir
+// metin ve Kopyala ile panoya; tam ileti (yol) ipucunda. Not hiç kaydedilmez, davranış değişmez.
+void View::draw_migration_banner() {
+    const std::optional<core::Error>& issue = state_.store_issue();
+    if (!issue || issue->code != core::Error::Code::MigrationRequired)
+        return;
+    const theme::Theme& colors = theme::current();
+    const ImGuiStyle& style = ImGui::GetStyle();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->ChannelsSplit(2);  // zemin içerikten sonra ölçülür, altına çizilir
+    draw->ChannelsSetCurrent(1);
+    ImGui::BeginGroup();
+    const float width = ImGui::GetContentRegionAvail().x;
+    std::string message = core::format_error(*issue);
+    if (const std::string warning = core::icon_text(core::icon_table::kWarning, state_.icon_style());
+        !warning.empty())
+        message = warning + " " + message;
+    ImGui::PushStyleColor(ImGuiCol_Text, colors.warning);
+    draw_fitted_text("migrate_message", message, width, keep_start);
+    ImGui::PopStyleColor();
+    const std::string copy_label = core::tr("gui.migrate_copy");
+    std::string command(kMigrateCommand);  // salt okunur: seçilip kopyalanabilsin diye metin alanı
+    ImGui::SetNextItemWidth(std::max(width - button_width(copy_label) - style.ItemSpacing.x,
+                                     ImGui::GetFontSize() * kMinFieldEms));
+    ImGui::InputText("##migrate_command", &command, ImGuiInputTextFlags_ReadOnly);
+    remember_item_center("migrate_command");
+    flow_after_previous(button_width(copy_label), ImGui::GetItemRectMin().x, width);
+    if (button("migrate_copy", copy_label))
+        queue([this] { state_.copy_to_clipboard(std::string(kMigrateCommand)); });
+    ImGui::SetItemTooltip("%s", core::tr("gui.migrate_copy_tip").c_str());
+    ImGui::EndGroup();
+    draw->ChannelsSetCurrent(0);
+    const ImVec2 pad(style.FramePadding.x / 2.0F, style.FramePadding.y / 2.0F);
+    draw->AddRectFilled(ImVec2(ImGui::GetItemRectMin().x - pad.x, ImGui::GetItemRectMin().y - pad.y),
+                        ImVec2(ImGui::GetItemRectMax().x + pad.x, ImGui::GetItemRectMax().y + pad.y),
+                        theme::with_alpha(colors.warning, kBannerAlpha), style.FrameRounding);
+    draw->ChannelsMerge();
+    remember_item_center("migrate_banner");
 }
 
 void View::draw_note_list() {
@@ -233,7 +317,9 @@ void View::draw_note_list() {
     const bool empty = trash      ? state_.trash_items().empty()
                        : browsing ? state_.browser_rows().size() <= root_rows
                                   : state_.model().row_count() == 0;
-    if (empty) {
+    if (empty && !trash && state_.model().total() == 0) {
+        draw_empty_notes();
+    } else if (empty) {
         ImGui::PushTextWrapPos(0.0F);
         ImGui::TextUnformatted(core::tr(trash ? "gui.trash_empty_hint" : "gui.empty_list_hint").c_str());
         ImGui::PopTextWrapPos();
@@ -356,15 +442,32 @@ void View::draw_tree_row(const BrowserRow& row, const std::string& name, bool se
     const bool clicked = ImGui::Selectable("##row", selected);
     if (state_.is_marked(row.path, folder))
         draw_mark_background();
+    if (selected)
+        draw_selection_bar();
     const bool new_tab = !folder && new_tab_click(clicked);
     remember_item_center(name);
     const bool hovered = ImGui::IsItemHovered();
     const bool on_arrow = toggles && hovered && ImGui::GetMousePos().x < arrow_end;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    // Girinti kılavuzu: her ata düzeyi için, atanın okunun ortasından 1 px çizgi (kök düzeyinin oku yok).
+    const ImVec2 row_min = ImGui::GetItemRectMin();
+    const ImVec2 row_max = ImGui::GetItemRectMax();
+    for (int level = 1; level < row.depth; ++level) {
+        const float level_indent =
+            std::min(static_cast<float>(level) * font * kTreeIndentEms, (row_end - position.x) / 2.0F);
+        const float x = std::floor(position.x + level_indent + number_width + (font * kTreeArrowEms / 2.0F));
+        draw->AddLine(ImVec2(x, row_min.y), ImVec2(x, row_max.y), ImGui::GetColorU32(ImGuiCol_TreeLines));
+    }
     if (number_width > 0.0F && row.number > 0)
         draw_row_number("row_number:" + name, row.number, ImVec2(position.x + indent, position.y), number_width);
-    if (toggles)
-        ImGui::GetWindowDrawList()->AddText(ImVec2(arrow_start, position.y), ImGui::GetColorU32(ImGuiCol_Text),
-                                            row.expanded ? kExpandedMark : kCollapsedMark);
+    if (toggles) {
+        // Ok soluk; üzerine gelince metin renginde. Simgeler açıkken chevron, kapalıyken metin üçgeni.
+        const std::string chevron = core::icon_text(
+            row.expanded ? core::icon_table::kExpanded : core::icon_table::kCollapsed, state_.icon_style());
+        const ImU32 color = on_arrow ? ImGui::GetColorU32(ImGuiCol_Text) : theme::current().faint;
+        draw->AddText(ImVec2(arrow_start, position.y), color,
+                      chevron.empty() ? (row.expanded ? kExpandedMark : kCollapsedMark) : chevron.c_str());
+    }
     position.x = arrow_end;
     position.x += draw_icon(position, row_icon(row), state_.icon_style(), selected);
     if (draw_fitted_row_text(position, row_label(row), row_end - position.x, {}))
@@ -380,6 +483,17 @@ void View::draw_tree_row(const BrowserRow& row, const std::string& name, bool se
     if (toggles && hovered && !on_arrow && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
         queue([this, path = row.path] { state_.toggle_expanded(path); });
     draw_row_menu(row);
+}
+
+// Seçili satırın solunda vurgu çubuğu, yalnız liste odaktayken: odak sağdayken seçim zemini kalır, çubuk
+// kalkar (TUI'deki odaklı/odaksız ayrımı). Son öğe seçili satırdır.
+void View::draw_selection_bar() {
+    if (!ImGui::IsWindowFocused())
+        return;
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max(min.x + (kSelectionBarPixels * ui_scale_), ImGui::GetItemRectMax().y);
+    ImGui::GetWindowDrawList()->AddRectFilled(min, max, theme::current().accent);
+    remember_rect("selection_bar", min, max);
 }
 
 // En büyük numaranın rakamları ve ada kadar boşluk; rakamlar orantılı fontta da aynı genişliktedir.
@@ -516,6 +630,8 @@ void View::draw_details_row(const BrowserRow& row, const std::string& name, bool
     const bool clicked = ImGui::Selectable("##row", selected, ImGuiSelectableFlags_SpanAllColumns);
     if (state_.is_marked(row.path, folder))
         draw_mark_background();
+    if (selected)
+        draw_selection_bar();
     const bool new_tab = !folder && new_tab_click(clicked);
     remember_item_center(name);
     const bool double_clicked = ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
@@ -532,11 +648,17 @@ void View::draw_details_row(const BrowserRow& row, const std::string& name, bool
         queue([this, path = row.path] { state_.enter_folder(path); });
     draw_row_menu(row);
     const int name_column = ImGui::TableGetColumnIndex();
+    // Boyut ve tarih ikincil boyda, adın satırında dikey ortalı.
+    const float name_height = ImGui::GetTextLineHeight();
+    ImGui::PushFont(nullptr, kSmallFontPixels);
+    const float offset = (name_height - ImGui::GetTextLineHeight()) / 2.0F;
     for (int column = 1; const DetailsField field : details_fields(state_.details_column())) {
         ImGui::TableSetColumnIndex(name_column + column);
-        ImGui::TextUnformatted(details_cell(row, field, now).c_str());
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offset);
+        ImGui::TextDisabled("%s", details_cell(row, field, now).c_str());  // ikincil metin soluk (G8)
         remember_item_center("details_cell:" + std::to_string(column++) + ":" + row.path);
     }
+    ImGui::PopFont();
 }
 
 // Tüm satırların en geniş hücresi; yalnız satırlar, yazı boyu ya da gün değişince yeniden ölçülür (kare
@@ -547,16 +669,20 @@ View::details_column_widths(const std::vector<BrowserRow>& rows, std::chrono::sy
     day.resize(std::min(day.size(), kDayKeyLength));
     const std::size_t rebuilds = state_.browser_rebuilds();
     const float font = ImGui::GetFontSize();
-    if (rebuilds == details_widths_rebuilds_ && font == details_widths_font_ && day == details_widths_day_)
+    if (rebuilds == details_widths_rebuilds_ && font == details_widths_font_ &&
+        ImGui::GetFont() == details_widths_face_ && day == details_widths_day_)
         return details_widths_;
+    ImGui::PushFont(nullptr, kSmallFontPixels);  // hücreler ikincil boyda çizilir (draw_details_row)
     details_widths_.fill(text_width(kNoValue));
     // Tüm alanlar ölçülür: sütun seçimi değişince yeniden ölçüm gerekmesin.
     for (const BrowserRow& row : rows)
         for (std::size_t field = 0; field < kDetailsFields; ++field)
             details_widths_[field] = std::max(details_widths_[field],
                                               text_width(details_cell(row, static_cast<DetailsField>(field), now)));
+    ImGui::PopFont();
     details_widths_rebuilds_ = rebuilds;
     details_widths_font_ = font;
+    details_widths_face_ = ImGui::GetFont();
     details_widths_day_ = std::move(day);
     return details_widths_;
 }
@@ -610,6 +736,8 @@ void View::draw_note_rows(bool focus_row) {
             plain_selectable(model.display(row), row == current, model.highlights(row), state_.icon_style(),
                              shown.show_best_line && !shown.hits.empty() ? &shown.hits.front() : nullptr,
                              state_.is_marked(model.note_at(row).path.string(), false));
+        if (row == current)
+            draw_selection_bar();
         remember_item_center("row:" + model.note_at(row).path.string());
         if (new_tab_click(clicked))
             queue_open(model.note_at(row).path, true);

@@ -4,6 +4,7 @@
 #include "support/test_support.hpp"
 #include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
+#include "tui/sync_indicator.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
 
@@ -14,9 +15,12 @@
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/screen/string.hpp>
+#include <ftxui/screen/terminal.hpp>
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -104,7 +108,7 @@ TEST_CASE("initial render shows list, preview, counts, sync status and key hints
     CHECK(contains(screen, "work-meeting.md"));
     CHECK(contains(screen, "personal-todo.md"));
     CHECK(contains(screen, "snippets-sort.java"));
-    CHECK(contains(screen, "[name] 3 notes"));
+    CHECK(contains(screen, "[name] · 3 notes"));
     CHECK(contains(screen, "sync off"));
     CHECK(contains(screen, "# Toplantı notları"));
     CHECK(contains(screen, "Enter edit"));
@@ -169,7 +173,7 @@ TEST_CASE("Turkish catalog is used when the language is tr") {
     core::init_i18n("tr");
     const auto state = sample_state();
     const auto screen = render_screen(state, text_preview({}));
-    CHECK(contains(screen, "[ad] 3 not"));
+    CHECK(contains(screen, "[ad] · 3 not"));
     CHECK(contains(screen, "Enter düzenle"));
     core::init_i18n("en");
 }
@@ -230,7 +234,7 @@ TEST_CASE("content mode lists hit counts and the preview highlights the first hi
     state.set_preview_line_count(preview.lines.size());
     const auto screen = render_screen(state, preview);
 
-    CHECK(contains(screen, "[content] 2/3"));
+    CHECK(contains(screen, "[content] · 2/3"));
     CHECK(contains(screen, "few.md  (2)"));
     CHECK(contains(screen, "long.md  (1)"));
     CHECK_FALSE(contains(screen, "none.md"));
@@ -322,6 +326,30 @@ std::string row_text(const ftxui::Screen& screen, int y) {
 
 constexpr std::array kHintKeys = {std::pair{Focus::List, "tui.key_hints_list"},
                                   std::pair{Focus::Preview, "tui.key_hints_preview"}};
+
+// Yardım ipucu katalogda da durur; çubuk onu sağa sabitler.
+const std::array<std::pair<const char*, std::string>, 2> kHelpHints = {
+    std::pair{"en", std::string("F1 help")}, std::pair{"tr", std::string("F1 yardım")}};
+
+// Çizilmemiş hücre (dolgu) "" taşır; satırı terminalde göründüğü gibi boşluklu verir.
+std::string padded_row(const ftxui::Screen& screen, int y) {
+    std::string out;
+    for (int x = 0; x < screen.dimx(); ++x) {
+        const std::string& glyph = screen.PixelAt(x, y).character;
+        out += glyph.empty() ? std::string(" ") : glyph;
+    }
+    while (out.ends_with(' '))
+        out.pop_back();
+    return out;
+}
+
+std::string without_hint(std::string hints, const std::string& hint) {
+    if (const std::size_t at = hints.find("  " + hint); at != std::string::npos)
+        hints.erase(at, hint.size() + 2);
+    else if (hints.starts_with(hint + "  "))
+        hints.erase(0, hint.size() + 2);
+    return hints;
+}
 
 }  // namespace
 
@@ -527,7 +555,7 @@ TEST_CASE("key hints change with the focus") {
     CHECK(contains(list, "/ filter"));
     CHECK(contains(list, "a add"));
     CHECK(contains(list, "d to trash"));
-    CHECK(contains(list, "? help"));
+    CHECK(contains(list, "F1 help"));
     const auto search = render_screen(state_in(Focus::Search), text_preview({}), 120, 40);
     CHECK(contains(search, "Esc close"));
     CHECK_FALSE(contains(search, "a add"));
@@ -551,41 +579,52 @@ TEST_CASE("fit_hints drops whole hints from the end and never cuts a word") {
     CHECK(tui::fit_hints("↑↓ git  çık", 11) == "↑↓ git  çık");
 }
 
-TEST_CASE("the shortcut bar shows whole hints at 60 columns in both languages") {
-    for (const char* language : {"en", "tr"}) {
+TEST_CASE("the shortcut bar pins F1 help right and fills whole hints left, at every width from 60") {
+    for (const auto& [language, help] : kHelpHints) {
         core::init_i18n(language);
         for (const auto& [focus, key] : kHintKeys) {
-            CAPTURE(language);
-            CAPTURE(key);
-            const auto screen = render_screen(state_in(focus), text_preview({}), 60, 15);
-            const std::string bar = row_text(screen, 14);
-            const std::string full = core::tr(key);
-            CHECK(bar == tui::fit_hints(full, 60));
-            CHECK(ftxui::string_width(bar) <= 60);
-            CHECK(bar.size() >= 20);                    // en önemli ipuçları kalır
-            CHECK(full.starts_with(bar));               // sıralama önem sırasıdır
-            CHECK(full.substr(bar.size(), 2) == "  ");  // kesim tam ipucu sınırında
+            for (const int width : {60, 61, 80, 120, 160}) {
+                CAPTURE(language);
+                CAPTURE(key);
+                CAPTURE(width);
+                const auto screen = render_screen(state_in(focus), text_preview({}), width, 15);
+                const std::string bar = padded_row(screen, 14);
+                CAPTURE(bar);
+                REQUIRE(bar.ends_with(help));
+                CHECK(ftxui::string_width(bar) == width);  // sağ kenara yaslı
+                std::string left = bar.substr(0, bar.size() - help.size());
+                CHECK(left.ends_with("  "));  // gruplar arası en az iki boşluk
+                while (left.ends_with(' '))
+                    left.pop_back();
+                const std::string rest = without_hint(core::tr(key), help);
+                // Sıra önem sırasıdır; sığmayan ipucu ve ardındakiler bütün olarak düşer.
+                CHECK(left == tui::fit_hints(rest, width - ftxui::string_width(help) - 2));
+                CHECK(left.size() >= 20);  // en önemli ipuçları kalır
+            }
         }
     }
     core::init_i18n("en");
 }
 
-TEST_CASE("the list hint bar starts with the keys users could not find, at any width from 60") {
+TEST_CASE("the list hint bar starts with the keys users could not find, F1 help at the right from 60") {
     const std::pair<const char*, std::array<const char*, 7>> expected[] = {
-        {"en", {": cmd", "T trash", "Space open", "o sort", "v col", "f search", "? help"}},
-        {"tr", {": komut", "T çöp", "Space aç", "o sırala", "v sütun", "f ara", "? yardım"}},
+        {"en", {": cmd", "T trash", "Space open", "o sort", "v col", "f search", "F1 help"}},
+        {"tr", {": komut", "T çöp", "Space aç", "o sırala", "v sütun", "f ara", "F1 yardım"}},
     };
     for (const auto& [language, hints] : expected) {
         core::init_i18n(language);
-        for (const int width : {60, 61, 79, 80, 100, 110, 160}) {
+        for (const int width : {60, 61, 79, 80, 100, 110, 120, 160}) {
             CAPTURE(language);
             CAPTURE(width);
             const std::string bar =
                 row_text(render_screen(state_in(Focus::List), text_preview({}), width, 15), 14);
+            CHECK(bar.ends_with(hints.back()));
+            // 60 sütunda Türkçe altıncı ipucu (`f ara`) bir hücreyle sığmaz: sağdaki F1 yer tutar.
+            const std::size_t whole = width == 60 && std::string_view(language) == "tr" ? 5 : 6;
             std::size_t after = 0;
-            for (const char* hint : hints) {
-                CAPTURE(hint);
-                const std::size_t at = bar.find(hint, after);
+            for (std::size_t i = 0; i < whole; ++i) {
+                CAPTURE(hints[i]);
+                const std::size_t at = bar.find(hints[i], after);
                 REQUIRE(at != std::string::npos);
                 after = at + 1;
             }
@@ -594,7 +633,7 @@ TEST_CASE("the list hint bar starts with the keys users could not find, at any w
     core::init_i18n("en");
 }
 
-TEST_CASE("a long filter does not push the priority hints off the list bar at 60 columns") {
+TEST_CASE("a long filter does not push the priority hints or F1 off the list bar at 60 columns") {
     core::init_i18n("tr");
     auto state = state_in(Focus::Search);
     for (const char c : std::string("uzun-bir-suzgec-metni-buraya-yazildi-ve-bitmedi"))
@@ -604,11 +643,108 @@ TEST_CASE("a long filter does not push the priority hints off the list bar at 60
     const std::string bar = row_text(render_screen(state, text_preview({}), 60, 15), 14);
     CHECK(bar.starts_with("> "));
     CHECK(bar.find("itmedi") != std::string::npos);  // yazdığının sonu görünür
-    for (const char* hint : {": komut", "T çöp", "Space aç", "o sırala", "v sütun"}) {
+    // Sağda F1 yer tutar: süzgeç yanında ilk dört ipucu kalır.
+    for (const char* hint : {": komut", "T çöp", "Space aç", "o sırala"}) {
         CAPTURE(hint);
         CHECK(bar.find(hint) != std::string::npos);
     }
+    CHECK(bar.ends_with("F1 yardım"));
     core::init_i18n("en");
+}
+
+// ---- U2 T3: kip hapı, üst satır, ipucu çubuğu ----
+
+TEST_CASE("the status line opens with a mode pill: bold black on the mode color, LIST then REVIEW") {
+    core::init_i18n("en");
+    const std::tuple<Focus, const char*, ftxui::Color> cases[] = {
+        {Focus::List, "tui.frame_list", ftxui::Color(ftxui::Color::Cyan)},
+        {Focus::Preview, "tui.frame_review", ftxui::Color(ftxui::Color::Green)}};
+    for (const auto& [focus, label, color] : cases) {
+        const auto screen = render_screen(state_in(focus), text_preview({}), 120, 40);
+        const std::string pill = " " + core::tr(label) + " ";
+        CAPTURE(pill);
+        CHECK(row_text(screen, 38).starts_with(pill + " "));
+        const int cells = ftxui::string_width(pill);
+        for (int x = 0; x < cells; ++x) {
+            const auto& cell = screen.PixelAt(x, 38);
+            CHECK(cell.background_color == color);
+            CHECK(cell.foreground_color == ftxui::Color(ftxui::Color::Black));
+            CHECK(cell.bold);
+            CHECK_FALSE(cell.inverted);
+        }
+        CHECK(screen.PixelAt(cells, 38).background_color == ftxui::Color());
+    }
+}
+
+TEST_CASE("without color (NO_COLOR) the mode pill is inverted and bold") {
+    core::init_i18n("en");
+    const ftxui::Terminal::Color before = ftxui::Terminal::ColorSupport();
+    ftxui::Terminal::SetColorSupport(ftxui::Terminal::Color::Palette1);
+    const auto screen = render_screen(state_in(Focus::List), text_preview({}), 120, 40);
+    ftxui::Terminal::SetColorSupport(before);
+    const std::string pill = " " + core::tr("tui.frame_list") + " ";
+    CHECK(row_text(screen, 38).starts_with(pill));
+    for (int x = 0; x < ftxui::string_width(pill); ++x) {
+        CHECK(screen.PixelAt(x, 38).inverted);
+        CHECK(screen.PixelAt(x, 38).bold);
+    }
+    CHECK_FALSE(screen.PixelAt(ftxui::string_width(pill), 38).inverted);
+}
+
+TEST_CASE("hint keys are bold in the mode color, their words in the default color, nothing dim") {
+    core::init_i18n("en");
+    const std::tuple<Focus, const char*, ftxui::Color> cases[] = {
+        {Focus::List, ": cmd", ftxui::Color(ftxui::Color::Cyan)},
+        {Focus::Preview, "← list", ftxui::Color(ftxui::Color::Green)}};
+    for (const auto& [focus, hint, color] : cases) {
+        CAPTURE(hint);
+        const auto screen = render_screen(state_in(focus), text_preview({}), 120, 40);
+        const auto at = find_text(screen, hint);
+        REQUIRE(at);
+        CHECK(at->second == 39);
+        const auto& key = screen.PixelAt(at->first, 39);
+        CHECK(key.bold);
+        CHECK_FALSE(key.dim);
+        CHECK(key.foreground_color == color);
+        const auto& word = screen.PixelAt(at->first + 2, 39);
+        CHECK_FALSE(word.bold);
+        CHECK_FALSE(word.dim);
+        CHECK(word.foreground_color == ftxui::Color());
+        const auto help = find_text(screen, "F1 help");
+        REQUIRE(help);
+        CHECK(screen.PixelAt(help->first, 39).bold);
+        CHECK(screen.PixelAt(help->first + 1, 39).foreground_color == color);
+        CHECK_FALSE(screen.PixelAt(help->first + 3, 39).bold);
+    }
+}
+
+TEST_CASE("top line: the right group is dim and split by middle dots, the sync state has its color") {
+    core::init_i18n("en");
+    using State = tui::SyncIndicator::State;
+    const std::tuple<State, std::string, ftxui::Color, bool> cases[] = {
+        {State::Disabled, "sync off", ftxui::Color(), true},
+        {State::Running, "⟳", ftxui::Color(ftxui::Color::Blue), false},
+        {State::Ok, "✓ 23:45", ftxui::Color(ftxui::Color::Green), false},
+        {State::Failed, "⚠ disk full", ftxui::Color(ftxui::Color::Red), false}};
+    for (const auto& [sync_state, sync, color, dim] : cases) {
+        CAPTURE(sync);
+        auto screen =
+            ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth), ftxui::Dimension::Fixed(kHeight));
+        const tui::StatusLine status{.sync = sync, .message = {}, .notice = {}, .sync_state = sync_state};
+        ftxui::Render(screen, tui::render(sample_state(), text_preview({}), status, {kWidth, kHeight}));
+        const std::string top = row_text(screen, 0);
+        CHECK(top.ends_with("↓ · [name] · 3 notes · " + sync));
+        const auto shown = find_text(screen, sync);
+        REQUIRE(shown);
+        CHECK(shown->second == 0);
+        CHECK(screen.PixelAt(shown->first, 0).foreground_color == color);
+        CHECK(screen.PixelAt(shown->first, 0).dim == dim);
+        CHECK(screen.PixelAt(shown->first - 2, 0).character == "·");
+        CHECK(screen.PixelAt(shown->first - 2, 0).dim);
+        const auto mode = find_text(screen, "[name]");
+        REQUIRE(mode);
+        CHECK(screen.PixelAt(mode->first, 0).dim);
+    }
 }
 
 TEST_CASE("the top line shows a non-empty trash as text, at the far left") {

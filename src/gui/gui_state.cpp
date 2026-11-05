@@ -220,6 +220,15 @@ void GuiState::load_gui_state() {
     else if (view_mode == kViewMap)
         layout_.browser_view = BrowserView::Map;
     layout_.row_numbers = table["row_numbers"].value_or(layout_.row_numbers);
+    // Bilinmeyen aile adı (elle düzenlenmiş dosya) varsayılanda kalır.
+    const auto font_choice = [&table](const char* key, std::span<const char* const> names,
+                                      std::string& field) {
+        if (const auto name = table[key].value<std::string>();
+            name && std::ranges::find(names, *name) != names.end())
+            field = *name;
+    };
+    font_choice("ui_font", kUiFonts, layout_.ui_font);
+    font_choice("editor_font", kEditorFonts, layout_.editor_font);
     // Ayrıntılar sütunu ve son komutlar TUI'nin adlarıyla; bilinmeyen değer varsayılanda kalır.
     if (const auto column = table["column"].value<std::string>()) {
         const auto found =
@@ -287,6 +296,8 @@ void GuiState::save_gui_state() const {
     };
     table.insert("view_mode", view_mode(layout_.browser_view));
     table.insert("row_numbers", layout_.row_numbers);
+    table.insert("ui_font", layout_.ui_font);
+    table.insert("editor_font", layout_.editor_font);
     const auto column =
         std::ranges::find(kDetailsColumnNames, layout_.column, [](const auto& entry) { return entry.first; });
     table.insert("column", column->second);
@@ -925,11 +936,11 @@ void GuiState::restore_selection() {
 }
 
 void GuiState::report(const core::Error& error) {
-    status_ = core::tr("gui.save_failed", {{"detail", core::format_error(error)}});
+    error_status_ = status_ = core::tr("gui.save_failed", {{"detail", core::format_error(error)}});
 }
 
 void GuiState::fail(const core::Error& error) {
-    status_ = core::tr("gui.op_failed", {{"detail", core::format_error(error)}});
+    error_status_ = status_ = core::tr("gui.op_failed", {{"detail", core::format_error(error)}});
 }
 
 std::string GuiState::header() const {
@@ -1173,6 +1184,11 @@ void GuiState::focus_search() {
 
 void GuiState::show_settings_tab() {
     tab_ = Tab::Settings;
+}
+
+// Üst sekme satırı yok: aynı kısayol Ayarlar'dan geri de götürür. Kaydedilmemiş alanlar formda kalır.
+void GuiState::toggle_settings_tab() {
+    tab_ = tab_ == Tab::Settings ? Tab::Notes : Tab::Settings;
 }
 
 // Listede görünmeyen (arama/klasör süzgeci) bir notu kaydettikten sonra süzgeç gevşetilir; aksi hâlde yeni

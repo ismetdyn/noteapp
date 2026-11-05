@@ -26,6 +26,11 @@ namespace noteapp::gui {
 
 struct GuiCommand;
 enum class CommandScope;
+struct PreviewFonts;
+
+// Düğme dili (.engineering/design/ui-redesign.md §3.4): ikincil dolgu, hayalet (zeminsiz; GhostDanger üzerine
+// gelince yıkıcı renkte), birincil (accent_fill) ve yıkıcı (danger_fill).
+enum class ButtonKind : std::uint8_t { Secondary, Ghost, GhostDanger, Primary, Danger };
 
 // Harita kamerası: ekran = tuval köşesi + offset + yerleşim konumu * zoom. auto_fit açıkken her kare çizge
 // tuvale sığdırılır; kullanıcı kaydırınca, yakınlaşınca ya da düğüm sürükleyince kapanır, `0` yeniden açar.
@@ -113,6 +118,7 @@ private:
     void render(const std::function<void()>& overlay);
     void apply_theme();
     void apply_window_scale();
+    PreviewFonts fonts() const;  // Ayarlar → Görünüm'de seçilen UI ve editör aileleri
     void run_intents();
     void queue(std::function<void()> intent);
     void queue_command(const GuiCommand& command);  // gui/commands.hpp tablosundaki eylem
@@ -140,9 +146,12 @@ private:
     void draw_folder_menu(const std::string& folder);
     void draw_note_menu(const core::NotePath& path);
     void draw_row_menu(const BrowserRow& row);
+    void draw_selection_bar();  // son öğe seçili satır; liste odakta değilse çizmez
     float row_number_width();
     void draw_row_number(const std::string& name, std::size_t number, ImVec2 position, float width);
     void draw_note_list();
+    void draw_empty_notes();       // hiç not yok: ortalanmış blok ve eylemler
+    void draw_migration_banner();  // eski düzende not: liste üstünde kopyalanabilir komut
     void draw_quick_add();
     void run_scope_commands(CommandScope scope);  // kapsamın tuşlarına basıldıysa komutu kuyruğa alır
     void draw_column_menu();
@@ -170,7 +179,7 @@ private:
     void zoom_map(ImVec2 origin, ImVec2 anchor, float factor);
     void draw_trash_header();
     void draw_trash_rows(bool focus_row);
-    void draw_right_pane();
+    void draw_right_pane(float canvas_left);  // tuval zemini bölme ayracından başlar
     void draw_note_tabs();
     void request_note_tab(std::function<void()> intent);
     void queue_open(const core::NotePath& path, bool new_tab);
@@ -182,7 +191,14 @@ private:
     void editor_keys();  // odaktaki editörün tuşları ve yazılan karakterler (SDL metin olayları)
     void draw_completion_popup(ImVec2 cursor, float row_height);
     void draw_find_bar();
-    void draw_editor_status();
+    // Durum çubuğu iletisi: metin, renk (ImU32) ve önem; çubukta yalnız en önemlisi yazılır, ötekiler çipte.
+    enum class StatusRank : std::uint8_t { Info, Warning, Error };
+    struct StatusMessage {
+        std::string text;
+        std::uint32_t color = 0;
+        StatusRank rank = StatusRank::Info;
+    };
+    StatusMessage editor_notice() const;  // editörün iletisi; yoksa metni boş
     void draw_preview(float reserved_height);
     void draw_markdown_preview();
     void draw_data_preview();  // csv ve json: TUI REVIEW'un ayrıştırması (app::parse_csv, app::pretty_json)
@@ -209,22 +225,32 @@ private:
     void draw_setting_input(const std::string& key);
     void draw_choice_combo(const std::string& key, std::span<const char* const> choices, std::string& value);
     void draw_row_numbers_setting();
+    void draw_font_setting(const char* key, std::span<const char* const> choices, const std::string& current,
+                           void (GuiState::*apply)(const std::string&));
     void draw_token_row();
     void draw_connection_test_row();
-    bool button(const std::string& name, const std::string& label);
+    bool button(const std::string& name, const std::string& label, ButtonKind kind = ButtonKind::Secondary);
+    struct DialogAnswer {
+        bool ok = false;
+        bool cancel = false;
+    };
+    DialogAnswer dialog_ok_cancel();  // Tamam ve Vazgeç düğmeleri ("dialog_ok", "dialog_cancel")
     void remember_item_center(const std::string& name);
     // Adlı alanı test kancasına yazar (item_rects_). Tek yazma noktası: MinGW GCC -O3, std::function içine
     // satır içi açılan lambdada map::operator[]'ı yanlış düğüm boyuyla görüp -Wstringop-overflow verir.
     void remember_rect(const std::string& name, ImVec2 min, ImVec2 max, bool disabled = false);
     void handle_shortcuts();
 
-    void run_modal(const std::string& title, const std::function<bool()>& body);
+    // `top_share` verilirse diyalog ortada değil, pencerenin üstünden o payda başlar (palet).
+    void run_modal(const std::string& title, const std::function<bool()>& body,
+                   std::optional<float> top_share = std::nullopt);
     template <typename Choice> Choice ask_choice(const ChoiceBox<Choice>& box);
     std::optional<SaveDetails> ask_save_details(const SaveDialogRequest& request);
     // Tek satırlık ad istemi; alan etiketi verilmezse "Klasör adı".
     std::optional<std::string> ask_folder_name(const std::string& title, const std::string& initial,
                                                const std::string& field_label = {});
     std::optional<std::string> ask_palette();  // seçilen komut kimliği
+    bool draw_palette_row(const PaletteRow& row, bool selected, float row_height);  // tıklandıysa true
     void show_help_dialog();
     enum class PathKind { SaveFile, Folder };
     // Yol elle yazılır ya da yerel dosya diyaloğu (portal/zenity) ile seçilir; yerel diyalog yoksa alan kalır
@@ -252,6 +278,7 @@ private:
         std::vector<std::string> names;   // item_rects adı: "map:<yol>", etiket "map:#<ad>"
         std::vector<std::string> labels;  // not: dosya adı; etiket: "#ad" (denetim baytı U+FFFD)
         std::vector<core::IconColor> colors;
+        std::vector<float> sizes;  // taban yarıçapın katı: bağlantı sayısından, çizge değişince bir kez
     };
     MapCamera map_camera_;
     MapCache map_cache_;
@@ -277,6 +304,7 @@ private:
     bool search_popup_hovered_ = false;  // fare tamamlama listesinde: kutu odağı bıraksa da liste kalır
     bool picker_shown_ = false;  // seçici açılır pencereyi geçen karede çizdi: kapanışı kullanıcı yaptı mı
     bool editor_active_ = false;
+    bool editor_drawn_ = false;  // bu karede editör çizildi: alanları ve iletisi durum çubuğunda
     // Boşta bekleyen dil sunucusu değişikliğinin gönderileceği an (LanguageServers::Update::send_at).
     std::optional<std::chrono::steady_clock::time_point> lsp_send_at_;
     bool list_focused_ = false;
@@ -289,10 +317,9 @@ private:
     std::array<float, kDetailsFields> details_widths_{};
     std::size_t details_widths_rebuilds_ = 0;
     float details_widths_font_ = 0.0F;
+    const void* details_widths_face_ = nullptr;  // ImFont: Ayarlar'da aile değişince yeniden ölçülür
     std::string details_widths_day_;  // klavyeyle seçim değişti: gezinti imleci yeni seçili satıra gelsin
-    Tab drawn_tab_ = Tab::Notes;
-    bool tab_switch_pending_ = false;
-    // Editör sekmeleri: programatik geçiş ImGui'de bir kare gecikir (üst sekmelerle aynı kural).
+    // Editör sekmeleri: programatik geçiş ImGui'de bir kare gecikir.
     std::uint64_t drawn_note_tab_ = 0;
     bool note_tab_pending_ = false;
     FocusRequest pending_focus_ = FocusRequest::None;

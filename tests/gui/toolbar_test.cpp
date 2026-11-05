@@ -6,6 +6,7 @@
 
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cmath>
 #include <doctest/doctest.h>
 #include <memory>
 #include <optional>
@@ -290,4 +291,27 @@ TEST_CASE("toolbar spans the window above both panes and wraps in the smallest w
         CHECK(lowest_bottom <= rects.at("editor").min_y);
         CHECK(rects.at(kViewDetails).max_x > rects.at("editor").min_x);  // sağa yaslı
     }
+}
+
+// G14: hiç not yokken liste alanında ortalanmış blok ve iki eylem; boş taslakta editörde soluk yer tutucu.
+TEST_CASE(
+    "the empty store shows a centred block with New note and Import, and the draft shows a placeholder") {
+    ToolbarScene scene;
+    scene.open();
+    const auto& rects = scene.view->item_rects();
+    REQUIRE(rects.contains("empty_title"));
+    REQUIRE(rects.contains("empty_new_note"));
+    REQUIRE(rects.contains("empty_import"));
+    const auto& list = rects.at("note_list");
+    const auto& title = rects.at("empty_title");
+    const float left = title.min_x - list.min_x;
+    const float right = list.max_x - title.max_x;
+    CHECK(std::abs(left - right) <= 2.0F * ImGui::GetFontSize());  // ortalı
+    REQUIRE(rects.contains("editor_placeholder"));
+
+    click_button(*scene.view, "empty_new_note");
+    CHECK(scene.state->is_new_note());
+    settle(*scene.view);
+    gui_test::type_text(*scene.view, "x");
+    CHECK_FALSE(scene.view->item_rects().contains("editor_placeholder"));  // yazınca kalkar
 }

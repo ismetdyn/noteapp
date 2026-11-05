@@ -118,7 +118,7 @@ TEST_CASE_FIXTURE(BrowserFixture, "clicking the arrow toggles a folder without s
     auto view = make_view(*state);
     settle(*view);
     const auto rect = view->item_rects().at("folder:work");
-    const float font = ImGui::GetStyle().FontScaleDpi * 16.0F;
+    const float font = ImGui::GetStyle().FontScaleDpi * 15.0F;
     ImGui::GetIO().AddMousePosEvent(rect.min_x + font * 1.5F, (rect.min_y + rect.max_y) / 2.0F);
     view->draw_frame();
     ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
@@ -654,4 +654,33 @@ TEST_CASE_FIXTURE(BrowserFixture, "measure: browser rows for 5000 notes in one f
     CHECK(rows == kNotes + 2);  // kök, work, notlar
     MESSAGE("first ensure_browser ms=", std::chrono::duration<double, std::milli>(built - started).count(),
             " two row rebuilds ms=", std::chrono::duration<double, std::milli>(rebuilt - built).count());
+}
+
+// G8: seçili satırın solunda 2 px vurgu çubuğu yalnız liste odaktayken; odak editöre geçince seçim zemini
+// kalır, çubuk kalkar (TUI'deki odaklı/odaksız ayrımı). Ağaçta da Ayrıntılar'da da.
+TEST_CASE_FIXTURE(WindowFixture, "the selection bar is drawn only while the list has focus") {
+    add_note("newest.md", "n", 0);
+    add_note("work/a.md", "a", 10);
+    auto state = make_state();
+    auto view = make_view(*state);
+    for (const BrowserView browser : {BrowserView::Tree, BrowserView::Details}) {
+        CAPTURE(static_cast<int>(browser));
+        state->set_browser_view(browser);
+        state->request_focus(FocusRequest::List);
+        settle(*view);
+        REQUIRE(view->item_rects().contains("selection_bar"));
+        const auto bar = view->item_rects().at("selection_bar");
+        const int index = state->browser_row();
+        REQUIRE(index >= 0);
+        const BrowserRow& selected = state->browser_rows()[static_cast<std::size_t>(index)];
+        const auto row = view->item_rects().at(
+            (selected.kind == BrowserRowKind::Folder ? "folder:" : "note:") + selected.path);
+        CHECK(bar.min_x == doctest::Approx(row.min_x));
+        CHECK(bar.max_x - bar.min_x == doctest::Approx(2.0F));
+        CHECK(bar.min_y == doctest::Approx(row.min_y));
+
+        state->request_focus(FocusRequest::Editor);
+        settle(*view);
+        CHECK_FALSE(view->item_rects().contains("selection_bar"));
+    }
 }

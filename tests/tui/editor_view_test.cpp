@@ -308,18 +308,30 @@ TEST_CASE("editor view: long lines wrap inside the pane and the cursor follows")
     CHECK(pane_x(tui::kMinWidth) - kTestGutter + viewport.columns == tui::kMinWidth - 1);
 }
 
-TEST_CASE("editor view: the status bar fits 60 columns in both languages without cutting a hint") {
-    for (const char* language : {"en", "tr"}) {
+TEST_CASE("editor view: the status bar fits 60 columns in both languages, F1 help at the right") {
+    const std::pair<const char*, std::string> helps[] = {{"en", "F1 help"}, {"tr", "F1 yardım"}};
+    for (const auto& [language, help] : helps) {
         CAPTURE(language);
         Fixture f("x", language);
         const auto screen = f.frame(tui::kMinWidth, tui::kMinHeight);
-        std::string bottom = row_text(screen, tui::kMinHeight - 1);
-        while (!bottom.empty() && bottom.back() == ' ')
+        // Dolgu hücresi "" taşır: terminalde göründüğü gibi boşluk say.
+        std::string bottom;
+        for (int x = 0; x < screen.dimx(); ++x) {
+            const std::string& glyph = screen.PixelAt(x, tui::kMinHeight - 1).character;
+            bottom += glyph.empty() ? std::string(" ") : glyph;
+        }
+        while (bottom.ends_with(' '))
             bottom.pop_back();
+        CAPTURE(bottom);
+        REQUIRE(bottom.ends_with(help));
+        CHECK(ftxui::string_width(bottom) == tui::kMinWidth);
+        std::string left = bottom.substr(0, bottom.size() - help.size());
+        CHECK(left.ends_with("  "));
+        while (left.ends_with(' '))
+            left.pop_back();
         const auto hints = core::tr("tui.key_hints_editor");
-        CHECK(ftxui::string_width(bottom) <= tui::kMinWidth);
-        CHECK(hints.starts_with(bottom));
-        CHECK((hints.size() == bottom.size() || hints.substr(bottom.size(), 2) == "  "));
+        CHECK(hints.starts_with(left));
+        CHECK(hints.substr(left.size(), 2) == "  ");  // kesim tam ipucu sınırında
     }
 }
 
@@ -886,6 +898,12 @@ TEST_CASE("edit view: the status bar names the file, type, encoding, line ending
     CHECK(row_text(screen, kHeight - 1).find("Ctrl+S save") != std::string::npos);
     CHECK(row_text(screen, kHeight - 1).find("Ctrl+Q quit") != std::string::npos);
     CHECK(screen.PixelAt(frame_x(kWidth), kHeight - 2).inverted);
+    // Kip hapı satırı açar: EDIT eflatun zeminde siyah ve kalın, ardından dosya adı.
+    CHECK(bar.starts_with(" EDIT  a.md"));
+    CHECK(screen.PixelAt(0, kHeight - 2).background_color == ftxui::Color(ftxui::Color::Magenta));
+    CHECK(screen.PixelAt(0, kHeight - 2).foreground_color == ftxui::Color(ftxui::Color::Black));
+    CHECK(screen.PixelAt(1, kHeight - 2).bold);
+    CHECK_FALSE(screen.PixelAt(1, kHeight - 2).inverted);
 
     f.session.handle(Key::Down);
     f.session.handle(Key::Char, "ş");

@@ -9,20 +9,22 @@
 ## Yerleşim
 
 ```
-notlar/work                                       [ad] 42/5000   ✓ 14:32
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┌──────────────────────────────────────┐
-┃ 1 ▾ work/                  ┃│# Toplantı notları                    │
-┃   1   plan.md              ┃│- bütçe onayı                         │
-┃ 2 ▸ personal/              ┃│...                                   │
-┃ 3   meeting-notes.md       ┃│                                      │
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛└──────────────────────────────────────┘
-Enter düzenle  → önizle  / ara  n yeni  a ekle  d sil  ? yardım  ...
+notlar/work                          güncelleme↓ · [ad] · 42/5000 · ✓ 14:32
+╭ LİSTE ─────────────────────╮╭──────────────────────────────────────╮
+│ 1 ▾ work/                  ││# Toplantı notları                    │
+│   1   plan.md              ││- bütçe onayı                         │
+│ 2 ▸ personal/              ││...                                   │
+│ 3   meeting-notes.md       ││                                      │
+╰────────────────────────────╯╰──────────────────────────────────────╯
+ LİSTE  Klasör: 3 öğe · Toplam 42 not · sayfa 1/1
+: komut  T çöp  Space aç  o sırala  v sütun  f ara  Enter düzenle      F1 yardım
 ```
 - Sol: geçerli klasörün çocukları (bkz. "Klasör görünümü"); aramada ve çöpte tam yollu düz liste, eşleşen karakterler vurgulu. Sağ: Liste ve Aramada seçili notun önizlemesi; seçim değişince aynı karede güncellenir. Önizlemede uzun satır kırpılmaz, panele sarılır (`cat`). Editör odağında aynı panel gömülü editördür; editörden seçim değişmez.
-- Üst: klasör yolu, mod (`[ad]` / `[içerik]`), süzgeçte eşleşme/toplam, klasör görünümünde ve çöpte yalnız not sayısı (`6 not`; satır klasör de sayar, oran yanıltır), senkron durumu (`kapalı` / `✓ saat` / `⟳` / `⚠`).
-- Alt: odağa göre kısayol çubuğu (i18n; Editörde üstünde durum çubuğu) ya da tek satırlık girdi (arama, not içi arama, ad istemi, yol girdisi). Katalogdaki sıra önem sırasıdır; sığmayan ipucu ve ardındakiler bütün olarak düşer. Liste, REVIEW ve çöpte ilk ipucu `: komut`tur. Listede `:`, `T`, `Space`, `o`, `v`, `f`, `?` her genişlikte (60 sütundan) görünür, seyrek olanlar `?`tedir. Listede kalan süzgeç (`> sorgu`) ve Önizlemede eşleşme sayacı (`3/12`) ipuçlarının başındadır; uzun süzgecin sonu kısalır, ilk beş ipucunu düşürmez. En küçük boyut 60×15; altında "pencere çok küçük" mesajı.
+- Üst: solda klasör yolu (adlar kalın, `/` soluk); sağda soluk ve ` · ` ayraçlı sıra, mod (`[ad]` / `[içerik]`), süzgeçte eşleşme/toplam, klasör görünümünde ve çöpte yalnız not sayısı (`6 not`; satır klasör de sayar, oran yanıltır); en sonda senkron durumu kendi renginde: `kapalı` soluk, `✓ saat` yeşil, `⟳` mavi, `⚠` kırmızı (renk tek sinyal değildir, ikon da söyler).
+- Alt: iki satır. Üstteki **kip hapıyla** açılır: ` LİSTE ` / ` İNCELEME ` / ` DÜZENLE ` (editör açıkken `DÜZENLE`, yoksa odaktaki panelin kipi) kip renginde zemin, siyah kalın metin; renksiz terminalde (`NO_COLOR`) ters ve kalın. Hapın yanında toplamlar, Editörde durum çubuğu.
+- En alttaki satır odağa göre kısayol çubuğu (i18n) ya da tek satırlık girdi (arama, not içi arama, ad istemi, yol girdisi). Tuş kalın ve kip renginde, açıklama varsayılan renkte; ipucu `tuş açıklama` biçimindedir, tuş boşluk taşımaz (`</>`, `PgUp/PgDn`). **`F1 yardım` sağ kenara sabittir**, en küçük pencerede de görünür (Liste, REVIEW, çöp, Editör); kalan ipuçları katalog sırasıyla soldan dolar, sığmayan ipucu ve ardındakiler bütün olarak düşer. Liste, REVIEW ve çöpte ilk ipucu `: komut`tur. Listede `:`, `T`, `Space`, `o`, `v`, `f` 61 sütundan (İngilizcede 60'tan) görünür; 60 sütunda Türkçe `f ara` F1'e yer bırakır. Seyrek olanlar F1'dedir. Listede kalan süzgeç (`> sorgu`) ve Önizlemede eşleşme sayacı (`3/12`) ipuçlarının başındadır; uzun süzgecin sonu kısalır, ilk dört ipucunu ve F1'i düşürmez. En küçük boyut 60×15; altında "pencere çok küçük" mesajı.
 - **Odak görünümü:** iki panel de yuvarlak çerçevelidir; odaklı panel kipe göre renkli çerçeve ve kalın etiket alır, diğerinin çerçevesi soluktur (`NO_COLOR`'da da kalın ve soluk kalır): `LIST` camgöbeği, `REVIEW` yeşil (Önizleme ve salt-okunur not), `EDIT` eflatun, kaydedilmemişse `EDIT *`. Renk tek sinyal değildir. Girdide imleç `▏`, Editörde gerçek terminal imleci. Seçim yalnız satır vurgusudur: liste odağında ters renk, sağ panel odaklıyken soluk arka plan. Satır: seçim işareti hücresi (`*`), girinti, sağa yaslı soluk numara (genişlik en büyük numaradan), klasörde `▸` (kapalı) ya da `▾` (açık), not satırında aynı iki hücre boş, ikon, ad, sağ sütun. Notun açık ayrıntısı yalnız girintili bloktur, işareti yoktur. Oka tıklamak klasörü yerinde açar/kapatır; not satırına tıklamak yalnız seçer.
-- **Toplamlar:** kısayol çubuğunun üstünde klasör görünümünde `Klasör: 12 öğe · Toplam 248 not · sayfa 2/7`, süzgeçte `Toplam 248 not · 12 eşleşme · sayfa 2/7` (eşleşme yalnız süzgeçte; sayfa = seçili satır / panel yüksekliği, kaydırma sanaldır). Editörde aynı satırı durum çubuğu kullanır.
+- **Toplamlar:** kısayol çubuğunun üstünde, kip hapından sonra klasör görünümünde `Klasör: 12 öğe · Toplam 248 not · sayfa 2/7`, süzgeçte `Toplam 248 not · 12 eşleşme · sayfa 2/7` (eşleşme yalnız süzgeçte; sayfa = seçili satır / panel yüksekliği, kaydırma sanaldır). Editörde aynı satırı durum çubuğu kullanır.
 - **Sağ sütun (`v`):** varsayılan boyut + tarih (`2.0 KiB  12:03`, bugün değilse yalnız tarih). Dar panelde önce tarih, sonra boyut düşer, değer yarım kesilmez; yol en az 16 hücre tutar. `created` ve `origin` boşken "bilinmiyor".
 - **Üst satır:** çöp doluysa en solda `çöp: 3`, tıklayınca çöp görünümü açılır; boşsa yok. Yalnız metin: simge karakterinin genişliği terminale göre değişir, satır kayardı. Çöp görünümünde aynı yerde `ÇÖP KUTUSU` başlığı.
 - **Boyut:** Liste ve Önizlemede `<` `>` sol paneli 5 sütun değiştirir (sol en az 16, sağ en az 24 sütun; 60 sütunda da geçerli), `z` odaklı paneli tam ekran yapar ve geri alır (F11 değil: Konsole'un). Fareyle bölücü sürüklenir. Genişlik ve yakınlaştırma oturumluktur, config'e yazılmaz. Yakınlaştırmada odak değişirse gösterilen panel de değişir.
@@ -158,7 +160,7 @@ Liste komutları içerik panelinde çalışmaz: `a d r s ?` ve `Ctrl-D` `Ctrl-R`
 `:` Liste, REVIEW ve çöpte küçük bir pencere açar; tuşunu bilmeden her işi adıyla çalıştırır. Odak değişmez: kip etiketi, yakınlaştırma ve komutun çalışacağı görünüm aynı kalır. `:` EDIT'te, girdilerde ve sıralama menüsünde metindir ya da yok sayılır; bağlantı bölümü odağında açılmaz (kendi `↑↓` `L` anlamları vardır, `Esc` REVIEW'a döner).
 
 - **Tek tablo:** `TuiState::commands()` (`src/tui/commands.cpp`). Liste, REVIEW ve çöp tuşları `handle_focused`ın başında buradan çözülür, palet aynı satırın `run`'ını çağırır: tuş ve palet aynı işi yapar. Tabloda kalmayan yalnız takma tuşlardır (`↑` `↓`, `Enter`, `Ctrl-O` gibi `handle_shared` kısayolları, `g` öneki, `Esc`); aynı metotları çağırırlar. Aynı `id` görünüm başına birden çok satır olabilir (`top`: Listede `gg`, REVIEW'da `g`); palet o görünümde bağlı olanı, yoksa ilkini tek satır gösterir.
-- **Satır:** `move — Taşı  m`: İngilizce kararlı `id` ve `command.*` etiketi ortak kayıttan (`app::kCommandRegistry`, `src/app/commands.hpp`; kayıtta olmayan kimlik derlenmez), sağda tuş (takma harf yanında: `gt T`, `F1 ?`). Tuşu olmayanlar (`column.*`, `tree.toggle_all`, `icons.toggle`, `search.tag`) yalnız paletten çalışır. Başlıkta hedef: seçili satırın yolu (`terminal_safe`, uzunsa sonu) ya da `seçili: 3`.
+- **Satır:** `Taşı … move  m`: solda `command.*` etiketi, sağ kenarda soluk İngilizce kararlı `id` ve tuş (takma harf yanında: `gt T`, `F1 ?`); GUI paletiyle aynı bilgi sırası. Uzun etiket kısalır, kimlik ve tuş görünür kalır. Etiket ve kimlik ortak kayıttan (`app::kCommandRegistry`, `src/app/commands.hpp`; kayıtta olmayan kimlik derlenmez). Tuşu olmayanlar (`column.*`, `tree.toggle_all`, `icons.toggle`, `search.tag`) yalnız paletten çalışır. Başlıkta hedef: seçili satırın yolu (`terminal_safe`, uzunsa sonu) ya da `seçili: 3`.
 - **Süzme:** `InputLine` + `app::rank_palette` (`search::fuzzy_match`; GUI paleti de bunu kullanacak), `id` ve çevrilmiş etiket üstünde, iyisi geçerli. Sıra: çalışanlar önce, puan, son kullanılan, tablo sırası. Boş süzgeçte puan yoktur: son kullanılanlar baştadır; süzerken eşit puanda öne geçer. `recent_commands` `tui-state.toml`da kalır, en çok 20; bilinmeyen ad yer tutmaz.
 - **Çalışamayan:** satır soluk, nedeni parantezde; seçiliyken ipucu satırında tamamı. `Enter` çalıştırmaz, pencere açık kalır; karar `Enter` anında yeniden hesaplanır. Nedenler: başka görünümün komutu, not ya da satır seçili değil, bağlantı yok, klasör görünümü değil, yank yok, senkron kapalı. `Yank` ve `Sync` tuşta engel değildir: tuş eski gibi nedeni alt satırda söyler.
 - **Tuşlar:** yazı süzer, `↑↓` gezer, `Enter` çalıştırır, `Esc` kapatır. `F1` `F9` paleti kapatıp açar, `Ctrl-C` çıkar. Fare yok sayılır.
@@ -174,7 +176,7 @@ Varsayılan liste klasör tabanlıdır (`src/tui/folder_tree.*`, saf). Ağaç `N
 - **Satır:** önce klasörler, sonra notlar; `file_icons` ikonu (klasörde açık ya da kapalı ikon), ad kısa (`arşiv/`, `plan.md`), klasör adı `/` ile biter. `o` her grubun içinde uygulanır: klasörde ad, alt ağacın toplam boyutu, son güncellemesi, son oluşturması; bilinmeyen tarih azalan sırada sonda. Numara klasörle birlikte 1'den başlar, klasör başına yeniden başlar; numara genişliği ve `row_marker_column` en büyük numaradan gelir.
 - **Ağaç:** `Space` klasörü yerinde açar: not ve alt klasörler altında, seviye başına iki hücre girintili (panelin en çok yarısı), her derinlikte; numara kendi klasöründe yeniden başlar. `→` `l` yine içeri girer (yazi), `←` `h` her zaman üst klasöre gider, açık satırı kapatmaz. Açık küme girip çıkınca kalır, `tui-state.toml`da `open_folders`; kalmayan klasörler yazarken düşer (taramada değil: senkron geri getirebilir). Seçim, sayfalama, toplamlar, fare satır eşlemesi, `x` ve toplu işlemler ağaç satırlarında çalışır; `p` ve `m`'nin ön değeri üst satırdaki klasördür. Liste yalnız değişimde kurulur (`O(görünür satır + açık klasörlerin çocukları)`), gezinme depo okumaz, çizim görünene orantılıdır: 20.000 satırlık açılış testi vardır.
 - **`m` taşı:** seçim ya da satır için altta `Taşı:` girdisi, geçerli klasörle dolu; `Tab` yalnız klasörleri önerir (boşlar dahil, ağaçtan), çoksa fuzzy liste. `Enter` not için `NoteStore::move`, klasör için `rename_folder`; yazılan iç içe klasörler oluşur. Hiçbir şey ezilmez: hedefte ad doluysa hiçbir öğe taşınmaz, hata girdide kalır. Aynı klasör hiçbir şey yapmaz; kendi içine taşıma hata verir. `Esc` vazgeçer. Kopyadan farkı: `p` ad çakışmasında `-2` verir, `m` hata verir.
-- **Üst satır:** çöp göstergesi, açık klasör ikonu, `notlar/work/sub`. Sığmazsa baştaki parçalar `…/` olur, bulunulan klasör görünür kalır. Sağ taraf için `kTopBarRightCells` (44) ayrılır. Parçaya tıklamak o klasöre gider, ayırıcı ve `…` tıklanmaz. Adlar `terminal_safe`ten geçer.
+- **Üst satır:** çöp göstergesi, açık klasör ikonu, `notlar/work/sub` (adlar kalın, `/` soluk). Sığmazsa baştaki parçalar `…/` olur, bulunulan klasör görünür kalır. Sağ taraf için `kTopBarRightCells` (44) ayrılır. Parçaya tıklamak o klasöre gider, ayırıcı ve `…` tıklanmaz. Adlar `terminal_safe`ten geçer.
 - **Sağ sütun:** klasörde `v` seçiminden bağımsız `12 öğe` (`yok` hariç). **Ayrıntı** (`i`): yol, öğe/not/klasör sayısı, toplam boyut, son güncelleme.
 - **REVIEW:** klasör seçiliyken özet: öğe sayısı, toplam boyut, son güncelleme, alt ağacın en yeni beş notu (`FolderTree::kRecentNotes`). `→` klasörde içeri girdiği için panele fareyle gelinir.
 - **Dönüş:** üst klasöre çıkışta çıkılan klasör seçili kalır. Süzgeçten dönüşte klasör ve seçim yerinde (`saved_spot_`); çöpten dönüşte klasör yerinde, seçim ilk satırda. Aramada `Esc` süzgeç kalarak Listeye döner (eski kural), ikinci `Esc` klasör görünümüne.
@@ -393,7 +395,7 @@ Kod noktaları Nerd Fonts v3.5.1'in `SymbolsNerdFontMono-Regular.ttf` cmap'inde 
 kümelerinden seçildi. TUI font gömmez: terminalde font kullanıcınındır, uygulama yalnız kod noktası yazar.
 
 Tam Symbols Nerd Font gömülmez: arşiv `LICENSE`'ı ve `fonts.json` MIT der, kök `LICENSE` OFL-1.1 der, dosyada OFL, CC BY ve
-markalı kümeler de vardır; birleşik dosyanın lisansı üstten belirlenemiyor. Kullanıcı kararı: GUI yalnız tablodaki 30 glifi
+markalı kümeler de vardır; birleşik dosyanın lisansı üstten belirlenemiyor. Kullanıcı kararı: GUI yalnız tablodaki glifleri (dosya ikonları ve GUI eylem ikonları)
 taşır (SPEC-gui "Dosya ikonları"); kaynak ve metinler `resources/fonts/LICENSE-NoteappIcons.txt`. `note font install` yoktur.
 
 ## Ayarlar ekranı (`,` `F9`)
@@ -640,3 +642,13 @@ TUI'de yalnız GUI'de olan özellikler (plan-parity T1, T2; karar 9 ve 10). Eşi
 ## Değişiklik 2026-11-05 (MAP-R)
 
 - **ADDED** Haritada ilişki kurma (bkz. "Harita" → "İlişki kurma"): `C` kipi (Tab hedef, Enter, `r` `l`, `d`, Esc), düğümden sağ sürükleme (terminal geçirirse Shift+sol), kenara sağ tık + `d`. Kural GUI ile ortak (`app::map_relations`); komut kaydı değişmedi, eşitlik listesi boş kalır. Neden: TUI–GUI eşitliği, GUI'deki fareyle ilişki kurma (kullanıcı isteği).
+
+## Değişiklik 2026-11-05 (U2 T3)
+
+- **MODIFIED** Üst satır: yol adları kalın, `/` soluk; sağ grup soluk ve ` · ` ayraçlı; senkron durumu ikon ve renkle (`StatusLine::sync_state`). Neden: plan-ui U2 T3, durum bir bakışta okunsun.
+- **ADDED** Alt satırın başında kip hapı (`NO_COLOR`'da ters). Neden: renksiz terminalde de kip okunur.
+- **MODIFIED** Kısayol çubuğu: tuş kalın ve kip renginde, açıklama varsayılan renkte (önceden tüm satır soluktu); `F1 yardım` sağa sabit. Listede, klasörde ve çöpte `? yardım` ipucu `F1 yardım` oldu (`?` yine çalışır); `< >` `</>`, `PgUp PgDn` `PgUp/PgDn` yazılır. 60 sütunda F1'in yerini şunlar bırakır: Türkçe listede `f ara`, klasör satırında `F2` (70 sütundan), çöpte `Esc/q geri` (80 sütundan). Süzgeç yanında korunan ipucu beşten dörde indi.
+
+## Değişiklik 2026-11-05 (U2 T5)
+
+- **MODIFIED** Palet satırı `move — Taşı  m` yerine `Taşı … move  m`: etiket solda, kimlik ve tuş sağda soluk. Süzme ve sıralama değişmedi. Neden: plan-ui U2 T5, GUI paletiyle aynı sıra; satır okunan adla başlar.

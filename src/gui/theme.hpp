@@ -142,6 +142,9 @@ inline constexpr float kMarkFillAlpha = 0.18F;
 inline constexpr ImGuiChildFlags kPaneChildFlags =
     ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding;
 
+// Rengin kanallarını `factor` ile çarpar (>1 açar, <1 koyulaştırır, 1'de kırpılır); saydamlık değişmez.
+ImU32 scaled(ImU32 color, float factor);
+
 // Boyutlar ölçek 1 pikselindedir: temiz ImGuiStyle() sonrası, ScaleAllSizes'tan ÖNCE çağrılır.
 void apply_style(ImGuiStyle& style);
 // Renkleri temadan kurar ve `current()`'ı ona çevirir. Boyutlara dokunmaz: sistem teması değişince yalnız bu.

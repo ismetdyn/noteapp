@@ -62,10 +62,17 @@ constexpr EditorChord kFindChords[] = {
     {ImGuiMod_Ctrl | ImGuiKey_N, tui::Key::CtrlN},
 };
 
-constexpr float kCurrentLineAlpha = 0.35F;
+// Geçerli satır metin renginin bu kadarı (G9): seçimle karışmaz, yazarken gözü yormaz.
+constexpr float kCurrentLineAlpha = 0.04F;
 constexpr float kCursorWidth = 2.0F;
 constexpr float kUnderlineInset = 2.0F;  // alt çizgi satırın dibinden bu kadar yukarıda
-constexpr float kUnderlineThickness = 1.5F;
+constexpr float kUnderlineThickness = 1.5F;  // tanı (önem rengi)
+constexpr float kSpellThickness = 1.0F;      // yazım: tanıdan ince ve soluk, metni bastırmasın
+constexpr float kSpellAlpha = 0.7F;
+// Ölçek 1 pikseli: oluk ile metin arası; metnin tuval kenarına uzaklığı (editörün iç boşluğu, üst ve sol).
+constexpr float kGutterGapPixels = 12.0F;
+constexpr float kTextTopPadPixels = 8.0F;
+constexpr float kTextLeftPadPixels = 4.0F;
 constexpr float kCellRounding = 0.5F;  // tık, hücrenin sağ yarısındaysa sonraki hücreye
 constexpr int kMinGutterDigits = 2;    // ilk satırlarda sütun zıplamasın (TUI ile aynı)
 
@@ -100,13 +107,13 @@ core::lsp::DiagnosticSeverity worst_diagnostic(std::span<const tui::DiagnosticMa
     return worst;
 }
 
-// Satır numarası sütununun hücre sayısı: rakamlar + bir boşluk (TUI EditorSession::gutter_width).
-int gutter_cells(std::size_t lines) {
+// Satır numarası sütununun rakam sayısı (TUI EditorSession::gutter_width'in rakamları).
+int gutter_digits(std::size_t lines) {
     constexpr std::size_t kDecimalBase = 10;
     int digits = 1;
     for (; lines >= kDecimalBase; lines /= kDecimalBase)
         ++digits;
-    return std::max(digits, kMinGutterDigits) + 1;
+    return std::max(digits, kMinGutterDigits);
 }
 
 }  // namespace
@@ -118,8 +125,8 @@ void View::draw_editor(float reserved_height) {
     }
     const bool finding = state_.editor().mode() == NoteEditor::Mode::Find;
     ImVec2 size = ImGui::GetContentRegionAvail();
-    // Bul satırı (açıksa) ve durum çubuğu editörün altındadır; payları önce düşülür.
-    const float bars = ImGui::GetFrameHeightWithSpacing() * (finding ? 2.0F : 1.0F);
+    // Bul satırı (açıksa) editörün altındadır, payı önce düşülür; alanlar ve iletiler durum çubuğunda (G7).
+    const float bars = finding ? ImGui::GetFrameHeightWithSpacing() : 0.0F;
     size.y = std::max(size.y - reserved_height - bars, ImGui::GetFrameHeight());
     if (pending_focus_ == FocusRequest::Editor) {
         ImGui::SetNextWindowFocus();
@@ -128,18 +135,22 @@ void View::draw_editor(float reserved_height) {
     // Sabit kimlik: sekme ya da içerik değişse de odak editörde kalır; kaydırma EditorBuffer'dadır.
     constexpr ImGuiWindowFlags kFlags =
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNavInputs;
-    ImGui::PushFont(platform_->mono_font, 0.0F);
+    ImGui::PushFont(fonts().mono, 0.0F);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::current().canvas);  // zemin Begin'de çizilir
+    // Metin tuvalin kenarına yapışmaz (üstte 8, solda 4 px); fare aynı kökten çözülür, tık eşlemesi değişmez.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(kTextLeftPadPixels * ui_scale_, kTextTopPadPixels * ui_scale_));
     ImGui::BeginChild("##editor", size, theme::kPaneChildFlags, kFlags);
+    ImGui::PopStyleVar();
     ImGui::PopStyleColor();
     editor_active_ = ImGui::IsWindowFocused();
     draw_editor_text();
     ImGui::EndChild();
     ImGui::PopFont();
     remember_item_center("editor");
+    editor_drawn_ = true;
     if (state_.editor().mode() == NoteEditor::Mode::Find)
         draw_find_bar();
-    draw_editor_status();
 }
 
 // Yalnız görünen görsel satırlar çizilir (EditorBuffer::visible_rows): 10 MiB'lik notta da kare maliyeti
@@ -150,9 +161,10 @@ void View::draw_editor_text() {
     const float row_height = ImGui::GetTextLineHeightWithSpacing();
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const ImVec2 area = ImGui::GetContentRegionAvail();
-    const int gutter = gutter_cells(state_.editor().buffer().line_count());
-    const float text_x = origin.x + (static_cast<float>(gutter) * cell);
-    const int columns = std::max(static_cast<int>(area.x / cell) - gutter, tui::EditorBuffer::kMinColumns);
+    const float gutter = (static_cast<float>(gutter_digits(state_.editor().buffer().line_count())) * cell) +
+                         (kGutterGapPixels * ui_scale_);
+    const float text_x = origin.x + gutter;
+    const int columns = std::max(static_cast<int>((area.x - gutter) / cell), tui::EditorBuffer::kMinColumns);
     const int rows = std::max(static_cast<int>(area.y / row_height), 1);
     state_.editor_layout(columns, rows);
 
@@ -209,6 +221,7 @@ std::optional<ImVec2> View::draw_editor_rows(ImVec2 origin, float text_x, float 
     ImDrawList* draw = ImGui::GetWindowDrawList();
     const ImU32 text_color = ImGui::GetColorU32(ImGuiCol_Text);
     const ImU32 dim_color = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    const ImU32 gutter_color = theme::current().faint;  // geçerli satırın numarası metin renginde
     const ImU32 selection_color = ImGui::GetColorU32(ImGuiCol_TextSelectedBg);
     const theme::Theme& colors = theme::current();
     const ImU32 find_match_color = theme::with_alpha(colors.warning, theme::kFindMatchAlpha);
@@ -230,11 +243,13 @@ std::optional<ImVec2> View::draw_editor_rows(ImVec2 origin, float text_x, float 
         const bool current = row.line == current_line;
         if (current)
             draw->AddRectFilled(ImVec2(origin.x, y), ImVec2(origin.x + width, y + row_height),
-                                ImGui::GetColorU32(ImGuiCol_HeaderHovered, kCurrentLineAlpha));
+                                theme::with_alpha(text_color, kCurrentLineAlpha));
         if (row.begin == buffer.line_start(row.line)) {  // sarılan satırın devamında numara yok
             const std::string number = std::to_string(row.line + 1);
-            const float number_x = text_x - (static_cast<float>(number.size() + 1) * cell);
-            draw->AddText(ImVec2(number_x, y + text_offset), current ? text_color : dim_color, number.c_str());
+            const float number_x =
+                text_x - (kGutterGapPixels * ui_scale_) - (static_cast<float>(number.size()) * cell);
+            draw->AddText(ImVec2(number_x, y + text_offset), current ? text_color : gutter_color,
+                          number.c_str());
             remember_rect("editor_line:" + std::to_string(row.line + 1), ImVec2(number_x, y),
                           ImVec2(text_x, y + row_height));
         }
@@ -291,8 +306,8 @@ std::optional<ImVec2> View::draw_editor_rows(ImVec2 origin, float text_x, float 
                 if (!inside(word, local))
                     continue;
                 draw->AddLine(ImVec2(x, y + row_height - kUnderlineInset),
-                              ImVec2(x + glyph_width, y + row_height - kUnderlineInset), colors.danger,
-                              kUnderlineThickness);
+                              ImVec2(x + glyph_width, y + row_height - kUnderlineInset),
+                              theme::with_alpha(colors.danger, kSpellAlpha), kSpellThickness);
                 if (local == word.begin)
                     remember_rect(std::format("editor_spell:{}:{}", row.line + 1, word.begin), ImVec2(x, y),
                                   ImVec2(x + glyph_width, y + row_height));
@@ -327,6 +342,14 @@ std::optional<ImVec2> View::draw_editor_rows(ImVec2 origin, float text_x, float 
             at = glyph.next;
         }
         flush();
+        // Yeni ve boş taslakta ilk satırda soluk yer tutucu (G14): ne yapılabileceğini söyler, metin
+        // değildir.
+        if (index == 0 && !state_.current_path() && buffer.text().empty()) {
+            const std::string placeholder = core::tr("gui.editor_placeholder");
+            draw->AddText(ImVec2(text_x + cell, y + text_offset), colors.faint, placeholder.c_str());
+            remember_rect("editor_placeholder", ImVec2(text_x + cell, y),
+                          ImVec2(text_x + cell + text_width(placeholder), y + row_height));
+        }
         // Satır sonu imleci: sarılan satırın bitiş ofseti sonraki görsel satırın başında çizilir. Gölge öneri
         // imleçten sonra soluk, panele kırpılır (metin değildir).
         if (cursor == row.end && row.last_of_line) {
@@ -427,40 +450,31 @@ void View::draw_find_bar() {
     }
 }
 
-// TUI bilgi satırının alanları sağda; solda sırayla: tek seferlik ileti (dil sunucusu), imlecin üstündeki
-// görünmez karakterin adı, imlecin üstündeki tanı (sunucu metni güvenilmez: printable).
-void View::draw_editor_status() {
+// Durum çubuğuna giden editör iletisi, sırayla: tek seferlik ileti (dil sunucusu, bilgi), imlecin üstündeki
+// görünmez karakterin adı (hata), imlecin üstündeki tanı (önemine göre; sunucu metni güvenilmez: printable).
+// Editör alanları (TUI bilgi satırı) durum çubuğunun sağındadır (G7).
+View::StatusMessage View::editor_notice() const {
     const tui::EditorBuffer& buffer = state_.editor().buffer();
-    std::string notice = state_.editor_notice();
-    ImU32 notice_color = ImGui::GetColorU32(ImGuiCol_Text);
-    if (notice.empty() && buffer.cursor() < buffer.text().size()) {
+    if (const std::string& notice = state_.editor_notice(); !notice.empty())
+        return {notice, ImGui::GetColorU32(ImGuiCol_TextDisabled), StatusRank::Info};
+    if (buffer.cursor() < buffer.text().size()) {
         const char32_t hidden = buffer.glyph_at(buffer.cursor(), 0).hidden;
         if (const core::HiddenControl* control = core::find_hidden_control(hidden))
-            notice = core::tr("tui.editor_hidden_char",
-                              {{"code", std::format("U+{:04X}", static_cast<std::uint32_t>(control->code_point))},
-                               {"name", std::string(control->name)}});
-        notice_color = theme::current().danger;
+            return {
+                core::tr("tui.editor_hidden_char",
+                         {{"code", std::format("U+{:04X}", static_cast<std::uint32_t>(control->code_point))},
+                          {"name", std::string(control->name)}}),
+                theme::current().danger, StatusRank::Error};
     }
-    if (notice.empty()) {
-        if (const tui::DiagnosticMark* mark = state_.editor().diagnostic_at_cursor()) {
-            notice = printable(mark->message);
-            notice_color = severity_color(mark->severity);
-        }
+    if (const tui::DiagnosticMark* mark = state_.editor().diagnostic_at_cursor()) {
+        using Severity = core::lsp::DiagnosticSeverity;
+        const StatusRank rank = mark->severity == Severity::Error || mark->severity == Severity::Unspecified
+                                    ? StatusRank::Error
+                                : mark->severity == Severity::Warning ? StatusRank::Warning
+                                                                      : StatusRank::Info;
+        return {printable(mark->message), severity_color(mark->severity), rank};
     }
-    const std::string fields = state_.editor_fields();
-    const float fields_width = text_width(fields);
-    ImGui::AlignTextToFramePadding();
-    if (!notice.empty()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, notice_color);
-        draw_fitted_text("editor_notice", notice,
-                         ImGui::GetContentRegionAvail().x - fields_width - ImGui::GetStyle().ItemSpacing.x,
-                         keep_start);
-        ImGui::PopStyleColor();
-        ImGui::SameLine();
-    }
-    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - fields_width));
-    ImGui::TextUnformatted(fields.c_str());
-    remember_item_center("editor_status");
+    return {};
 }
 
 }  // namespace noteapp::gui

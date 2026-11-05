@@ -38,7 +38,7 @@ inline constexpr GuiCommand kGuiCommands[] = {
      [](GuiState& s) { s.save_as(); }},
     {"move", ImGuiMod_Ctrl | ImGuiKey_M, CommandScope::Global, [](GuiState& s) { s.move_selected(); }},
     {"settings", ImGuiMod_Ctrl | ImGuiKey_Comma, CommandScope::Global,
-     [](GuiState& s) { s.show_settings_tab(); }},
+     [](GuiState& s) { s.toggle_settings_tab(); }},
     {"export.pdf", ImGuiMod_Ctrl | ImGuiKey_E, CommandScope::Global, [](GuiState& s) { s.export_pdf(); }},
     {"links.toggle", ImGuiMod_Ctrl | ImGuiKey_L, CommandScope::Global, [](GuiState& s) { s.toggle_links(); }},
     {"details", ImGuiMod_Ctrl | ImGuiKey_I, CommandScope::Global, [](GuiState& s) { s.toggle_info(); }},
@@ -48,7 +48,8 @@ inline constexpr GuiCommand kGuiCommands[] = {
     // Not içi bul (TUI editörü Ctrl+F, F3): bul satırı editörün altında; sonraki/önceki eşleşme.
     {"find", ImGuiMod_Ctrl | ImGuiKey_F, CommandScope::Global, [](GuiState& s) { s.find_in_note(); }},
     {"find.next", ImGuiKey_F3, CommandScope::Global, [](GuiState& s) { s.find_step(1); }},
-    {"find.previous", ImGuiMod_Shift | ImGuiKey_F3, CommandScope::Global, [](GuiState& s) { s.find_step(-1); }},
+    {"find.previous", ImGuiMod_Shift | ImGuiKey_F3, CommandScope::Global,
+     [](GuiState& s) { s.find_step(-1); }},
     // Arama: F(ind) her yerde, T(ag) seçici, R(un view) seçici.
     {"search.global", ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_F, CommandScope::Global,
      [](GuiState& s) { s.search_global(); }},

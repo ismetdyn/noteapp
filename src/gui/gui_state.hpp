@@ -101,6 +101,8 @@ struct Deciders {
 };
 
 enum class Tab { Notes, Settings };
+// Durum çubuğundaki senkron göstergesinin anlamı (etiketin rengi ve simgesi).
+enum class SyncIndicator { Off, Running, Ok, Error };
 enum class FocusRequest { None, Search, Editor, List, QuickAdd, Links };
 enum class BrowserView { Tree, Details, Map };
 // Ayrıntılar'ın üst veri sütunları (TUI'deki sağ sütun, `column` komutları). Sıra `column` döngüsüdür; kalıcı
@@ -115,6 +117,10 @@ inline constexpr std::pair<DetailsColumn, const char*> kDetailsColumnNames[] = {
     {DetailsColumn::Origin, "origin"},
     {DetailsColumn::None, "none"},
 };
+// Ayarlar → Görünüm'deki yazı aileleri; gui-state.toml'da bu adlarla. İlki varsayılandır (gömülü DejaVu),
+// TUI'de karşılığı yoktur (terminalin fontu).
+inline constexpr const char* kUiFonts[] = {"dejavu", "inter"};
+inline constexpr const char* kEditorFonts[] = {"dejavu-mono", "jetbrains-mono"};
 // Notun senkron durumu, bilgi panelinde ve Ayrıntılar sütununda aynı metin.
 std::string sync_state_text(core::SyncState state);
 // Komut paletinin satırı (app::rank_palette sırasıyla).
@@ -148,6 +154,8 @@ struct GuiLayout {
     BrowserView browser_view = BrowserView::Tree;
     bool row_numbers = false;  // Ağaç ve Ayrıntılar'da sıra no sütunu (Ayarlar)
     DetailsColumn column = DetailsColumn::SizeAndDate;
+    std::string ui_font = kUiFonts[0];          // kUiFonts'tan biri
+    std::string editor_font = kEditorFonts[0];  // kEditorFonts'tan biri
 };
 
 // Klasör satırı seçiliyken sağ panelin özeti; sayaçlar alt ağacı kapsar.
@@ -279,6 +287,9 @@ public:
     bool row_numbers() const { return layout_.row_numbers; }
     // Ayarlar'daki onay kutusu: hemen uygulanır ve yerleşimle birlikte hemen yazılır (Kaydet beklemez).
     void set_row_numbers(bool on);
+    // Görünüm'deki yazı aileleri: sıra no gibi hemen uygulanır ve yazılır; listede olmayan ad yok sayılır.
+    void set_ui_font(const std::string& name);
+    void set_editor_font(const std::string& name);
     // Satırlar yalnız listeleme, açık klasörler ya da konum değişince yeniden kurulur; kare başına depoya
     // gidilmez.
     const std::vector<BrowserRow>& browser_rows();
@@ -472,7 +483,8 @@ public:
 
     // --- Eylemler (kısayollar) ---
     void focus_search();       // Ctrl+K / Ctrl+P
-    void show_settings_tab();  // Ctrl+,
+    void show_settings_tab();
+    void toggle_settings_tab();  // Ctrl+, ve palet: Notlar ↔ Ayarlar
     void set_tab(Tab tab) { tab_ = tab; }
     Tab tab() const { return tab_; }
     void new_note(const std::string& first_line = {});  // Ctrl+N; nvALT: arama kutusunda Enter
@@ -553,16 +565,23 @@ public:
     // TUI `c`: klasör satırında yol, notta özgün baytlar panoya (deciders.copy_text); ikili ve geçersiz UTF-8
     // reddedilir, nedeni durum çubuğunda.
     void copy_selected();
+    // Verilen metni panoya yazar; sonucu (kopyalandı ya da yazılamadı, hata) durum çubuğunda söyler.
+    void copy_to_clipboard(const std::string& text);
 
     void request_focus(FocusRequest focus) { focus_request_ = focus; }
     FocusRequest take_focus_request();
 
     // --- Durum çubuğu ---
     const std::string& status() const { return status_; }
+    // İleti bir hata mı (kayıt, işlem, içe alma, config ve depo uyarısı): durum çubuğunda danger rengi.
+    bool status_is_error() const { return !status_.empty() && status_ == error_status_; }
     std::string count_label() const;
     // Açılışta config yükleme uyarılarını gösterir (bozuk config.toml sessizce varsayılana düşmesin).
     void show_config_warnings(const std::vector<core::Error>& warnings);
+    // Açılışta okunan depo sorunu (geçiş gerekli ya da açılamıyor); liste üstündeki şerit bunu gösterir.
+    const std::optional<core::Error>& store_issue() const { return store_issue_; }
     const std::string& sync_label() const { return sync_label_; }
+    SyncIndicator sync_indicator() const { return sync_indicator_; }  // etiketin rengi ve simgesi
     void show_sync_status(const sync::SyncStatus& status, bool running);
 
     SettingsPage& settings() { return settings_; }
@@ -801,9 +820,12 @@ private:
     std::size_t sync_restarts_ = 0;
     std::size_t sync_generation_ = 0;  // durdurulan AutoSync'in kuyrukta kalan durumu yeni göstergeyi ezmesin
     std::string sync_label_;
+    SyncIndicator sync_indicator_ = SyncIndicator::Off;
     Tab tab_ = Tab::Notes;
     FocusRequest focus_request_ = FocusRequest::None;
     std::string status_;
+    std::string error_status_;  // status_ bu metne eşitse ileti hatadır (danger); yeni ileti eşitliği bozar
+    std::optional<core::Error> store_issue_;
     ImportRequest import_request_ = ImportRequest::None;
     GuiLayout layout_;
 

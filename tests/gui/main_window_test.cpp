@@ -818,3 +818,69 @@ TEST_CASE_FIXTURE(WindowFixture, "old-layout notes: the window says how to migra
     CHECK(state->model().row_count() == 0);
     CHECK(noteapp::test::slurp(full_path("eski.md")) == "eski");
 }
+
+// G5 (K2): üst Notlar/Ayarlar sekme satırı yok; Ayarlar araç çubuğundaki ⚙ ile ve Ctrl+, ile açılır, `←
+// Notlar` ve ikinci Ctrl+, ile kapanır.
+TEST_CASE_FIXTURE(WindowFixture, "Ctrl+, opens Settings and a second Ctrl+, returns to Notes") {
+    add_note("alpha.md", "alpha body");
+    auto state = make_state();
+    auto view = make_view(*state);
+    press(*view, ImGuiMod_Ctrl | ImGuiKey_Comma);
+    CHECK(state->tab() == Tab::Settings);
+    press(*view, ImGuiMod_Ctrl | ImGuiKey_Comma);
+    CHECK(state->tab() == Tab::Notes);
+}
+
+TEST_CASE_FIXTURE(WindowFixture, "the gear button opens Settings and the back button returns to Notes") {
+    add_note("alpha.md", "alpha body");
+    auto state = make_state();
+    auto view = make_view(*state);
+    settle(*view);
+    REQUIRE(view->item_rects().contains("settings_open"));
+    CHECK_FALSE(view->item_rects().contains("settings_back"));
+    gui_test::click_button(*view, "settings_open");
+    CHECK(state->tab() == Tab::Settings);
+    REQUIRE(view->item_rects().contains("settings_back"));
+    CHECK_FALSE(view->item_rects().contains("toolbar_new_note"));  // Ayarlar tüm içerik alanıdır
+    gui_test::click_button(*view, "settings_back");
+    CHECK(state->tab() == Tab::Notes);
+    CHECK(view->item_rects().contains("toolbar_new_note"));
+}
+
+// G14: geçiş iletisi durum çubuğunda kırpılmasın: liste üstünde şerit, komut seçilebilir ve Kopyala panoya
+// koyar.
+TEST_CASE_FIXTURE(WindowFixture,
+                  "old-layout notes: a banner above the list offers the migrate command to copy") {
+    std::ofstream(full_path("eski.md"), std::ios::binary) << "eski";
+    auto state = make_state();
+    state->show_config_warnings({});
+    std::string copied;
+    auto view = make_view(*state);
+    state->deciders.copy_text = [&](const std::string& text) {
+        copied = text;
+        return true;
+    };
+    settle(*view);
+    const auto& rects = view->item_rects();
+    REQUIRE(rects.contains("migrate_banner"));
+    REQUIRE(rects.contains("migrate_command"));
+    CHECK(rects.at("migrate_banner").max_y <= rects.at("note_list").min_y + 1.0F);  // listenin üstünde
+    gui_test::click_button(*view, "migrate_copy");
+    CHECK(copied == "note graph migrate");
+    CHECK(noteapp::test::slurp(full_path("eski.md")) == "eski");  // davranış aynı: dosyaya dokunulmaz
+}
+
+// İnceleme 2: pano yazılamazsa (SDL_SetClipboardText false) Kopyala bunu durum çubuğunda söyler.
+TEST_CASE_FIXTURE(WindowFixture,
+                  "old-layout notes: the banner says so when the clipboard cannot be written") {
+    std::ofstream(full_path("eski.md"), std::ios::binary) << "eski";
+    auto state = make_state();
+    state->show_config_warnings({});
+    auto view = make_view(*state);
+    state->deciders.copy_text = [](const std::string&) { return false; };
+    settle(*view);
+    REQUIRE(view->item_rects().contains("migrate_copy"));
+    gui_test::click_button(*view, "migrate_copy");
+    CHECK(state->status() == noteapp::core::tr("gui.copy_failed"));
+    CHECK(state->status_is_error());
+}

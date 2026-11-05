@@ -42,7 +42,8 @@ float field_width_beside(float trailing_width) {
 
 float settings_label_width(const SettingsPage& page, float available) {
     float widest =
-        std::max(text_width(core::tr("gui.token_label")), text_width(core::tr("gui.setting_row_numbers")));
+        std::max({text_width(core::tr("gui.token_label")), text_width(core::tr("gui.setting_row_numbers")),
+                  text_width(setting_label("ui_font")), text_width(setting_label("editor_font"))});
     for (const std::string& key : page.keys())
         widest = std::max(widest, text_width(setting_label(key)));
     return std::min(widest + 1.0F, available * kMaxLabelColumnShare);  // +1: yuvarlama etiketi sarmasın
@@ -168,6 +169,19 @@ void View::draw_row_numbers_setting() {
     remember_item_center("setting_hint:row_numbers");
 }
 
+// Görünüm'deki yazı ailesi: sıra no gibi hemen uygulanır, config değildir (gui-state.toml).
+void View::draw_font_setting(const char* key, std::span<const char* const> choices,
+                             const std::string& current, void (GuiState::*apply)(const std::string&)) {
+    begin_setting_row(setting_label(key), std::string("setting_label:") + key);
+    ImGui::PushID(key);
+    std::string value = current;
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    draw_choice_combo(key, choices, value);
+    if (value != current)
+        queue([this, value, apply] { (state_.*apply)(value); });
+    ImGui::PopID();
+}
+
 void View::draw_token_row() {
     SettingsPage& page = state_.settings();
     begin_setting_row(core::tr("gui.token_label"), "token_label");
@@ -244,6 +258,9 @@ void View::draw_settings_form() {
     remember_item_center("settings_group_display");
     if (begin_form_table("##display", label_width)) {
         draw_row_numbers_setting();
+        draw_font_setting("ui_font", kUiFonts, state_.layout().ui_font, &GuiState::set_ui_font);
+        draw_font_setting("editor_font", kEditorFonts, state_.layout().editor_font,
+                          &GuiState::set_editor_font);
         ImGui::EndTable();
     }
 }
@@ -278,7 +295,21 @@ void View::draw_settings_footer() {
     settings_footer_height_ = ImGui::GetCursorPosY() - top;
 }
 
+// Üst sekme yok (K2): başlık satırında geri düğmesi ve sayfa adı; Ctrl+, de iki yönde geçer.
 void View::draw_settings_tab() {
+    const float row_y = ImGui::GetCursorPosY();
+    const float row_height = ImGui::GetFrameHeight();
+    ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);  // kısayolu var; Tab sırası uzamasın
+    if (button("settings_back", "← " + core::tr("gui.tab_notes"), ButtonKind::Ghost))
+        queue([this] { state_.set_tab(Tab::Notes); });
+    ImGui::PopItemFlag();
+    ImGui::SetItemTooltip("%s", core::tr("gui.settings_back_tip").c_str());
+    ImGui::SameLine();
+    ImGui::PushFont(nullptr, kTitleFontPixels);
+    ImGui::SetCursorPosY(row_y + ((row_height - ImGui::GetTextLineHeight()) / 2.0F));
+    ImGui::TextUnformatted(core::tr("gui.tab_settings").c_str());
+    ImGui::PopFont();
+    remember_item_center("settings_title");
     ImGui::BeginChild("##settings_form", ImVec2(0.0F, -settings_footer_height_));
     draw_settings_form();
     ImGui::EndChild();

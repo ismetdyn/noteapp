@@ -13,17 +13,21 @@ namespace {
 
 // Aralıklar gövde yazı boyu (em) birimindedir: arayüz ölçeğiyle birlikte büyür.
 constexpr float kLineSpacing = 1.3F;      // satır yüksekliği / yazı boyu
-constexpr float kBlockGapEms = 0.6F;      // bloklar arası
+constexpr float kBlockGapEms = 0.6F;      // bloklar arası (paragraf)
+constexpr float kHeadingGapEms = 1.2F;    // başlığın üstünde: bölüm ayrımı okunsun
 constexpr float kListItemGapEms = 0.15F;  // aynı listenin ardışık öğeleri arası
 constexpr float kListIndentEms = 1.5F;    // liste derinliği başına
 constexpr float kQuoteIndentEms = 1.0F;   // alıntı derinliği başına; çubuk bu payın başında
 constexpr float kQuoteBarEms = 0.2F;
-constexpr float kCodePadEms = 0.4F;
+constexpr float kCodePadEms = 0.75F;  // gövde 16 px'te 12 px
 constexpr float kInlineCodePadEms = 0.2F;
 constexpr float kCellPadEms = 0.5F;
 constexpr float kLineThickness = 1.0F;  // piksel: ayraç ve tablo çizgisi ölçekle kalınlaşmaz
-// h1..h6; daha derin başlık yok (md4c 6'da keser).
-constexpr std::array<float, 6> kHeadingScale = {1.6F, 1.4F, 1.2F, 1.1F, 1.0F, 1.0F};
+// h1..h6; daha derin başlık yok (md4c 6'da keser). Ölçek SPEC-gui "Önizleme" (G10'da sıkılaştı).
+constexpr std::array<float, 6> kHeadingScale = {1.6F, 1.35F, 1.2F, 1.05F, 1.0F, 1.0F};
+// Köşe yarıçapı, ölçek 1 pikseli: kod bloğu çocuk pencere gibi, satır içi kod çip gibi.
+constexpr float kCodeBlockRounding = 6.0F;
+constexpr float kInlineCodeRounding = 4.0F;
 
 std::size_t utf8_length(char lead) {
     const auto byte = static_cast<unsigned char>(lead);
@@ -174,6 +178,7 @@ public:
 
     // Bloğun altını döner; sağ kenarı `right_`a işler.
     float add(const pdf::Block& block, float top) {
+        quoted_ = block.quote_depth > 0;
         const float quote_left = static_cast<float>(block.quote_depth) * kQuoteIndentEms * em_;
         const float list_indent = kListIndentEms * em_;
         const float marker_left = quote_left + (static_cast<float>(std::max(block.list_depth - 1, 0)) * list_indent);
@@ -217,8 +222,12 @@ private:
 
     float add_text(const std::vector<pdf::Span>& spans, float left, float top, float size, bool bold) {
         Flow flow(out_, left, std::max(width_, left + em_), top, size * kLineSpacing);
-        for (const pdf::Span& span : spans)
-            flow.add(span.text, look_of(fonts_, span, size, bold, resolves_));
+        for (const pdf::Span& span : spans) {
+            Look look = look_of(fonts_, span, size, bold, resolves_);
+            if (quoted_ && look.ink == PreviewInk::Text)  // alıntı soluk; bağlantı rengi kalır
+                look.ink = PreviewInk::Muted;
+            flow.add(span.text, look);
+        }
         right_ = std::max(right_, flow.right_edge());
         return flow.bottom();
     }
@@ -297,6 +306,7 @@ private:
     float width_;
     float line_height_;
     float right_ = 0.0F;
+    bool quoted_ = false;  // eklenen blok alıntıda
 };
 
 bool is_list_item(const pdf::Block& block) {
@@ -316,8 +326,12 @@ PreviewLayout layout_preview(const std::vector<pdf::Block>& blocks, const Previe
         const float bottom = layouter.add(block, y);
         out.block_spans.emplace_back(y, bottom);
         const pdf::Block* next = index + 1 < blocks.size() ? &blocks[index + 1] : nullptr;
-        const float gap =
-            (next != nullptr && is_list_item(block) && is_list_item(*next) ? kListItemGapEms : kBlockGapEms) * font_size;
+        float gap_ems = kBlockGapEms;
+        if (next != nullptr && next->kind == pdf::Block::Kind::Heading)
+            gap_ems = kHeadingGapEms;
+        else if (next != nullptr && is_list_item(block) && is_list_item(*next))
+            gap_ems = kListItemGapEms;
+        const float gap = gap_ems * font_size;
         // Alıntı çubuğu aynı alıntının sonraki bloğuna aradaki boşluk boyunca uzar: kesik çizgi olmasın.
         for (int depth = 0; depth < block.quote_depth; ++depth) {
             const float x = static_cast<float>(depth) * kQuoteIndentEms * font_size;
@@ -343,13 +357,13 @@ void draw_preview_layout(const PreviewLayout& layout, ImVec2 origin, float top, 
     // Kod bloğu ve satır içi kod aynı zemin: tuvale karşı ≥ 1,5, metne karşı ≥ 4,5 (theme_test).
     const ImU32 background = theme::current().code_bg;
     const ImU32 line = ImGui::GetColorU32(ImGuiCol_Separator);
-    const float rounding = ImGui::GetStyle().FrameRounding;
+    const float scale = ImGui::GetStyle().FontScaleDpi;
     const auto at = [origin](ImVec2 point) { return ImVec2(origin.x + point.x, origin.y + point.y); };
     for (const PreviewBox& box : layout.boxes) {
         if (box.max.y < top || box.min.y > bottom)
             continue;
         if (box.kind == PreviewBox::Kind::CodeBlock)
-            draw_list->AddRectFilled(at(box.min), at(box.max), background, rounding);
+            draw_list->AddRectFilled(at(box.min), at(box.max), background, kCodeBlockRounding * scale);
         else
             draw_list->AddRectFilled(at(box.min), at(box.max), line);
     }
@@ -361,8 +375,9 @@ void draw_preview_layout(const PreviewLayout& layout, ImVec2 origin, float top, 
         const ImVec2 pos = at(run.pos);
         if (run.code_background) {
             const float pad = run.size * kInlineCodePadEms;
-            draw_list->AddRectFilled(ImVec2(pos.x - pad, pos.y), ImVec2(pos.x + run.width + pad, pos.y + run.size),
-                                     background, rounding);
+            draw_list->AddRectFilled(ImVec2(pos.x - pad, pos.y),
+                                     ImVec2(pos.x + run.width + pad, pos.y + run.size), background,
+                                     kInlineCodeRounding * scale);
         }
         draw_list->AddText(run.font, run.size, pos, color, run.text.data(), run.text.data() + run.text.size());
         if (run.underline)

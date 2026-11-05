@@ -37,8 +37,9 @@ ftxui::Element token_styled(ftxui::Element element, TokenKind token);
 ftxui::Element editor_pane(const EditorSession& session, bool show_cursor, SpellChecker* spell = nullptr);
 // Micro gibi durum çubuğu: dosya, kirli işareti, tip, kodlama, satır sonu, BOM, satır:sütun, toplam satır.
 ftxui::Element editor_info_bar(const EditorSession& session, int width);
-// En alt satır: ileti ve sığan kısayollar; arama ve ad isteminde tek satırlık girdi.
-ftxui::Element editor_status_bar(const EditorSession& session, int width);
+// En alt satır: ileti ve sığan kısayollar (tuşlar `key_color`, kip rengi); arama ve ad isteminde tek satırlık
+// girdi.
+ftxui::Element editor_status_bar(const EditorSession& session, int width, ftxui::Color key_color);
 // Açık soru penceresi (kaydedilmemiş değişiklik, çakışma); yoksa nullptr.
 ftxui::Element editor_modal(const EditorSession& session);
 

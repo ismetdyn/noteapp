@@ -19,6 +19,20 @@ void GuiState::set_row_numbers(bool on) {
     save_gui_state();
 }
 
+void GuiState::set_ui_font(const std::string& name) {
+    if (std::ranges::find(kUiFonts, name) == std::end(kUiFonts))
+        return;
+    layout_.ui_font = name;
+    save_gui_state();
+}
+
+void GuiState::set_editor_font(const std::string& name) {
+    if (std::ranges::find(kEditorFonts, name) == std::end(kEditorFonts))
+        return;
+    layout_.editor_font = name;
+    save_gui_state();
+}
+
 void GuiState::ensure_browser() {
     const bool details = layout_.browser_view == BrowserView::Details;
     if (details && built_folder_ != current_folder_)

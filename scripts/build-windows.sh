@@ -253,7 +253,8 @@ fi
 for exe in note.exe notes.exe notes-gui.exe; do
     [[ -s "$output_dir/$exe" ]] || die "$output_dir/$exe was not produced"
 done
-for license in noteapp-icons/LICENSE-NoteappIcons.txt sdl3/LICENSE.txt sdl3/SOURCE-NOTICES.txt libgit2/COPYING libgit2/SOURCE-NOTICES.txt \
+for license in noteapp-icons/LICENSE-NoteappIcons.txt inter/LICENSE-Inter.txt jetbrains-mono/LICENSE-JetBrainsMono.txt \
+    sdl3/LICENSE.txt sdl3/SOURCE-NOTICES.txt libgit2/COPYING libgit2/SOURCE-NOTICES.txt \
     libharu/SOURCE-NOTICES.txt winpthreads/COPYING libstdc++/COPYING.RUNTIME; do
     [[ -s "$output_dir/licenses/$license" ]] || die "$output_dir/licenses/$license was not produced"
 done

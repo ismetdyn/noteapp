@@ -9,6 +9,7 @@
 #include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
 #include "tui/settings.hpp"
+#include "tui/sync_indicator.hpp"
 #include "tui/tui_state.hpp"
 
 #include <chrono>
@@ -131,6 +132,7 @@ struct StatusLine {
     std::string sync;         // üst çubuk: senkron durumu metni
     std::string message;      // geçici ileti; doluysa kısayol çubuğunun yerine geçer
     std::string notice = {};  // ilk tuşa dek sönük ipucu; hata değildir, message ondan önceliklidir
+    SyncIndicator::State sync_state = SyncIndicator::State::Disabled;  // senkron metninin rengi
 };
 
 // Tüm ekran: üst çubuk, sol liste, sağ önizleme, toplamlar, alt çubuk. `window` terminal boyutu (testte ekran
@@ -178,6 +180,9 @@ ftxui::Element input_bar(const std::string& label, const std::string& value, con
 // Çift boşlukla ayrılmış ipuçlarından baştan `width` sütuna sığanları döner; katalogdaki sıra önem sırasıdır,
 // sığmayan ipucu ve ardındakiler bütün olarak düşer (kelime ortasında kesilmez).
 std::string fit_hints(std::string_view hints, int width);
+// Kısayol çubuğu (SPEC-tui "Yerleşim"): tuş kalın ve `key_color` renginde, açıklama varsayılan renkte. `F1`
+// yardım ipucu sağ kenara sabitlenir, kalanlar sırayla `fit_hints` kuralıyla soldan dolar.
+ftxui::Element hint_bar(std::string_view hints, int width, ftxui::Color key_color);
 
 // Değerin son `limit` kod noktası; kesilen başa "…" konur (imleç sonda, görünür kalsın).
 std::string tail_cells(const std::string& value, std::size_t limit);

@@ -255,7 +255,7 @@ void GuiState::import_files(std::span<const std::filesystem::path> sources) {
 }
 
 void GuiState::import_dialog_failed(const std::string& detail) {
-    status_ = core::tr("gui.import_dialog_failed", {{"detail", detail}});
+    error_status_ = status_ = core::tr("gui.import_dialog_failed", {{"detail", detail}});
 }
 
 // ---- Taşıma ----

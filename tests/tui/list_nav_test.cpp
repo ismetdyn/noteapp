@@ -406,7 +406,7 @@ TEST_CASE("the line above the hints shows totals, matches and the page in both l
     s.set_notes(many(248));
     s.set_window(100, 24);  // 19 satırlık panel: 14 sayfa
     auto screen = draw(s);
-    CHECK(row_of(screen, 22) == "Klasör: 248 öğe · Toplam 248 not · sayfa 1/14");
+    CHECK(row_of(screen, 22) == " LİSTE  Klasör: 248 öğe · Toplam 248 not · sayfa 1/14");
     s.handle(Key::Char, "/");
     s.handle(Key::Char, "1");
     s.handle(Key::Char, "2");
@@ -415,10 +415,10 @@ TEST_CASE("the line above the hints shows totals, matches and the page in both l
     const std::size_t matches = s.rows().size();
     screen = draw(s);
     CHECK(row_of(screen, 22)
-              .starts_with("Toplam 248 not · " + std::to_string(matches) + " eşleşme · sayfa 1/"));
+              .starts_with(" LİSTE  Toplam 248 not · " + std::to_string(matches) + " eşleşme · sayfa 1/"));
     core::init_i18n("en");
     CHECK(row_of(draw(s), 22)
-              .starts_with("Total 248 notes · " + std::to_string(matches) + " matches · page 1/"));
+              .starts_with(" LIST  Total 248 notes · " + std::to_string(matches) + " matches · page 1/"));
 }
 
 TEST_CASE("the page number follows the selection") {

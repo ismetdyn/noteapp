@@ -3,6 +3,7 @@
 #include "app/document.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -48,6 +49,8 @@ template <typename Choice> struct ChoiceBox {
     std::vector<std::pair<std::string, Choice>> buttons;
     std::size_t default_button = 0;
     std::size_t escape_button = 0;
+    // Veri silen ya da ezen düğme: yıkıcı dolgu (danger_fill). Esc düğmesi hayalet, varsayılan birincil.
+    std::optional<std::size_t> danger_button;
 };
 
 // Varsayılan düğme "benimkini kopya olarak kaydet" (veri kaybettirmeyen seçenek), Esc = vazgeç.

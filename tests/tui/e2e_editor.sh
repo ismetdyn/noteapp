@@ -807,7 +807,12 @@ for width in 60 80 110 160; do
     keys Down
     sleep 0.2
     echo "bar@$width: $(bottom_line 30)"
-    check "the list bar at $width columns shows the main keys" bar_has 30 ": komut" "T çöp" "Space aç" "o sırala" "v sütun" "f ara" "? yardım"
+    # 60 sütunda `f ara` bir hücreyle sığmaz: sağa sabitlenen `F1 yardım` yer tutar (SPEC-tui "Yerleşim").
+    if [[ "$width" -eq 60 ]]; then
+        check "the list bar at $width columns shows the main keys" bar_has 30 ": komut" "T çöp" "Space aç" "o sırala" "v sütun" "F1 yardım"
+    else
+        check "the list bar at $width columns shows the main keys" bar_has 30 ": komut" "T çöp" "Space aç" "o sırala" "v sütun" "f ara" "F1 yardım"
+    fi
 done
 keys g
 keys g
@@ -1397,10 +1402,12 @@ sleep 0.2
 tmux resize-window -t "$session" -x 60 -y 30
 sleep 0.5
 check "the tree fits 60 columns" screen_has "▾ "
-check "folder hints stay at 60 columns" bar_has 30 "→ open" "F2 rename"
+# 60 sütunda sağa sabit `F1 help` `F2 rename`in yerini alır; F2 110 sütunda da denetlenir.
+check "folder hints stay at 60 columns" bar_has 30 "→ open" "F1 help"
 snapshot tree-60
 tmux resize-window -t "$session" -x 110 -y 30
 sleep 0.5
+check "folder hints at 110 columns name rename" bar_has 30 "→ open" "F2 rename" "F1 help"
 keys q
 wait_exit >/dev/null
 check "the open set is saved" grep -qF 'open_folders = ' "$work/home/state/tui-state.toml"
@@ -1571,7 +1578,9 @@ check "the hint bar leads with the palette" bar_has 30 ": cmd"
 literal ':'
 wait_screen "Commands"
 check "the palette names the selection" screen_has "klasor"
-check "a row shows id and label" screen_has " — "
+# Satır: etiket solda; kimlik ve tuş sağ kenarda.
+palette_row_has() { screen | grep -qE -- "$1"; }
+check "a row shows the label, then id and key at the right" palette_row_has '│New note +new  n │'
 keys Escape
 sleep 0.2
 check "Esc closes the palette" screen_lacks "Commands"
@@ -1591,7 +1600,7 @@ keys j
 literal ':'
 wait_screen "Commands"
 literal 'move'
-wait_screen "move — Move"
+wait_screen " move  m "
 keys Enter
 wait_screen "Move to"
 check "the palette runs the same move as m" screen_has "Move to"
@@ -1603,8 +1612,10 @@ palette_keys="$work/palette-keys"
 literal ':'
 wait_screen "Commands"
 for page in $(seq 1 12); do
-    # Palet kutusu panellerin üstündedir: önce kutunun satırı, sonra iki boşlukla ayrılan sağdaki tuşlar.
-    screen | grep -oE '│[^│]* — [^│]*│' | sed -nE 's/^│.*[^ ]  +([^ ].*[^ ]|[^ ]) *│$/\1/p' >>"$palette_keys"
+    # Palet kutusu panellerin üstündedir: satır `etiket  kimlik  tuşlar │`; kimlikten sonra iki boşlukla
+    # ayrılan tuşlar alınır, tuşsuz satır (`etiket  kimlik │`) atlanır.
+    screen | grep -oE '│[^│]*[^ ]  +[a-z][a-z0-9_.]*  [^│]*[^ ] │' |
+        sed -nE 's/^│.*[^ ]  +[a-z][a-z0-9_.]*  ([^ ].*[^ ]|[^ ]) │$/\1/p' >>"$palette_keys"
     for step in 1 2 3 4 5 6 7 8; do
         keys Down
     done
@@ -1641,7 +1652,7 @@ check "every key the palette shows is in F1" every_palette_key_is_in_help
 literal ':'
 wait_screen "Commands"
 literal 'icons.toggle'
-wait_screen "icons.toggle — "
+wait_screen " icons.toggle "
 keys Enter
 sleep 0.3
 # toml++ yazarken tek tırnak seçebilir.
@@ -1652,7 +1663,8 @@ wait_exit >/dev/null
 start_app "→ open"
 literal ':'
 wait_screen "Commands"
-check "the recent command comes first after a restart" bash -c "tmux capture-pane -p -t '$session' | grep -m1 -F ' — ' | grep -qF 'icons.toggle'"
+# İlk satır: başlık ve girdi satırından sonraki palet satırı.
+check "the recent command comes first after a restart" bash -c "tmux capture-pane -p -t '$session' | grep -A2 -F 'Commands' | sed -n 3p | grep -qF ' icons.toggle '"
 keys Enter
 sleep 0.3
 check "icons.toggle flips back" icons_set_to off
@@ -1716,7 +1728,7 @@ sleep 0.2
 literal ':'
 wait_screen "Commands"
 literal 'view.map'
-wait_screen "view.map — "
+wait_screen " view.map "
 keys Enter
 wait_screen "depth 2"
 check "the map shows its scope line" screen_has "Tab select"

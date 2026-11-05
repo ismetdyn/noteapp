@@ -8,7 +8,9 @@
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 
+#include <SDL3/SDL.h>
 #include <chrono>
+#include <cstdint>
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <fstream>
@@ -178,6 +180,27 @@ private:
     ImGuiID begin_hook_ = 0;
     ImGuiID end_hook_ = 0;
 };
+
+// Son karenin bir pikseli (0xRRGGBB); yazılımsal çizicide sunumdan sonra da arka tampon yerindedir. Tek
+// pencere.
+inline std::uint32_t pixel_at(float x, float y) {
+    int count = 0;
+    const std::unique_ptr<SDL_Window*, decltype(&SDL_free)> windows(SDL_GetWindows(&count), &SDL_free);
+    REQUIRE(count == 1);
+    SDL_Surface* pixels = SDL_RenderReadPixels(SDL_GetRenderer(windows.get()[0]), nullptr);
+    REQUIRE(pixels != nullptr);
+    Uint8 red = 0;
+    Uint8 green = 0;
+    Uint8 blue = 0;
+    Uint8 alpha = 0;
+    const bool read =
+        SDL_ReadSurfacePixel(pixels, static_cast<int>(x), static_cast<int>(y), &red, &green, &blue, &alpha);
+    SDL_DestroySurface(pixels);
+    REQUIRE(read);
+    constexpr int kRedShift = 16;
+    constexpr int kGreenShift = 8;
+    return (std::uint32_t{red} << kRedShift) | (std::uint32_t{green} << kGreenShift) | std::uint32_t{blue};
+}
 
 inline void type_text(View& view, const char* utf8) {
     ImGui::GetIO().AddInputCharactersUTF8(utf8);

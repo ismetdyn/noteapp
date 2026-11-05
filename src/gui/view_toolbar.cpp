@@ -1,3 +1,4 @@
+#include "core/file_icon_table.hpp"
 #include "core/i18n.hpp"
 #include "gui/commands.hpp"
 #include "gui/view_internal.hpp"
@@ -319,44 +320,37 @@ void View::draw_picker() {
     ImGui::EndPopup();
 }
 
+// K3: simgeler açıkken eylemler yalnız simgedir ("Yeni not" birincil düğme, simge ve adıyla); ad, kısayol ve
+// kapalı düğmenin nedeni ipucundadır. Simgeler kapalıysa (`icons = off`) düğmeler adlarıyla kalır.
 void View::draw_toolbar() {
+    namespace icons = core::icon_table;
     struct ToolbarAction {
         const char* name{};
         const char* label_key{};
         const char* tooltip_key{};
         bool enabled{};
         const GuiCommand* command{};
-        std::string icon;           // boşsa etiket ikonsuz; tabloda "sil" karşılığı glif yok
+        core::FileIcon icon{};
         bool starts_group = false;  // öncesine ayraç
-    };
-    const auto glyph = [this](const core::FileIcon& icon) {
-        return core::icon_text(icon, state_.icon_style());
+        ButtonKind kind = ButtonKind::Ghost;
     };
     const ToolbarAction actions[] = {
         {"toolbar_new_note", "gui.toolbar_new_note", "gui.toolbar_new_note_tip", true, &gui_command("new"),
-         glyph(core::file_icon(""))},
+         icons::kNewNote, false, ButtonKind::Primary},
         {"toolbar_new_folder", "gui.new_folder", "gui.toolbar_new_folder_tip", true,
-         &gui_command("folder.new"), glyph(core::folder_icon(false))},
-        {"toolbar_import", "gui.toolbar_import", "gui.toolbar_import_tip", true, &gui_command("import"), {}},
-        {"toolbar_rename",
-         "gui.rename_folder",
-         "gui.toolbar_rename_tip",
-         state_.can_rename(),
-         &gui_command("rename"),
-         {},
-         true},
+         &gui_command("folder.new"), icons::kNewFolder},
+        {"toolbar_import", "gui.toolbar_import", "gui.toolbar_import_tip", true, &gui_command("import"),
+         icons::kImport},
+        {"toolbar_rename", "gui.rename_folder", "gui.toolbar_rename_tip", state_.can_rename(),
+         &gui_command("rename"), icons::kRename, true},
         {"toolbar_move", "gui.toolbar_move", "gui.toolbar_move_tip", state_.can_move(), &gui_command("move"),
-         glyph(core::folder_icon(true))},
-        {"toolbar_delete",
-         "gui.delete",
-         "gui.toolbar_delete_tip",
-         state_.can_delete(),
-         &gui_command("trash"),
-         {}},
-        {"toolbar_trash", nullptr, "gui.toolbar_trash_tip", true, &gui_command("go.trash"),
-         glyph(core::trash_icon()), true},
+         icons::kMove},
+        {"toolbar_delete", "gui.delete", "gui.toolbar_delete_tip", state_.can_delete(), &gui_command("trash"),
+         icons::kDelete, false, ButtonKind::GhostDanger},
+        {"toolbar_trash", nullptr, "gui.toolbar_trash_tip", true, &gui_command("go.trash"), icons::kTrash,
+         true},
         {"toolbar_export", "gui.toolbar_export", "gui.toolbar_export_tip", state_.can_export(),
-         &gui_command("export.pdf"), glyph(core::file_icon("a.pdf"))},
+         &gui_command("export.pdf"), icons::kExportPdf},
     };
     const float row_start_x = ImGui::GetCursorScreenPos().x;
     const float row_width = ImGui::GetContentRegionAvail().x;
@@ -366,11 +360,17 @@ void View::draw_toolbar() {
     // Fare içindir: her eylemin kısayolu ya da bağlam menüsü var; Tab sırası arama ile liste arasında
     // uzamasın.
     ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
-    const std::string trash_label =
-        core::tr("gui.toolbar_trash", {{"count", std::to_string(state_.trash_count())}});
+    const std::string trash_count = std::to_string(state_.trash_count());
     for (const ToolbarAction& action : actions) {
-        const std::string text = action.label_key ? core::tr(action.label_key) : trash_label;
-        const std::string label = action.icon.empty() ? text : action.icon + " " + text;
+        const std::string text = action.label_key ? core::tr(action.label_key)
+                                                  : core::tr("gui.toolbar_trash", {{"count", trash_count}});
+        const std::string glyph = core::icon_text(action.icon, state_.icon_style());
+        std::string label = text;
+        if (!glyph.empty() && action.kind == ButtonKind::Primary)
+            label = glyph + " " + text;
+        else if (!glyph.empty())
+            label =
+                action.label_key ? glyph : glyph + " " + trash_count;  // çöpte sayı simgenin yanında kalır
         if (!first) {
             const float lead = action.starts_group ? gap + spacing : 0.0F;
             // Ayraç yalnız aynı satırda: alt satıra inen grup zaten ayrıdır.
@@ -379,14 +379,18 @@ void View::draw_toolbar() {
         }
         first = false;
         ImGui::BeginDisabled(!action.enabled);
-        if (button(action.name, label)) {
+        if (button(action.name, label, action.kind)) {
             if (action.command == &gui_command("import"))
                 ImGui::OpenPopup("##import_menu");  // dosya mı klasör mü: yerel diyaloglar ayrıdır
             else
                 queue_command(*action.command);
         }
-        ImGui::SetItemTooltip(
-            "%s", core::tr(action.tooltip_key).c_str());  // kapalı düğmede de neden/kısayol görünsün
+        // Kapalı düğmede de neden ve kısayol görünsün; adı yazmayan düğmenin adı ipucunun başında.
+        const std::string tip = core::tr(action.tooltip_key);
+        if (label == text)
+            ImGui::SetItemTooltip("%s", tip.c_str());
+        else
+            ImGui::SetItemTooltip("%s\n%s", text.c_str(), tip.c_str());
         ImGui::EndDisabled();
     }
     if (ImGui::BeginPopup("##import_menu")) {
@@ -412,44 +416,66 @@ void View::draw_toolbar_separator(float gap) {
     ImGui::SameLine();
 }
 
-// Görünüm seçici sağa yaslı: sığmazsa alt satıra iner, yine sağda durur.
+// Görünüm seçici segmentli denetimdir: üç bitişik düğme tek zeminde; etkin segment seçili tonda, ötekiler
+// soluk metinle. Ardından Ayarlar (⚙). İkisi sağa yaslı ve birlikte kalır: sığmazsa alt satıra inerler, yine
+// sağda.
 void View::draw_view_switch(float row_start_x, float row_width, float gap) {
+    namespace icons = core::icon_table;
     struct ViewChoice {
         const char* name;
         const char* label_key;
         const char* tooltip_key;
         BrowserView view;
         const GuiCommand* command;
+        core::FileIcon icon;
     };
     static constexpr ViewChoice kChoices[] = {
         {"toolbar_view_tree", "gui.view_tree", "gui.view_tree_tip", BrowserView::Tree,
-         &gui_command("view.tree")},
+         &gui_command("view.tree"), icons::kViewTree},
         {"toolbar_view_details", "gui.view_details", "gui.view_details_tip", BrowserView::Details,
-         &gui_command("view.details")},
-        {"toolbar_view_map", "gui.view_map", "gui.view_map_tip", BrowserView::Map, &gui_command("view.map")},
+         &gui_command("view.details"), icons::kViewDetails},
+        {"toolbar_view_map", "gui.view_map", "gui.view_map_tip", BrowserView::Map, &gui_command("view.map"),
+         icons::kViewMap},
     };
+    const auto with_icon = [this](const core::FileIcon& icon, const std::string& text) {
+        const std::string glyph = core::icon_text(icon, state_.icon_style());
+        return glyph.empty() ? text : glyph + " " + text;
+    };
+    const std::string settings_glyph = core::icon_text(icons::kSettings, state_.icon_style());
+    const std::string settings_label = settings_glyph.empty() ? core::tr("gui.tab_settings") : settings_glyph;
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    float width = -spacing;
+    float segments = 0.0F;
     for (const ViewChoice& choice : kChoices)
-        width += button_width(core::tr(choice.label_key)) + spacing;
-    flow_after_previous(gap + spacing + width, row_start_x, row_width);
-    ImGui::SetCursorScreenPos(ImVec2(std::max(ImGui::GetCursorScreenPos().x, row_start_x + row_width - width),
-                                     ImGui::GetCursorScreenPos().y));
+        segments += button_width(with_icon(choice.icon, core::tr(choice.label_key)));
+    const float trailing = segments + spacing + button_width(settings_label);
+    flow_after_previous(gap + spacing + trailing, row_start_x, row_width);
+    const ImVec2 start(std::max(ImGui::GetCursorScreenPos().x, row_start_x + row_width - trailing),
+                       ImGui::GetCursorScreenPos().y);
+    ImGui::SetCursorScreenPos(start);
+    const theme::Theme& colors = theme::current();
+    ImGui::GetWindowDrawList()->AddRectFilled(start,
+                                              ImVec2(start.x + segments, start.y + ImGui::GetFrameHeight()),
+                                              colors.control, ImGui::GetStyle().FrameRounding);
     bool first = true;
     for (const ViewChoice& choice : kChoices) {
-        const std::string label = core::tr(choice.label_key);
         if (!first)
-            flow_after_previous(button_width(label), row_start_x, row_width);
+            ImGui::SameLine(0.0F, 0.0F);
         first = false;
         const bool active = state_.browser_view() == choice.view;
-        if (active)
-            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        if (button(choice.name, label))
+        // Doygun ButtonActive yok: etkin segment seçili satırın tonudur.
+        ImGui::PushStyleColor(ImGuiCol_Button, active ? colors.selected : 0);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active ? colors.selected : colors.control_hovered);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, active ? colors.selected : colors.control_active);
+        ImGui::PushStyleColor(ImGuiCol_Text, active ? colors.text : colors.muted);
+        if (button(choice.name, with_icon(choice.icon, core::tr(choice.label_key))))
             queue_command(*choice.command);
-        if (active)
-            ImGui::PopStyleColor();
+        ImGui::PopStyleColor(4);
         ImGui::SetItemTooltip("%s", core::tr(choice.tooltip_key).c_str());
     }
+    ImGui::SameLine();
+    if (button("settings_open", settings_label, ButtonKind::Ghost))
+        queue_command(gui_command("settings"));
+    ImGui::SetItemTooltip("%s", core::tr("gui.settings_open_tip").c_str());
 }
 
 }  // namespace noteapp::gui

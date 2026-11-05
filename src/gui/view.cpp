@@ -1,5 +1,6 @@
 #include "gui/view.hpp"
 
+#include "core/file_icon_table.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
 #include "core/text.hpp"
@@ -14,11 +15,12 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
-#include <cstring>
+#include <cstdio>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlrenderer3.h>
 #include <imgui_internal.h>  // Ctrl+Tab pencere geçişi (GImGui)
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -26,7 +28,6 @@ namespace noteapp::gui {
 
 namespace {
 
-constexpr float kFontPixels = 16.0F;
 // Ölçek 1'deki alt sınırlar: en uzun Türkçe Ayarlar satırı ve araç çubuğu bu boyutta sığar; ölçekle çarpılır.
 constexpr float kMinWindowWidth = 640.0F;
 constexpr float kMinWindowHeight = 420.0F;
@@ -56,37 +57,49 @@ int map_zoom_step(SDL_Keycode key) {
     return 0;
 }
 
-// Atlas kendi kopyasına sahip olur: gömülü veri const'tur, ImGui imzası void* ister; const_cast yerine kopya.
-// DejaVu bidi ve sıfır genişlikli karakterlere boş, genişliksiz glif verir: editörde, önizlemede ve adlarda
-// görünmez kalırlardı. ImGui bidi uygulamaz; U+FFFD glifine yönlendirmek onları yerinde görünür yapar ve
-// InputText'in imleç ölçüsü glifin kendi genişliğini kullandığından tutarlı kalır. Baytlar değişmez.
-ImFont* load_font(const char* resource) {
-    const auto font = pdf::embedded_font(resource);
-    if (!font)
+// Gömülü dosya kaynağı: pdf::embedded_font (DejaVu), embedded_ui_font (Inter, JetBrains Mono),
+// embedded_icon_font.
+using EmbeddedFile = std::optional<std::string_view> (*)(std::string_view);
+
+// Gömülü baytlar programın ömrü boyunca duran statik dizilerdir: atlas onları yerinde okur, kopyalamaz ve
+// sahiplenmez (FontDataOwnedByAtlas = false: ImGui kapanışta IM_FREE etmez, imgui_draw.cpp
+// ImFontAtlasFontSourceDestroy). ImGui imzası void* ister ama veriyi yalnız okur (stb_truetype const okur);
+// const_cast bu yüzden güvenli. `merge` iken yüz önceki fonta eklenir: glif aranırken önce eklenen kaynak
+// kazanır, eklenen yalnız eksiği doldurur. `ranges` fontla yaşamalı (ImGui dizinin kopyasını tutmaz). Ad
+// (dosya) ImGui'nin font adıdır.
+ImFont* add_font(EmbeddedFile source, const char* resource, bool merge = false,
+                 const ImWchar* ranges = nullptr) {
+    const auto data = source(resource);
+    if (!data)
         return nullptr;
-    void* owned = IM_ALLOC(font->size());
-    std::memcpy(owned, font->data(), font->size());
-    ImFont* loaded =
-        ImGui::GetIO().Fonts->AddFontFromMemoryTTF(owned, static_cast<int>(font->size()), kFontPixels);
-    if (loaded != nullptr)
+    ImFontConfig config;
+    config.FontDataOwnedByAtlas = false;
+    config.MergeMode = merge;
+    config.GlyphRanges = ranges;
+    std::snprintf(config.Name, sizeof(config.Name), "%s", resource);
+    void* bytes = const_cast<char*>(data->data());
+    ImFont* font = ImGui::GetIO().Fonts->AddFontFromMemoryTTF(bytes, static_cast<int>(data->size()),
+                                                              kFontPixels, &config);
+    // DejaVu bidi ve sıfır genişlikli karakterlere boş, genişliksiz glif verir: editörde, önizlemede ve
+    // adlarda görünmez kalırlardı. ImGui bidi uygulamaz; U+FFFD glifine yönlendirmek onları yerinde görünür
+    // yapar ve InputText'in imleç ölçüsü glifin kendi genişliğini kullandığından tutarlı kalır. Baytlar
+    // değişmez.
+    if (font != nullptr && !merge)
         for (const core::HiddenControl& hidden : core::hidden_controls())
-            loaded->AddRemapCodepoint(static_cast<ImWchar>(hidden.code_point), kReplacementCodepoint);
-    return loaded;
+            font->AddRemapCodepoint(static_cast<ImWchar>(hidden.code_point), kReplacementCodepoint);
+    return font;
 }
 
-// Aralıklar yalnız tablodaki kod noktalarıdır; alt küme fontu zaten yalnız onları taşır, atlas da yalnız
-// onları ister. `ranges` fontla yaşar (ImGui dizinin kopyasını tutmaz).
-bool merge_icon_font(const std::vector<ImWchar>& ranges) {
-    const auto font = embedded_icon_font("fonts/NoteappIcons.ttf");
-    if (!font)
-        return false;
-    void* owned = IM_ALLOC(font->size());
-    std::memcpy(owned, font->data(), font->size());
-    ImFontConfig config;
-    config.MergeMode = true;
-    config.GlyphRanges = ranges.data();
-    return ImGui::GetIO().Fonts->AddFontFromMemoryTTF(owned, static_cast<int>(font->size()), kFontPixels,
-                                                      &config) != nullptr;
+// Seçilebilir yüz ve eksik glifleri için DejaVu yedeği (⟳ ✓ ⚠, kutu çizgileri, U+FFFD); biri yoksa ikisi de
+// yok.
+ImFont* add_font_with_fallback(const char* face, const char* dejavu) {
+    ImFont* font = add_font(embedded_ui_font, face);
+    return font != nullptr && add_font(pdf::embedded_font, dejavu, true) != nullptr ? font : nullptr;
+}
+
+// İkon alt kümesi son eklenen UI yüzüne birleşir; aralık yalnız tablodaki kod noktalarıdır.
+bool merge_icons(const std::vector<ImWchar>& ranges) {
+    return add_font(embedded_icon_font, "fonts/NoteappIcons.ttf", true, ranges.data()) != nullptr;
 }
 
 }  // namespace
@@ -120,15 +133,33 @@ std::expected<std::unique_ptr<View>, std::string> View::create(GuiState& state) 
     GImGui->ConfigNavWindowingKeyNext = 0;
     GImGui->ConfigNavWindowingKeyPrev = 0;
 
-    platform->ui_font = load_font("fonts/DejaVuSans.ttf");
-    const bool has_icons = merge_icon_font(platform->icon_ranges);
-    platform->mono_font = load_font("fonts/DejaVuSansMono.ttf");
-    // Önizlemenin kalın ve eğik yüzleri PDF ile aynı gömülü aileden; atlas glifleri ilk kullanımda üretir.
-    PreviewFonts& preview = platform->preview_fonts;
-    preview = {platform->ui_font, load_font("fonts/DejaVuSans-Bold.ttf"), load_font("fonts/DejaVuSans-Oblique.ttf"),
-               load_font("fonts/DejaVuSans-BoldOblique.ttf"), platform->mono_font};
-    if (platform->ui_font == nullptr || !has_icons || platform->mono_font == nullptr || preview.bold == nullptr ||
-        preview.italic == nullptr || preview.bold_italic == nullptr)
+    // Ayarlar → Görünüm'deki aileler açılışta eklenir; glif ilk kullanımda üretilir (dinamik atlas), seçim
+    // değişince atlas yeniden kurulmaz. İlk font (Fonts[0]) DejaVu'dur, FontSizeBase ondan gelir. DejaVu'nun
+    // kalın ve eğik yüzleri PDF ile aynı gömülü aileden. Inter'de olmayan glif (⟳ ✓ ⚠) DejaVu'dan, ikonlar
+    // ikisine de.
+    PreviewFonts& dejavu = platform->dejavu;
+    dejavu.regular = add_font(pdf::embedded_font, "fonts/DejaVuSans.ttf");
+    const bool dejavu_icons = dejavu.regular != nullptr && merge_icons(platform->icon_ranges);
+    dejavu.mono = add_font(pdf::embedded_font, "fonts/DejaVuSansMono.ttf");
+    dejavu.bold = add_font(pdf::embedded_font, "fonts/DejaVuSans-Bold.ttf");
+    dejavu.italic = add_font(pdf::embedded_font, "fonts/DejaVuSans-Oblique.ttf");
+    dejavu.bold_italic = add_font(pdf::embedded_font, "fonts/DejaVuSans-BoldOblique.ttf");
+    PreviewFonts& inter = platform->inter;
+    inter.regular = add_font(embedded_ui_font, "fonts/Inter-Regular.ttf");
+    const bool inter_icons = inter.regular != nullptr && merge_icons(platform->icon_ranges) &&
+                             add_font(pdf::embedded_font, "fonts/DejaVuSans.ttf", true) != nullptr;
+    inter.bold = add_font_with_fallback("fonts/Inter-Bold.ttf", "fonts/DejaVuSans-Bold.ttf");
+    inter.italic = add_font_with_fallback("fonts/Inter-Italic.ttf", "fonts/DejaVuSans-Oblique.ttf");
+    inter.bold_italic =
+        add_font_with_fallback("fonts/Inter-BoldItalic.ttf", "fonts/DejaVuSans-BoldOblique.ttf");
+    platform->jetbrains_mono =
+        add_font_with_fallback("fonts/JetBrainsMono-Regular.ttf", "fonts/DejaVuSansMono.ttf");
+    const auto complete = [](const PreviewFonts& family) {
+        return family.regular != nullptr && family.bold != nullptr && family.italic != nullptr &&
+               family.bold_italic != nullptr;
+    };
+    if (!complete(dejavu) || dejavu.mono == nullptr || !dejavu_icons || !complete(inter) || !inter_icons ||
+        platform->jetbrains_mono == nullptr)
         return std::unexpected("embedded UI font is missing");
     platform->sdl_backend.emplace(platform->window.get(), platform->renderer.get());
     if (!platform->sdl_backend->ok)
@@ -186,6 +217,14 @@ void View::set_ui_scale(float scale) {
         core::log_warn(std::string("event=window_min_size_failed detail=") + SDL_GetError());
 }
 
+// Ayarlar → Görünüm'deki seçim (gui-state.toml); tanınmayan ad ilk aileye (DejaVu) düşer.
+PreviewFonts View::fonts() const {
+    const GuiLayout& layout = state_.layout();
+    PreviewFonts chosen = layout.ui_font == kUiFonts[1] ? platform_->inter : platform_->dejavu;
+    chosen.mono = layout.editor_font == kEditorFonts[1] ? platform_->jetbrains_mono : platform_->dejavu.mono;
+    return chosen;
+}
+
 void View::apply_theme() {
     // Plan davranış 2: yalnız açık/koyu ayrımı izlenir.
     theme::apply_colors(ImGui::GetStyle(),
@@ -231,6 +270,7 @@ void View::pump_events() {
 
 void View::render(const std::function<void()>& overlay) {
     pump_events();
+    ImGui::GetIO().FontDefault = fonts().regular;  // Ayarlar'daki aile: NewFrame onunla başlar
     // TUI gibi her kareden önce: tanılar ve öneriler bu karede çizilsin.
     lsp_send_at_ = state_.update_language_servers(std::chrono::steady_clock::now());
     item_rects_.clear();  // yalnız bu karede çizilenler kalır: gizli sekmenin eski konumu test edilmesin
@@ -419,43 +459,22 @@ void View::draw_root() {
     // Kısayollar önceki karenin değerini okudu; editör bu karede çizilmezse (çöp, klasör özeti, harita,
     // Ayarlar) odakta sayılmaz, yoksa arama kutusunun kırpma imleci duruyordu (caret_blinks).
     editor_active_ = false;
+    editor_drawn_ = false;
 
     const FocusRequest focus = state_.take_focus_request();
     if (focus != FocusRequest::None)
         pending_focus_ = focus;
 
-    ImGui::BeginChild("##content", ImVec2(0.0F, -ImGui::GetFrameHeightWithSpacing()));
-    if (ImGui::BeginTabBar("##tabs")) {
-        // Programatik geçiş (Ctrl+,) ImGui'de bir kare gecikir: o arada görünen eski sekme kullanıcı seçimi
-        // sanılmasın.
-        const Tab wanted = state_.tab();
-        if (wanted != drawn_tab_)
-            tab_switch_pending_ = true;
-        const auto tab_flags = [&](Tab tab) -> ImGuiTabItemFlags {
-            return tab_switch_pending_ && tab == wanted ? ImGuiTabItemFlags_SetSelected
-                                                        : ImGuiTabItemFlags_None;
-        };
-        const auto on_visible = [&](Tab tab) {
-            if (!tab_switch_pending_)
-                state_.set_tab(tab);
-            else if (tab == wanted)
-                tab_switch_pending_ = false;
-            drawn_tab_ = tab_switch_pending_ ? drawn_tab_ : tab;
-        };
-        const std::string notes_label = core::tr("gui.tab_notes") + "###notes";
-        const std::string settings_label = core::tr("gui.tab_settings") + "###settings";
-        if (ImGui::BeginTabItem(notes_label.c_str(), nullptr, tab_flags(Tab::Notes))) {
-            on_visible(Tab::Notes);
-            draw_notes_tab();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem(settings_label.c_str(), nullptr, tab_flags(Tab::Settings))) {
-            on_visible(Tab::Settings);
-            draw_settings_tab();
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
-    }
+    // Durum çubuğu ikincil boydadır: payı da o boyun satırıdır.
+    ImGui::PushFont(nullptr, kSmallFontPixels);
+    const float status_height = ImGui::GetFrameHeightWithSpacing();
+    ImGui::PopFont();
+    // Üst sekme satırı yok (K2): Ayarlar tüm içerik alanıdır, araç çubuğundaki ⚙ ya da Ctrl+, ile açılır.
+    ImGui::BeginChild("##content", ImVec2(0.0F, -status_height));
+    if (state_.tab() == Tab::Settings)
+        draw_settings_tab();
+    else
+        draw_notes_tab();
     ImGui::EndChild();
     draw_status_bar();
     ImGui::End();
@@ -463,11 +482,19 @@ void View::draw_root() {
 
 void View::draw_notes_tab() {
     draw_toolbar();
+    float canvas_left = ImGui::GetCursorScreenPos().x;
     if (!state_.zoomed()) {  // pane.zoom: sağ panel tüm genişlikte
         draw_left_pane();
+        // Bölmeler çizgiyle değil tonla ayrılır (sol krom, sağ tuval); aradaki 1 px, sol bölmenin
+        // boyutlandırma kenarıdır (üzerine gelince ImGui SeparatorHovered ile vurgular).
+        const ImVec2 min = ImGui::GetItemRectMin();
+        const ImVec2 max = ImGui::GetItemRectMax();
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(max.x, min.y), ImVec2(max.x, max.y),
+                                            ImGui::GetColorU32(ImGuiCol_Separator));
+        canvas_left = max.x + 1.0F;
         ImGui::SameLine();
     }
-    draw_right_pane();
+    draw_right_pane(canvas_left);
 }
 
 void View::draw_left_pane() {
@@ -498,6 +525,7 @@ void View::draw_left_pane() {
         draw_error(*error);
         remember_item_center("search_error");
     }
+    draw_migration_banner();
     if (map)
         draw_map();
     else
@@ -518,30 +546,130 @@ float View::reconcile_pane_size(float& stored, std::optional<float>& last_size, 
     return *last_size;
 }
 
+// Tek durum çubuğu (G7), öncelikli yerleşim: solda sayaç ve tek ileti, en önemlisi (hata > uyarı > bilgi;
+// eşitte genel ileti, senkron, editör sırası); kısalırsa tamamı ipucunda. Öbür iletiler bir sayı çipine ("⚠
+// 2") toplanır, tam metinleri çipin ipucunda. Sağda editör alanları ve kısa senkron göstergesi hiç kısalmaz.
+// 13 px, üstte 1 px.
 void View::draw_status_bar() {
-    const std::string count = state_.count_label();
-    const std::string& status = state_.status();
-    const std::string& sync = state_.sync_label();
+    namespace icons = core::icon_table;
+    const theme::Theme& colors = theme::current();
+    const ImVec2 top = ImGui::GetCursorScreenPos();
+    const float top_line = std::floor(top.y - (ImGui::GetStyle().ItemSpacing.y / 2.0F));
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(ImGui::GetWindowPos().x, top_line),
+                                        ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth(), top_line),
+                                        ImGui::GetColorU32(ImGuiCol_Separator));
+    ImGui::PushFont(nullptr, kSmallFontPixels);
+    ImGui::PushStyleColor(ImGuiCol_Text, colors.muted);
+    const std::string warning_glyph = core::icon_text(icons::kWarning, state_.icon_style());
+    const std::string warning_mark = warning_glyph.empty() ? std::string("⚠") : warning_glyph;
+
+    // Senkron etiketi ⟳ / ✓ / ⚠ ile başlar: simgeler açıkken baştaki sembol aynı anlamın simgesiyle değişir.
+    std::string sync = state_.sync_label();
+    ImU32 sync_color = colors.muted;
+    core::FileIcon sync_icon{};
+    switch (state_.sync_indicator()) {
+    case SyncIndicator::Off:
+        break;
+    case SyncIndicator::Running:
+        sync_color = colors.accent;
+        sync_icon = icons::kSync;
+        break;
+    case SyncIndicator::Ok:
+        sync_color = colors.success;
+        sync_icon = icons::kSyncOk;
+        break;
+    case SyncIndicator::Error:
+        sync_color = colors.danger;
+        sync_icon = icons::kWarning;
+        break;
+    }
+    if (const std::string glyph = core::icon_text(sync_icon, state_.icon_style());
+        sync_icon.nerd != 0 && !glyph.empty() && !sync.empty())
+        sync = glyph + sync.substr(utf8_length(sync.front()));
+
+    std::vector<StatusMessage> messages;
+    if (const std::string& status = state_.status(); !status.empty()) {
+        const bool error = state_.status_is_error();
+        messages.push_back({error && !warning_glyph.empty() ? warning_glyph + " " + status : status,
+                            error ? colors.danger : colors.muted,
+                            error ? StatusRank::Error : StatusRank::Info});
+    }
+    const bool sync_error = state_.sync_indicator() == SyncIndicator::Error;
+    if (sync_error)
+        messages.push_back({sync, colors.danger, StatusRank::Error});
+    if (editor_drawn_) {
+        if (StatusMessage notice = editor_notice(); !notice.text.empty())
+            messages.push_back(std::move(notice));
+    }
+    std::ranges::stable_sort(messages, std::ranges::greater{}, &StatusMessage::rank);
+
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const std::string count = state_.count_label();
     const bool can_undo = state_.can_undo_trash();
     const std::string undo_label = core::tr("gui.undo_trash");
-    const float undo_width = can_undo ? button_width(undo_label) + spacing : 0.0F;
-    const float free_width = ImGui::GetContentRegionAvail().x - text_width(count) - spacing - undo_width;
-    // İkisi de uzunsa alan yarı yarıya; kısa olan kendi kadar alır, kalan diğerinin.
-    const float sync_width = std::min(text_width(sync), status.empty() ? free_width : free_width / 2.0F);
+    const std::string fields = editor_drawn_ ? state_.editor_fields() : std::string{};
+    // Senkron hatası iletilerdedir; sağda yalnız işareti kalır (sığar, ipucunda tamamı).
+    const std::string sync_short = sync_error ? warning_mark : sync;
+    std::string more;
+    if (messages.size() > 1) {
+        const bool serious =
+            std::ranges::any_of(messages.begin() + 1, messages.end(),
+                                [](const StatusMessage& m) { return m.rank != StatusRank::Info; });
+        more = (serious ? warning_mark : std::string("+")) + " " + std::to_string(messages.size() - 1);
+    }
+    const float right_width = (fields.empty() ? 0.0F : text_width(fields) + spacing) + text_width(sync_short);
+    const float fixed = text_width(count) + (more.empty() ? 0.0F : text_width(more) + spacing) +
+                        (can_undo ? button_width(undo_label) + spacing : 0.0F) + right_width + spacing;
+    const float message_room = ImGui::GetContentRegionAvail().x - fixed - spacing;
+
+    ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(count.c_str());
     remember_item_center("count");
-    if (!status.empty()) {
+    if (!messages.empty() && message_room > 0.0F) {
         ImGui::SameLine();
-        draw_fitted_text("status", status, free_width - sync_width - spacing, keep_start);
+        ImGui::PushStyleColor(ImGuiCol_Text, messages.front().color);
+        draw_fitted_text("status", messages.front().text, message_room, keep_start);
+        ImGui::PopStyleColor();
+    }
+    if (!more.empty()) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, more.starts_with('+') ? colors.muted : colors.warning);
+        ImGui::TextUnformatted(more.c_str());
+        ImGui::PopStyleColor();
+        remember_item_center("status_more");
+        if (ImGui::BeginItemTooltip()) {
+            ImGui::PushTextWrapPos(dialog_content_width());
+            for (auto message = messages.begin() + 1; message != messages.end(); ++message) {
+                ImGui::PushStyleColor(ImGuiCol_Text, message->color);
+                ImGui::TextUnformatted(message->text.c_str());
+                ImGui::PopStyleColor();
+            }
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
     }
     if (can_undo) {
         ImGui::SameLine();
-        if (button("status_undo", undo_label))
+        ImGui::PushStyleColor(ImGuiCol_Text, colors.text);
+        if (button("status_undo", undo_label, ButtonKind::Ghost))
             queue([this] { state_.undo_trash(); });
+        ImGui::PopStyleColor();
     }
-    ImGui::SameLine(ImGui::GetContentRegionMax().x - sync_width);
-    draw_fitted_text("sync", sync, sync_width, keep_start);
+    const float right = ImGui::GetContentRegionMax().x;
+    if (!fields.empty()) {
+        ImGui::SameLine(right - right_width);
+        ImGui::TextUnformatted(fields.c_str());
+        remember_item_center("editor_status");
+    }
+    ImGui::SameLine(right - text_width(sync_short));
+    ImGui::PushStyleColor(ImGuiCol_Text, sync_color);
+    ImGui::TextUnformatted(sync_short.c_str());
+    ImGui::PopStyleColor();
+    remember_item_center("sync");
+    if (sync_short != sync)
+        full_text_tooltip(sync);
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
 }
 
 }  // namespace noteapp::gui

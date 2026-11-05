@@ -16,15 +16,9 @@ namespace {
 
 constexpr float kDialogTextEms = 32.0F;
 constexpr const char* kEllipsis = "…";
-
-std::size_t utf8_length(char lead) {
-    const auto byte = static_cast<unsigned char>(lead);
-    if (byte >= 0xF0)
-        return 4;
-    if (byte >= 0xE0)
-        return 3;
-    return byte >= 0xC0 ? 2 : 1;
-}
+// Dolu (birincil, yıkıcı) düğmenin üzerinde ve basılıyken parlaklığı (tasarım §3.4: ±%8).
+constexpr float kFillHoverScale = 1.08F;
+constexpr float kFillActiveScale = 0.92F;
 
 // `width` içine sığan baştaki bayt sayısı; kod noktası ortasında kesmez.
 std::size_t fitting_bytes(std::string_view text, float width) {
@@ -72,6 +66,15 @@ std::vector<std::size_t> hit_offsets(const search::Hit& hit) {
 }
 
 }  // namespace
+
+std::size_t utf8_length(char lead) {
+    const auto byte = static_cast<unsigned char>(lead);
+    if (byte >= 0xF0)
+        return 4;
+    if (byte >= 0xE0)
+        return 3;
+    return byte >= 0xC0 ? 2 : 1;
+}
 
 void draw_error(const std::string& message) {
     if (message.empty())
@@ -133,13 +136,19 @@ bool flow_after_previous(float next_width, float row_start_x, float row_width) {
     return true;
 }
 
-// Sütuna sarılan soluk açıklama satırı.
+void align_right(float width, float room) {
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(room - width, 0.0F));
+}
+
+// Sütuna sarılan soluk açıklama satırı, ikincil boyda.
 void draw_hint(const std::string& text) {
+    ImGui::PushFont(nullptr, kSmallFontPixels);
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::PushTextWrapPos(0.0F);
     ImGui::TextUnformatted(text.c_str());
     ImGui::PopTextWrapPos();
     ImGui::PopStyleColor();
+    ImGui::PopFont();
 }
 
 // Metindeki [[hedef]] ve senkrondan gelen ad güvenilmez: denetim baytı yer tutucu olur, çizim satırı kaymaz.
@@ -362,10 +371,63 @@ bool new_tab_click(bool clicked) {
     return (clicked && ImGui::GetIO().KeyCtrl) || ImGui::IsItemClicked(ImGuiMouseButton_Middle);
 }
 
-bool View::button(const std::string& name, const std::string& label) {
-    const bool clicked = ImGui::Button((label + "###" + name).c_str());
+// Çerçevesiz (sınır yalnız girdi ve onay kutusunda). Dolu düğmede üzerine gelince %8 açık, basılıyken %8
+// koyu.
+bool View::button(const std::string& name, const std::string& label, ButtonKind kind) {
+    const std::string id = label + "###" + name;
+    const theme::Theme& colors = theme::current();
+    int pushed = 0;
+    const auto push = [&pushed](ImGuiCol slot, ImU32 color) {
+        ImGui::PushStyleColor(slot, color);
+        ++pushed;
+    };
+    const auto fill = [&](ImU32 color) {
+        push(ImGuiCol_Button, color);
+        push(ImGuiCol_ButtonHovered, theme::scaled(color, kFillHoverScale));
+        push(ImGuiCol_ButtonActive, theme::scaled(color, kFillActiveScale));
+        push(ImGuiCol_Text, colors.on_fill);
+    };
+    switch (kind) {
+    case ButtonKind::Secondary:
+        break;
+    case ButtonKind::Ghost:
+    case ButtonKind::GhostDanger:
+        push(ImGuiCol_Button, 0);
+        push(ImGuiCol_ButtonHovered, colors.hover);
+        push(ImGuiCol_ButtonActive, colors.control_active);
+        // Renk Button'dan önce verilir: üzerinde olup olmadığı geçen karenin sonucudur (fare olayı kare
+        // üretir).
+        if (kind == ButtonKind::GhostDanger && GImGui->HoveredIdPreviousFrame == ImGui::GetID(id.c_str()))
+            push(ImGuiCol_Text, colors.danger);
+        break;
+    case ButtonKind::Primary:
+        fill(colors.accent_fill);
+        break;
+    case ButtonKind::Danger:
+        fill(colors.danger_fill);
+        break;
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0F);
+    const bool clicked = ImGui::Button(id.c_str());
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(pushed);
     remember_item_center(name);
     return clicked;
+}
+
+// Diyalog altı (G11): Tamam birincil, Vazgeç hayalet, ikisi sağa yaslı; dar diyalogda alt satıra iner.
+View::DialogAnswer View::dialog_ok_cancel() {
+    const std::string ok = core::tr("gui.ok");
+    const std::string cancel = core::tr("gui.cancel");
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const float row_start_x = ImGui::GetCursorScreenPos().x;
+    const float room = dialog_content_width();
+    align_right(button_width(ok) + spacing + button_width(cancel), room);
+    DialogAnswer answer;
+    answer.ok = button("dialog_ok", ok, ButtonKind::Primary);
+    flow_after_previous(button_width(cancel), row_start_x, room);
+    answer.cancel = button("dialog_cancel", cancel, ButtonKind::Ghost);
+    return answer;
 }
 
 void View::remember_item_center(const std::string& name) {

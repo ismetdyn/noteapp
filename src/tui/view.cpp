@@ -31,7 +31,8 @@ constexpr int kMinPathCells = 16;  // sağ sütun yolu bundan fazla sıkıştır
 constexpr std::string_view kColumnGap = "  ";
 constexpr std::string_view kEllipsis = "…";  // ContentIndex kesitlerinin kenar işareti
 constexpr int kFrameLabelOffset = 1;         // etiket köşeyi örtmesin
-constexpr int kPriorityHints = 5;            // Listede süzgeç yüzünden düşmeyen ilk ipuçları
+// Listede süzgeç yüzünden düşmeyen ilk ipuçları; sağda F1 yardım da yer tutar, 60 sütunda dördü sığar.
+constexpr int kPriorityHints = 4;
 constexpr std::string_view kIconGap = "  ";  // taşma hücresi ve boşluk
 constexpr std::string_view kBom = "\xEF\xBB\xBF";
 
@@ -190,14 +191,39 @@ std::vector<Crumb> breadcrumb(const TuiState& state) {
     return crumbs;
 }
 
-std::string breadcrumb_text(const TuiState& state) {
+// Klasör adları kalın, ayırıcı soluk: yol bir bakışta okunur. Hücreler `breadcrumb_folder_at` ile aynıdır.
+ftxui::Element breadcrumb_element(const TuiState& state) {
+    using namespace ftxui;
     const std::vector<Crumb> crumbs = breadcrumb(state);
     if (crumbs.empty())
-        return trash_indicator(state);
-    std::string shown = breadcrumb_lead(state);
-    for (std::size_t i = 0; i < crumbs.size(); ++i)
-        shown += (i == 0 ? std::string{} : std::string(kCrumbSeparator)) + crumbs[i].text;
-    return shown;
+        return text(trash_indicator(state)) | bold;
+    Elements parts = {text(breadcrumb_lead(state)) | bold};
+    for (std::size_t i = 0; i < crumbs.size(); ++i) {
+        if (i > 0)
+            parts.push_back(text(std::string(kCrumbSeparator)) | dim);
+        parts.push_back(text(crumbs[i].text) | bold);
+    }
+    return hbox(std::move(parts));
+}
+
+constexpr std::string_view kGroupSeparator = " · ";
+
+// Senkron durumu rengiyle: ✓ yeşil, ⟳ mavi, ⚠ kırmızı, kapalı soluk. Renk tek sinyal değildir, ikon da
+// söyler. Metin uzak hata ayrıntısı taşıyabilir: çizim noktasında arınır.
+ftxui::Element sync_element(const StatusLine& status) {
+    using namespace ftxui;
+    Element shown = text(terminal_safe(status.sync));
+    switch (status.sync_state) {
+    case SyncIndicator::State::Running:
+        return shown | color(Color::Blue);
+    case SyncIndicator::State::Ok:
+        return shown | color(Color::Green);
+    case SyncIndicator::State::Failed:
+        return shown | color(Color::Red);
+    case SyncIndicator::State::Disabled:
+        break;
+    }
+    return shown | dim;
 }
 
 ftxui::Element top_bar(const TuiState& state, const StatusLine& status) {
@@ -207,12 +233,14 @@ ftxui::Element top_bar(const TuiState& state, const StatusLine& status) {
     const std::string counts = filtered
                                    ? std::to_string(state.rows().size()) + "/" + std::to_string(state.total())
                                    : count_text("tui.count_notes", state.total());
-    const std::string left =
-        state.trash_view() ? trash_prefix(state) + core::tr("tui.trash_title") : breadcrumb_text(state);
-    // Senkron metni uzak hata ayrıntısı taşıyabilir: çizim noktasında arınır.
-    return hbox({text(left) | bold, filler(),
-                 text(sort_label(state) + "  " + mode_label(state) + " " + counts + "   " +
-                      terminal_safe(status.sync))});
+    Element left = state.trash_view() ? text(trash_prefix(state) + core::tr("tui.trash_title")) | bold
+                                      : breadcrumb_element(state);
+    // Sağ grup ikincil bilgidir: soluk, ` · ` ayraçlı; yalnız senkron durumu kendi rengindedir.
+    std::string right = sort_label(state) + std::string(kGroupSeparator) + mode_label(state) +
+                        std::string(kGroupSeparator) + counts;
+    if (!status.sync.empty())
+        right += kGroupSeparator;
+    return hbox({std::move(left), filler(), text(right) | dim, sync_element(status)});
 }
 
 // `n` görünümünün üst satırı: liste ve sayaçlar gizli, kaydedildiyse notun yolu.
@@ -252,6 +280,28 @@ PaneMode editor_mode(const EditorSession& editor) {
         return review_mode();
     return {ftxui::Color::Magenta,
             core::tr("tui.frame_edit") + (editor.dirty() ? std::string(kDirtyMark) : "")};
+}
+
+// Alt satırların kipi: editör açıkken satırlar editörü anlatır, yoksa odaktaki panel. Hap ve ipucu tuşları
+// bu rengi alır.
+PaneMode status_mode(const TuiState& state, const EditorSession* editing) {
+    if (editing && editing->is_open())
+        return editor_mode(*editing);
+    return right_pane_focused(state.focus()) ? review_mode() : list_mode();
+}
+
+std::string pill_text(const PaneMode& mode) {
+    return " " + mode.label + " ";
+}
+
+// Kip hapı: kip renginde zemin, siyah kalın metin (açık ve koyu temada okunur). Renksiz terminalde (NO_COLOR,
+// FTXUI Palette1) zemin rengi düşer; hap ters çizilir ki kip yine bir bakışta okunsun.
+ftxui::Element mode_pill(const PaneMode& mode) {
+    using namespace ftxui;
+    Element pill = text(pill_text(mode)) | bold;
+    if (Terminal::ColorSupport() == Terminal::Color::Palette1)
+        return pill | inverted;
+    return pill | bgcolor(mode.color) | color(Color::Black);
 }
 
 // Çocuğu çizdikten sonra kutusunun kenar hücrelerine `apply` uygular; içerik hücrelerine dokunmaz.
@@ -1021,8 +1071,52 @@ int priority_hints_cells(std::string_view hints) {
     return ftxui::string_width(std::string(hints.substr(0, end)));
 }
 
+std::vector<std::string_view> split_hints(std::string_view hints) {
+    std::vector<std::string_view> out;
+    for (std::size_t start = 0; start < hints.size();) {
+        const std::size_t end = std::min(hints.find(kHintSeparator, start), hints.size());
+        out.push_back(hints.substr(start, end - start));
+        start = end + kHintSeparator.size();
+    }
+    return out;
+}
+
+constexpr std::string_view kHelpKey = "F1 ";
+
+// Katalogdan `F1` yardım ipucunu ayırır (çubuk onu sağa sabitler): {kalan ipuçları, yardım ipucu}. Katalog
+// yine tek kaynaktır: ipucunun metni ve dili oradan gelir.
+std::pair<std::string, std::string> split_help_hint(std::string_view hints) {
+    std::string rest;
+    std::string help;
+    for (const std::string_view hint : split_hints(hints)) {
+        if (help.empty() && hint.starts_with(kHelpKey)) {
+            help = hint;
+            continue;
+        }
+        if (!rest.empty())
+            rest += kHintSeparator;
+        rest += hint;
+    }
+    return {rest, help};
+}
+
+// "tuş açıklama": tuş kalın ve kip renginde, açıklama varsayılan renkte; renksiz terminalde kalınlık ayırır.
+ftxui::Elements hint_cells(std::string_view hints, ftxui::Color key_color) {
+    using namespace ftxui;
+    Elements cells;
+    for (const std::string_view hint : split_hints(hints)) {
+        if (!cells.empty())
+            cells.push_back(text(std::string(kHintSeparator)));
+        const std::size_t space = std::min(hint.find(' '), hint.size());
+        cells.push_back(text(std::string(hint.substr(0, space))) | bold | color(key_color));
+        if (space < hint.size())
+            cells.push_back(text(std::string(hint.substr(space))));
+    }
+    return cells;
+}
+
 ftxui::Element bottom_bar(const TuiState& state, const StatusLine& status, const NewRowState* new_row,
-                          const RenameState* rename, int width) {
+                          const RenameState* rename, int width, ftxui::Color key_color) {
     using namespace ftxui;
     if (rename) {
         if (rename->error().empty())
@@ -1046,16 +1140,18 @@ ftxui::Element bottom_bar(const TuiState& state, const StatusLine& status, const
     if (!status.notice.empty())
         return text(fit_hints(terminal_safe(status.notice), width)) | dim;
     const std::string hints = core::tr(hints_key(state));
+    const auto [rest, help] = split_help_hint(hints);
+    const int separator = static_cast<int>(kHintSeparator.size());
+    const int pinned = help.empty() ? 0 : string_width(help) + separator;
     const std::string selection = selection_text(state);
-    const std::string filter =
-        active_filter(state, width - priority_hints_cells(hints) - static_cast<int>(kHintSeparator.size()) -
-                                 string_width(selection));
+    const std::string filter = active_filter(state, width - priority_hints_cells(rest) - separator -
+                                                        string_width(selection) - pinned);
     if (filter.empty() && selection.empty())
-        return text(fit_hints(hints, width)) | dim;
+        return hint_bar(hints, width, key_color);
     const std::string shown = selection +
                               (!filter.empty() && !selection.empty() ? std::string(kHintSeparator) : "") +
                               filter + std::string(kHintSeparator);
-    return hbox({text(shown) | bold, text(fit_hints(hints, width - string_width(shown))) | dim});
+    return hbox({text(shown) | bold, hint_bar(hints, width - string_width(shown), key_color) | flex});
 }
 
 ftxui::Element settings_box(const SettingsState& settings, int window_height) {
@@ -1111,13 +1207,17 @@ std::string palette_title(const TuiState& state) {
 ftxui::Element palette_row(const PaletteRow& row, bool selected) {
     using namespace ftxui;
     const Command& command = *row.command;
-    std::string left = std::string(command.id) + " — " + core::tr(command.label_key);
+    std::string label = core::tr(command.label_key);
     if (row.reason)
-        left += " (" + core::tr(row.reason) + ")";
+        label += " (" + core::tr(row.reason) + ")";
     std::string keys(command.keys);
     if (!command.alias.empty())
         keys += " " + std::string(command.alias);
-    Element line = hbox({text(left) | flex, text(keys.empty() ? keys : " " + keys + " ")});
+    // GUI paletiyle aynı bilgi sırası: okunan etiket solda; kararlı kimlik ve tuş sağda, soluk. Uzun etiket
+    // kısalır, kimlik ve tuş sağ kenarda kalır.
+    const std::string right =
+        " " + std::string(command.id) + (keys.empty() ? std::string{} : "  " + keys) + " ";
+    Element line = hbox({text(label) | flex, text(right) | dim});
     if (row.reason)
         line = line | dim;
     return selected ? line | inverted : line;
@@ -1579,6 +1679,19 @@ std::string fit_hints(std::string_view hints, int width) {
     return fitted;
 }
 
+ftxui::Element hint_bar(std::string_view hints, int width, ftxui::Color key_color) {
+    using namespace ftxui;
+    const auto [rest, help] = split_help_hint(hints);
+    if (help.empty())
+        return hbox(hint_cells(fit_hints(rest, width), key_color));
+    // Yardım en dar pencerede de görünür: önce onun yeri ayrılır, ipuçları kalan yere sığdığınca.
+    const int room = width - string_width(help) - static_cast<int>(kHintSeparator.size());
+    Elements cells = hint_cells(fit_hints(rest, room), key_color);
+    cells.push_back(filler());
+    std::ranges::move(hint_cells(help, key_color), std::back_inserter(cells));
+    return hbox(std::move(cells));
+}
+
 std::string tab_strip_text(std::span<const TabLabel> tabs, int width) {
     constexpr std::string_view kSeparator = " │ ";
     constexpr std::string_view kMore = "…";
@@ -1656,12 +1769,16 @@ ftxui::Element render(const TuiState& state, const Preview& preview, const Statu
         panes(state, preview, editing, new_row, window, panel_height, !modal_open, spell, tabs) | flex};
     // Biçimli görünüm olmadıysa neden burada: içerik satırlarını kaydırmaz, fare ve arama eşlemesi bozulmaz.
     const std::string note = preview.note.empty() ? std::string{} : preview.note + "  ";
+    // Alt satırlar odaktaki işi anlatır: satır kip hapıyla açılır, ipucu tuşları aynı renktedir.
+    const PaneMode mode = status_mode(state, editing);
+    const int info_width = window.dimx - ftxui::string_width(pill_text(mode));
     // cppcheck-suppress nullPointerRedundantCheck ; editor_open, editing dolu demektir
-    lines.push_back(editor_open ? editor_info_bar(*editing, window.dimx)
-                                : text(note + totals_text(state, panel_height)) | dim);
+    lines.push_back(
+        hbox({mode_pill(mode), editor_open ? editor_info_bar(*editing, info_width) | flex
+                                           : text(" " + note + totals_text(state, panel_height)) | dim}));
     // cppcheck-suppress nullPointerRedundantCheck ; editor_open, editing dolu demektir
-    lines.push_back(editor_open ? editor_status_bar(*editing, window.dimx)
-                                : bottom_bar(state, status, new_row, rename, window.dimx));
+    lines.push_back(editor_open ? editor_status_bar(*editing, window.dimx, mode.color)
+                                : bottom_bar(state, status, new_row, rename, window.dimx, mode.color));
     Element main = vbox(std::move(lines));
     if (!modal)
         modal = inner_modal(state, editing, new_row, rename);

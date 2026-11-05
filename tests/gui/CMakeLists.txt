@@ -2,11 +2,13 @@ noteapp_add_test(gui
     browser_test.cpp
     command_parity_test.cpp
     content_search_test.cpp
+    dialogs_test.cpp
     editor_features_test.cpp
     editor_lsp_test.cpp
     editor_widget_test.cpp
     external_copy_test.cpp
     folders_test.cpp
+    fonts_test.cpp
     global_search_test.cpp
     gui_args_test.cpp
     icon_font_test.cpp

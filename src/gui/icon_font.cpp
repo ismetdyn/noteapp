@@ -12,6 +12,8 @@ std::vector<ImWchar> icon_glyph_ranges() {
                                    table::kFolderOpen.nerd, table::kTrash.nerd};
     for (const table::Entry& entry : table::kByExtension)
         points.push_back(entry.icon.nerd);
+    for (const core::FileIcon& icon : table::kActionIcons)
+        points.push_back(icon.nerd);
     std::ranges::sort(points);
     const auto duplicates = std::ranges::unique(points);
     points.erase(duplicates.begin(), duplicates.end());

@@ -22,7 +22,7 @@ ARCHIVE_URL = "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.1/
 ARCHIVE_SHA256 = "01172f37db8543edb102e5cb5c64101c9f4686630804d49b419aa07b23a69996"
 MEMBER = "SymbolsNerdFont-Regular.ttf"
 OUTPUT = pathlib.Path("/src/resources/fonts/NoteappIcons.ttf")
-EXPECTED_GLYPHS = 30
+EXPECTED_GLYPHS = 50
 
 table = pathlib.Path("/src/src/core/file_icon_table.hpp").read_text(encoding="utf-8")
 code_points = sorted({int(found, 16) for found in re.findall(r"\b0x([0-9A-F]{4,5})\b", table)})

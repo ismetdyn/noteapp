@@ -6,6 +6,7 @@
 #include "support/run_process.hpp"
 #include "support/test_support.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <csignal>
@@ -22,6 +23,7 @@
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -34,15 +36,16 @@ constexpr int kReadTimeoutMs = 10000;  // yalnız asılmaya karşı; başarı bu
 
 class PtyApp {
 public:
-    explicit PtyApp(const std::string& program, std::vector<std::string> args = {}) {
+    explicit PtyApp(const std::string& program, std::vector<std::string> args = {}, int columns = kColumns,
+                    int rows = kRows) {
         args.insert(args.begin(), program);
         std::vector<char*> argv;
         for (std::string& arg : args)
             argv.push_back(arg.data());
         argv.push_back(nullptr);
         winsize size{};
-        size.ws_row = kRows;
-        size.ws_col = kColumns;
+        size.ws_row = static_cast<unsigned short>(rows);
+        size.ws_col = static_cast<unsigned short>(columns);
         pid_ = forkpty(&fd_, nullptr, nullptr, &size);
         REQUIRE(pid_ >= 0);
         if (pid_ == 0) {
@@ -84,8 +87,9 @@ public:
         return seen;
     }
 
-    // `duration` boyunca okur (terminal sorularını yanıtlar), okunan bayt sayısını döner.
-    std::size_t read_for(std::chrono::milliseconds duration) const {
+    // `duration` boyunca okur (terminal sorularını yanıtlar), okunan bayt sayısını döner; `seen` doluysa
+    // okunanı ona ekler.
+    std::size_t read_for(std::chrono::milliseconds duration, std::string* seen = nullptr) const {
         const auto until = std::chrono::steady_clock::now() + duration;
         std::size_t total = 0;
         for (auto now = std::chrono::steady_clock::now(); now < until;
@@ -100,6 +104,8 @@ public:
             const std::string_view chunk(buffer.data(), static_cast<std::size_t>(count));
             answer_queries(chunk);
             total += chunk.size();
+            if (seen)
+                seen->append(chunk);
         }
         return total;
     }
@@ -431,5 +437,174 @@ TEST_CASE("NO_COLOR draws no color but keeps bold, dim and inverse; without it t
         CHECK(seen.bold);
         CHECK(seen.dim);
         CHECK(seen.inverse);
+    }
+}
+
+namespace {
+
+// Çıktının yorumlandığı ızgara: frame_diff'in kullandığı alt küme (CUP, CHA, CUF, \r\n, SGR). Genişliği kesin
+// olmayan glifin ardından frame_diff mutlak konum yazar; bu yüzden her kod noktası bir hücre sayılır.
+struct GridCell {
+    std::string text = " ";
+    bool bold = false;
+    bool inverse = false;
+    int foreground = 39;
+    int background = 49;
+};
+
+class Grid {
+public:
+    Grid(int columns, int rows)
+        : columns_(columns),
+          cells_(static_cast<std::size_t>(rows), std::vector<GridCell>(static_cast<std::size_t>(columns))) {}
+
+    void feed(std::string_view bytes) {
+        for (std::size_t at = 0; at < bytes.size();) {
+            if (bytes.substr(at, 2) == "\x1B[") {
+                const std::size_t end = bytes.find_first_not_of("0123456789;? ", at + 2);
+                if (end == std::string_view::npos)
+                    return;
+                control(bytes.substr(at + 2, end - at - 2), bytes[end]);
+                at = end + 1;
+                continue;
+            }
+            const auto lead = static_cast<unsigned char>(bytes[at]);
+            const std::size_t length = lead < 0x80 ? 1 : lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : 2;
+            if (lead == '\r') {
+                x_ = 0;
+            } else if (lead == '\n') {
+                ++y_;
+            } else if (lead >= 0x20 && y_ < static_cast<int>(cells_.size()) && x_ < columns_) {
+                GridCell& cell = cells_[static_cast<std::size_t>(y_)][static_cast<std::size_t>(x_)];
+                cell = style_;
+                cell.text = std::string(bytes.substr(at, length));
+                ++x_;
+            }
+            at += length;
+        }
+    }
+
+    // Sağdaki boşluklar kırpılmış satır.
+    std::string row(int y) const {
+        std::string out;
+        for (const GridCell& cell : cells_[static_cast<std::size_t>(y)])
+            out += cell.text;
+        while (out.ends_with(' '))
+            out.pop_back();
+        return out;
+    }
+
+    const GridCell& at(int x, int y) const {
+        return cells_[static_cast<std::size_t>(y)][static_cast<std::size_t>(x)];
+    }
+
+private:
+    void control(std::string_view params, char final_byte) {
+        if (params.starts_with('?') || params.ends_with(' '))
+            return;  // kip ve imleç biçimi
+        std::vector<int> values;
+        for (std::size_t begin = 0; begin <= params.size();) {
+            const std::size_t cut = std::min(params.find(';', begin), params.size());
+            values.push_back(cut == begin ? 0 : std::stoi(std::string(params.substr(begin, cut - begin))));
+            begin = cut + 1;
+        }
+        const int first = values.front();
+        if (final_byte == 'H') {
+            y_ = std::max(first, 1) - 1;
+            x_ = values.size() > 1 ? std::max(values[1], 1) - 1 : 0;
+        } else if (final_byte == 'G') {
+            x_ = std::max(first, 1) - 1;
+        } else if (final_byte == 'C') {
+            x_ += std::max(first, 1);
+        } else if (final_byte == 'J' && first == 2) {
+            for (auto& line : cells_)
+                std::ranges::fill(line, GridCell{});
+        } else if (final_byte == 'm') {
+            sgr(values);
+        }
+    }
+
+    void sgr(const std::vector<int>& values) {
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            const int code = values[i];
+            if (code == 0)
+                style_ = GridCell{};
+            else if (code == 1)
+                style_.bold = true;
+            else if (code == 22)
+                style_.bold = false;
+            else if (code == 7)
+                style_.inverse = true;
+            else if (code == 27)
+                style_.inverse = false;
+            else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97) || code == 39)
+                style_.foreground = code;
+            else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107) || code == 49)
+                style_.background = code;
+            else if ((code == 38 || code == 48) && i + 1 < values.size())
+                i += values[i + 1] == 5 ? 2 : 4;  // 256 ve truecolor: bu testler 16 rengi sınar
+        }
+    }
+
+    int columns_;
+    std::vector<std::vector<GridCell>> cells_;
+    int x_ = 0;
+    int y_ = 0;
+    GridCell style_;
+};
+
+// Açılış kareleri (işçi sonuçları dahil) susana dek: ekranın tamamı.
+Grid settled_screen(const PtyApp& app, int columns, int rows) {
+    std::string bytes = app.read_frame_text();
+    const auto until = std::chrono::steady_clock::now() + kSettleLimit;
+    while (std::chrono::steady_clock::now() < until && app.read_for(kQuiet, &bytes) > 0) {
+    }
+    Grid grid(columns, rows);
+    grid.feed(bytes);
+    return grid;
+}
+
+}  // namespace
+
+// U2 T3: ipucu çubuğu gerçek terminalde. En küçük pencerede de yardım görünür, 120 sütunda ilk altı ipucu
+// tamdır.
+TEST_CASE("the real TUI keeps F1 help at the right of the hint bar at 60x15 and 120x40") {
+    for (const auto& [columns, rows] : {std::pair{60, 15}, std::pair{120, 40}}) {
+        CAPTURE(columns);
+        const DrawCountFixture f;
+        const PtyApp app(NOTEAPP_NOTES_EXE, {}, columns, rows);
+        const Grid screen = settled_screen(app, columns, rows);
+        const std::string bar = screen.row(rows - 1);
+        CAPTURE(bar);
+        CHECK(bar.ends_with("F1 help"));
+        CHECK(screen.at(columns - 1, rows - 1).text == "p");  // sağ kenara yaslı
+        if (columns == 120)
+            for (const char* hint : {": cmd", "T trash", "Space open", "o sort", "v col", "f search"})
+                CHECK(bar.find(hint) != std::string::npos);
+    }
+}
+
+// NO_COLOR'da hap zemin rengini kaybeder: ters ve kalın kalır ki kip yine bir bakışta okunsun.
+TEST_CASE("the mode pill is black on cyan, and inverted and bold under NO_COLOR") {
+    constexpr int kPillColumns = 120;
+    constexpr int kPillRows = 40;
+    constexpr int kPillCells = 6;  // " LIST "
+    for (const bool no_color : {false, true}) {
+        CAPTURE(no_color);
+        const DrawCountFixture f;
+        const noteapp::test::ScopedEnv color("NO_COLOR", no_color ? std::string("1") : std::string());
+        const PtyApp app(NOTEAPP_NOTES_EXE, {}, kPillColumns, kPillRows);
+        const Grid screen = settled_screen(app, kPillColumns, kPillRows);
+        const int status_row = kPillRows - 2;
+        CHECK(screen.row(status_row).starts_with(" LIST  "));
+        for (int x = 0; x < kPillCells; ++x) {
+            CAPTURE(x);
+            const GridCell& cell = screen.at(x, status_row);
+            CHECK(cell.bold);
+            CHECK(cell.inverse == no_color);
+            CHECK(cell.background == (no_color ? 49 : 46));
+            CHECK(cell.foreground == (no_color ? 39 : 30));
+        }
+        CHECK_FALSE(screen.at(kPillCells, status_row).inverse);
     }
 }

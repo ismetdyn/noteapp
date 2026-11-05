@@ -259,9 +259,15 @@ void GuiState::copy_selected() {
     } else {
         return;
     }
-    const std::size_t bytes = text.size();
-    status_ = deciders.copy_text(text) ? core::tr("gui.copied", {{"size", core::human_size(bytes)}})
-                                       : core::tr("gui.copy_failed");
+    copy_to_clipboard(text);
+}
+
+// Pano yazılamazsa (SDL_SetClipboardText false) sessiz kalınmaz: neden durum çubuğunda, hata renginde.
+void GuiState::copy_to_clipboard(const std::string& text) {
+    if (deciders.copy_text(text))
+        status_ = core::tr("gui.copied", {{"size", core::human_size(text.size())}});
+    else
+        error_status_ = status_ = core::tr("gui.copy_failed");
 }
 
 }  // namespace noteapp::gui
