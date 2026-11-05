@@ -218,3 +218,16 @@ TEST_CASE_FIXTURE(SearchFixture, "a name-only global row is one line tall; a con
     // Yalnız adı eşleşen satırın altında boş ikinci satır kalmasın.
     CHECK(height("row:zeta.md") < height("row:other.md") * 0.75F);
 }
+
+// NY-G inceleme: genel aramada Enter de bulunan notu incelemede bırakır (odak önizlemeye).
+TEST_CASE_FIXTURE(SearchFixture, "Enter in a global search keeps the found note in review") {
+    auto state = make_state();
+    auto view = make_view(*state);
+    state->set_search_mode(SearchMode::Global);
+    state->set_query("plan");
+    REQUIRE(state->current_path().has_value());
+    state->search_enter();
+    settle(*view);
+    CHECK(state->reviewing());
+    CHECK_FALSE(view->editor_active());
+}

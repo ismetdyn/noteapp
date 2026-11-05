@@ -134,7 +134,8 @@ struct TuiLimits {
     Limit completion_note_words;    // açılır listeye bu nottan giren sözcük
     Limit completion_note_bytes;    // sözcük tablosuna okunan en büyük not
     Limit completion_table_bytes;   // sözcük tablosuna okunan toplam bayt
-    Limit paste_bytes;              // sistem panosundan yapıştırılan metin
+    Limit paste_bytes;              // sistem panosundan ya da terminalden yapıştırılan metin
+    Limit paste_timeout;            // bitiş işareti gelmeyen terminal yapıştırmasının beklediği sessizlik
     Limit search_history;           // hatırlanan arama sorgusu
     Limit search_entry_bytes;       // hatırlanan en uzun sorgu
     Limit undo_bytes;               // editörde not başına geri alma geçmişi

@@ -64,6 +64,22 @@ out="$(bash_complete note help "")"
 contains "$out" import || die "bash: help operand: $out"
 out="$(bash_complete note config get lang)"
 [[ "$out" == language ]] || die "bash: config keys: $out"
+# Kısa komut bayrakları: ilk sözcükte önerilir, sonrası o komutun bağlamıdır.
+out="$(bash_complete note -)"
+contains "$out" -S || die "bash: command flags at the first word: $out"
+contains "$out" --import || die "bash: long command flags: $out"
+contains "$out" -t || die "bash: quick add options at the first word: $out"
+out="$(bash_complete note -S "iş/p")"
+[[ "$out" == "iş/plan toplantı.md" ]] || die "bash: -S completes notes: $out"
+out="$(bash_complete note cat "iş/p")"
+[[ "$out" == "iş/plan toplantı.md" ]] || die "bash: cat completes notes: $out"
+out="$(bash_complete note -i --)"
+contains "$out" --overwrite || die "bash: -i takes import options: $out"
+out="$(bash_complete note -l -f "")"
+contains "$out" "iş" || die "bash: -l -f completes folders: $out"
+out="$(bash_complete note -a -)"
+contains "$out" --type || die "bash: -a takes quick add options: $out"
+if contains "$out" -S; then die "bash: command flag offered after the first word: $out"; fi
 echo "ok: bash completes"
 
 # zsh: compadd ve _describe yerine adayları yazan taslaklar; tamamlama sistemi yüklenmeden işlev çağrılır.
@@ -87,8 +103,33 @@ if command -v zsh >/dev/null; then
     contains "$out" "ls:List notes" || die "zsh: described commands: $out"
     out="$(zsh_complete note import -)"
     contains "$out" "--folder:Put the notes in this folder" || die "zsh: described options: $out"
+    out="$(zsh_complete note -)"
+    contains "$out" "-S:Print the best match" || die "zsh: command flags at the first word: $out"
+    contains "$out" "--type:Note type (extension)" || die "zsh: quick add options at the first word: $out"
+    out="$(zsh_complete note -S "")"
+    contains "$out" "iş/plan toplantı.md" || die "zsh: -S completes notes: $out"
+    out="$(zsh_complete note --import -)"
+    contains "$out" "--overwrite:Replace what already exists" || die "zsh: --import takes import options: $out"
     echo "ok: zsh completes"
 else
     echo "SKIP: zsh not installed, zsh behaviour not run"
+fi
+
+# fish: betik kaynaklanır, `complete -C` gerçek tamamlamayı verir.
+if command -v fish >/dev/null; then
+    fish_complete() { fish --no-config -c "source $(printf %q "$work/note.fish"); complete -C '$1'" | cut -f1; }
+    out="$(fish_complete "note -")"
+    contains "$out" -S || die "fish: command flags at the first word: $out"
+    contains "$out" -t || die "fish: quick add options at the first word: $out"
+    out="$(fish_complete "note -S iş/p")"
+    contains "$out" "iş/plan toplantı.md" || die "fish: -S completes notes: $out"
+    out="$(fish_complete "note -i --o")"
+    contains "$out" --overwrite || die "fish: -i takes import options: $out"
+    out="$(fish_complete "note -a -")"
+    contains "$out" --type || die "fish: -a takes quick add options: $out"
+    if contains "$out" -S; then die "fish: command flag offered after the first word: $out"; fi
+    echo "ok: fish completes"
+else
+    echo "SKIP: fish not installed, fish behaviour not run"
 fi
 echo ok

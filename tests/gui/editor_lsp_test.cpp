@@ -60,6 +60,7 @@ TEST_CASE_FIXTURE(LspFixture, "editor: language server diagnostics are underline
     add_note("pkg/a.py", "import os\nx = 1\n");
     auto state = make_state();
     auto view = make_view(*state);
+    state->edit_selected();  // seçilen not incelemede açılır
     state->request_focus(FocusRequest::Editor);
     REQUIRE(pump_until(*state, *view, [&] { return view->item_rects().contains("editor_diagnostic:1:0"); }));
     CHECK_FALSE(view->item_rects().contains("editor_diagnostic:2:0"));
@@ -79,6 +80,7 @@ TEST_CASE_FIXTURE(LspFixture, "editor: an edit reaches the language server while
     add_note("pkg/e.py", "x = 1\n");
     auto state = make_state();
     auto view = make_view(*state);
+    state->edit_selected();  // seçilen not incelemede açılır
     state->request_focus(FocusRequest::Editor);
     settle(*view);
     REQUIRE(view->editor_active());
@@ -104,6 +106,7 @@ TEST_CASE_FIXTURE(LspFixture, "editor: server completion items join the Ctrl+Spa
     add_note("pkg/b.py", "al\n");
     auto state = make_state();
     auto view = make_view(*state);
+    state->edit_selected();  // seçilen not incelemede açılır
     state->request_focus(FocusRequest::Editor);
     settle(*view);
     REQUIRE(view->editor_active());
@@ -150,6 +153,7 @@ TEST_CASE_FIXTURE(CrashFixture, "editor: a crashed language server is reported o
         settle(*view);
         CHECK(rendered.contains(state->editor_notice()));
     }
+    state->edit_selected();  // seçilen not incelemede açılır
     state->request_focus(FocusRequest::Editor);
     settle(*view);
     press(*view, ImGuiKey_RightArrow);  // sonraki tuş iletiyi siler (TUI)

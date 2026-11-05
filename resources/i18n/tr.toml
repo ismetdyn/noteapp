@@ -137,7 +137,7 @@ cmd_why_links = "bu notun bağlantısı yok"
 cmd_why_folder_view = "yalnız klasör görünümünde"
 palette_title = "Komutlar"
 palette_hints = "↑↓ gez  Enter çalıştır  Esc kapat"
-key_hints_list = ": komut  T çöp  Space aç  o sırala  v sütun  f ara  F1 yardım  Enter düzenle  → önizle  / süz  n yeni  a ekle  d çöpe at  ← üst  u geri al  x seç  y kopya  p yapıştır  m taşı  L ilişkilendir  gg baş  F2 ad değiştir  PgDn sayfa  c kopya  q çık  D kalıcı sil  E harici  r taşı  s senkron  Alt+→ detay  I tümü  </> genişlik  z yakınlaştır  Tab içerik  , ayar"
+key_hints_list = ": komut  t çöp  Space aç  o sırala  V sütun  s ara  F1 yardım  Enter düzenle  → önizle  / süz  n ekle  a yeni  d çöpe at  ← üst  u geri al  v seç  y kopya  p yapıştır  m taşı  L ilişkilendir  gg baş  F2 ad değiştir  PgDn sayfa  c kopya  q çık  D kalıcı sil  E harici  x dışa aktar  T etiket  i içe al  r taşı  ^S senkron  Alt+→ detay  I tümü  </> genişlik  z yakınlaştır  Tab içerik  , ayar"
 key_hints_search = "Enter tut  Esc kapat  ↑↓ seç  Tab tamamla  ^T içerik  ^P geçmiş  → öneri  F1 yardım  ^O yeni  ^R taşı  ^D çöp  ^S senkron  F9 ayar"
 key_hints_links = "↑↓ seç  Enter aç  Esc geri  L ilişkilendir/kaldır  PgDn sayfa  z yakınlaştır  F1 yardım"
 link_label = "İlişkilendir:"
@@ -218,14 +218,14 @@ Liste
 ↑ ↓  k j      gezin, sağ panel izler
 gg G          ilk / son satır
 gh gt         kök klasör, çöp
-x             satırı seç, aşağı in
+v             satırı seç, aşağı in
 X  Ctrl+A     seçimi temizle, görünenleri seç
 y             seçimi ya da satırı kopyala
 p             buraya yapıştır; dolu ada -2
 m             klasöre taşı (girdi, Tab listeler)
 L             nota bağla (girdi, Tab listeler)
 Esc           bekleyen y'den vazgeç
-→ l           önizle; klasörde içeri gir
+→ l S         önizle; klasörde içeri gir
 ← h           üst klasör (kökte etkisiz);
               arama sonucunda notun klasörüne git
 Fare          tıklama seçer, çift tıklama girer,
@@ -234,21 +234,24 @@ Enter e       sağ panelde düzenle
 E             harici editörde aç ($EDITOR)
 F2 r klasörde ad değiştir, buradan göreli
 F2            yol ve adı değiştir (altta)
-n ^O          yeni not: tam ekran editör
-a  ad/        burada yeni klasör, Listede kalır
-a             yeni not: ad listenin başında
+a ^O          yeni not: tam ekran editör
+n  ad/        burada yeni klasör, Listede kalır
+n             yeni not: ad listenin başında
 c             notun tamamını kopyala
-f             ad ve içerikte ara, argümanlar da
+s f           ad ve içerikte ara, argümanlar da
+T             etikete göre ara (Tab listeler)
 d ^D          çöpe at, sormaz  u geri al
 d D klasörde  sorar, sayıları söyler; u d'yi alır
 c klasörde    yolunu kopyala
 D             kalıcı sil (önce sorar)
-T             çöp kutusu (aşağıda)
-Space i I     satır ayrıntısı (aşağıda)
+t             çöp kutusu (aşağıda)
+Space I       satır ayrıntısı (aşağıda)
+x             PDF olarak dışa aktar (yol altta)
+i             dosya ve klasör içe al (yol altta)
 PgUp PgDn     listede sayfa sayfa gez
-o  v          sıralama, sağ sütun (aşağıda)
+o  V          sıralama, sağ sütun (aşağıda)
 r             taşı / ad ya da tip değiştir
-s             şimdi senkronla
+^S            şimdi senkronla (önizlemede de)
 Tab           ad / içerik araması
 < >           panel genişliği  z yakınlaştır
 ?             bu yardım
@@ -264,34 +267,34 @@ Tab           tamamla: tekse yazar, yoksa liste
 →             sondaki soluk öneriyi alır
 ← → Home End  imleci oynatır
 Esc           önce listeyi, sonra girdiyi kapatır
-Girdiler (a, F2, ad, editörde bul)
+Girdiler (n, F2, ad, editörde bul)
 →             sondaki soluk öneriyi alır
 Tab           tamamla: tekse yazar, yoksa liste
 Liste ve arama
 ^P ^N         seçimi gez (Liste)
 PgUp PgDn     sayfa sayfa gez
 ^O yeni  ^R taşı  ^D çöpe at  ^S senkron
-Çöp kutusu (T ya da üstte çöp: N tıkla)
-x  Ctrl+A     u ve D için satır seç
+Çöp kutusu (t ya da üstte çöp: N tıkla)
+v  Ctrl+A     u ve D için satır seç
 u             seçili notu geri getir
 D             kalıcı sil (önce sorar)
 E             tümünü boşalt (önce sorar)
 ↑ ↓  k j      gez, sağda içerik salt okunur
 PgUp PgDn     sağ paneli kaydır
-Esc q T       listeye dön
+Esc q t       listeye dön
 Ağaç
 ▸ ▾           klasör kapalı / açık; oka tıkla
 Space         klasör: yerinde aç; not: ayrıntı
 Satır ayrıntısı
-i             seçili satırı aç / kapat
+i             çöpte: seçili satırı aç / kapat
 I             tüm satırları aç / kapat
 Alt+→ Alt+←   aç / kapat
               boyut, tarih, senkron, kaynak
 Sıralama ve sütun
 o             n ad  u güncelleme  c oluşturma
               s boyut  r ters  Esc vazgeç
-v             sağ sütunu sırayla değiştir
-Süzme argümanları (/ ve f)
+V             sağ sütunu sırayla değiştir
+Süzme argümanları (/ ve s)
 sort:-size    büyükten küçüğe (- ters çevirir)
 type:md       tipe göre
 in:work/      klasörde
@@ -346,6 +349,7 @@ Harita (palet view.map; view.tree döner)
 ← → ↑ ↓       kaydır  + -  yakınlaş  0 sığdır
 Tab ⇧Tab      not seç, Enter açar
 w t           bütün çizge, etiket  1-9 derinlik
+gt            çöp (haritada t etikettir)
 /             arama eşleşen notları yakar
 C             seçili nottan bağla: Tab hedef,
               Enter bağlar (not: r ilişkili,
@@ -425,7 +429,7 @@ mode_global = "[tümü]"
 mode_trash = "[çöp]"
 global_label = "Tümü>"
 key_hints_global = "Enter aç  Esc kapat  ↑↓ seç  Tab tamamla  ^P geçmiş  → öneri  F1 yardım"
-key_hints_trash = ": komut  u geri getir  D kalıcı sil  E boşalt  Esc/q geri  x seç  ↑↓ seç  F1 yardım  PgUp/PgDn kaydır  Alt+→ detay  z yakınlaştır"
+key_hints_trash = ": komut  u geri getir  D kalıcı sil  E boşalt  Esc/q geri  v seç  ↑↓ seç  F1 yardım  PgUp/PgDn kaydır  Alt+→ detay  z yakınlaştır"
 trash_title = "ÇÖP KUTUSU"
 totals = "Toplam {total}"
 totals_matches = " · {count}"
@@ -454,7 +458,7 @@ folder_trash_title = "Klasörü çöpe at"
 folder_delete_title = "Klasörü sil"
 confirm_trash_folder = "'{path}' içindeki {notes} çöpe atılsın, klasör ve {folders} kaldırılsın mı?"
 confirm_delete_folder = "'{path}', {notes} ve {folders} ile kalıcı silinsin mi? Bu işlem geri alınamaz."
-key_hints_folder = ": komut  → aç  ← üst  a ekle, ad/ = klasör  F2 ad değiştir  d çöpe at  Space aç  i detay  T çöp  o sırala  v sütun  f ara  F1 yardım  Enter aç  c yol kopyala  u geri al  x seç  y kopya  p yapıştır  m taşı  gg baş  D kalıcı sil  q çık  / süz  n yeni  r ad değiştir  s senkron  I tümü  </> genişlik  z yakınlaştır  , ayar"
+key_hints_folder = ": komut  → aç  ← üst  n ekle, ad/ = klasör  F2 ad değiştir  d çöpe at  Space aç  Alt+→ detay  t çöp  o sırala  V sütun  s ara  F1 yardım  Enter aç  c yol kopyala  u geri al  v seç  y kopya  p yapıştır  m taşı  gg baş  D kalıcı sil  q çık  / süz  a yeni  r ad değiştir  ^S senkron  I tümü  </> genişlik  z yakınlaştır  , ayar"
 rename_label = "Yeni yol:"
 move_to_label = "Taşı:"
 moved_to = "Taşındı: {to}"
@@ -692,7 +696,7 @@ view_tree_tip = "Klasörler ve notlar tek ağaçta; oklar klasörü açar ve kap
 view_details = "Ayrıntılar"
 view_details_tip = "Yalnız geçerli klasör, boyut ve tarihlerle; çift tıklama ya da Enter klasöre girer"
 view_map = "Harita"
-view_map_tip = "Notlar bağlantı ve ilişkileriyle çizge olarak. Tıklama notu açar, çift tıklama ağaçta açar, sürükleme sabitler; tekerlek ya da +/- yakınlaştırır, oklar ya da sürükleme kaydırır, 0 sığdırır. Shift+sürükleme düğümü ötekine ilişkilendirir, bağlar ya da etiketler; kenara sağ tık onu kaldırır"
+view_map_tip = "Notlar bağlantı ve ilişkileriyle çizge olarak. Tıklama notu açar, çift tıklama ağaçta açar, sürükleme sabitler; tekerlek ya da +/- yakınlaştırır, oklar ya da sürükleme kaydırır, 0 sığdırır. Shift+sürükleme (ya da düğüme sağ tık → Bağla…, sonra hedefe tıklama) düğümü ötekine ilişkilendirir, bağlar ya da etiketler; kenara ya da düğüme sağ tık ilişkiyi kaldırır"
 map_whole = "Tüm çizge"
 map_whole_tip = "Kapalı: yalnız gösterilen notun çevresi"
 map_depth = "Derinlik {depth}"
@@ -734,10 +738,12 @@ ui_font_inter = "Inter"
 "editor_font_jetbrains-mono" = "JetBrains Mono"
 details_number = "#"
 preview = "Önizleme"
+review = "İncele"
 edit = "Düzenle"
-preview_tip = "Biçimli Markdown'ı salt okunur gösterir; [[bağlantılar]] notunu açar (Ctrl+Shift+V)"
-edit_tip = "Metni düzenlemeye dön (Ctrl+Shift+V)"
-preview_unavailable = "Önizleme yalnız düzenlenebilir metin notunda açılır"
+preview_tip = "Biçimli önizlemeye dön; bekleyen düzenleme önce kaydedilir (Esc, Ctrl+Shift+V)"
+review_tip = "Salt okunur incelemeye dön; bekleyen düzenleme önce kaydedilir (Esc, Ctrl+Shift+V)"
+edit_tip = "Metni düzenle (E, Enter, çift tık, Ctrl+Shift+V)"
+edit_unavailable = "Bu not salt okunur"
 preview_too_large = "Biçimli önizleme için büyük (en çok {limit}, limits.tui.view_bytes), ham metin"
 preview_rows_cut = "… {count} satır daha gösterilmiyor (limits.tui.table_rows)"
 preview_columns_cut = "… {count} sütun daha gösterilmiyor (limits.tui.table_columns)"
@@ -876,6 +882,7 @@ help_heading_commands = "Komutlar:"
 help_heading_options = "Seçenekler:"
 help_heading_examples = "Örnekler:"
 help_heading_see_also = "Ayrıca bakınız:"
+help_short_forms = "Kısa yazım (yalnız ilk argüman): {forms}"
 value_text = "DEĞER"
 value_note = "NOT"
 value_folder = "KLASÖR"
@@ -888,7 +895,7 @@ value_file = "DOSYA"
 value_directory = "DİZİN"
 examples_ls = "note ls\ten yeniden eskiye\nnote ls tag:proje sort:-size\tetiketli, en büyük önce\nnote ls toplanti -f is\ttek klasörde bulanık sıra"
 examples_find = "note find bütçe 2026\tiki sözcüğü de içeren notlar\nnote find yapilacak --limit 5\ten çok beş not"
-examples_show = "note show plan\ten iyi eşleşmeyi yazdır\nnote show is/plan.md > plan.md\tsaklandığı gibi baytlar"
+examples_show = "note show plan\ten iyi eşleşmeyi yazdır\nnote show is/plan.md > plan.md\tsaklandığı gibi baytlar\nnote -S plan | grep todo\tyalnız todo geçen satırlar\nnote -S plan >> hepsi.txt\tdosyanın sonuna ekle"
 examples_edit = "note edit plan\ten iyi eşleşmeyi editörde aç"
 examples_rm = "note rm is/plan.md\tsor, sonra sil\nnote rm -y is/plan.md\tsormadan sil"
 examples_mv = "note mv plan.md is/plan.md\tklasöre taşı\nnote mv notlar.txt notlar.md\ttipi değiştir"
@@ -932,8 +939,8 @@ query_usage = "Kullanım: note query [--write] [--json] [--param ANAHTAR=DEĞER]
 query_no_database = "{path} konumunda graph veritabanı yok; 'note query --write' oluşturur"
 query_bad_param = "--param düz adlı ANAHTAR=DEĞER ister, verilen: '{param}'"
 help_config = "Ayarları yönetir (types virgülle ayrılmış liste alır)"
-help = "note [SEÇENEKLER] METİN...\tArgümanlardan not ekler\n... | note [SEÇENEKLER]\tstdin'den not ekler\nnote [SEÇENEKLER]\tEditörde not ekler\nnote -e [SEÇENEKLER] [METİN...]\tEditörü her durumda açar; METİN ön içerik olur\nnote KOMUT [ARGÜMANLAR...]\tAşağıdaki komutlardan birini çalıştırır"
-help_footer = "Ayrıntı: 'note help KOMUT' ya da 'note KOMUT --help'.\nKomut adıyla aynı metni not etmek için: 'note -- ls'.\nOrtam: NO_COLOR, NOTEAPP_COLOR=auto|always|never, NOTEAPP_PAGER, PAGER, NOTEAPP_HOME.\n\nÇıkış kodları: 0 başarı, 1 kullanıcı kaynaklı, 2 kullanım hatası, 3 G/Ç veya iç hata, 4 senkron hatası."
+help = "note [SEÇENEKLER] METİN...\tArgümanlardan not ekler\n... | note [SEÇENEKLER]\tstdin'den not ekler\nnote -n AD < DOSYA\tDosyanın metnini adla ekler\nnote [SEÇENEKLER]\tEditörde not ekler\nnote -e [SEÇENEKLER] [METİN...]\tEditörü her durumda açar; METİN ön içerik olur\nnote KOMUT [ARGÜMANLAR...]\tAşağıdaki komutlardan birini çalıştırır\nnote -l [ARGÜMANLAR...]\tKomutun kısa bayrağı, aşağıda parantezde"
+help_footer = "Ayrıntı: 'note help KOMUT' ya da 'note KOMUT --help'.\nKomut adıyla aynı metni not etmek için: 'note -a ls' ya da 'note -- ls'; tireyle başlayan metin için: 'note -- -i'.\nOrtam: NO_COLOR, NOTEAPP_COLOR=auto|always|never, NOTEAPP_PAGER, PAGER, NOTEAPP_HOME.\n\nÇıkış kodları: 0 başarı, 1 kullanıcı kaynaklı, 2 kullanım hatası, 3 G/Ç veya iç hata, 4 senkron hatası."
 group_notes = "Notlar:"
 group_sync = "Senkron:"
 group_advanced = "Gelişmiş:"
@@ -1036,6 +1043,7 @@ opt_output = "Bu dosyaya yaz"
 opt_type = "Not tipi (uzantı)"
 opt_folder = "Notları bu klasöre koy"
 opt_in_folder = "Yalnız bu klasördeki notlar"
+opt_add = "Metni not olarak ekle (varsayılan; 'note -a ls' ls sözcüğünü ekler)"
 opt_name = "Not adı"
 opt_editor = "Editörü her durumda aç"
 opt_help = "Yardımı göster"
@@ -1121,6 +1129,11 @@ choose_link = "Bağlantı ({from} notuna [[wiki]] bağlantısı)"
 remove_related = "İlişkiyi kaldır"
 remove_tag = "#{tag} etiketini {path} notundan kaldır"
 remove_link = "Bağlantıyı kaldır"
+connect = "Bağla…"
+connect_hint = "İlişki kurmak için: Shift+sürükle ya da düğüme sağ tık → Bağla… (tuvalde C)"
+connect_pending = "{from} → bağlanacak düğüme tıklayın; Esc vazgeçer"
+remove_relations = "İlişkileri kaldır"
+remove_related_to = "İlişkiyi kaldır: {path}"
 
 [graph]
 cypher_syntax = "Sorgu söz dizimi hatası, satır {line}, sütun {col}: {what}"
@@ -1143,6 +1156,16 @@ storage_error = "Graph veritabanı hatası"
 txn_poisoned = "İşlem başarısız oldu, geri alındı"
 wal_unavailable = "Graph veritabanı yazma günlüğünü açamadı"
 bad_frame = "Geçersiz işlem günlüğü çerçevesi: {reason}"
+
+[notice]
+success = "Tamam"
+error = "Hata"
+info = "Bilgi"
+more = "+{count} bildirim"
+open_folder = "Klasörü aç"
+open_folder_failed = "Klasör açılamadı: {path}"
+dismiss_tip = "Kapatmak için tıklayın"
+sync_done = "Senkron tamamlandı"
 
 [command]
 new = "Yeni not"

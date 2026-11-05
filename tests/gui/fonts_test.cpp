@@ -79,6 +79,7 @@ TEST_CASE("choosing Inter and JetBrains Mono in Settings redraws the window and 
     fixture.add_note("a.md", "alpha body\n");
     const auto state = fixture.make_state();
     const auto view = make_view(*state);
+    state->edit_selected();  // editör hücresi ölçülür
     settle(*view);
     const float dejavu_count = width_of(*view, "count");
     const float dejavu_cell = width_of(*view, "editor_cursor");

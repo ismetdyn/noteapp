@@ -60,4 +60,14 @@ struct PasteChoice {
 // `Ctrl+V` kararı: sistem panosu, yoksa ya da kullanılamıyorsa iç pano (`internal`).
 PasteChoice choose_paste(SystemClipboard& clipboard, const std::string& internal);
 
+// Terminalin yapıştırdığı metin (`Ctrl+Shift+V`, bracketed paste): CRLF, tek CR ve LF birer LF olur. Terminaller
+// satır sonunu çoğunlukla CR'ye çevirir (Konsole, VTE, xterm), bazıları CRLF'i aynen gönderir; notun satır
+// sonunu tampon koyar (EditorBuffer::paste).
+std::string terminal_paste_text(std::string_view raw);
+// Terminal yapıştırmasının kararı: `Ctrl+V` ile aynı sınır (`limits.tui.paste_bytes`, sınırsız SIZE_MAX).
+// Aşan metin normalleştirilmeden reddedilir (büyük yapıştırmanın ikinci kopyası kurulmaz), ileti nedeni söyler.
+PasteChoice terminal_paste(std::string_view raw, std::size_t max_bytes);
+// `limits.tui.paste_bytes`'ı aşan yapıştırmanın iletisi (Ctrl+V ve terminal aynı metni gösterir).
+std::string paste_too_large_message(std::size_t max_bytes);
+
 }  // namespace noteapp::tui

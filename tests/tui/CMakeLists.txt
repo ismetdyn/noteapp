@@ -19,6 +19,7 @@ noteapp_add_test(tui
     map_test.cpp
     map_relations_test.cpp
     markdown_view_test.cpp
+    paste_parser_test.cpp
     save_dialog_test.cpp
     modals_test.cpp
     settings_test.cpp
@@ -28,6 +29,9 @@ noteapp_add_test(tui
     tags_test.cpp
     views_test.cpp
     wiki_follow_test.cpp)
+# Yamalı FTXUI ayrıştırıcısı (bracketed paste) doğrudan sınanır; başlığı FTXUI'nin iç kaynağındadır.
+target_include_directories(tui_tests SYSTEM PRIVATE ${ftxui_SOURCE_DIR}/src)
+target_link_libraries(tui_tests PRIVATE ftxui::component)
 
 # LSP istemcisi gerçek süreçle sınanır: sahte sunucu kabuksuz, her platformda derlenen ayrı bir ikilidir.
 add_executable(fake_lsp_server fake_lsp_server.cpp)

@@ -586,3 +586,115 @@ TEST_CASE("map: a tag is hovered within its drawn square, not within a note's re
     CHECK(hovered_at(0.0F));                // karenin ortası
     CHECK_FALSE(hovered_at(0.45F * font));  // notun erişimi (0,5 em) içinde, etiketinkinin dışında
 }
+
+// NY-G: çevre görünümünde düğüm seçmek merkezi değiştirir. a'nın ve b'nin iki adımlık çevresi aynı üç nottur;
+// önceden yalnız sıra değiştiği için harita yeniden kuruluyor, yerleşim ılınıyor ve düğümler kare başına
+// 30–450 px sıçrıyordu (titreme). Seçimden sonra hiçbir düğüm kıpırdamaz.
+TEST_CASE("map: selecting a node in the same neighbourhood leaves every node still") {
+    MapScene scene;
+    scene.open(false);
+    const std::size_t generation = scene.state->map_generation();
+    const auto [x, y] = scene.view->button_center("map:b.md");
+    mouse_to(*scene.view, x, y);
+    mouse_button(*scene.view, true);
+    mouse_button(*scene.view, false);
+    REQUIRE(scene.state->current_path());
+    REQUIRE(scene.state->current_path()->string() == "b.md");
+    const auto before = scene.view->item_rects();
+    constexpr int kWatchedFrames = 20;
+    for (int frame = 0; frame < kWatchedFrames; ++frame) {
+        scene.view->draw_frame();
+        CHECK(scene.state->map_layout().settled());
+        for (const std::string name : {"map:a.md", "map:b.md", "map:c.md"}) {
+            CHECK(scene.rect(name).min_x == before.at(name).min_x);
+            CHECK(scene.rect(name).min_y == before.at(name).min_y);
+        }
+    }
+    CHECK(scene.state->map_generation() == generation);
+}
+
+// NY-G: ilişki kurmak keşfedilir olsun. Düğüme sağ tık menüsü "Bağla…" kipini açar, sıradaki tıklanan düğüm
+// hedeftir (Shift+sürüklemenin bırakmasıyla aynı kural); denetimlerin altında yolu söyleyen ipucu.
+TEST_CASE("map: right-click Connect… then a click on another note asks Related or Link") {
+    MapScene scene;
+    scene.open();
+    {  // ImGui günlüğü tek: iki RenderedText aynı anda yaşamaz
+        const gui_test::RenderedText hint;
+        settle(*scene.view);
+        CHECK(hint.contains(core::tr("map.connect_hint")));
+    }
+    const auto [x, y] = scene.view->button_center("map:d.md");
+    right_click(*scene.view, x, y);
+    REQUIRE(scene.view->item_rects().contains("map_node_connect"));
+    click_button(*scene.view, "map_node_connect");
+    {
+        const gui_test::RenderedText pending;
+        settle(*scene.view);
+        CHECK(pending.contains(core::tr("map.connect_pending", {{"from", "d.md"}})));
+    }
+    click_button(*scene.view, "map:e.md");
+    REQUIRE(scene.view->item_rects().contains("map_connect_related"));
+    CHECK(scene.state->current_path()->string() == "a.md");  // bağlama tıklaması notu açmaz
+    click_button(*scene.view, "map_connect_related");
+    CHECK(has_map_edge(*scene.state, "d.md", "e.md", noteapp::gui::MapEdgeKind::Related));
+}
+
+TEST_CASE("map: Esc leaves connect mode; the next click opens the note as usual") {
+    MapScene scene;
+    scene.open();
+    const auto [x, y] = scene.view->button_center("map:d.md");
+    right_click(*scene.view, x, y);
+    click_button(*scene.view, "map_node_connect");
+    press(*scene.view, ImGuiKey_Escape);
+    click_button(*scene.view, "map:e.md");
+    CHECK_FALSE(scene.view->item_rects().contains("map_connect_related"));
+    CHECK(scene.state->current_path()->string() == "e.md");
+}
+
+TEST_CASE("map: the node menu removes the node's relation") {
+    MapScene scene;
+    {
+        core::NoteStore store(scene.fixture.store_dir());
+        REQUIRE(store.add_relation(np("d.md"), np("e.md")).has_value());
+    }
+    scene.open();
+    REQUIRE(has_map_edge(*scene.state, "d.md", "e.md", noteapp::gui::MapEdgeKind::Related));
+    const auto [x, y] = scene.view->button_center("map:d.md");
+    right_click(*scene.view, x, y);
+    REQUIRE(scene.view->item_rects().contains("map_node_remove"));
+    const auto [mx, my] = scene.view->button_center("map_node_remove");
+    mouse_to(*scene.view, mx, my);  // alt menü üzerine gelince açılır
+    settle(*scene.view);
+    REQUIRE(scene.view->item_rects().contains("map_node_remove:e.md"));
+    click_button(*scene.view, "map_node_remove:e.md");
+    CHECK_FALSE(has_map_edge(*scene.state, "d.md", "e.md", noteapp::gui::MapEdgeKind::Related));
+}
+
+TEST_CASE("map: C on the focused canvas connects from the shown note") {
+    MapScene scene;
+    scene.open();
+    focus_canvas(scene);
+    press(*scene.view, ImGuiKey_C);
+    click_button(*scene.view, "map:d.md");
+    REQUIRE(scene.view->item_rects().contains("map_connect_related"));
+    click_button(*scene.view, "map_connect_related");
+    CHECK(has_map_edge(*scene.state, "a.md", "d.md", noteapp::gui::MapEdgeKind::Related));
+}
+
+// İnceleme bulgusu: menü açıkken çizge yeniden kurulursa dizin başka düğümü gösterir; Bağla… o zaman kip
+// açmaz.
+TEST_CASE("map: Connect… from a menu opened before the map rebuilt does nothing") {
+    MapScene scene;
+    scene.open();
+    const auto [x, y] = scene.view->button_center("map:d.md");
+    right_click(*scene.view, x, y);
+    REQUIRE(scene.view->item_rects().contains("map_node_connect"));
+    const std::size_t generation = scene.state->map_generation();
+    scene.state->set_map_options(MapOptions{.whole_graph = false, .depth = 1});  // çevre: a, b, c
+    REQUIRE(scene.state->map_generation() != generation);
+    click_button(*scene.view, "map_node_connect");
+    const gui_test::RenderedText rendered;
+    settle(*scene.view);
+    CHECK_FALSE(rendered.contains(core::tr("map.connect_pending", {{"from", "d.md"}})));
+    CHECK(rendered.contains(core::tr("map.connect_hint")));
+}

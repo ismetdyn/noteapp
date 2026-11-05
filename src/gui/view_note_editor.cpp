@@ -128,7 +128,8 @@ void View::draw_editor(float reserved_height) {
     // Bul satırı (açıksa) editörün altındadır, payı önce düşülür; alanlar ve iletiler durum çubuğunda (G7).
     const float bars = finding ? ImGui::GetFrameHeightWithSpacing() : 0.0F;
     size.y = std::max(size.y - reserved_height - bars, ImGui::GetFrameHeight());
-    if (pending_focus_ == FocusRequest::Editor) {
+    // İncelemedeki önizlenmeyen not kilitli editörde durur: önizleme odağı da onundur.
+    if (pending_focus_ == FocusRequest::Editor || pending_focus_ == FocusRequest::Preview) {
         ImGui::SetNextWindowFocus();
         pending_focus_ = FocusRequest::None;
     }
@@ -180,6 +181,9 @@ void View::draw_editor_text() {
     if (ImGui::IsItemActivated()) {
         const auto [row, column] = cell_at();
         state_.editor_click(row, column, ImGui::GetIO().KeyShift);
+        // İncelemedeki kilitli metne çift tık düzenlemeye geçer; imleç tıklanan hücrede kalır.
+        if (state_.reviewing() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            queue([this] { state_.begin_edit(); });
     } else if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0F)) {
         const auto [row, column] = cell_at();
         state_.editor_click(row, column, true);

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cstdint>
 #include <doctest/doctest.h>
 #include <format>
 #include <imgui.h>
@@ -61,27 +62,28 @@ ImGuiWindow* preview_window() {
 
 }  // namespace
 
-TEST_CASE("gui preview: only a saved markdown note previews, the switch lasts the session") {
+TEST_CASE("gui preview: only a saved markdown note previews; each opened note starts in review") {
     WindowFixture fixture;
     fixture.add_note("a.md", kSample, 10);
     fixture.add_note("t.txt", "# düz metin\n", 20);
     const auto state = fixture.make_state();
     select(*state, "t.txt");
     CHECK_FALSE(state->can_preview());
-    state->toggle_preview();
+    CHECK(state->reviewing());  // kilitli metin
     CHECK_FALSE(state->showing_preview());
 
     select(*state, "a.md");
     REQUIRE(state->can_preview());
-    state->toggle_preview();
     CHECK(state->showing_preview());
-    select(*state, "t.txt");
+    state->toggle_preview();  // düzenle
     CHECK_FALSE(state->showing_preview());
+    select(*state, "t.txt");
     select(*state, "a.md");
-    CHECK(state->showing_preview());  // TUI'deki `R` gibi oturum boyunca
+    CHECK(state->showing_preview());  // yeniden açılan not incelemede (TUI REVIEW)
 
     state->new_note();
     CHECK_FALSE(state->showing_preview());
+    CHECK_FALSE(state->reviewing());
 }
 
 TEST_CASE("gui preview: a .markdown note previews like .md") {
@@ -104,7 +106,6 @@ TEST_CASE("gui preview: a note over limits.tui.view_bytes previews as raw text w
     select(*state, "büyük.md");
     REQUIRE(state->can_preview());
     CHECK(state->preview_too_large());
-    state->toggle_preview();
     settle(*view);
     const RenderedText text;
     settle(*view);
@@ -124,7 +125,6 @@ TEST_CASE("gui preview: a long raw line is drawn in 4 KiB rows without losing or
     const auto state = fixture.make_state();
     const auto view = make_view(*state);
     select(*state, "uzun.md");
-    state->toggle_preview();
     settle(*view);
     const RenderedText text;
     settle(*view);
@@ -153,7 +153,6 @@ TEST_CASE("gui preview: a scrolled raw preview skips to the visible rows, counti
     const auto state = fixture.make_state();
     const auto view = make_view(*state);
     select(*state, "uzun.md");
-    state->toggle_preview();
     settle(*view);
     state->scroll_preview(FLT_MAX);
     settle(*view);
@@ -203,7 +202,6 @@ TEST_CASE("gui preview: a keyboard scroll in the frame of an anchor correction i
     const auto state = fixture.make_state();
     const auto view = make_view(*state);
     select(*state, "büyük.md");
-    state->toggle_preview();
     settle(*view);
     state->scroll_preview(FLT_MAX);
     settle(*view);
@@ -235,7 +233,6 @@ TEST_CASE("gui preview: End reaches the bottom when a wide code block adds a hor
     const auto state = fixture.make_state();
     const auto view = make_view(*state);
     select(*state, "geniş.md");
-    state->toggle_preview();
     settle(*view);
     state->scroll_preview(FLT_MAX);
     settle(*view);
@@ -251,8 +248,10 @@ TEST_CASE("gui preview: Ctrl+Shift+V renders headings, lists, code, quotes and l
     fixture.add_note("a.md", kSample, 10);
     fixture.add_note("b.md", "b\n", 20);
     const auto state = fixture.make_state();
+    state->layout().height = 900;  // örneğin tamamı (bağlantı satırı dahil) görünsün
     const auto view = make_view(*state);
     select(*state, "a.md");
+    state->begin_edit();  // açılış incelemededir; geçiş düzenlemeden sınanır
     settle(*view);
     REQUIRE(view->item_rects().contains("preview_toggle"));
     CHECK_FALSE(view->item_rects().contains("preview"));
@@ -288,6 +287,7 @@ TEST_CASE("gui preview: the header button switches between preview and edit") {
     const auto state = fixture.make_state();
     const auto view = make_view(*state);
     select(*state, "a.md");
+    state->begin_edit();  // açılış incelemededir; geçiş düzenlemeden sınanır
     settle(*view);
     click_button(*view, "preview_toggle");
     settle(*view);
@@ -340,7 +340,6 @@ TEST_CASE("gui preview: a missing [[target]] cannot be clicked until the note ex
     const auto state = fixture.make_state();
     const auto view = make_view(*state);
     select(*state, "a.md");
-    state->toggle_preview();
     settle(*view);
     CHECK(view->item_rects().contains("preview_link:b"));
     CHECK_FALSE(view->item_rects().contains("preview_link:yok"));
@@ -362,7 +361,6 @@ TEST_CASE("gui preview: a csv note previews as a table with the detected delimit
     select(*state, "veri.csv");
     CHECK(state->previewable_type());
     REQUIRE(state->can_preview());
-    state->toggle_preview();
     settle(*view);
     REQUIRE(state->showing_preview());
     const RenderedText text;
@@ -383,7 +381,6 @@ TEST_CASE("gui preview: table rows and columns follow limits.tui and say what th
     const auto state = fixture.make_state();
     const auto view = make_view(*state);
     select(*state, "büyük.csv");
-    state->toggle_preview();
     settle(*view);
     const RenderedText text;
     settle(*view);
@@ -400,7 +397,6 @@ TEST_CASE("gui preview: a csv that is no table shows its raw text and why") {
     const auto state = fixture.make_state();
     const auto view = make_view(*state);
     select(*state, "liste.csv");
-    state->toggle_preview();
     settle(*view);
     const RenderedText text;
     settle(*view);
@@ -416,7 +412,6 @@ TEST_CASE("gui preview: a json note is pretty printed by depth; invalid json sho
     const auto view = make_view(*state);
     select(*state, "veri.json");
     REQUIRE(state->can_preview());
-    state->toggle_preview();
     settle(*view);
     {
         const RenderedText text;
@@ -452,4 +447,134 @@ TEST_CASE("gui preview: limits.tui.view_bytes bounds every previewed type") {
     select(*state, "sınır.json");
     CHECK(state->can_preview());
     CHECK_FALSE(state->preview_too_large());
+}
+
+// NY-G: TUI gibi seçilen not incelemede (REVIEW) açılır; düzenleme yalnız açık eylemle. Testler yalnız mevcut
+// arayüzü (seçim, tuş, önizleme durumu) kullanır: eski davranışta (editör açık) düşer.
+TEST_CASE("gui review: a selected note opens read-only, md as the preview and txt as locked text") {
+    WindowFixture fixture;
+    fixture.add_note("a.md", kSample, 10);
+    fixture.add_note("t.txt", "düz metin\n", 20);
+    const auto state = fixture.make_state();
+    const auto view = make_view(*state);
+    select(*state, "a.md");
+    settle(*view);
+    CHECK(state->showing_preview());
+    CHECK(view->item_rects().contains("preview"));
+    CHECK_FALSE(view->item_rects().contains("editor"));
+
+    select(*state, "t.txt");
+    settle(*view);
+    CHECK(view->item_rects().contains("editor"));  // renkli metin, kilitli
+    state->editor_key(noteapp::tui::Key::Char, "x");
+    state->editor_key(noteapp::tui::Key::Backspace);
+    CHECK(state->buffer() == "düz metin\n");
+    CHECK_FALSE(state->dirty());
+}
+
+TEST_CASE("gui review: e and Enter start editing; Esc saves and returns, a selection's Esc only clears it") {
+    WindowFixture fixture;
+    fixture.add_note("t.txt", "düz metin\n", 20);
+    const auto state = fixture.make_state();
+    const auto view = make_view(*state);
+    select(*state, "t.txt");
+    settle(*view);
+    state->editor_key(noteapp::tui::Key::Char, "e");  // TUI REVIEW `e`
+    state->editor_key(noteapp::tui::Key::Char, "x");
+    CHECK(state->buffer() == "xdüz metin\n");
+    REQUIRE(state->dirty());
+
+    state->editor_key(noteapp::tui::Key::ShiftRight);  // `d` seçili, imleç ondan sonra
+    state->editor_key(noteapp::tui::Key::Escape);      // önce seçim kalkar, kip değişmez
+    state->editor_key(noteapp::tui::Key::Char, "y");
+    CHECK(state->buffer() == "xdyüz metin\n");
+
+    state->editor_key(noteapp::tui::Key::Escape);  // incelemeye: bekleyen düzenleme yazılır
+    CHECK(fixture.read_note("t.txt") == "xdyüz metin\n");
+    CHECK_FALSE(state->dirty());
+    CHECK(state->reviewing());
+    state->editor_key(noteapp::tui::Key::Char, "z");
+    CHECK(state->buffer() == "xdyüz metin\n");
+
+    state->editor_key(noteapp::tui::Key::Enter);  // TUI REVIEW Enter
+    state->editor_key(noteapp::tui::Key::Char, "z");
+    CHECK(state->buffer() == "xdyzüz metin\n");
+}
+
+TEST_CASE("gui review: the header button, E in the preview and a double-click start editing") {
+    WindowFixture fixture;
+    fixture.add_note("a.md", kSample, 10);
+    const auto state = fixture.make_state();
+    const auto view = make_view(*state);
+    select(*state, "a.md");
+    settle(*view);
+    REQUIRE(state->showing_preview());
+    click_button(*view, "preview_toggle");  // Düzenle
+    settle(*view);
+    CHECK_FALSE(state->showing_preview());
+    CHECK(view->item_rects().contains("editor"));
+    CHECK(view->editor_active());
+    click_button(*view, "preview_toggle");  // Önizleme
+    settle(*view);
+    REQUIRE(state->showing_preview());
+
+    press(*view, ImGuiKey_E);  // önizleme odakta (incelemeye dönüş odağı ona verir)
+    settle(*view);
+    CHECK_FALSE(state->showing_preview());
+    press(*view, ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_V);
+    settle(*view);
+    REQUIRE(state->showing_preview());
+
+    const View::ItemRect area = view->item_rects().at("preview");
+    // Sol iç boşluk: metin hizasında ama bağlantı ve kaydırma çubuğu dışında.
+    ImGui::GetIO().AddMousePosEvent(area.min_x + 4.0F, (area.min_y + area.max_y) / 2.0F);
+    view->draw_frame();
+    for (int click = 0; click < 2; ++click) {
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        view->draw_frame();
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        view->draw_frame();
+    }
+    settle(*view);
+    CHECK_FALSE(state->showing_preview());
+}
+
+TEST_CASE("gui review: a new note is edited at once and every tab keeps its own mode") {
+    WindowFixture fixture;
+    fixture.add_note("a.md", kSample, 10);
+    fixture.add_note("b.md", "# b\n", 20);
+    const auto state = fixture.make_state();
+    const auto view = make_view(*state);
+    state->new_note();
+    state->editor_key(noteapp::tui::Key::Char, "n");
+    CHECK(state->buffer() == "n");
+
+    WindowFixture other;
+    other.add_note("a.md", kSample, 10);
+    other.add_note("b.md", "# b\n", 20);
+    const auto tabs = other.make_state();
+    select(*tabs, "a.md");
+    tabs->toggle_preview();  // a.md düzenlemede
+    REQUIRE_FALSE(tabs->showing_preview());
+    const std::uint64_t first = tabs->active_tab();
+    tabs->open_in_new_tab(np("b.md"));
+    CHECK(tabs->showing_preview());  // yeni açılan not incelemede
+    REQUIRE(tabs->activate_tab(first));
+    CHECK_FALSE(tabs->showing_preview());  // a.md'nin sekmesi düzenlemede kaldı
+}
+
+TEST_CASE("gui review: Esc whose save is cancelled in the conflict question stays in edit") {
+    WindowFixture fixture;
+    fixture.add_note("t.txt", "düz metin\n", 20);
+    const auto state = fixture.make_state();
+    select(*state, "t.txt");
+    state->begin_edit();
+    state->editor_key(noteapp::tui::Key::Char, "x");
+    REQUIRE(state->dirty());
+    fixture.add_note("t.txt", "dışarıda değişti\n", 0);  // çakışma; varsayılan karar Vazgeç
+    state->editor_key(noteapp::tui::Key::Escape);
+    CHECK_FALSE(state->reviewing());
+    CHECK(state->dirty());
+    CHECK(state->buffer() == "xdüz metin\n");
+    CHECK(fixture.read_note("t.txt") == "dışarıda değişti\n");
 }

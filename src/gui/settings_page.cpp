@@ -218,6 +218,8 @@ void SettingsPage::test_connection() {
                         : core::tr("gui.test_failed", {{"detail", core::format_error(outcome.error())}});
             if (outcome && host_.synced)
                 host_.synced();  // çekilen notlar listeye yansısın
+            if (host_.notify)
+                host_.notify(outcome.has_value(), test_result_);
         });
     });
 }

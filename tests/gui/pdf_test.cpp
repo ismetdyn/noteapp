@@ -1,8 +1,10 @@
 // Ctrl+E akışı: PDF motorunun kendisi tests/pdf'te sınanır.
 #include "gui/gui_state.hpp"
+#include "gui/view.hpp"
 #include "support/test_support.hpp"
 #include "window_fixture.hpp"
 
+#include <chrono>
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <fstream>
@@ -152,4 +154,81 @@ TEST_CASE_FIXTURE(ExportFixture, "the path dialog accepts a typed path and asks 
     view->on_modal_frame = script;
     state->export_pdf();
     CHECK(noteapp::test::slurp(out_path()) == "keep");
+}
+
+// NY-G: işlem bildirimi (toast). Dışa aktarma başarı bildirimi "Klasörü aç" taşır, notice_ms sonra düşer;
+// düşme anı uyanmadır (next_deadline), boşta kare üretilmez. Hata kapatılana dek kalır.
+TEST_CASE_FIXTURE(ExportFixture, "a pdf export posts a notice that opens its folder and expires after notice_ms") {
+    config.tuning.notice_ms = noteapp::core::Limit{50, "50"};
+    add_note("alpha.md", "# a");
+    auto state = make_state();
+    auto view = make_view(*state);
+    wire(*state, out_path());
+    std::string opened;
+    state->deciders.open_folder = [&opened](const std::string& folder) {
+        opened = folder;
+        return true;
+    };
+    state->export_pdf();
+    REQUIRE(state->notices().items().size() == 1);
+    const noteapp::app::Notice notice = state->notices().items().front();
+    CHECK(notice.kind == noteapp::app::NoticeKind::Success);
+    CHECK(contains(notice.text, noteapp::test::utf8(out_path())));
+    REQUIRE(notice.folder.has_value());
+    CHECK(fs::path(*notice.folder) == out.path());
+    gui_test::settle(*view);
+    const std::string box = "notice:" + std::to_string(notice.id);
+    REQUIRE(view->item_rects().contains(box));
+    gui_test::click_button(*view, "notice_open:" + std::to_string(notice.id));
+    CHECK(fs::path(opened) == out.path());
+
+    REQUIRE(state->next_deadline().has_value());
+    CHECK(*state->next_deadline() <= notice.posted + std::chrono::milliseconds(50));
+    CHECK(state->tick(notice.posted + std::chrono::milliseconds(50)));
+    CHECK(state->notices().items().empty());
+    gui_test::settle(*view);
+    CHECK_FALSE(view->item_rects().contains(box));
+}
+
+TEST_CASE_FIXTURE(ExportFixture, "a failed export posts an error notice that stays until it is clicked") {
+    config.tuning.notice_ms = noteapp::core::Limit{50, "50"};
+    add_note("alpha.md", "# a");
+    auto state = make_state();
+    auto view = make_view(*state);
+    wire(*state, out.path() / "yok-dizin" / "x.pdf");
+    state->export_pdf();
+    REQUIRE(state->notices().items().size() == 1);
+    const auto id = state->notices().items().front().id;
+    CHECK(state->notices().items().front().kind == noteapp::app::NoticeKind::Error);
+    state->tick(std::chrono::steady_clock::now() + std::chrono::hours(1));
+    REQUIRE(state->notices().items().size() == 1);
+    gui_test::settle(*view);
+    gui_test::click_button(*view, "notice:" + std::to_string(id));
+    CHECK(state->notices().items().empty());
+}
+
+// İnceleme bulgusu: "Klasörü aç" adresi baytları kodlar; göreli çıktı yolunun klasörü mutlaktır (boş olsaydı
+// file:/// kökü açılırdı).
+TEST_CASE("file_url encodes spaces, #, % and Turkish letters and keeps a drive path") {
+    using noteapp::gui::file_url;
+    CHECK(file_url("/home/a b/#1 %/şçğ") == "file:///home/a%20b/%231%20%25/%C5%9F%C3%A7%C4%9F");
+    CHECK(file_url("C:/Users/a b") == "file:///C:/Users/a%20b");
+#ifdef _WIN32
+    CHECK(file_url("C:\\Users\\a b") == "file:///C:/Users/a%20b");
+#endif
+}
+
+TEST_CASE_FIXTURE(ExportFixture, "a relative export path still gives the notice an absolute folder") {
+    add_note("alpha.md", "# a");
+    auto state = make_state();
+    const fs::path before = fs::current_path();
+    fs::current_path(out.path());
+    wire(*state, fs::path(u8"göreli.pdf"));
+    state->export_pdf();
+    fs::current_path(before);
+    REQUIRE(state->notices().items().size() == 1);
+    const auto& folder = state->notices().items().front().folder;
+    REQUIRE(folder.has_value());
+    CHECK(fs::path(*folder).is_absolute());
+    CHECK(fs::equivalent(fs::path(*folder), out.path()));
 }

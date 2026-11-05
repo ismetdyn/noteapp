@@ -128,7 +128,7 @@ TEST_CASE("x marks the row, moves down, shows a marker and a count; X clears") {
     f.put("b.md");
     f.put("c.md");
     f.load();
-    f.press("x");
+    f.press("v");
     CHECK(f.state.selected() == 1);
     CHECK(f.state.marked_count() == 1);
     CHECK(f.state.is_marked(f.state.rows()[0]));
@@ -136,9 +136,9 @@ TEST_CASE("x marks the row, moves down, shows a marker and a count; X clears") {
     CHECK(row_of(screen, 2).find("│ *") == 0);
     CHECK(screen.PixelAt(tui::kPaneContentX, 2).foreground_color == ftxui::Color(ftxui::Color::Yellow));
     CHECK(has(row_of(screen, kHeight - 1), "selected: 1"));
-    f.press("x");
+    f.press("v");
     f.press("k");
-    f.press("x");  // geri basınca kalkar
+    f.press("v");  // geri basınca kalkar
     CHECK(f.state.marked_count() == 1);
     CHECK_FALSE(f.state.is_marked(f.state.rows()[1]));
     f.press("X");
@@ -163,7 +163,7 @@ TEST_CASE("the selection survives moving between folders and the count stays") {
     f.put("b.md");
     f.load();
     f.select("b.md");
-    f.press("x");
+    f.press("v");
     f.enter("work/");
     CHECK(f.state.marked_count() == 1);
     CHECK(shows(f.state, "selected: 1"));
@@ -194,7 +194,7 @@ TEST_CASE("d with a selection trashes all of it and one u brings the whole batch
     f.put("b.md", "B");
     f.put("c.md", "C");
     f.load();
-    f.press("xx");
+    f.press("vv");
     f.press("d");
     CHECK(f.in_trash("a.md"));
     CHECK(f.in_trash("b.md"));
@@ -215,13 +215,13 @@ TEST_CASE("d with a marked folder holding notes asks first; a note inside a mark
     f.put("work/sub/b.md");
     f.put("c.md");
     f.load();
-    f.press("x");  // work/
+    f.press("v");  // work/
     f.enter("work/");
     f.select("a.md");
-    f.press("x");
+    f.press("v");
     f.state.handle(Key::Left);
     f.select("c.md");
-    f.press("x");
+    f.press("v");
     REQUIRE(f.state.marked_count() == 3);
     f.press("d");
     REQUIRE(f.confirm);
@@ -248,7 +248,7 @@ TEST_CASE("d partial failure continues, reports the item, and u restores what wa
     f.put("b.md");
     f.put("c.md");
     f.load();
-    f.press("xxx");
+    f.press("vvv");
     // Enjekte hata: not liste yenilenmeden depodan gider, tek öğe başarısız olur.
     REQUIRE(f.store->remove(core::NotePath::parse("b.md").value()));
     f.press("d");
@@ -269,7 +269,7 @@ TEST_CASE("u partial failure restores the rest and reports the missing item") {
     f.put("a.md");
     f.put("b.md");
     f.load();
-    f.press("xx");
+    f.press("vv");
     f.press("d");
     REQUIRE(f.store->purge(core::NotePath::parse("a.md").value()));
     f.press("u");
@@ -288,9 +288,9 @@ TEST_CASE("D shows the total count, defaults to Cancel and removes everything se
     f.put("work/c.md");
     f.load();
     f.select("a.md");
-    f.press("x");
+    f.press("v");
     f.select("work/");
-    f.press("x");
+    f.press("v");
     f.press("D");
     REQUIRE(f.confirm);
     CHECK(has(f.confirm->message(), "2 items"));
@@ -424,9 +424,9 @@ TEST_CASE("copying a folder into itself is refused and reported; the rest contin
     f.put("b.md", "B");
     f.load();
     f.select("b.md");
-    f.press("x");
+    f.press("v");
     f.select("work/");
-    f.press("x");
+    f.press("v");
     f.press("y");
     f.enter("work/");
     f.enter("sub/");
@@ -455,7 +455,7 @@ TEST_CASE("paste partial failure continues and loses nothing") {
     f.put("dest/x.md");
     f.load();
     f.select("a.md");
-    f.press("xxx");
+    f.press("vvv");
     f.press("y");
     f.enter("dest/");
     REQUIRE(f.store->remove(core::NotePath::parse("b.md").value()));  // enjekte hata: kaynak gitti
@@ -514,7 +514,7 @@ TEST_CASE("search results: x marks with full paths and d acts on them") {
     f.state.handle(Key::Escape);
     REQUIRE(f.state.focus() == Focus::List);
     REQUIRE(f.state.rows().size() == 2);
-    f.press("xx");
+    f.press("vv");
     CHECK(f.state.marked_count() == 2);
     f.press("d");
     CHECK(f.in_trash("work/a.md"));
@@ -529,12 +529,12 @@ TEST_CASE("trash view: x with u restores and D purges the selected, marks stay s
     f.put("c.md");
     f.load();
     f.select("c.md");
-    f.press("x");  // canlı seçim, çöpe karışmaz
+    f.press("v");  // canlı seçim, çöpe karışmaz
     REQUIRE(f.state.marked_count() == 1);
     REQUIRE(f.store->trash(core::NotePath::parse("a.md").value()));
     REQUIRE(f.store->trash(core::NotePath::parse("b.md").value()));
     f.load();
-    f.press("T");
+    f.press("t");
     REQUIRE(f.state.trash_view());
     CHECK(f.state.marked_count() == 0);
     f.state.handle(Key::CtrlA);
@@ -546,15 +546,15 @@ TEST_CASE("trash view: x with u restores and D purges the selected, marks stay s
     REQUIRE(f.store->trash(core::NotePath::parse("a.md").value()));
     REQUIRE(f.store->trash(core::NotePath::parse("b.md").value()));
     f.actions.refresh_trash_view();
-    f.press("x");
-    f.press("x");
+    f.press("v");
+    f.press("v");
     f.press("D");
     REQUIRE(f.confirm);
     CHECK(has(f.confirm->message(), "2 items"));
     f.yes();
     CHECK_FALSE(f.in_trash("a.md"));
     CHECK_FALSE(f.in_trash("b.md"));
-    f.press("T");
+    f.press("t");
     CHECK(f.state.marked_count() == 1);  // canlı seçim yerinde
 }
 
@@ -613,7 +613,7 @@ TEST_CASE("the hints and F1 name the new keys") {
     f.put("a.md");
     f.load();
     const std::string hints = core::tr("tui.key_hints_list");
-    for (const std::string_view key : {"x select", "y copy", "p paste", "m move"})
+    for (const std::string_view key : {"v select", "y copy", "p paste", "m move"})
         CHECK(has(hints, key));
     const std::string help = core::tr("tui.help_body");
     for (const std::string_view key : {"gg", "gh", "gt", "Ctrl+A"})
@@ -708,7 +708,7 @@ TEST_CASE("a partial folder trash notifies: notes left even though the folder it
     f.put("z.md");
     f.load();
     f.select("work/");
-    f.press("x");  // satır seçimi: toplu yol
+    f.press("v");  // satır seçimi: toplu yol
     REQUIRE(f.store->remove(core::NotePath::parse("work/b.md").value()));
     f.press("d");
     REQUIRE(f.confirm);
@@ -742,17 +742,17 @@ TEST_CASE("purging a note keeps an undo step that still holds folders") {
     REQUIRE(f.store->create_folder("empty"));
     f.load();
     f.select("empty/");
-    f.press("x");
+    f.press("v");
     f.select("a.md");
-    f.press("x");
+    f.press("v");
     f.press("d");  // notsuz klasör: onay yok
     REQUIRE_FALSE(f.confirm);
     REQUIRE(f.in_trash("a.md"));
-    f.press("T");
+    f.press("t");
     REQUIRE(f.state.selected_row());
     f.press("D");
     f.yes();  // tek öğe, forget_trashed
-    f.press("T");
+    f.press("t");
     REQUIRE_FALSE(f.state.trash_view());
     f.press("u");
     const auto folders = f.store->folders();

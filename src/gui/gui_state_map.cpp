@@ -70,6 +70,7 @@ void GuiState::edit_map(const MapNode& from, const MapNode& to, MapEdgeKind kind
     map_.edges_changed();  // ilişki listeyi değiştirmez
     rescan();              // gövde yazıldıysa: liste etiketleri ve temiz editör yeni metni alır
     status_ = *done;
+    notify(app::NoticeKind::Success, status_);
 }
 
 }  // namespace noteapp::gui

@@ -160,7 +160,6 @@ TEST_CASE("renders the info panel, row numbers and the markdown preview to PNG")
         scene.state->set_info_open(false);
         scene.state->set_browser_view(noteapp::gui::BrowserView::Tree);
         scene.state->open_note(*noteapp::core::NotePath::parse("toplantı/örnek.md"));
-        scene.state->toggle_preview();
         gui_test::settle(*scene.view);
         REQUIRE(scene.state->showing_preview());
         save_png(file("preview"));
@@ -374,7 +373,6 @@ TEST_CASE("renders the G4 data previews and the search line to PNG") {
                    std::format("{}-1000x650-s1.00-{}.png", what, dark ? "dark" : "light");
         };
         scene.state->open_note(*noteapp::core::NotePath::parse("veri/şehirler.csv"));
-        scene.state->toggle_preview();
         gui_test::settle(*scene.view);
         REQUIRE(scene.state->showing_preview());
         save_png(file("g4-csv"));
@@ -469,6 +467,7 @@ TEST_CASE("renders the G5 editor to PNG") {
                    std::format("{}-1000x650-s1.00-{}.png", what, dark ? "dark" : "light");
         };
         scene.state->open_note(*noteapp::core::NotePath::parse("kod/örnek.md"));
+        scene.state->edit_selected();  // seçilen not incelemede açılır
         scene.state->request_focus(noteapp::gui::FocusRequest::Editor);
         gui_test::settle(*scene.view);
         gui_test::press(*scene.view, ImGuiKey_DownArrow);
@@ -521,6 +520,7 @@ TEST_CASE("renders the G5 editor features to PNG") {
         save_png(file("g5-syntax"));
 
         scene.state->open_note(*noteapp::core::NotePath::parse("yazı.md"));
+        scene.state->edit_selected();  // seçilen not incelemede açılır
         scene.state->request_focus(noteapp::gui::FocusRequest::Editor);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         while (!scene.view->item_rects().contains("editor_spell:3:7") && std::chrono::steady_clock::now() < deadline) {
@@ -567,6 +567,7 @@ TEST_CASE("renders the G5 language server diagnostic to PNG") {
         if (dark)
             apply_dark_theme();
         scene.state->open_note(*noteapp::core::NotePath::parse("kod/hata.py"));
+        scene.state->edit_selected();  // seçilen not incelemede açılır
         scene.state->request_focus(noteapp::gui::FocusRequest::Editor);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         while (!scene.view->item_rects().contains("editor_diagnostic:1:0") &&

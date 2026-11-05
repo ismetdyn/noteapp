@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/notices.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
 #include "edit/spellcheck.hpp"
@@ -141,6 +142,15 @@ struct StatusLine {
     std::string message;      // geçici ileti; doluysa kısayol çubuğunun yerine geçer
     std::string notice = {};  // ilk tuşa dek sönük ipucu; hata değildir, message ondan önceliklidir
     SyncIndicator::State sync_state = SyncIndicator::State::Disabled;  // senkron metninin rengi
+    // İşlem bildirimleri (toast; GUI ile ortak model, SPEC-tui "Bildirimler"): alt çubuğun üstünde sağda tek
+    // satır, en yenisi. Süre `tuning.notice_ms` (main kurar); hata sonraki tuşa dek kalır (main kapatır).
+    app::NoticeQueue notices{std::chrono::milliseconds(0)};
+
+    // İşlem sonucu: ileti satırı ve bildirim aynı metin; bildirim görünürken alt çubuk metni yinelemez.
+    void notify(app::NoticeKind kind, std::string text) {
+        message = text;
+        notices.post(kind, std::move(text), std::chrono::steady_clock::now());
+    }
 };
 
 // Tüm ekran: üst çubuk, sol liste, sağ önizleme, toplamlar, alt çubuk. `window` terminal boyutu (testte ekran

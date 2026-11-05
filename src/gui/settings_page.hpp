@@ -24,6 +24,8 @@ struct SettingsHost {
     std::function<void()> synced;
     // İşçi iş parçacığından UI iş parçacığına iş aktarır.
     std::function<void(std::function<void()>)> post;
+    // Bağlantı testinin sonucu bildirim olur (true = başarılı).
+    std::function<void(bool ok, std::string text)> notify = {};
 };
 
 // Ayarlar formunun modeli (ImGui bilmez): config_entries'teki 12 anahtar + token satırı + bağlantı testi.

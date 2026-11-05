@@ -454,4 +454,90 @@ void View::draw_fitted_text(const std::string& name, const std::string& text, fl
         full_text_tooltip(text);
 }
 
+namespace {
+
+constexpr float kNoticeWidthEms = 24.0F;  // kutu genişliği; uzun metin sarılır
+constexpr float kNoticeMarginEms = 0.8F;  // pencere kenarından ve durum çubuğundan
+constexpr float kNoticeStripePixels = 3.0F;  // türün rengi solda şerit: renk tek sinyal değil, önek de var
+
+ImU32 notice_color(app::NoticeKind kind) {
+    switch (kind) {
+    case app::NoticeKind::Error:
+        return theme::current().danger;
+    case app::NoticeKind::Success:
+        return theme::current().success;
+    case app::NoticeKind::Info:
+        break;
+    }
+    return theme::current().accent;
+}
+
+const char* notice_prefix_key(app::NoticeKind kind) {
+    switch (kind) {
+    case app::NoticeKind::Error:
+        return "notice.error";
+    case app::NoticeKind::Success:
+        return "notice.success";
+    case app::NoticeKind::Info:
+        break;
+    }
+    return "notice.info";
+}
+
+}  // namespace
+
+// Bildirimler en yeni altta, sağ altta yığılır; sığmayan eskiler çizilmez (kuyruk sınırsız, ekran sınırlı).
+// Kutuya tıklamak kapatır; dışa aktarmada "Klasörü aç" düğmesi. Odak çalmaz, kare istemez: düşme anı
+// GuiState::next_deadline'dadır.
+void View::draw_notices(float status_height) {
+    const auto& items = state_.notices().items();
+    if (items.empty())
+        return;
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float font = ImGui::GetFontSize();
+    const float margin = kNoticeMarginEms * font;
+    const float width = std::min(kNoticeWidthEms * font, viewport->WorkSize.x - (2.0F * margin));
+    if (width <= 0.0F)
+        return;
+    float bottom = viewport->WorkPos.y + viewport->WorkSize.y - status_height - margin;
+    const float top_limit = viewport->WorkPos.y + margin;
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_AlwaysAutoResize;
+    for (auto it = items.rbegin(); it != items.rend() && bottom > top_limit; ++it) {
+        const app::Notice& notice = *it;
+        const std::string id = "##notice" + std::to_string(notice.id);
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - margin, bottom), ImGuiCond_Always,
+                                ImVec2(1.0F, 1.0F));
+        ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0F), ImVec2(width, FLT_MAX));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::current().raised);
+        ImGui::Begin(id.c_str(), nullptr, kFlags);
+        ImGui::PopStyleColor();
+        const ImVec2 min = ImGui::GetWindowPos();
+        const ImVec2 size = ImGui::GetWindowSize();
+        ImGui::GetWindowDrawList()->AddRectFilled(min, ImVec2(min.x + (kNoticeStripePixels * ui_scale_), min.y + size.y),
+                                                  notice_color(notice.kind));
+        std::string text = core::tr(notice_prefix_key(notice.kind)) + "  " + printable(notice.text);
+        if (notice.repeats > 1)
+            text += "  (×" + std::to_string(notice.repeats) + ")";
+        ImGui::PushTextWrapPos(0.0F);
+        ImGui::TextUnformatted(text.c_str());
+        ImGui::PopTextWrapPos();
+        bool acted = false;
+        if (notice.folder) {
+            if (button("notice_open:" + std::to_string(notice.id), core::tr("notice.open_folder"), ButtonKind::Ghost)) {
+                queue([this, notice_id = notice.id] { state_.open_notice_folder(notice_id); });
+                acted = true;
+            }
+        }
+        // Kutuya tıklama kapatır (düğmenin tıkı onun işidir).
+        if (!acted && ImGui::IsWindowHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+            queue([this, notice_id = notice.id] { state_.dismiss_notice(notice_id); });
+        ImGui::SetItemTooltip("%s", core::tr("notice.dismiss_tip").c_str());
+        remember_rect("notice:" + std::to_string(notice.id), min, ImVec2(min.x + size.x, min.y + size.y));
+        bottom = min.y - (margin / 2.0F);
+        ImGui::End();
+    }
+}
+
 }  // namespace noteapp::gui

@@ -30,7 +30,9 @@ namespace fs = std::filesystem;
 
 namespace {
 
+// Seçilen not incelemede açılır (TUI REVIEW): düzenleme açık eylemle başlar; taslak zaten düzenlemededir.
 void focus_editor(GuiState& state, View& view) {
+    state.edit_selected();
     state.request_focus(FocusRequest::Editor);
     settle(view);
     REQUIRE(view.editor_active());
@@ -196,6 +198,7 @@ TEST_CASE_FIXTURE(WindowFixture, "editor: misspelled words are underlined when h
     add_note("yazı.md", "iyi kotu söz\n");
     auto state = make_state();
     auto view = make_view(*state);
+    state->edit_selected();  // yazım alt çizgisi editördedir
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (!view->item_rects().contains("editor_spell:1:4") && std::chrono::steady_clock::now() < deadline) {
         state->tick(std::chrono::steady_clock::now());

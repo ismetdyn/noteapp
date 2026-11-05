@@ -716,7 +716,17 @@ void TuiState::set_list_prefs(const ListPrefs& prefs) {
     prefs_ = prefs;
     if (prefs_.recent_commands.size() > recent_commands_limit_.cap())
         prefs_.recent_commands.resize(recent_commands_limit_.cap());
+    if (prefs_.list_share)  // tuning.tui_list_share'i geçer; sütun sınırları okurken uygulanır
+        layout_.set_share(*prefs_.list_share);
     refilter(false);
+}
+
+void TuiState::store_list_share() {
+    const std::optional<double> share = layout_.chosen_share(window_width_);
+    if (!share || share == prefs_.list_share)
+        return;
+    prefs_.list_share = share;
+    prefs_changed_ = true;
 }
 
 std::size_t TuiState::row_height(std::size_t row) const {
@@ -1275,9 +1285,9 @@ void TuiState::scroll_to_find_match() {
 
 bool TuiState::handle_layout_letter(std::string_view text) {
     if (text == "<")
-        layout_.resize(-PaneLayout::kKeyStep, window_width_);
+        resize_list(-1);
     else if (text == ">")
-        layout_.resize(PaneLayout::kKeyStep, window_width_);
+        resize_list(1);
     else if (text == "z")
         layout_.toggle_zoom();
     else
@@ -1515,6 +1525,7 @@ void TuiState::select_last() {
 
 void TuiState::resize_list(int direction) {
     layout_.resize(direction * PaneLayout::kKeyStep, window_width_);
+    store_list_share();
 }
 
 void TuiState::toggle_zoom() {

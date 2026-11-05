@@ -112,6 +112,15 @@ public:
 
     void signal(int number) const { REQUIRE(kill(pid_, number) == 0); }
 
+    // Sürecin şimdiye dek en yüksek yerleşik belleği (VmHWM, KiB); okunamazsa 0.
+    std::size_t peak_rss_kib() const {
+        std::ifstream status("/proc/" + std::to_string(pid_) + "/status");
+        for (std::string line; std::getline(status, line);)
+            if (line.starts_with("VmHWM:"))
+                return static_cast<std::size_t>(std::stoull(line.substr(line.find_first_of("0123456789"))));
+        return 0;
+    }
+
     // Süreç kendiliğinden bitti mi (read_until_exit zaman aşımında da döner). Yıkıcının waitpid'i sonra boşa döner.
     bool exited() const {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kReadTimeoutMs);
@@ -318,10 +327,13 @@ struct DrawCountFixture {
     noteapp::test::ScopedEnv log_env{"NOTEAPP_TUI_DRAW_LOG", noteapp::test::utf8(log)};
 
     // Dil sunucusu ve yazım denetimi kapalı (.py, lsp.enabled = false): işçi sonucu kare saymayı bozmasın.
-    explicit DrawCountFixture(int autosave_ms = kDefaultAutosaveMs) {
+    // `limits_tui`: config'in [limits.tui] bölümüne eklenen satırlar.
+    explicit DrawCountFixture(int autosave_ms = kDefaultAutosaveMs, std::string_view limits_tui = {}) {
         std::filesystem::create_directories(home.path() / "config");
         std::ofstream(home.path() / "config" / "config.toml")
-            << "language = \"en\"\n[lsp]\nenabled = false\n[tuning]\nautosave_ms = " << autosave_ms << '\n';
+            << "language = \"en\"\n[lsp]\nenabled = false\n[tuning]\nautosave_ms = " << autosave_ms
+            << "\n[limits.tui]\n"
+            << limits_tui << '\n';
         add_note("a.py", "x = 1\n");
     }
 
@@ -590,7 +602,7 @@ TEST_CASE("the real TUI keeps F1 help at the right of the hint bar at 60x15 and 
         CHECK(bar.ends_with("F1 help"));
         CHECK(screen.at(columns - 1, rows - 1).text == "p");  // sağ kenara yaslı
         if (columns == 120)
-            for (const char* hint : {": cmd", "T trash", "Space open", "o sort", "v col", "f search"})
+            for (const char* hint : {": cmd", "t trash", "Space open", "o sort", "V col", "s search"})
                 CHECK(bar.find(hint) != std::string::npos);
     }
 }
@@ -736,4 +748,282 @@ TEST_CASE("a Save that fails validation at the Ctrl+C prompt keeps the app open"
     app.send("\r");
     app.read_until_exit();
     CHECK(app.exited());
+}
+
+namespace {
+
+// NY-T yapıştırma: terminal Ctrl+Shift+V'yi ya bracketed paste (ESC[200~ … ESC[201~) ya da tuş olayları olarak
+// gönderir. Eskiden CRLF iki Enter'dı (satır arası boş satır, sonda iki katı boş satır); metin notun satır
+// sonuyla bayt bayt girmeli.
+constexpr std::string_view kPasteStart = "\x1B[200~";
+constexpr std::string_view kPasteEnd = "\x1B[201~";
+constexpr int kPasteAutosaveMs = 200;
+
+std::string bracketed(std::string_view text) {
+    return std::string(kPasteStart) + std::string(text) + std::string(kPasteEnd);
+}
+
+// Kayıt bitene dek bekler (en çok kSettleLimit); son okunan gövdeyi döner.
+std::string wait_body(const PtyApp& app, const std::filesystem::path& data, std::string_view path,
+                      std::string_view expected) {
+    const auto until = std::chrono::steady_clock::now() + kSettleLimit;
+    std::string body = noteapp::test::note_body(data, path);
+    while (body != expected && std::chrono::steady_clock::now() < until) {
+        app.read_for(std::chrono::milliseconds(50));
+        body = noteapp::test::note_body(data, path);
+    }
+    return body;
+}
+
+// Kayıtlı not yolları, sıralı; `count` kadar not olunca (en çok kSettleLimit) döner.
+std::vector<std::string> wait_notes(const PtyApp& app, const std::filesystem::path& data, std::size_t count) {
+    std::vector<std::string> names;
+    const auto until = std::chrono::steady_clock::now() + kSettleLimit;
+    while (names.size() < count && std::chrono::steady_clock::now() < until) {
+        app.read_for(std::chrono::milliseconds(50));
+        names.clear();
+        for (const noteapp::core::NoteInfo& note : noteapp::core::NoteStore(data).list())
+            names.push_back(note.path.string());
+    }
+    std::ranges::sort(names);
+    return names;
+}
+
+struct PasteCase {
+    std::string_view name;
+    std::string sent;
+    std::string_view note;      // yapıştırmadan önceki not (imleç başta)
+    std::string_view expected;  // otomatik kayıttan sonra
+};
+
+}  // namespace
+
+TEST_CASE("a terminal paste lands byte for byte in the note: CRLF, CR, LF, mixed, bracketed or not") {
+    const std::vector<PasteCase> cases{
+        {"bracketed CRLF", bracketed("one\r\ntwo\r\n\r\nthree\r\n"), "x\n", "one\ntwo\n\nthree\nx\n"},
+        {"bracketed CR (Konsole, VTE, xterm)", bracketed("one\rtwo\r\rthree\r"), "x\n", "one\ntwo\n\nthree\nx\n"},
+        {"bracketed LF", bracketed("one\ntwo\n\nthree\n"), "x\n", "one\ntwo\n\nthree\nx\n"},
+        {"bracketed mixed", bracketed("one\r\ntwo\rthree\nfour"), "x\n", "one\ntwo\nthree\nfourx\n"},
+        {"bracketed trailing newlines", bracketed("end\r\n\r\n\r\n"), "x\n", "end\n\n\nx\n"},
+        {"bracketed list, indent and tab", bracketed("- a\r  - b\r\tc\r"), "x\n", "- a\n  - b\n\tc\nx\n"},
+        {"bracketed into a CRLF note", bracketed("one\ntwo\n"), "x\r\n", "one\r\ntwo\r\nx\r\n"},
+        {"unbracketed CR keys", "one\rtwo\r\rthree\r", "x\n", "one\ntwo\n\nthree\nx\n"},
+        {"unbracketed CRLF", "one\r\ntwo\r\n\r\nthree\r\n", "x\n", "one\ntwo\n\nthree\nx\n"},
+    };
+    for (const PasteCase& paste : cases) {
+        CAPTURE(paste.name);
+        const DrawCountFixture f(kPasteAutosaveMs);
+        noteapp::test::upsert_note(f.home.path() / "data", "a.py", paste.note);
+        const PtyApp app(NOTEAPP_NOTES_EXE);
+        app.read_frame();
+        wait_quiet(app, kQuiet, kSettleLimit);
+        app.send("\r");  // Enter: tek not editörde, imleç başta
+        app.read_frame();
+        wait_quiet(app, kQuiet, kSettleLimit);
+        app.send(paste.sent);
+        CHECK(wait_body(app, f.home.path() / "data", "a.py", paste.expected) == paste.expected);
+    }
+}
+
+TEST_CASE("a bracketed paste is one edit drawn in one frame, and the mode is left at exit") {
+    const DrawCountFixture f;
+    const PtyApp app(NOTEAPP_NOTES_EXE);
+    CHECK(app.read_frame_text().find("\x1B[?2004h") != std::string::npos);  // terminalden istenir
+    wait_quiet(app, kQuiet, kSettleLimit);
+    app.send("\r");
+    app.read_frame();
+    wait_quiet(app, kQuiet, kSettleLimit);
+    const std::size_t before = draws(f.log);
+    app.send(bracketed("one\r\ntwo\r\nthree\r\n"));
+    app.read_frame();
+    wait_quiet(app, kQuiet, kSettleLimit);
+    CHECK(draws(f.log) == before + 1);
+    app.send("\x1A");  // Ctrl+Z: yapıştırma tek geri alma adımı
+    app.read_frame();
+    app.send("y");
+    app.read_frame();
+    app.send("\x13");  // Ctrl+S
+    CHECK(wait_body(app, f.home.path() / "data", "a.py", "yx = 1\n") == "yx = 1\n");
+    app.signal(SIGTERM);
+    CHECK(app.read_until_exit().find("\x1B[?2004l") != std::string::npos);
+}
+
+TEST_CASE("a paste into a new note draft keeps its lines; the name comes from the first line") {
+    const DrawCountFixture f;
+    const PtyApp app(NOTEAPP_NOTES_EXE);
+    app.read_frame();
+    wait_quiet(app, kQuiet, kSettleLimit);
+    app.send("a");  // ad sormadan boş taslak
+    app.read_frame();
+    wait_quiet(app, kQuiet, kSettleLimit);
+    app.send(bracketed("Shopping\r\n\r\n- milk\r\n- eggs\r\n"));
+    app.read_frame();
+    app.send("\x13");  // ilk Ctrl+S ad girdisini açar (ilk satırın slug'ı)
+    app.read_frame();
+    wait_quiet(app, kQuiet, kSettleLimit);
+    app.send("\r");
+    const std::filesystem::path data = f.home.path() / "data";
+    const std::vector<std::string> names = wait_notes(app, data, 2);
+    REQUIRE(names.size() == 2);
+    CHECK(names[1].starts_with("shopping."));
+    CHECK(noteapp::test::note_body(data, names[1]) == "Shopping\n\n- milk\n- eggs\n");
+}
+
+TEST_CASE("a multi-line paste into the new-note name row is one name, not an early Enter") {
+    const DrawCountFixture f;
+    const PtyApp app(NOTEAPP_NOTES_EXE);
+    app.read_frame();
+    wait_quiet(app, kQuiet, kSettleLimit);
+    app.send("n");  // listede ad satırı
+    app.read_frame();
+    wait_quiet(app, kQuiet, kSettleLimit);
+    app.send(bracketed("weekly\r\nplan\r\n"));
+    app.read_frame();
+    app.send("\r");
+    CHECK(wait_notes(app, f.home.path() / "data", 2) == std::vector<std::string>{"a.py", "weekly-plan.md"});
+}
+
+namespace {
+
+// Bir yapıştırma birden çok okumada gelir: parçalar arasında terminal susar.
+void send_in_reads(const PtyApp& app, const std::vector<std::string>& parts) {
+    for (const std::string& part : parts) {
+        app.send(part);
+        app.read_for(std::chrono::milliseconds(120));
+    }
+}
+
+// Editörde a.py açık, imleç başta.
+void open_editor(const PtyApp& app) {
+    app.read_frame();
+    wait_quiet(app, kQuiet, kSettleLimit);
+    app.send("\r");
+    app.read_frame();
+    wait_quiet(app, kQuiet, kSettleLimit);
+}
+
+}  // namespace
+
+TEST_CASE("a paste split across reads keeps its bytes: the end mark, UTF-8 and escape sequences inside") {
+    struct SplitCase {
+        std::string_view name;
+        std::vector<std::string> parts;
+        std::string_view expected;
+    };
+    const std::vector<SplitCase> cases{
+        {"end mark split", {std::string(kPasteStart) + "ab\x1B[20", "1~"}, "abx = 1\n"},
+        {"UTF-8 split", {std::string(kPasteStart) + "\xC5", "\x9F" + std::string(kPasteEnd)}, "\xC5\x9Fx = 1\n"},
+        {"escape sequences inside", {bracketed("a\x1B[Ab\x1B[1;5Cc")}, "a\x1B[Ab\x1B[1;5Ccx = 1\n"},
+    };
+    for (const SplitCase& paste : cases) {
+        CAPTURE(paste.name);
+        const DrawCountFixture f(kPasteAutosaveMs);
+        const PtyApp app(NOTEAPP_NOTES_EXE);
+        open_editor(app);
+        send_in_reads(app, paste.parts);
+        CHECK(wait_body(app, f.home.path() / "data", "a.py", paste.expected) == paste.expected);
+    }
+}
+
+// Hiç bitmeyen yapıştırma tuşları sonsuza dek yutmasın: limits.tui.paste_timeout sessizlikten sonra toplananı
+// yapıştırır, sonraki tuş yine çalışır.
+TEST_CASE("a paste that never ends is delivered after limits.tui.paste_timeout and keys work again") {
+    const DrawCountFixture f(kPasteAutosaveMs, "paste_timeout = \"300ms\"");
+    const PtyApp app(NOTEAPP_NOTES_EXE);
+    open_editor(app);
+    app.send(std::string(kPasteStart) + "lost");
+    app.read_for(std::chrono::milliseconds(900));
+    app.send("z");
+    CHECK(wait_body(app, f.home.path() / "data", "a.py", "lostzx = 1\n") == "lostzx = 1\n");
+}
+
+// Ctrl+V ile aynı sınır (limits.tui.paste_bytes): aşan terminal yapıştırması metne girmez, neden söylenir.
+TEST_CASE("a terminal paste over limits.tui.paste_bytes changes nothing and says why") {
+    const DrawCountFixture f(kPasteAutosaveMs, "paste_bytes = 16");
+    const PtyApp app(NOTEAPP_NOTES_EXE);
+    open_editor(app);
+    app.send(bracketed("0123456789abcdefg"));  // 17 bayt
+    std::string seen;
+    app.read_for(std::chrono::milliseconds(500), &seen);
+    CHECK(seen.find("Not pasted") != std::string::npos);
+    app.send(bracketed("0123456789abcdef"));  // 16 bayt: sınırda girer
+    CHECK(wait_body(app, f.home.path() / "data", "a.py", "0123456789abcdefx = 1\n") == "0123456789abcdefx = 1\n");
+}
+
+namespace {
+
+constexpr std::string_view kShortPasteTimeout = "paste_timeout = \"300ms\"";
+constexpr auto kPastTimeout = std::chrono::milliseconds(450);  // 300 ms sessizliğin ötesi, ikincisinden önce
+
+}  // namespace
+
+// Zaman aşımıyla biten yapıştırmanın geç gelen devamı tuş değildir: metin olarak eklenir, hiçbir komut koşmaz.
+TEST_CASE("the late rest of a paste that timed out lands as text in the editor; Ctrl+Q in it is a byte") {
+    const DrawCountFixture f(kPasteAutosaveMs, kShortPasteTimeout);
+    const PtyApp app(NOTEAPP_NOTES_EXE);
+    open_editor(app);
+    app.send(std::string(kPasteStart) + "part1");
+    app.read_for(kPastTimeout);
+    app.send("part2\x11" + std::string(kPasteEnd));
+    CHECK(wait_body(app, f.home.path() / "data", "a.py", "part1part2\x11x = 1\n") == "part1part2\x11x = 1\n");
+}
+
+TEST_CASE("the late rest of a paste that timed out runs no list command") {
+    const DrawCountFixture f(kPasteAutosaveMs, kShortPasteTimeout);
+    const PtyApp app(NOTEAPP_NOTES_EXE);
+    app.read_frame();
+    wait_quiet(app, kQuiet, kSettleLimit);
+    app.send(std::string(kPasteStart) + "ab");
+    app.read_for(kPastTimeout);
+    app.send("dD" + std::string(kPasteEnd));  // tuş olsaydı: çöpe at, kalıcı sil sorusu
+    wait_quiet(app, kQuiet, kSettleLimit);
+    std::vector<std::string> names;
+    for (const noteapp::core::NoteInfo& note : noteapp::core::NoteStore(f.home.path() / "data").list())
+        names.push_back(note.path.string());
+    CHECK(names == std::vector<std::string>{"a.py"});
+}
+
+// Toplamda zaman aşımından uzun ama arası kısa akış bölünmez: tek yapıştırma, tek geri alma adımı.
+TEST_CASE("a long paste with short gaps does not end early: one undo step takes all of it back") {
+    const DrawCountFixture f(kPasteAutosaveMs, kShortPasteTimeout);
+    const PtyApp app(NOTEAPP_NOTES_EXE);
+    open_editor(app);
+    std::vector<std::string> parts{std::string(kPasteStart) + "a"};
+    for (int i = 0; i < 6; ++i)  // 6 x 120 ms > 300 ms
+        parts.emplace_back("b");
+    parts.emplace_back(kPasteEnd);
+    send_in_reads(app, parts);
+    CHECK(wait_body(app, f.home.path() / "data", "a.py", "abbbbbbx = 1\n") == "abbbbbbx = 1\n");
+    app.send("\x1A");  // Ctrl+Z
+    app.read_frame();
+    app.send("y");
+    CHECK(wait_body(app, f.home.path() / "data", "a.py", "yx = 1\n") == "yx = 1\n");
+}
+
+TEST_CASE("paste_timeout = 0 waits for the end mark however long it takes") {
+    const DrawCountFixture f(kPasteAutosaveMs, "paste_timeout = 0");
+    const PtyApp app(NOTEAPP_NOTES_EXE);
+    open_editor(app);
+    app.send(std::string(kPasteStart) + "abc");
+    app.read_for(std::chrono::milliseconds(1500));
+    app.send("\x11" + std::string(kPasteEnd));  // tuş olsaydı Ctrl+Q çıkış sorusu
+    CHECK(wait_body(app, f.home.path() / "data", "a.py", "abc\x11x = 1\n") == "abc\x11x = 1\n");
+}
+
+// Ayrıştırıcı sınırı aşan baytı saklamaz: dev yapıştırma belleği şişirmez, sonunda neden söylenir.
+TEST_CASE("a paste far over limits.tui.paste_bytes is not kept in memory and says why") {
+    constexpr std::size_t kPasteMiB = 24;
+    const DrawCountFixture f(kPasteAutosaveMs, "paste_bytes = \"4KiB\"");
+    const PtyApp app(NOTEAPP_NOTES_EXE);
+    open_editor(app);
+    const std::size_t before = app.peak_rss_kib();
+    REQUIRE(before > 0);
+    app.send(bracketed(std::string(kPasteMiB * 1024 * 1024, 'x')));
+    std::string seen;
+    app.read_for(std::chrono::milliseconds(3000), &seen);
+    CHECK(seen.find("Not pasted") != std::string::npos);
+    const std::size_t grown = app.peak_rss_kib() - before;
+    CAPTURE(grown);
+    CHECK(grown < kPasteMiB * 1024 / 4);  // eskiden metnin tamamı (ve kopyası) bellekteydi
+    CHECK(noteapp::test::note_body(f.home.path() / "data", "a.py") == "x = 1\n");
 }

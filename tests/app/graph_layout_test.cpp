@@ -282,3 +282,89 @@ TEST_CASE("note map: the node cap is limits.app.map_nodes and 0 is unlimited") {
     CHECK(model.map().nodes.size() == 6);
     CHECK_FALSE(model.map().capped());
 }
+
+// NY-G: haritada düğüm seçmek çevre merkezini değiştirir. Çevre aynı not ve kenar kümesiyse yalnız BFS
+// sırası değişir; bu "yeni çizge" sayılırsa yerleşim ılınır, oturmuş düğümler kare kare bir kenar boyu
+// sıçrar ve kamera yeniden sığar: tüm harita titrer.
+TEST_CASE("note map: re-centring on a note with the same neighbourhood keeps the map and the layout still") {
+    const Chain chain;
+    const auto edges = [&]() -> std::expected<std::vector<core::NoteEdge>, core::Error> {
+        return chain.edges;
+    };
+    noteapp::app::MapModel model;
+    model.set_options(MapOptions{.depth = 5});  // a..e tek bileşen: her merkezden aynı beş not
+    model.update(edges, chain.notes, core::NotePath::parse("c.md").value());
+    settle(model.layout());
+    const std::size_t generation = model.generation();
+    const std::vector<LayoutPoint> before = model.layout().positions();
+    const auto nodes_before = keys_of(model.map());
+
+    model.update(edges, chain.notes, core::NotePath::parse("a.md").value());
+    CHECK(keys_of(model.map()) == nodes_before);
+    CHECK(model.generation() == generation);
+    CHECK(model.layout().settled());
+    REQUIRE(model.layout().positions().size() == before.size());
+    for (std::size_t i = 0; i < before.size(); ++i) {
+        CHECK(model.layout().positions()[i].x == before[i].x);
+        CHECK(model.layout().positions()[i].y == before[i].y);
+    }
+    CHECK(model.center() == core::NotePath::parse("a.md").value());
+
+    // Çevre gerçekten değişince (derinlik 1: yalnız a ve b) harita yeniden kurulur.
+    model.set_options(MapOptions{.depth = 1});
+    model.update(edges, chain.notes, core::NotePath::parse("a.md").value());
+    CHECK(model.generation() == generation + 1);
+}
+
+// NY-G: çevre gerçekten değişince (düğüm girdi/çıktı) yerleşim ılınır. Adım sıcaklıkla kısıtlı ve sönümsüzdü:
+// dengesine bir adımdan yakın düğüm (çok kenarlı merkez) her adımda dengeyi aşıp geri döndü, tüm harita ~90
+// kare boyunca bir kenar boyu genlikle titredi. Yön değiştiren düğümün adımı sönümlenir.
+TEST_CASE("graph layout: after a rebuild nodes settle without swinging back and forth") {
+    // Merkez h, dört kol; iki kolun ucunda birer not. Yeniden kurulumda bir uç gider, yeni bir uç gelir.
+    std::vector<std::string> keys{"h", "n1", "n2", "n3", "n4", "m1", "m2"};
+    std::vector<GraphLayout::Edge> edges{{0, 1}, {0, 2}, {0, 3}, {0, 4}, {1, 5}, {2, 6}};
+    GraphLayout layout;
+    layout.set_graph(keys, edges);
+    settle(layout);
+    keys = {"n1", "h", "m1", "n2", "n3", "n4", "k1"};
+    edges = {{1, 0}, {1, 3}, {1, 4}, {1, 5}, {0, 2}, {2, 6}};
+    REQUIRE(layout.set_graph(keys, edges));
+    REQUIRE_FALSE(layout.settled());
+
+    constexpr int kWarmup = 10;  // ilk adımlarda yön değişimi doğaldır; sonrasında genlik görünmez kalmalı
+    constexpr float kVisibleSwing = 0.1F * kK;
+    std::vector<LayoutPoint> previous = layout.positions();
+    std::vector<LayoutPoint> last_step(keys.size());
+    float worst = 0.0F;
+    for (int iteration = 0; iteration < kEnoughIterations && layout.step(1); ++iteration) {
+        const std::vector<LayoutPoint>& now = layout.positions();
+        for (std::size_t i = 0; i < now.size(); ++i) {
+            const LayoutPoint step{now[i].x - previous[i].x, now[i].y - previous[i].y};
+            const bool reversed = (step.x * last_step[i].x) + (step.y * last_step[i].y) < 0.0F;
+            if (reversed && iteration >= kWarmup)
+                worst = std::max(worst, std::hypot(step.x, step.y));
+            last_step[i] = step;
+        }
+        previous = now;
+    }
+    CHECK(worst < kVisibleSwing);
+}
+
+// İnceleme bulgusu: imza kenar türünü de karşılaştırır; aynı uçlarda tür değişince (bağlantı -> ilişki) harita
+// yeniden kurulur, eski renk kalmaz. Yerleşim türü bilmez (uçlar aynı): konumlar ve kuşak yerinde kalır.
+TEST_CASE("note map: an edge whose kind changes between the same notes rebuilds the map") {
+    const std::vector<core::NoteMeta> notes{meta("a.md"), meta("b.md")};
+    std::vector<core::NoteEdge> edges{link("a.md", "b.md")};
+    const auto read = [&]() -> std::expected<std::vector<core::NoteEdge>, core::Error> { return edges; };
+    noteapp::app::MapModel model;
+    model.update(read, notes, core::NotePath::parse("a.md").value());
+    const std::size_t generation = model.generation();
+    REQUIRE(model.map().edges.size() == 1);
+    CHECK(model.map().edges.front().kind == MapEdgeKind::Link);
+    edges = {link("a.md", "b.md", core::EdgeKind::RelatedTo)};
+    model.edges_changed();
+    model.update(read, notes, core::NotePath::parse("a.md").value());
+    REQUIRE(model.map().edges.size() == 1);
+    CHECK(model.map().edges.front().kind == MapEdgeKind::Related);
+    CHECK(model.generation() == generation);  // düğüm önbelleği (ad, renk, boy) türden bağımsız
+}

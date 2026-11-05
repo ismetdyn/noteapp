@@ -67,10 +67,16 @@ constexpr int kRowY = 2;  // ilk liste satırı
 
 }  // namespace
 
-TEST_CASE("pane layout: the default is 2/5 and keys stop at the bounds, also at 60 columns") {
+// Kullanıcı isteği (NY-T): ilk açılışta iki panel eşit değil, sol liste bariz dar (tuning.tui_list_share).
+TEST_CASE("pane layout: the default list is a third, clearly narrower than the right pane, also at 60 columns") {
     PaneLayout layout;
-    CHECK(layout.list_width(100) == 40);
-    CHECK(layout.list_width(60) == 24);
+    CHECK(layout.list_width(100) == 33);
+    CHECK(layout.list_width(60) == 19);
+    for (const int width : {60, 80, 100, 160, 240}) {
+        CAPTURE(width);
+        const tui::PaneGeometry geometry = layout.geometry(width, false);
+        CHECK(geometry.list_width * 3 / 2 <= geometry.right_width);
+    }
     for (int i = 0; i < 20; ++i)
         layout.resize(-PaneLayout::kKeyStep, 60);
     CHECK(layout.list_width(60) == PaneLayout::kMinListWidth);
@@ -79,11 +85,59 @@ TEST_CASE("pane layout: the default is 2/5 and keys stop at the bounds, also at 
     CHECK(layout.list_width(60) == 60 - PaneLayout::kMinRightWidth);
 }
 
+TEST_CASE("pane layout: the share comes from config, stays within the bounds and a chosen width wins") {
+    PaneLayout layout;
+    layout.set_share(0.5);
+    CHECK(layout.list_width(100) == 50);
+    layout.set_share(0.0);
+    CHECK(layout.list_width(100) == PaneLayout::kMinListWidth);
+    layout.set_share(1.0);
+    CHECK(layout.list_width(100) == 100 - PaneLayout::kMinRightWidth);
+    layout.set_list_width(40, 100);  // sürükleme ya da `<` `>`
+    layout.set_share(0.25);          // ayar yeniden okununca da kullanıcının genişliği kalır
+    CHECK(layout.list_width(100) == 40);
+}
+
 TEST_CASE("pane layout: a shrinking window pulls a wide list back so both panes stay usable") {
     PaneLayout layout;
     layout.set_list_width(150, 200);
     CHECK(layout.list_width(200) == 150);
     CHECK(layout.list_width(60) == 60 - PaneLayout::kMinRightWidth);
+}
+
+// NY-T3: seçilen genişlik tui-state.toml'a pencere oranı olarak yazılır. Aynı pencerede aynı sütuna dönmeli
+// (oran tamsayıya kesilir: kayan nokta yuvarlaması bir sütun kaydırmasın).
+TEST_CASE("pane layout: a chosen width becomes a share that gives the same column back in the same window") {
+    PaneLayout layout;
+    CHECK_FALSE(layout.chosen_share(100));  // seçilmedi: config'in oranı geçerli
+    for (const int window : {60, 80, 99, 100, 137, 240, 317}) {
+        for (int width = PaneLayout::kMinListWidth; width <= window - PaneLayout::kMinRightWidth; ++width) {
+            CAPTURE(window);
+            CAPTURE(width);
+            layout.set_list_width(width, window);
+            const std::optional<double> share = layout.chosen_share(window);
+            REQUIRE(share);
+            PaneLayout next;
+            next.set_share(*share);
+            CHECK(next.list_width(window) == width);
+        }
+    }
+    CHECK_FALSE(layout.chosen_share(0));
+}
+
+TEST_CASE("dragging the divider marks the width for saving once, when the drag ends") {
+    Fixture f;
+    f.state.take_prefs_changed();
+    const int start = f.divider();
+    f.mouse(start, 5, MouseButton::Left, MouseMotion::Press);
+    f.mouse(start + 4, 5, MouseButton::Left, MouseMotion::Move);
+    CHECK_FALSE(f.state.take_prefs_changed());  // her hareket dosya yazmaz
+    f.mouse(start + 4, 5, MouseButton::Left, MouseMotion::Release);
+    CHECK(f.state.take_prefs_changed());
+    REQUIRE(f.state.list_prefs().list_share);
+    PaneLayout next;
+    next.set_share(*f.state.list_prefs().list_share);
+    CHECK(next.list_width(kWidth) == start + 5);
 }
 
 TEST_CASE("pane layout: zoom shows only the focused pane; the divider is gone") {
@@ -440,7 +494,7 @@ TEST_CASE("mouse: right click on a folder row opens the folder menu; an unmarked
     f.state.set_folders(f.store.folders());
     REQUIRE(f.state.rows().front().is_folder);
     f.state.select_index(1);
-    f.state.handle(Key::Char, "x");
+    f.state.handle(Key::Char, "v");
     REQUIRE(f.state.marked_count() == 1);
     f.mouse(10, kRowY, MouseButton::Right);
     REQUIRE(f.state.palette_open());

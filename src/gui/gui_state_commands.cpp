@@ -91,12 +91,12 @@ void GuiState::show_help() {
     deciders.help();
 }
 
-// TUI `e`: seçili not editörde; önizlemedeyse düzenlemeye dönülür.
+// TUI `e`: seçili not düzenlemede, odak editöre.
 void GuiState::edit_selected() {
     if (trash_view_ || selected_folder_ || !shown_ || new_note_)
         return;
-    if (showing_preview())
-        toggle_preview();  // odak editöre
+    if (reviewing())
+        begin_edit();
     else
         request_focus(FocusRequest::Editor);
 }

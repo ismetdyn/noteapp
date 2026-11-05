@@ -69,6 +69,8 @@ struct Tuning {
     int sync_timeout_seconds;      // AutoSync bir senkron sürecini bu kadar bekler, sonra sonlandırır
     std::size_t graph_batch_ops;   // graf işleminin işlem bütçesi; iş bölünür, kullanıcı işlemi reddedilmez
     std::size_t completion_min_prefix_bytes;  // TUI tamamlamasının öneri için beklediği en kısa önek
+    Limit notice_ms;  // işlem bildiriminin (toast) ekranda kalma süresi; hata kalıcı, 0 = kendiliğinden kapanmaz
+    double tui_list_share;  // TUI'de sol panelin ilk genişliği, pencereye oranı (0..1); sürüklenen genişlik geçer
 
     bool operator==(const Tuning&) const = default;
 };

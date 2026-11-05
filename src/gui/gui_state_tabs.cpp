@@ -83,7 +83,7 @@ void GuiState::clear_live() {
     shown_.reset();
     new_note_ = false;
     doc_.reset_draft();
-    preview_ = false;
+    review_ = true;
     draft_folder_.clear();
     set_editor({}, false);
     reload_links();
@@ -114,7 +114,7 @@ void GuiState::stash() {
                                 .editable = editable_,
                                 .dirty = dirty_,
                                 .new_note = new_note_,
-                                .preview = preview_};
+                                .review = review_};
     tab->loaded = true;
     clear_live();
 }
@@ -150,7 +150,8 @@ void GuiState::restore_tab(std::uint64_t id, bool focus_editor) {
         if (note)
             show_note(*saved.shown);  // gui-state'ten gelen sekme: ilk etkinleşmede okunur
     }
-    preview_ = saved.preview;
+    review_ = saved.review;
+    lock_for_review();
     current_row_ = -1;
     if (note) {
         ensure_visible(*note);

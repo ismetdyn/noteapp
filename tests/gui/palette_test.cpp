@@ -281,7 +281,6 @@ TEST_CASE_FIXTURE(PaletteScene, "preview keys scroll the markdown preview") {
     auto state = make_state();
     auto view = make_view(*state);
     state->open_note(*noteapp::core::NotePath::parse("long.md"));
-    state->toggle_preview();
     settle(*view);
     REQUIRE(state->showing_preview());
     const auto [x, y] = view->button_center("preview");

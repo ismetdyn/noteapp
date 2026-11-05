@@ -662,6 +662,7 @@ TEST_CASE("an oversized saved left pane cannot push the editor out of the window
     auto state = fixture.make_state();
     state->layout().left_pane_width = 5000.0F;
     auto view = gui_test::make_view(*state);
+    state->edit_selected();  // seçilen not incelemede açılır; editör ölçülür
     gui_test::settle(*view);
     const ItemRects rects = view->item_rects();
     check_inside_x(rects, "editor", window_frame());
@@ -679,6 +680,7 @@ TEST_CASE("shrinking the window keeps the pane sizes the user set, on screen and
         state->layout().width = 1400;
         state->layout().height = 900;
         auto view = gui_test::make_view(*state);
+        state->edit_selected();  // seçilen not incelemede açılır; editör ölçülür
         drag_left_pane(*view, 300.0F);
         left_width = state->layout().left_pane_width;
         REQUIRE(left_width > 600.0F);
@@ -770,7 +772,7 @@ TEST_CASE("settings labels come from the catalog") {
 
 // G3: bilgi yoğun metin (durum çubuğu, Ayrıntılar'ın boyut ve tarih hücresi) gövdeden bir kademe küçük.
 TEST_CASE("the status bar and the Details cells use the secondary type size at every scale") {
-    constexpr float kSmallPixels = 13.0F;
+    constexpr float kSmallPixels = 14.0F;  // NY-G: bir kademe büyüdü
     for (const float scale : {1.0F, 2.0F}) {
         CAPTURE(scale);
         LayoutScene scene(1000, 650, scale);
@@ -869,6 +871,7 @@ TEST_CASE("the editor fields and notice live in the one status bar at every scal
     fixture.add_note("a.md", "a\n");
     auto state = fixture.make_state();
     auto view = gui_test::make_view(*state);
+    state->edit_selected();  // seçilen not incelemede açılır; editör ölçülür
     gui_test::settle(*view);
     const ItemRects rects = view->item_rects();
     // Bağlantısız notta editörün altında yalnız kapalı Bilgi başlığı var: ondan sonra durum çubuğu gelir, arada
@@ -880,7 +883,7 @@ TEST_CASE("the editor fields and notice live in the one status bar at every scal
 
 // G10: önizlemenin okuma ölçüsü 46 em (UI boyu), geniş pencerede ortalı; dar pencerede tam genişlik.
 TEST_CASE("the preview keeps a 46 em reading measure, centred in a wide window") {
-    const float measure = 46.0F * 15.0F;  // ölçek 1, UI gövdesi 15 px
+    const float measure = 46.0F * 16.0F;  // ölçek 1, UI gövdesi 16 px (NY-G)
     {
         LayoutScene scene(2000, 1000, 1.0F);
         scene.state->toggle_preview();

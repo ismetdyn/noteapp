@@ -107,51 +107,58 @@ bool is_pageable(const CommandSpec& command, const std::vector<std::string>& res
     return verb != command.verbs.end() && has_flag(verb->options);
 }
 
+// `args[0]` ayrılmış sözcük: sonrası komut adıyla yazılmış gibi ayrışır (`-l` = `--ls` = `ls`, `cat` = `show`).
+ParsedArgs parse_command(const std::vector<std::string>& args) {
+    ParsedArgs parsed;
+    const std::span<const std::string> rest(args.begin() + 1, args.end());
+    const CommandSpec* command = find_command(args[0]);
+    const std::string command_name = command == nullptr ? args[0] : std::string(command->name);
+    if (command_name == "help") {
+        bool no_pager = false;
+        const std::vector<std::string> words =
+            take_flag(std::vector<std::string>(rest.begin(), rest.end()), kNoPagerFlag, no_pager);
+        parsed.kind = ParsedArgs::Kind::Help;
+        parsed.paged = !no_pager;
+        if (!words.empty() && !is_help_flag(words.front()))
+            parsed.command = words.front();  // `note help KOMUT`
+        return parsed;
+    }
+    // Kabuğun gizli yardımcısı (`__complete`, tabloda yok) önek olarak `-h` alabilir: yardım değildir.
+    if (command != nullptr && asks_for_help(*command, rest)) {
+        parsed.kind = ParsedArgs::Kind::Help;
+        parsed.command = command_name;
+        parsed.paged = !std::ranges::contains(rest, kNoPagerFlag);
+        return parsed;
+    }
+    parsed.kind = ParsedArgs::Kind::Reserved;
+    parsed.command = command_name;
+    if (command == nullptr) {
+        parsed.rest.assign(rest.begin(), rest.end());  // `__complete`: önek olduğu gibi kalır
+        return parsed;
+    }
+    parsed.rest = split_inline_values(
+        rest, [command](std::string_view name) { return command_takes_value(*command, name); });
+    if (is_pageable(*command, parsed.rest)) {
+        bool no_pager = false;
+        parsed.rest = take_flag(std::move(parsed.rest), kNoPagerFlag, no_pager);
+        parsed.paged = !no_pager;
+    }
+    return parsed;
+}
+
 }  // namespace
 
 bool is_reserved_command(std::string_view word) {
-    return word == kCompleteCommand || std::ranges::contains(kCommands, word, &CommandSpec::name);
+    return word == kCompleteCommand || find_command(word) != nullptr;
 }
 
 ParsedArgs parse_args(const std::vector<std::string>& args) {
     ParsedArgs parsed;
 
-    // Alt komut yalnız ilk argüman olabilir; `note -t md ls` "ls" metnini ekler.
-    if (!args.empty() && is_reserved_command(args[0])) {
-        const std::span<const std::string> rest(args.begin() + 1, args.end());
-        if (args[0] == "help") {
-            bool no_pager = false;
-            const std::vector<std::string> words =
-                take_flag(std::vector<std::string>(rest.begin(), rest.end()), kNoPagerFlag, no_pager);
-            parsed.kind = ParsedArgs::Kind::Help;
-            parsed.paged = !no_pager;
-            if (!words.empty() && !is_help_flag(words.front()))
-                parsed.command = words.front();  // `note help KOMUT`
-            return parsed;
-        }
-        // Kabuğun gizli yardımcısı (`__complete`, tabloda yok) önek olarak `-h` alabilir: yardım değildir.
-        if (const CommandSpec* spec = find_command(args[0]); spec != nullptr && asks_for_help(*spec, rest)) {
-            parsed.kind = ParsedArgs::Kind::Help;
-            parsed.command = args[0];
-            parsed.paged = !std::ranges::contains(rest, kNoPagerFlag);
-            return parsed;
-        }
-        parsed.kind = ParsedArgs::Kind::Reserved;
-        parsed.command = args[0];
-        const CommandSpec* command = find_command(args[0]);
-        if (command == nullptr) {
-            parsed.rest.assign(rest.begin(), rest.end());  // `__complete`: önek olduğu gibi kalır
-            return parsed;
-        }
-        parsed.rest = split_inline_values(
-            rest, [command](std::string_view name) { return command_takes_value(*command, name); });
-        if (is_pageable(*command, parsed.rest)) {
-            bool no_pager = false;
-            parsed.rest = take_flag(std::move(parsed.rest), kNoPagerFlag, no_pager);
-            parsed.paged = !no_pager;
-        }
-        return parsed;
-    }
+    // Alt komut (adı, eş adı ya da `-l`/`--ls` bayrağı) yalnız ilk argüman olabilir; `note -t md ls` "ls"
+    // metnini ekler, `note -n -i` "-i" adını verir (değer konumu kazanır).
+    if (!args.empty() && is_reserved_command(args[0]))
+        return parse_command(args);
 
     const std::vector<std::string> words =
         split_inline_values(args, [](std::string_view name) { return takes_value(name, kAddOptions); });
@@ -171,6 +178,8 @@ ParsedArgs parse_args(const std::vector<std::string>& args) {
         } else if (arg == "--version") {
             parsed.kind = ParsedArgs::Kind::Version;
             return parsed;
+        } else if (arg == "-a" || arg == "--add") {
+            // Ekleme zaten varsayılan; bayrak yalnız ilk argümanın komut sayılmasını önler (`note -a ls`).
         } else if (arg == "--no-sync") {
             parsed.no_sync = true;
         } else if (arg == "-e" || arg == "--editor") {

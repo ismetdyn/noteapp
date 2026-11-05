@@ -62,6 +62,8 @@ sync_stale_lock_minutes = 10  # okunamayan senkron kilidi bundan eskiyse bayat s
 sync_timeout_seconds = 120    # AutoSync bir senkron sürecini en çok bu kadar bekler, sonra sonlandırır
 graph_batch_ops = 30000       # bir graf işlemindeki işlem bütçesi; aşan iş sonraki işlemlere bölünür, reddedilmez
 completion_min_prefix_bytes = 2   # TUI editöründe gölge öneri için yazılmış en kısa sözcük öneki (bayt)
+notice_ms = 4000              # işlem bildirimi (toast) bu kadar görünür, "4s" yazılabilir; hata kapatılana dek kalır; 0 = kendiliğinden kapanmaz
+tui_list_share = 0.33         # TUI ilk açılışta sol listenin pencereye oranı (0..1); sürüklenen genişlik geçer
 
 # Kapasite sınırları: anahtar `limits.<modül>.<ad>`, 0 = sınırsız. Boyut "512KiB"/"64MiB"/"10MB", süre
 # "250ms"/"5s"/"2min"/"1h" yazılabilir; düz sayı taban birimdir (bayt, ms). `note config set limits.… 0` ile
@@ -139,7 +141,8 @@ completion_candidates = 5000  # açılır listenin aday havuzu
 completion_note_words = 2000  # açılır listeye bu nottan giren sözcük
 completion_note_bytes = "2MiB"    # sözcük tablosuna okunan en büyük not
 completion_table_bytes = "64MiB"  # sözcük tablosuna okunan toplam not baytı
-paste_bytes = "32MiB"         # sistem panosundan yapıştırılan metin
+paste_bytes = "32MiB"         # sistem panosundan ya da terminalden (Ctrl+Shift+V) yapıştırılan metin
+paste_timeout = "1s"          # ESC[201~ gelmeyen terminal yapıştırması bu sessizlikten sonra biter; 0 = hiç
 search_history = 200          # hatırlanan arama sorgusu
 search_entry_bytes = 1024     # hatırlanan en uzun sorgu
 undo_bytes = "64MiB"          # editörde not başına geri alma geçmişi; dolunca en eski adım düşer

@@ -478,6 +478,7 @@ void View::draw_root() {
     ImGui::EndChild();
     draw_status_bar();
     ImGui::End();
+    draw_notices(status_height);
 }
 
 void View::draw_notes_tab() {

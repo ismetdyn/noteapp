@@ -90,7 +90,7 @@ TEST_CASE("the palette is 36 em wide, sits 18 % from the top and shows shortcuts
     scene.with_dialog([&] { scene.state->open_palette(); }, [&] { rects = scene.view->item_rects(); });
     REQUIRE(rects.contains("palette_input"));
     const View::ItemRect& input = rects.at("palette_input");
-    CHECK(input.max_x - input.min_x == doctest::Approx(36.0F * 15.0F));
+    CHECK(input.max_x - input.min_x == doctest::Approx(36.0F * 16.0F));  // NY-G: gövde 16 px
     CHECK(input.max_y - input.min_y == doctest::Approx(32.0F));
     CHECK(rects.at("modal").min_y == doctest::Approx(0.18F * ImGui::GetIO().DisplaySize.y).epsilon(0.02));
     REQUIRE(rects.contains("palette:new"));

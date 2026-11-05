@@ -201,6 +201,7 @@ TEST_CASE_FIXTURE(BrowserFixture, "a selected folder shows its summary instead o
     add_note("work/sub/b.md", "b", 10);
     auto state = make_state();
     auto view = make_view(*state);
+    state->edit_selected();  // seçilen not incelemede açılır
     settle(*view);
     REQUIRE(has_item(*view, "editor"));
     click_button(*view, "folder:work");
@@ -678,6 +679,8 @@ TEST_CASE_FIXTURE(WindowFixture, "the selection bar is drawn only while the list
         CHECK(bar.min_x == doctest::Approx(row.min_x));
         CHECK(bar.max_x - bar.min_x == doctest::Approx(2.0F));
         CHECK(bar.min_y == doctest::Approx(row.min_y));
+
+        state->edit_selected();  // seçilen not incelemede açılır
 
         state->request_focus(FocusRequest::Editor);
         settle(*view);

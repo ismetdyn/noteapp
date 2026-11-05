@@ -195,6 +195,8 @@ void measure_gui_typing(std::size_t note_bytes, bool at_end, const char* label) 
     gui::GuiState state(config);
     auto view = gui::View::create(state);
     REQUIRE(view.has_value());
+    // Seçilen not incelemede açılır (NY-G): kullanıcı gibi `edit` komutuyla düzenlemeye geçilir.
+    state.edit_selected();
     state.request_focus(gui::FocusRequest::Editor);
     for (int frame = 0; frame < 3; ++frame)
         (*view)->draw_frame();

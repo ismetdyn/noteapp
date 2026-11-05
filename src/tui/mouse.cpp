@@ -283,6 +283,7 @@ MouseResult route_mouse(const MouseInput& input, TuiState& state, EditorSession&
         // Release, modal açıkken düşmüş ya da terminalde kaybolmuş olabilir: sol tuş basılı değilse sürükleme
         // biter ve olay normal işlenir, bölücü taşınmaz.
         layout.end_drag();
+        state.store_list_share();  // her harekette değil, bir kez yazılır
     }
     const PaneGeometry geometry = layout.geometry(state.window_width(), right_pane_focused(state.focus()));
     if (state.preview_selection_dragging())

@@ -105,6 +105,7 @@ void GuiState::trash_note() {
     select_after_removal(shown, row, browser_index);
     undo_status_ = core::tr("gui.trashed", {{"path", path->string()}});
     status_ = undo_status_;
+    notify(app::NoticeKind::Success, status_);
 }
 
 void GuiState::undo_trash() {
@@ -134,6 +135,7 @@ void GuiState::undo_trash() {
         fail(*failure->error);  // teklif hata iletisiyle kalır: kilit kalkınca yeniden denenir
     } else {
         status_ = core::tr("gui.restored", {{"path", restored}});
+        notify(app::NoticeKind::Success, status_);
     }
     // Yığın (plan-parity karar 2): önceki adım kaldıysa Geri al teklifi bu iletiyle sürer.
     undo_status_ = status_;
@@ -210,6 +212,7 @@ void GuiState::restore_trashed() {
     changed();
     rescan();
     status_ = core::tr("gui.restored", {{"path", restored->string()}});
+    notify(app::NoticeKind::Success, status_);
 }
 
 void GuiState::purge_trashed() {

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -24,6 +25,8 @@ constexpr float kGoldenAngle = 2.39996323F;  // çakışan çiftlere sıradan t�
 // küçülür ve etiketler kaybolurdu. Bir komşunun k uzaklıktaki itmesine (k) 50k uzakta eşit: büyük çizgeyi
 // sıkıştırmaz (sıkışan çizgede itme çifti ve adım maliyeti artar).
 constexpr float kGravity = 0.02F;
+constexpr float kSwingDamping = 0.5F;  // yön değiştiren düğümün erimi: son adımının bu payı
+constexpr float kReachRegain = 1.2F;   // aynı yönde adım başına erimin büyümesi (sıcaklık üstü sınırdır)
 constexpr std::uint64_t kFnvOffset = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 constexpr int kHalfBits = 32;
@@ -99,6 +102,8 @@ bool GraphLayout::set_graph(std::vector<std::string> keys, std::vector<Edge> edg
     edges_ = std::move(edges);
     positions_ = std::move(positions);
     pinned_ = std::move(pinned);
+    last_steps_.assign(keys_.size(), {});
+    reaches_.assign(keys_.size(), std::numeric_limits<float>::max());
     const float initial = std::max(side * kInitialTemperatureShare, kWarmTemperature);
     temperature_ = keys_.empty() ? 0.0F : (kept ? std::max(temperature_, kWarmTemperature) : initial);
     return true;
@@ -176,9 +181,23 @@ void GraphLayout::iterate() {
         const float moved = length(displacement_[i]);
         if (pinned_[i] != 0 || moved <= 0.0F)
             continue;
-        const float scale = std::min(moved, temperature_) / moved;
-        positions_[i].x += displacement_[i].x * scale;
-        positions_[i].y += displacement_[i].y * scale;
+        // Salınım sönümü: adım sıcaklıkla kısıtlıdır; dengesine bir adımdan yakın düğüm (çok kenarlı merkez)
+        // dengeyi aşıp geri dönerdi, ılınan harita her karede bir kenar boyu titrerdi. Yön değiştiren düğümün
+        // erimi son adımının yarısına iner, aynı yönde yavaşça geri büyür.
+        const LayoutPoint force = displacement_[i];
+        LayoutPoint& last = last_steps_[i];
+        float limit = std::min(temperature_, reaches_[i]);
+        if ((force.x * last.x) + (force.y * last.y) < 0.0F) {
+            limit = std::min(limit, kSwingDamping * length(last));
+            reaches_[i] = limit;
+        } else if (reaches_[i] < std::numeric_limits<float>::max()) {
+            reaches_[i] *= kReachRegain;
+        }
+        const float scale = std::min(moved, limit) / moved;
+        const LayoutPoint step{force.x * scale, force.y * scale};
+        positions_[i].x += step.x;
+        positions_[i].y += step.y;
+        last = step;
     }
     temperature_ *= kCooling;
     ++iterations_done_;

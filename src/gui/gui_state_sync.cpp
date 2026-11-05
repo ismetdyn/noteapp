@@ -77,6 +77,17 @@ void GuiState::stop_sync(std::chrono::seconds timeout) {
 }
 
 void GuiState::show_sync_status(const sync::SyncStatus& status, bool running) {
+    const bool was_running = sync_indicator_ == SyncIndicator::Running;
+    show_sync_label(status, running);
+    if (!was_running || sync_indicator_ == SyncIndicator::Running)
+        return;
+    if (sync_indicator_ == SyncIndicator::Error)
+        notify(app::NoticeKind::Error, sync_label_);
+    else if (sync_indicator_ == SyncIndicator::Ok)
+        notify(app::NoticeKind::Success, core::tr("notice.sync_done"));
+}
+
+void GuiState::show_sync_label(const sync::SyncStatus& status, bool running) {
     if (!auto_sync_ && !running && !status.last_success && !status.last_error) {
         sync_label_ = core::tr("gui.sync_off");
         sync_indicator_ = SyncIndicator::Off;
@@ -103,6 +114,7 @@ void GuiState::show_sync_status(const sync::SyncStatus& status, bool running) {
 void GuiState::apply_settings(const core::Config& before, const core::Config& after) {
     config_ = after;
     autosave_.set_delay(std::chrono::milliseconds(config_.tuning.autosave_ms));
+    notices_.set_lifetime(app::NoticeQueue::lifetime_of(config_.tuning.notice_ms.value));
     map_.set_node_limit(config_.limits.app.map_nodes);  // app::adopt_live_limits: dosyadan gelir
     map_.set_depth_limit(config_.limits.app.map_depth);
     if (before.notes_dir != after.notes_dir) {

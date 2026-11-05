@@ -315,7 +315,7 @@ TEST_CASE_FIXTURE(ContentFixture, "selecting a result selects the first occurren
     CHECK_FALSE(state->dirty());  // seçim belgeyi kirletmez
 }
 
-TEST_CASE_FIXTURE(ContentFixture, "Enter from the search box lands on the first match in the editor") {
+TEST_CASE_FIXTURE(ContentFixture, "Enter from the search box selects the first match; E edits it") {
     seed();
     auto state = make_state();
     auto view = make_view(*state);
@@ -326,9 +326,12 @@ TEST_CASE_FIXTURE(ContentFixture, "Enter from the search box lands on the first 
     settle(*view);
     press(*view, ImGuiKey_Enter);
     settle(*view);
-    REQUIRE(view->editor_active());
-    REQUIRE(state->editor_selection().has_value());  // editörde seçili
+    REQUIRE(state->reviewing());  // NY-G: bulunan not incelemede, odak listede
+    REQUIRE(state->editor_selection().has_value());  // eşleşme seçili
     CHECK(selected_text(*state) == "İstanbul");
+    press(*view, ImGuiKey_E);
+    REQUIRE(view->editor_active());
+    REQUIRE(state->editor_selection().has_value());  // düzenlemeye geçiş seçimi korur
 
     type_text(*view,
               "X");  // seçili eşleşme yazılanla değişir: seçimin gerçekten ilk eşleşmede olduğunun kanıtı

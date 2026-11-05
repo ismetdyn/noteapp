@@ -95,6 +95,7 @@ TEST_CASE("note editor: a drag keeps the anchor where the press was") {
 TEST_CASE_FIXTURE(WindowFixture, "note editor: Ctrl+C, Ctrl+X and Ctrl+V go through the system clipboard") {
     add_note("clip.md", "one two");
     auto state = make_state();
+    state->edit_selected();  // seçilen not incelemede açılır
     std::string copied;
     std::optional<std::string> system;
     state->deciders.copy_text = [&](const std::string& text) {
@@ -128,6 +129,7 @@ TEST_CASE_FIXTURE(WindowFixture, "note editor: a paste above limits.tui.paste_by
     config.limits.tui.paste_bytes = noteapp::core::Limit{4, "4B"};
     add_note("clip.md", "x");
     auto state = make_state();
+    state->edit_selected();
     state->deciders.paste_text = [] { return std::optional<std::string>("12345"); };
     state->editor_key(Key::CtrlV);
     CHECK(state->buffer() == "x");

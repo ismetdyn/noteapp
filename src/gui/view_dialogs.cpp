@@ -81,7 +81,30 @@ void keep_window_in_viewport() {
 
 }  // namespace
 
+// file:// adresi: yol baytları, ayırıcı ve güvenli karakterler dışında yüzde kodlu (boşluk, Türkçe harf).
+std::string file_url(const std::string& path) {
+    constexpr char kHex[] = "0123456789ABCDEF";
+    constexpr unsigned kNibbleBits = 4;
+    constexpr unsigned kNibbleMask = 0xF;
+    std::string generic = std::filesystem::path(path).generic_string();  // Windows: C:/..., ters bölü yok
+    if (!generic.starts_with('/'))
+        generic.insert(0, "/");
+    std::string url = "file://";
+    for (const char c : generic) {
+        const auto byte = static_cast<unsigned char>(c);
+        if (std::isalnum(byte) != 0 || std::string_view("/-._~:").find(c) != std::string_view::npos) {
+            url += c;
+            continue;
+        }
+        url += '%';
+        url += kHex[byte >> kNibbleBits];
+        url += kHex[byte & kNibbleMask];
+    }
+    return url;
+}
+
 void View::install_deciders() {
+    state_.deciders.open_folder = [](const std::string& folder) { return SDL_OpenURL(file_url(folder).c_str()); };
     state_.deciders.save_dialog = [this](const SaveDialogRequest& request) {
         return ask_save_details(request);
     };

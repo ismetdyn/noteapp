@@ -273,26 +273,27 @@ TEST_CASE("leaving the trash after a restore selects the first row of the list")
     press("g");
     press("g");
     press("d");
-    press("T");
+    press("t");
     press("u");
     press("q");
     CHECK(f.state.selected() == 0);
     CHECK(f.state.selected_row()->path.string() == first);
 }
 
-// ---- B: Space, i, I ----
+// ---- B: Space, Alt+→, I ----
 
-TEST_CASE("Space and i toggle the selected row; I toggles all rows") {
+TEST_CASE("Space and Alt+→ open the selected row; I toggles all rows") {
     tui::TuiState s;
     s.set_notes({info("a.md"), info("b.md"), info("c.md")});
-    for (const std::string_view letter : {" ", "i"}) {
-        CAPTURE(letter);
-        CHECK(s.handle(Key::Char, letter) == Intent::None);
-        CHECK(s.row_height(0) == 6);
-        CHECK(s.row_height(1) == 1);
-        s.handle(Key::Char, letter);
-        CHECK(s.row_height(0) == 1);
-    }
+    CHECK(s.handle(Key::Char, " ") == Intent::None);
+    CHECK(s.row_height(0) == 6);
+    CHECK(s.row_height(1) == 1);
+    s.handle(Key::Char, " ");
+    CHECK(s.row_height(0) == 1);
+    CHECK(s.handle(Key::AltRight) == Intent::None);  // Listede `i` içe almadır (CLI -i)
+    CHECK(s.row_height(0) == 6);
+    s.handle(Key::AltLeft);
+    CHECK(s.row_height(0) == 1);
     s.handle(Key::Char, " ");  // biri açık: I hepsini açar
     s.handle(Key::Char, "I");
     for (std::size_t row = 0; row < 3; ++row)
@@ -340,7 +341,7 @@ TEST_CASE("the default column shows size and date together; v cycles through all
     const Column order[] = {Column::Size,   Column::Updated, Column::Created,    Column::Sync,
                             Column::Origin, Column::None,    Column::SizeAndDate};
     for (const Column expected : order) {
-        CHECK(s.handle(Key::Char, "v") == Intent::SavePrefs);
+        CHECK(s.handle(Key::Char, "V") == Intent::SavePrefs);
         CHECK(s.list_column() == expected);
     }
 }

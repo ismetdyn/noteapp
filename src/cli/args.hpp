@@ -7,7 +7,8 @@
 
 namespace noteapp::cli {
 
-// command_table.hpp'deki komut adları (help dahil) ve gizli `__complete`.
+// command_table.hpp'deki komut adları (help dahil), eş adları (`cat`), komut bayrakları (`-l`, `--ls`) ve gizli
+// `__complete`.
 bool is_reserved_command(std::string_view word);
 
 struct ParsedArgs {

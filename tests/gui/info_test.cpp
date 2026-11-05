@@ -86,6 +86,7 @@ TEST_CASE("gui info: the panel is closed at first, Ctrl+I and its header open an
     const auto state = fixture.make_state();
     const auto view = make_view(*state);
     state->select_row(state->model().index_of(np("a.md")));
+    state->edit_selected();  // panel editörün altında ölçülür
     settle(*view);
     REQUIRE(view->item_rects().contains("info_header"));
     CHECK_FALSE(state->info_open());

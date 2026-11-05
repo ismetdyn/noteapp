@@ -15,14 +15,41 @@ set(FTXUI_BUILD_EXAMPLES OFF)
 set(FTXUI_BUILD_DOCS OFF)
 set(FTXUI_BUILD_TESTS OFF)
 set(FTXUI_ENABLE_INSTALL OFF)
-# Yama: FTXUI her karede tüm ekranı yazar ve çıktı kancası yoktur; gerekçe yama dosyasının başında.
+# Yama: FTXUI her karede tüm ekranı yazar, çıktı kancası ve bracketed paste yoktur; gerekçe yama dosyasının başında.
 find_package(Patch REQUIRED)
+set(ftxui_patch ${CMAKE_CURRENT_LIST_DIR}/patches/ftxui-7.0.3-frame-writer.patch)
+# FetchContent yama dosyası değişince kaynağı yeniden yamamaz (komut aynıysa eski kaynak kalır, komut
+# değişirse yamalı ağaca ikinci kez uygular ve düşer): yamanın özeti değiştiyse kaynak önbellekteki arşivden
+# yeniden açılıp yamalanır. Arşiv ve URL_HASH kalır: ağ gerekmez (indirme adımı özeti tutan dosyayı atlar).
+# FULLY_DISCONNECTED'da FetchContent hiçbir adımı koşmaz: kaynak silinmez, açık hatayla durulur. Kullanıcının
+# verdiği kaynak dizinine (FETCHCONTENT_SOURCE_DIR_FTXUI) dokunulmaz.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${ftxui_patch})
+file(SHA256 ${ftxui_patch} ftxui_patch_hash)
+set(ftxui_patch_stamp ${FETCHCONTENT_BASE_DIR}/ftxui-patch.sha256)
+set(ftxui_applied_hash "")
+if(EXISTS ${ftxui_patch_stamp})
+    file(READ ${ftxui_patch_stamp} ftxui_applied_hash)
+endif()
+if(NOT FETCHCONTENT_SOURCE_DIR_FTXUI AND EXISTS ${FETCHCONTENT_BASE_DIR}/ftxui-src
+   AND NOT ftxui_applied_hash STREQUAL ftxui_patch_hash)
+    if(FETCHCONTENT_FULLY_DISCONNECTED)
+        message(FATAL_ERROR "The FTXUI patch stamp is missing or changed, but FETCHCONTENT_FULLY_DISCONNECTED "
+                            "is ON, so the sources in ${FETCHCONTENT_BASE_DIR}/ftxui-src may keep an old patch. "
+                            "Configure once "
+                            "with -DFETCHCONTENT_FULLY_DISCONNECTED=OFF (the cached archive is reused, no "
+                            "network needed) or remove ${FETCHCONTENT_BASE_DIR}/ftxui-*.")
+    endif()
+    message(STATUS "FTXUI patch changed: unpacking and patching FTXUI again")
+    file(REMOVE_RECURSE ${FETCHCONTENT_BASE_DIR}/ftxui-src ${FETCHCONTENT_BASE_DIR}/ftxui-build
+         ${FETCHCONTENT_BASE_DIR}/ftxui-subbuild/ftxui-populate-prefix/src/ftxui-populate-stamp)
+endif()
 FetchContent_Declare(ftxui
     URL https://github.com/ArthurSonzogni/FTXUI/archive/refs/tags/v7.0.3.tar.gz
     URL_HASH SHA256=e7c62ffe19009759821b4f0f8df7f2a6fb83784c3a9f1477d81f56d3ee723c88
-    PATCH_COMMAND ${Patch_EXECUTABLE} -p1 --binary -i ${CMAKE_CURRENT_LIST_DIR}/patches/ftxui-7.0.3-frame-writer.patch
+    PATCH_COMMAND ${Patch_EXECUTABLE} -p1 --binary -i ${ftxui_patch}
     SYSTEM)
 FetchContent_MakeAvailable(ftxui)
+file(WRITE ${ftxui_patch_stamp} ${ftxui_patch_hash})
 
 # libgit2 ve keychain ayarları cache değişkeni olmalı: libgit2 cmake_minimum_required(3.5) ile CMP0077'yi OLD
 # bıraktığından option() normal değişkeni ezer. BUILD_SHARED_LIBS/BUILD_TESTS globaldir; keychain'in testlerini de

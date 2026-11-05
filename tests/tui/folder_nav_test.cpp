@@ -348,18 +348,18 @@ TEST_CASE("folder view: the top line shows the breadcrumb, also shortened for a 
     CHECK(deep.selected_folder_row()->path.string() == "seg0");
 }
 
-TEST_CASE("folder view: the right column shows the item count and i opens folder details") {
+TEST_CASE("folder view: the right column shows the item count and Alt+→ opens folder details") {
     tui::TuiState s = nav_state();
     select_label(s, "work/");
     CHECK(row_of(draw(s), kFirstRowY + 1).find("2 items") != std::string::npos);
-    type(s, "i");
+    s.handle(Key::AltRight);
     CHECK(s.row_height(s.selected()) == 1 + tui::TuiState::kFolderMetaLines);
     const auto screen = draw(s);
     CHECK(screen.ToString().find("path: work") != std::string::npos);
     CHECK(screen.ToString().find("2 items · 2 notes · 1 folder") != std::string::npos);
     CHECK(screen.ToString().find("size: 30 B") != std::string::npos);
     CHECK(screen.ToString().find("updated: ") != std::string::npos);
-    type(s, "i");
+    s.handle(Key::AltLeft);
     CHECK(s.row_height(s.selected()) == 1);
 }
 
@@ -396,14 +396,14 @@ TEST_CASE("folder view: the hint bar names folder creation at 60 columns and ren
     tui::TuiState narrow = nav_state();
     narrow.set_window(60, kHeight);
     const std::string bar = row_of(draw(narrow, 60), kHeight - 1);
-    CHECK(bar.find("a add, name/ = folder") != std::string::npos);
+    CHECK(bar.find("n add, name/ = folder") != std::string::npos);
     CHECK(bar.find("← up") != std::string::npos);
     CHECK(bar.ends_with("F1 help"));  // yardım sağa sabit: `F2` 60 sütunda ona yer bırakır
     tui::TuiState wider = nav_state();
     wider.set_window(70, kHeight);
     CHECK(row_of(draw(wider, 70), kHeight - 1).find("F2 rename") != std::string::npos);
     select_label(s, "c.md");
-    CHECK(row_of(draw(s), kHeight - 1).find("a add") != std::string::npos);
+    CHECK(row_of(draw(s), kHeight - 1).find("n add") != std::string::npos);
 }
 
 TEST_CASE("search: slash and f stay flat with full paths across folders, Esc returns to the same spot") {
@@ -849,7 +849,7 @@ TEST_CASE("u partial failure on a folder restores the rest and reports the missi
 TEST_CASE("mouse: rows below an open row map through its detail lines") {
     MouseFixture f;
     const int details = static_cast<int>(tui::TuiState::kFolderMetaLines);
-    f.state.handle(Key::Char, "i");
+    f.state.handle(Key::AltRight);
     REQUIRE(f.state.row_height(0) == 1 + tui::TuiState::kFolderMetaLines);
     f.click(kNameX, kFirstRowY + 1 + details);
     CHECK(f.state.selected_folder_row()->path.string() == "archive");

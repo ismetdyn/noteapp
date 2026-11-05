@@ -225,10 +225,10 @@ TEST_CASE("tree: Space on a note still toggles details, i opens folder details, 
     s.handle(Key::Char, " ");
     CHECK(s.row_height(s.selected()) == 1);
     select_label(s, "work/");
-    s.handle(Key::Char, "i");
+    s.handle(Key::AltRight);
     CHECK(s.row_height(s.selected()) == 1 + tui::TuiState::kFolderMetaLines);
     CHECK(labels(s).size() == 3);  // ağaç kapalı kalır
-    s.handle(Key::Char, "i");
+    s.handle(Key::AltLeft);
     CHECK(s.row_height(s.selected()) == 1);
 }
 
@@ -261,7 +261,7 @@ TEST_CASE("tree: x and d work on tree rows; a marked child of a marked folder co
     open_folder(f.state, "work/");
     REQUIRE(labels(f.state) == Names{"work/", "a.md", "b.md", "c.md"});
     select_label(f.state, "a.md");
-    f.press("x");
+    f.press("v");
     CHECK(f.state.selected() == 2);
     f.press("d");
     CHECK(f.in_trash("work/a.md"));
@@ -340,7 +340,7 @@ TEST_CASE("tree: folders that no longer exist leave open_folders when saving") {
     REQUIRE(f.store->remove_folder("gone", true));
     f.load();
     CHECK(f.state.list_prefs().open_folders.contains("gone"));  // tarama silmez: sync geri getirebilir
-    f.press("v");                                               // tercih yazımı
+    f.press("V");                                               // tercih yazımı
     CHECK_FALSE(f.state.list_prefs().open_folders.contains("gone"));
     CHECK(f.state.list_prefs().open_folders.contains("work"));
 }
@@ -365,7 +365,7 @@ TEST_CASE("counts read properly: singular and plural, English and Turkish") {
     core::init_i18n("en");
     s.set_window(kWidth, kHeight);
     s.set_notes({note("work/a.md")});
-    s.handle(Key::Char, "i");
+    s.handle(Key::AltRight);
     std::string shown = draw(s).ToString();
     CHECK(has(shown, "1 item"));
     CHECK_FALSE(has(shown, "1 items"));
@@ -546,7 +546,7 @@ TEST_CASE("m on a selection moves all of it and consumes the marks") {
     f.put("work/c.md", "C");
     f.load();
     select_label(f.state, "a.md");
-    f.press("xx");
+    f.press("vv");
     f.begin_move("work");
     f.submit();
     CHECK(f.body("work/a.md") == "A");
@@ -562,7 +562,7 @@ TEST_CASE("m collision: inline error, input stays, nothing is moved or overwritt
     f.put("dest/a.md", "old");
     f.load();
     select_label(f.state, "a.md");
-    f.press("xx");
+    f.press("vv");
     f.begin_move("dest");
     f.submit();
     REQUIRE(f.rename);
@@ -645,11 +645,11 @@ TEST_CASE("icons: the REVIEW frame carries the note's glyph when icons are on") 
     CHECK_FALSE(has(row_of(draw(s), 1), glyph));
 }
 
-TEST_CASE("t is gone: it does nothing, m opens the move input and there is no pending move") {
+TEST_CASE("t opens the trash, m opens the move input and there is no pending move") {
     Fixture f;
     f.put("a.md");
     f.load();
-    CHECK(f.state.handle(Key::Char, "t") == Intent::None);
+    CHECK(f.state.handle(Key::Char, "t") == Intent::ToggleTrash);
     CHECK(f.state.handle(Key::Char, "m") == Intent::MoveTo);
     CHECK_FALSE(f.state.yank());
     CHECK_FALSE(has(core::tr("tui.key_hints_list"), "t move"));

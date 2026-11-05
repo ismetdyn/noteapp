@@ -265,17 +265,17 @@ wait_screen "Enter edit"
 keys q
 check "q quits after the emoji check" test "$(wait_exit)" = 0
 
-# 6. n: boş editör tüm terminali alır, ad ilk Ctrl+S'te sorulur; kayıttan önce dosya yok.
+# 6. a: boş editör tüm terminali alır, ad ilk Ctrl+S'te sorulur; kayıttan önce dosya yok.
 clear_notes
 start_app
-keys n
+keys a
 wait_screen "New note"
 check "n hides the top line" screen_lacks "[name]"
 check "n shows the EDIT label" screen_has " EDIT "
 keys C-q
 wait_screen "Enter edit"
 check "Esc on an empty draft closes silently" no_notes
-keys n
+keys a
 wait_screen "New note"
 literal 'dq şöyle'
 check "typing creates no file" no_notes
@@ -303,7 +303,7 @@ check "the list label is back" screen_has " LIST "
 # 6b. env yapıştırma: tuş olayı olarak gelir, ad isteminde .env görünür, değer ada girmez.
 clear_notes
 start_app
-keys n
+keys a
 wait_screen "New note"
 literal $'API_URL=https://gizli\rDB_PORT=5432\r'
 keys C-s
@@ -377,21 +377,21 @@ wait_screen "← list"
 # 10. Pano ve yerleşim: < > z, fare ile bölücü sürükleme, tekerlek, satır tıklama.
 keys Left
 wait_screen "Enter edit"
-check "the default list width" width_is 40
+check "the default list width" width_is 33
 keys '>'
 sleep 0.3
-check "> widens by 5" width_is 45
+check "> widens by 5" width_is 38
 keys '<'
 keys '<'
 sleep 0.3
-check "< narrows by 5" width_is 35
+check "< narrows by 5" width_is 28
 keys z
 sleep 0.3
 check "z hides the right pane" one_pane
 keys z
 sleep 0.3
-check "z again brings it back" width_is 35
-mouse_press 0 36 5
+check "z again brings it back" width_is 28
+mouse_press 0 29 5
 mouse_press 32 51 5
 mouse_release 0 51 5
 check "mouse drag moves the divider" width_is 51
@@ -435,6 +435,15 @@ check_bytes "discard keeps the external version" "$notes/g.md" 'dis ikinci\n'
 keys Left
 wait_screen "Enter edit"
 
+# 10c. NY-T3: sürüklenen genişlik bırakınca tui-state.toml'a yazılır (çıkışı beklemez: start_app SIGKILL'le
+# kapatır), yeniden açılışta kalır. Sonra varsayılana döner: sonraki bölümler 33 sütun bekler.
+start_app
+check "the dragged list width survives a restart" width_is 51
+mouse_press 0 51 5
+mouse_press 32 33 5
+mouse_release 0 33 5
+check "the divider drags back to the default width" width_is 33
+
 # 11. SIGTERM ve SIGHUP: kirli metin normal yoldan yazılır, süreç 128+N ile biter; taslak da düşmez.
 for signal in TERM:143 HUP:129; do
     clear_notes
@@ -450,7 +459,7 @@ for signal in TERM:143 HUP:129; do
 done
 clear_notes
 start_app
-keys n
+keys a
 wait_screen "New note"
 literal 'kaybolmasın'
 podman kill --signal TERM "$name" >/dev/null
@@ -545,19 +554,19 @@ printf 'birinci\nikinci\n' | put_note v.md
 start_app
 keys Enter
 wait_screen "Ctrl+S save"
-# Sol panel 40, kenar 1, iç boşluk 1, numara sütunu 3: metnin ilk hücresi 45, ilk satır 2.
-check "the terminal cursor is at the first text cell after the gutter" cursor_at 45 2
+# Sol panel 33 (100 sütunun üçte biri), kenar 1, iç boşluk 1, numara sütunu 3: metnin ilk hücresi 38, ilk satır 2.
+check "the terminal cursor is at the first text cell after the gutter" cursor_at 38 2
 keys Down
 keys End
 sleep 0.3
-check "the terminal cursor follows after motion" cursor_at 51 3
+check "the terminal cursor follows after motion" cursor_at 44 3
 check "the gutter shows the line number" screen_has " 2 ikinci"
 check "rows past the end show a tilde" screen_has "~"
 check "the status bar names the file and format" screen_has "UTF-8  LF"
-mouse_press 0 48 3
-mouse_release 0 48 3
+mouse_press 0 41 3
+mouse_release 0 41 3
 sleep 0.3
-check "a click lands on the text cell, the gutter is not text" cursor_at 47 2
+check "a click lands on the text cell, the gutter is not text" cursor_at 40 2
 keys C-q
 wait_screen "← list"
 check "REVIEW has no gutter" screen_has "│ birinci"
@@ -600,16 +609,16 @@ for shot in java:ornek.java env:ornek.env py:ornek.py; do
     sleep 0.2
 done
 
-# 16. T55b: f ile genel arama, argümanlar, bozuk argüman, d/u, D, T, Alt+ok, v, o ve kalıcılık.
+# 16. T55b: s ile genel arama, argümanlar, bozuk argüman, d/u, D, t, Alt+ok, V, o ve kalıcılık.
 clear_notes
 printf 'birinci satir\naranan kelime\n' | put_note a.md 2020-01-02
 printf 'x\n' | put_note b.txt 2020-01-01
 start_app
-keys f
+keys s
 wait_screen "Enter open"
 literal 'aranan'
 wait_screen "kelime"
-check "f searches content and shows the best line" screen_has " a.md"
+check "s searches content and shows the best line" screen_has " a.md"
 check "f shows its mode on the top line" screen_has "[all]"
 keys Enter
 wait_screen "← list"
@@ -648,7 +657,7 @@ sleep 0.2
 check "Alt+left closes them" screen_lacks "size: "
 keys d
 wait_screen "Trashed"
-keys T
+keys t
 wait_screen "[trash]"
 check "T shows the trashed note" screen_has "a.md"
 keys D
@@ -661,9 +670,9 @@ wait_screen "Restored"
 keys q
 wait_screen "Enter edit"
 check "q leaves the trash view" screen_lacks "[trash]"
-keys v
+keys V
 sleep 0.2
-check "v shows the size column" screen_has " B"
+check "V shows the size column" screen_has " B"
 keys o
 wait_screen "Sort:"
 keys s
@@ -680,8 +689,8 @@ keys g
 keys g
 keys Right
 wait_screen "← list"
-# Sol panel 40 sütun, kenar 1, iç boşluk 1; SGR 1 tabanlı: metnin ilk hücresi 43, ilk satır 3.
-screen_x=43
+# Sol panel 33 sütun, kenar 1, iç boşluk 1; SGR 1 tabanlı: metnin ilk hücresi 36, ilk satır 3.
+screen_x=36
 mouse_press 0 "$screen_x" 3
 mouse_press 32 "$((screen_x + 6))" 3
 mouse_release 0 "$((screen_x + 6))" 3
@@ -721,7 +730,7 @@ wait_screen "← list"
 keys q
 wait_exit >/dev/null
 
-# 19. T68: girdi satırı. Gölge, Tab listesi, renk, Ctrl+T, geçmiş; aynı model `a`da da çalışır.
+# 19. T68: girdi satırı. Gölge, Tab listesi, renk, Ctrl+T, geçmiş; aynı model `n`de de çalışır.
 clear_notes
 printf 'plan\n' | put_note work/plan.md
 printf 'todo\n' | put_note personal/todo.cpp
@@ -756,7 +765,7 @@ keys C-p
 wait_screen "sort:size▏"
 keys Escape
 sleep 0.2
-keys a
+keys n
 literal 'wo'
 wait_screen "wo▏rk/"
 keys Right
@@ -782,7 +791,7 @@ keys q
 wait_exit >/dev/null
 rm -f "$notes/eski.md"
 
-# 18. T64: Türkçe; her genişlikte T, Space, o, v, f; satır işareti, çöp, F2, ayarlar, sayfalama. Gerçek ev dizini yok.
+# 18. T64: Türkçe; her genişlikte t, Space, o, V, s; satır işareti, çöp, F2, ayarlar, sayfalama. Gerçek ev dizini yok.
 clear_notes
 printf 'birinci metin\n' | put_note a.md
 printf 'ikinci metin\n' | put_note b.md
@@ -807,11 +816,11 @@ for width in 60 80 110 160; do
     keys Down
     sleep 0.2
     echo "bar@$width: $(bottom_line 30)"
-    # 60 sütunda `f ara` bir hücreyle sığmaz: sağa sabitlenen `F1 yardım` yer tutar (SPEC-tui "Yerleşim").
+    # 60 sütunda `s ara` bir hücreyle sığmaz: sağa sabitlenen `F1 yardım` yer tutar (SPEC-tui "Yerleşim").
     if [[ "$width" -eq 60 ]]; then
-        check "the list bar at $width columns shows the main keys" bar_has 30 ": komut" "T çöp" "Space aç" "o sırala" "v sütun" "F1 yardım"
+        check "the list bar at $width columns shows the main keys" bar_has 30 ": komut" "t çöp" "Space aç" "o sırala" "V sütun" "F1 yardım"
     else
-        check "the list bar at $width columns shows the main keys" bar_has 30 ": komut" "T çöp" "Space aç" "o sırala" "v sütun" "f ara" "F1 yardım"
+        check "the list bar at $width columns shows the main keys" bar_has 30 ": komut" "t çöp" "Space aç" "o sırala" "V sütun" "s ara" "F1 yardım"
     fi
 done
 keys g
@@ -846,7 +855,7 @@ sleep 0.2
 check "o n sorts by name" screen_has "ad↑"
 keys Down
 sleep 0.2
-keys v
+keys V
 sleep 0.2
 check "v changes the right column" bar_has 3 "B"
 
@@ -862,7 +871,7 @@ wait_screen "Çöpe atıldı"
 wait_screen "çöp: 1"
 check "the top line counts the trash" bar_has 1 "çöp: 1"
 check "d moved the selected note to the trash" note_tool in-trash "$first"
-keys T
+keys t
 wait_screen "ÇÖP KUTUSU"
 check "the trash hints are shown" bar_has 30 "u geri getir" "D kalıcı sil" "E boşalt" "Esc/q geri"
 wait_screen "$(content_of "$first") metin"
@@ -901,7 +910,7 @@ keys g
 keys g
 keys d
 wait_screen "çöp: 2"
-keys T
+keys t
 wait_screen "ÇÖP KUTUSU"
 keys E
 wait_screen "2 not"
@@ -1027,7 +1036,7 @@ clear_notes
 printf 'bir\n' | put_note ilk.md
 rm -f "$work/home/state/tui-state.toml"
 start_app
-keys a
+keys n
 wait_screen "Enter oluştur"
 literal 'deneme.cpp'
 check "a: the name row is the first row of the list pane" bar_has 3 "│ " "+ deneme.cpp▏"
@@ -1038,7 +1047,7 @@ keys Escape
 sleep 0.2
 check "a: Esc removes the row" screen_lacks "deneme.cpp"
 check "a: Esc creates nothing" test "$(note_tool count)" = 1
-keys a
+keys n
 wait_screen "Enter oluştur"
 literal 'deneme.cpp'
 keys Enter
@@ -1054,7 +1063,7 @@ wait_screen "← liste"
 check "a: highlight follows the typed extension" ansi_has $'\e[91m'
 keys Left
 wait_screen "Enter düzenle"
-keys a
+keys n
 wait_screen "Enter oluştur"
 literal 'boş not.txt'
 keys Enter
@@ -1065,7 +1074,7 @@ keys Left
 wait_screen "Enter düzenle"
 check "a: left empty, it stays; the stem is slugged, the extension is not" note_tool has "bos-not.txt"
 for typed in deneme.xyz a.tar.gz notlar.v2 Rapor.PDF; do
-    keys a
+    keys n
     wait_screen "Enter oluştur"
     literal "$typed"
     keys Enter
@@ -1079,7 +1088,7 @@ check "a: an unknown extension stays" note_tool has deneme.xyz
 check "a: a multi-dot name stays" note_tool has a.tar.gz
 check "a: a version-like extension stays" note_tool has notlar.v2
 check "a: extension case is preserved, the stem is slugged" note_tool has rapor.PDF
-keys a
+keys n
 wait_screen "Enter oluştur"
 literal 'yalin'
 keys Enter
@@ -1089,7 +1098,7 @@ wait_screen "← liste"
 keys Left
 wait_screen "Enter düzenle"
 check "a: no extension takes default_type" note_tool has yalin.md
-keys a
+keys n
 wait_screen "Enter oluştur"
 literal 'yalin.md'
 keys Enter
@@ -1099,7 +1108,7 @@ check "a: a taken name is an inline error, not -2" screen_lacks "yalin-2.md"
 check "a: the error is in the list pane" bar_has 4 "│ Zaten"
 keys Escape
 sleep 0.2
-keys a
+keys n
 wait_screen "Enter oluştur"
 literal '../kacis.md'
 keys Enter
@@ -1113,7 +1122,7 @@ wait_screen "Enter tut"
 literal 'ilk'
 keys Enter
 wait_screen "> ilk"
-keys a
+keys n
 wait_screen "Enter oluştur"
 check "a: the row is visible under an active filter" bar_has 3 "│ " "+ "
 literal 'filtre-disi.md'
@@ -1125,8 +1134,8 @@ check "a: the note is visible, the filter gave way" screen_has "filtre-disi.md"
 keys Left
 wait_screen "Enter düzenle"
 
-# 20. Uzantı kuralı öbür yollarda: n, F2, r, note -n.
-keys n
+# 20. Uzantı kuralı öbür yollarda: a, F2, r, note -n.
+keys a
 wait_screen "Yeni not"
 literal 'x'
 keys C-s
@@ -1159,7 +1168,7 @@ podman run --rm -e NOTEAPP_HOME=/data/home -v "$work:/data:z" -v "$volume:/build
     /build/src/cli/note -n cli-yolu.xyz '# baslik' >/dev/null
 check "note -n: a typed extension stays" note_tool has cli-yolu.xyz
 
-# 21. created ve origin gerçekten görünür: satır ayrıntısı, v sütunu, sort:created, origin:, çöp.
+# 21. created ve origin gerçekten görünür: satır ayrıntısı, V sütunu, sort:created, origin:, çöp.
 clear_notes
 printf 'eski\n' | put_note eski.md 2020-01-02
 printf 'yeni\n' | put_note yeni.md 2021-01-02
@@ -1172,12 +1181,12 @@ check "details show the created date" screen_has "oluşturma: 2021-01-02"
 check "details have no unknown value" screen_lacks "bilinmiyor"
 keys Space
 sleep 0.2
-for _ in 1 2 3; do keys v; done
+for _ in 1 2 3; do keys V; done
 sleep 0.3
-check "v: the created column" screen_has "2020-01-02"
-for _ in 1 2; do keys v; done
+check "V: the created column" screen_has "2020-01-02"
+for _ in 1 2; do keys V; done
 sleep 0.3
-check "v: the origin column" bar_has 3 "linux"
+check "V: the origin column" bar_has 3 "linux"
 keys /
 wait_screen "Enter tut"
 literal 'sort:created'
@@ -1196,7 +1205,7 @@ keys Escape
 sleep 0.2
 keys d
 wait_screen "çöp: 1"
-keys T
+keys t
 wait_screen "ÇÖP KUTUSU"
 keys Space
 wait_screen "kaynak:"
@@ -1215,7 +1224,7 @@ printf 'notes_dir = "/data/notes"\nlanguage = "en"\nicons = "off"\n' >"$work/hom
 rm -f "$work/home/state/tui-state.toml"
 ready_text="Enter edit"
 start_app
-keys a
+keys n
 literal 'proje/'
 wait_screen "proje/▏"
 keys Enter
@@ -1226,12 +1235,12 @@ check "the note row follows" screen_has "2   kok.md"
 check "the top line is the root" top_line_has "notes"
 check "the totals count the folder" screen_has "Folder: 2 items · Total 1 note"
 keys Up
-wait_screen "a add, name/ = folder"
+wait_screen "n add, name/ = folder"
 check "the hint bar names rename on a folder" screen_has "F2 rename"
 keys l
 wait_screen "notes/proje"
-check "an empty folder shows the add hint" screen_has "a add, name/ = folder"
-keys a
+check "an empty folder shows the add hint" screen_has "n add, name/ = folder"
+keys n
 literal 'ic.md'
 wait_screen "ic.md▏"
 keys Enter
@@ -1246,7 +1255,7 @@ keys h
 wait_screen "Enter edit"
 check "numbers restart inside the folder" screen_has "1   ic.md"
 check "the short name is shown" screen_lacks "proje/ic.md"
-keys a
+keys n
 literal 'alt/iki.md'
 keys Enter
 wait_screen "Ctrl+S save"
@@ -1314,8 +1323,8 @@ printf 'K\n' | put_note hedef/a.md
 printf 'sort = "name"\nsort_descending = false\ncolumn = "none"\nversion = 2\n' >"$work/home/state/tui-state.toml"
 start_app "→ open"
 keys Down
-keys x
-keys x
+keys v
+keys v
 wait_screen "selected: 2"
 check "marked rows carry the text marker" screen_has "*2"
 check "marked rows are yellow" ansi_has $'\e[1m\e[33m*'
@@ -1580,7 +1589,7 @@ wait_screen "Commands"
 check "the palette names the selection" screen_has "klasor"
 # Satır: etiket solda; kimlik ve tuş sağ kenarda.
 palette_row_has() { screen | grep -qE -- "$1"; }
-check "a row shows the label, then id and key at the right" palette_row_has '│New note +new  n │'
+check "a row shows the label, then id and key at the right" palette_row_has '│New note +new  a │'
 keys Escape
 sleep 0.2
 check "Esc closes the palette" screen_lacks "Commands"

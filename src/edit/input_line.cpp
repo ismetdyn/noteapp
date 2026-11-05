@@ -73,6 +73,18 @@ bool is_typable(std::string_view text) {
            core::is_valid_utf8(text);
 }
 
+// Tek satırlık girdiye yapıştırma: satır sonu Enter gibi erken göndermesin. Sondaki satır sonları atılır,
+// aradakiler ve diğer kontrol baytları (sekme dahil) boşluk olur.
+std::string single_line(std::string_view pasted) {
+    while (!pasted.empty() && (pasted.back() == '\n' || pasted.back() == '\r'))
+        pasted.remove_suffix(1);
+    std::string line(pasted);
+    for (char& c : line)
+        if (static_cast<unsigned char>(c) < 0x20 || c == kDelete)
+            c = ' ';
+    return line;
+}
+
 struct Range {
     std::size_t begin;
     std::size_t end;
@@ -405,6 +417,8 @@ InputLine::Result InputLine::handle(Key key, std::string_view typed, std::span<c
     case Key::Backspace:
     case Key::Delete:
         return edit(key, typed);
+    case Key::Paste:
+        return edit(Key::Char, single_line(typed));
     case Key::Left:
         cursor_ = previous_code_point(text_, cursor_);
         return Result::Consumed;

@@ -69,7 +69,11 @@ Sample measure(WindowFixture& fixture, core::Limit view_bytes, const std::string
     const auto state = fixture.make_state();
     const auto view = make_view(*state);
     state->select_row(state->model().index_of(core::NotePath::parse(note).value()));
+    // Seçilen not incelemede (önizlemede) açılır (NY-G): ölçülen düzenleme -> önizleme geçişi için önce
+    // kullanıcı gibi `edit` komutuyla düzenlemeye geçilir.
+    state->edit_selected();
     gui_test::settle(*view);
+    REQUIRE_FALSE(state->showing_preview());
     REQUIRE(state->can_preview());
     const auto before = noteapp::test::resident_bytes();
     Sample sample;

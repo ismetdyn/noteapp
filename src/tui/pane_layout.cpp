@@ -6,10 +6,6 @@ namespace noteapp::tui {
 
 namespace {
 
-// Sol panel genişliğinin pencereye oranı (pay/payda); önizlemeye kalan alan okunabilir olsun.
-constexpr int kListWidthNumerator = 2;
-constexpr int kListWidthDenominator = 5;
-
 int clamped(int width, int window_width) {
     const int maximum = std::max(window_width - PaneLayout::kMinRightWidth, PaneLayout::kMinListWidth);
     return std::clamp(width, PaneLayout::kMinListWidth, maximum);
@@ -18,11 +14,19 @@ int clamped(int width, int window_width) {
 }  // namespace
 
 int PaneLayout::list_width(int window_width) const {
-    return clamped(width_.value_or(window_width * kListWidthNumerator / kListWidthDenominator), window_width);
+    return clamped(width_.value_or(static_cast<int>(window_width * share_)), window_width);
 }
 
 void PaneLayout::set_list_width(int width, int window_width) {
     width_ = clamped(width, window_width);
+}
+
+std::optional<double> PaneLayout::chosen_share(int window_width) const {
+    if (!width_ || window_width <= 0)
+        return std::nullopt;
+    // Sütunun ortası: list_width oranı tamsayıya keser, kayan nokta hatası aynı pencerede sütun kaydırmaz.
+    constexpr double kColumnMiddle = 0.5;
+    return std::min((list_width(window_width) + kColumnMiddle) / window_width, 1.0);
 }
 
 void PaneLayout::resize(int delta, int window_width) {

@@ -221,6 +221,24 @@ std::string_view group_heading(CommandGroup group) {
     return "cli.group_other";
 }
 
+// Genel listedeki komut: "  note show (-S, cat)"; uzun bayrak (`--show`) komutun kendi yardımındadır.
+std::string command_label(const CommandSpec& command) {
+    std::string label = "  note " + std::string(command.name);
+    if (!command.flag.empty())
+        label.append(" (").append(command.flag).append(command.alias.empty() ? "" : ", ").append(command.alias) += ')';
+    return label;
+}
+
+// `note show` yardımındaki eşler: "note -S, note --show, note cat"; bayraksız komutta boş.
+std::string short_forms(const CommandSpec& command) {
+    if (command.flag.empty())
+        return "";
+    std::string forms = "note " + std::string(command.flag) + ", note " + long_flag(command);
+    if (!command.alias.empty())
+        forms.append(", note ").append(command.alias);
+    return forms;
+}
+
 // `note help`: hızlı ekleme biçimleri ve seçenekleri, sonra gruplu komut listesi (tek satırlık `cli.desc_*`).
 std::string top_help() {
     HelpWriter writer(output_width());
@@ -233,14 +251,14 @@ std::string top_help() {
     // Gruplar tek sütunda hizalanır: liste bir bütün olarak okunur.
     std::size_t column = 0;
     for (const CommandSpec& command : kCommands)
-        column = std::max(column, columns_of("  note " + std::string(command.name)) + 2);
+        column = std::max(column, columns_of(command_label(command)) + 2);
     for (const CommandGroup group :
          {CommandGroup::Notes, CommandGroup::Sync, CommandGroup::Advanced, CommandGroup::Other}) {
         writer.heading(core::tr(group_heading(group)));
         std::vector<std::pair<std::string, std::string>> rows;
         for (const CommandSpec& command : kCommands)
             if (command.group == group)
-                rows.emplace_back("  note " + std::string(command.name), core::tr(command.description));
+                rows.emplace_back(command_label(command), core::tr(command.description));
         writer.rows(rows, column);
     }
     writer.blank();
@@ -261,6 +279,10 @@ std::string command_help(const CommandSpec& command) {
     if (const std::string key = "cli.help_" + name; has_key(key)) {
         writer.blank();
         writer.block("", core::tr(key), 0);
+    }
+    if (const std::string forms = short_forms(command); !forms.empty()) {
+        writer.blank();
+        writer.block("", core::tr("cli.help_short_forms", {{"forms", forms}}), 0);
     }
 
     writer.heading(core::tr("cli.help_heading_usage"));

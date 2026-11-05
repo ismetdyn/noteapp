@@ -113,6 +113,10 @@ inline constexpr GuiCommand kGuiCommands[] = {
     // Dış editör (TUI `E`): Shift+E; kopya (TUI `c`): GUI'nin alışılmış Ctrl+C'si (C sütun döngüsünde).
     {"external", ImGuiMod_Shift | ImGuiKey_E, CommandScope::List, [](GuiState& s) { s.open_external(); }},
     {"external", ImGuiMod_Shift | ImGuiKey_E, CommandScope::Preview, [](GuiState& s) { s.open_external(); }},
+    // İncelemede düzenlemeye geçiş (TUI REVIEW `e` `Enter`); kilitli editörde aynı tuşlar GuiState::editor_key'de.
+    {"edit", ImGuiKey_E, CommandScope::Preview, [](GuiState& s) { s.edit_selected(); }},
+    {"edit", ImGuiKey_Enter, CommandScope::Preview, [](GuiState& s) { s.edit_selected(); }},
+    {"edit", ImGuiKey_KeypadEnter, CommandScope::Preview, [](GuiState& s) { s.edit_selected(); }},
     {"copy", ImGuiMod_Ctrl | ImGuiKey_C, CommandScope::List, [](GuiState& s) { s.copy_selected(); }},
     {"copy", ImGuiMod_Ctrl | ImGuiKey_C, CommandScope::Preview, [](GuiState& s) { s.copy_selected(); }},
     {"toggle", ImGuiKey_Space, CommandScope::List, [](GuiState& s) { s.toggle_row(); }},

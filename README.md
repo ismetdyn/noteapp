@@ -174,7 +174,40 @@ note config path | list | get ANAHTAR | set ANAHTAR DEĞER
 note completion zsh | bash | fish          # kabuk tamamlama betiği (aşağıda)
 note --help | note help KOMUT              # gruplu komut listesi / tek komutun ayrıntısı (örneklerle)
 note ls --help                             # her komutta -h/--help: note help ls ile aynı
-note -- ls                                 # "ls" metnini not et (alt komut adıyla çakışma)
+note -- ls                                 # "ls" metnini not et (alt komut adıyla çakışma); note -a ls de olur
+```
+
+Komutların kısa bayrakları TUI tuşlarıyla aynıdır. Bayrak **yalnız ilk argüman** olarak komuttur, kalan argümanlar o
+komuta aynen gider (`note -i a.txt b.md --folder x` = `note import a.txt b.md --folder x`, `note -s sözcük -n 5` =
+`note find sözcük -n 5`):
+
+| Kısa | Uzun | Anlam |
+|---|---|---|
+| `-a METİN…` | `--add` | düz ekleme (`note METİN…` ile aynı; `note -a ls` "ls" metnini ekler) |
+| `-n AD METİN…` | `--name` | adla ekleme |
+| `-l` | `--ls` | `note ls` |
+| `-s` | `--find` | `note find` |
+| `-S` | `--show` | `note show` (`note cat` da aynı) |
+| `-E` | `--edit` | `note edit` (`-e` editör seçeneğidir) |
+| `-d` | `--rm` | `note rm` |
+| `-m` | `--mv` | `note mv` |
+| `-x` | `--export` | `note export` |
+| `-T` | `--tags` | `note tags` |
+| `-i` | `--import` | `note import` |
+
+`-t` tip, `-f` klasör, `-e` editör, `-q` sessiz, `-h` yardım olarak kalır. Değer alan seçeneğin ardındaki sözcük değerdir:
+`note -n -i` "-i" adlı not ekler. Tireyle başlayan metin için `note -- -i`.
+
+Boru ve yönlendirme kabuğundur, `note` stdin/stdout ile çalışır:
+
+```bash
+note -n deneme < dosya.txt                 # dosyanın içeriği "deneme" adlı not olur
+cat dosya.txt | note -n deneme             # aynısı, borudan
+note -S deneme | grep x                    # notu göster, yalnız x geçen satırlar
+note -S deneme >> cikti.txt                # notu dosyanın sonuna ekle (> üzerine yazar)
+note -n deneme <<'EOF'                     # << dosya değil heredoc: sonraki satırlar EOF'a kadar stdin olur
+ilk satır
+EOF
 ```
 
 `--no-sync` yazan komutlarda arka plan senkronunu atlar. Her kısa bayrağın uzun adı var (`-t/--type`, `-f/--folder`,
@@ -242,22 +275,23 @@ Betik yalnız kendi ürettiği dosyanın üzerine yazar, `--uninstall` onları s
 | `Enter` `e` | Düzenle (EDIT): `Ctrl+S` kaydet, `Ctrl+Q` çık (kaydedilmemişi sorar), `Ctrl+F` bul, `Ctrl+Z/Y`, `Ctrl+X/C/V`; `Esc` yalnız aramayı kapatır ya da seçimi kaldırır, tek başına çıkmaz |
 | `E` | Harici editörde aç (`$EDITOR`) |
 | `/` | Alt satırda ara: `↑↓` seç, `Enter` seçimi tut (eşleşme yoksa taslak), `Ctrl+T` ad/içerik, `Esc` kapat |
-| `f` | Ad ve içerikte ara: eşleşen satır yolun altında, `Enter` REVIEW'da eşleşmeye kayar. `/` ve `f` argüman alır: `sort:-size` `type:md` `in:work/` `size:>1mb` `updated:7d` `sync:modified` `tag:proje` `view:iş`; bozuk değer metin sayılmaz, yeriyle hata gösterir |
-| `n` `Ctrl-O` | Yeni not: tüm terminali alan boş editör. Ad ilk `Ctrl+S`'te altta sorulur (`klasör/ad.uzantı`, önerisi ilk satır + algılanan tip), o ana dek dosya yok; `Ctrl+Q` iki panele döner |
-| `a` | Yeni not ya da klasör, ad bulunulan klasöre göre: `ad/` klasör oluşturur ve Listede kalır, `sub/x.md` gereken klasörleri açar. Listenin başında satır açılır, `Enter` boş notu oluşturup EDIT'te açar (yazmaya ya da yapıştırmaya hazır), `Esc` vazgeçer; uzantı yoksa `default_type`; dolu ya da geçersiz ad satırda hata verir · `r` taşı/ad/tip · `s` senkron |
+| `s` | Ad ve içerikte ara (eski `f` de çalışır): eşleşen satır yolun altında, `Enter` REVIEW'da eşleşmeye kayar. `/` ve `s` argüman alır: `sort:-size` `type:md` `in:work/` `size:>1mb` `updated:7d` `sync:modified` `tag:proje` `view:iş`; bozuk değer metin sayılmaz, yeriyle hata gösterir |
+| `a` `Ctrl-O` | Yeni not: tüm terminali alan boş editör. Ad ilk `Ctrl+S`'te altta sorulur (`klasör/ad.uzantı`, önerisi ilk satır + algılanan tip), o ana dek dosya yok; `Ctrl+Q` iki panele döner |
+| `n` | Yeni not ya da klasör, ad bulunulan klasöre göre: `ad/` klasör oluşturur ve Listede kalır, `sub/x.md` gereken klasörleri açar. Listenin başında satır açılır, `Enter` boş notu oluşturup EDIT'te açar (yazmaya ya da yapıştırmaya hazır), `Esc` vazgeçer; uzantı yoksa `default_type`; dolu ya da geçersiz ad satırda hata verir · `r` taşı/ad/tip · `Ctrl+S` senkron (REVIEW'da da) |
 | `d` `u` `D` | `d` çöpe atar (sormaz), `u` bu oturumda son atılanı geri alır, `D` kalıcı siler (sorar, varsayılan Vazgeç). Klasörde: `d` notları tek tek çöpe atıp klasörü kaldırır (notlu klasörde sorar, varsayılan Vazgeç), `u` hepsini geri getirir; `D` sayıları gösterip sorar, kalıcıdır |
 | `F2` | Yol ve ad: altta tek satır, bulunulan klasöre göre; `/` içeren yol taşır; klasörde (`r` de) klasörü yeniden adlandırır; imleç adın sonunda; `Enter` taşır (hedef varsa hata, ezme yok), `Esc` vazgeçer |
-| `T` | Çöp görünümü (ya da üstteki `çöp: N`e tıkla): `u` geri getir, `D` kalıcı sil, `E` tümünü boşalt (ikisi de sorar, varsayılan Vazgeç), `q` `Esc` geri; sağda not salt okunur |
+| `t` | Çöp görünümü (ya da üstteki `çöp: N`e tıkla; haritada `gt`): `u` geri getir, `D` kalıcı sil, `E` tümünü boşalt (ikisi de sorar, varsayılan Vazgeç), `q` `Esc` geri; sağda not salt okunur |
 | `c` | Notun özgün baytlarını sistem panosuna kopyalar (liste ve REVIEW); ikili ya da UTF-8 olmayan notta nedenini söyler |
-| `i` / `I` | Seçili satırın (klasör de) / tüm satırların ayrıntısını aç-kapat |
-| `x` `X` `Ctrl+A` | Satırı seç ve aşağı in, seçimi temizle, görünenleri seç; seçim klasör değişince kalır, altta `seçili: 3` |
+| `Alt+→` / `I` | Seçili satırın (klasör de) / tüm satırların ayrıntısını aç-kapat (çöpte `i` de) |
+| `i` `x` `T` `S` | İçe al (yol girdisi) · seçili notu PDF'e aktar · etikete göre ara · önizle (`→` gibi) |
+| `v` `X` `Ctrl+A` | Satırı seç ve aşağı in, seçimi temizle, görünenleri seç; seçim klasör değişince kalır, altta `seçili: 3` |
 | `y` `p` | Seçimi ya da satırı kopya için işaretle, geçerli klasöre yapıştır. Hiçbir şey ezilmez: dolu ad `-2` alır, raporlanır. `Esc` vazgeçer |
 | `:` `import` | Dosya ya da klasör içe al (`note import` kuralı): altta yol girdisi (göreli yol çalışma dizinine göre), hedef `n` ile aynı klasör; arka planda koşar, ilerleme (`n/m` ve yol) alt satırda, `Esc` ya da `Ctrl+C` durdurur (alınanlar kalır); özet alt satırda, ilk not REVIEW'da açılır; hiçbir şey alınamazsa girdi nedeniyle geri açılır. Komut satırından: `notes import YOL... [--folder K] [--name AD] [--overwrite]` önce özeti yazar, sonra TUI'yi ilk notla açar (hiçbir şey alınamazsa açmaz, çıkış 1); `notes --help` kısa kullanım |
 | `gg` `gh` `gt` | Baş, kök klasör, çöp (`g` sıradaki tuşu bekler) |
 | `PgUp` `PgDn` `gg` `G` | Listede sayfa sayfa, baş, son; REVIEW'da `↑↓` basılı tutunca hızlanır, `Ctrl+U` `Ctrl+D` yarım sayfa, `J` `K` 5 satır |
 | `Alt+→` `Alt+←` | Satırı aç/kapat: boyut, güncelleme, oluşturma, senkron, kaynak (bilinmiyorsa "bilinmiyor"); birden çok satır açık kalabilir |
-| `v` `o` | Sağ sütun (boyut + tarih, boyut, güncelleme, oluşturma, senkron, kaynak, yok) · sıralama menüsü (`n` ad, `u` güncelleme, `c` oluşturma, `s` boyut, `r` ters); ikisi de `tui-state.toml`'da kalır |
-| `<` `>` `z` | Panel genişliği, yakınlaştırma · Fare: bölücü, tekerlek, tıklama; REVIEW'da sürükleme metni seçer ve bırakınca kopyalar (biçimli görünümde görüneni; `c` her zaman özgün baytları; `Shift`+sürükle terminalin seçimi) |
+| `V` `o` | Sağ sütun (boyut + tarih, boyut, güncelleme, oluşturma, senkron, kaynak, yok) · sıralama menüsü (`n` ad, `u` güncelleme, `c` oluşturma, `s` boyut, `r` ters); ikisi de `tui-state.toml`'da kalır |
+| `<` `>` `z` | Panel genişliği (`tui-state.toml`'da kalır), yakınlaştırma · Fare: bölücü, tekerlek, tıklama; REVIEW'da sürükleme metni seçer ve bırakınca kopyalar (biçimli görünümde görüneni; `c` her zaman özgün baytları; `Shift`+sürükle terminalin seçimi) |
 | `,` `F9` / `F1` `?` | Ayarlar (`F9` her yerde, editörde kaydedilmemişi sorar) / yardım |
 | `Esc` | Listede süzgeci temizler, çıkmaz |
 | `q` | Liste ve önizlemeden çık (editörde ve girdilerde metindir) · `Ctrl-C` editör dışında acil çıkış (editörde kopyalar) |
@@ -266,13 +300,13 @@ Bağlantılar metindeki `[[hedef]]`ten türer. Hedef yeniden adlandırılınca n
 
 Etiketler `md`, `markdown`, `txt` ve uzantısız notlarda metindeki `#etiket`ten türer (harf, rakam, `_`, `-`, `/`; en az bir harf). Başlık (`# Başlık`), kod bloğu, satır içi kod, URL parçası (`sayfa#bolum`) ve `[[not#bölüm]]` etiket değildir; kodda `#include` de değil. Büyük/küçük harf eşleşmede fark etmez, ilk yazılış gösterilir. Notun etiketleri önizlemenin altındaki ayırıcı satırında (`#iş #proje/alt ───`) ve GUI başlığında görünür. `tag:proje` `proje` ve `proje/alt`'ı bulur, `tag:proje/alt` yalnız o dalı; paletteki (`:`) "Etikete göre süz" aramayı `tag:` ile açar ve etiketleri listeler. Çöpteki not sayılmaz. Graf olarak `(:Note)-[:TAGGED]->(:Tag {name})`: `note query "MATCH (n:Note)-[:TAGGED]->(t:Tag {name:'proje'}) RETURN n.name"`. Önceki sürümden gelen notlar ilk açılışta kendiliğinden etiketlenir.
 
-Görünüm, adla saklanmış bir Cypher sorgusudur: `note view save iş "MATCH (n:Note)-[:TAGGED]->(:Tag {name:'iş'}) RETURN n"`. `note view run iş` `note query` ile aynı tabloyu (`--json` ile JSON) verir; `note view ls`, `show`, `rm` yönetir, var olan adı `--force` olmadan ezmez. `view:iş` her aramada (`note ls`, TUI `/` `f`, GUI arama kutusu) listeyi görünümün döndürdüğü notlara süzer: görünüm not düğümünü (`RETURN n`) ya da not yolunu döndürmelidir. TUI paletindeki (`:`) "Görünüm çalıştır" aramayı `view:` ile açar ve görünümleri listeler. Görünümler notlar gibi senkronlanır, bu yüzden **salt okunurdur**: yazan sorgu (`CREATE`, `SET`, `DELETE`…) kaydedilmez, başka cihazdan gelse de çalıştırılmaz, hiçbir şey değiştirmez.
+Görünüm, adla saklanmış bir Cypher sorgusudur: `note view save iş "MATCH (n:Note)-[:TAGGED]->(:Tag {name:'iş'}) RETURN n"`. `note view run iş` `note query` ile aynı tabloyu (`--json` ile JSON) verir; `note view ls`, `show`, `rm` yönetir, var olan adı `--force` olmadan ezmez. `view:iş` her aramada (`note ls`, TUI `/` `s`, GUI arama kutusu) listeyi görünümün döndürdüğü notlara süzer: görünüm not düğümünü (`RETURN n`) ya da not yolunu döndürmelidir. TUI paletindeki (`:`) "Görünüm çalıştır" aramayı `view:` ile açar ve görünümleri listeler. Görünümler notlar gibi senkronlanır, bu yüzden **salt okunurdur**: yazan sorgu (`CREATE`, `SET`, `DELETE`…) kaydedilmez, başka cihazdan gelse de çalıştırılmaz, hiçbir şey değiştirmez.
 
 EDIT'te `Ctrl+C` `Ctrl+X` `Ctrl+V` sistem panosunu kullanır: Wayland'de `wl-copy`/`wl-paste`, X11'de `xclip` ya da `xsel`, macOS'ta `pbcopy`/`pbpaste`, Windows'ta Win32. Araç yoksa kopya OSC 52 ile terminale gider (en çok 75 KB, üstünde ileti) ve yapıştırma için `Ctrl+Shift+V` önerilir; `notes` kendi iç panosunu yedek tutar.
 
 EDIT'te satır sonunda soluk öneri çıkar (önce bu nottan, sonra diğer notlardan): `Tab` ya da `→` alır, yazmaya devam etmek düşürür; öneri yokken `Tab` sekme ekler. `Ctrl+Space` fzf gibi süzülen tamamlama listesini açar. `.env`, `properties`, `ini`, `toml`, `yaml`, `sh`, `json` ve benzeri notlardan yalnız anahtarlar önerilir; öbür notlarda da `KEY=değer` satırı yalnız anahtarını verir, değerler başka nota sızmaz. `md` ve `txt`'de PATH'te `hunspell` varsa yanlış sözcüklerin altı çizilir (sözlük dilden: `tr_TR`, `en_US`; içerik makineden çıkmaz); yoksa sessizce kapalıdır.
 
-Girdiler zsh gibi çalışır (`f`, `/`, `a`, `F2`, ad istemi, editörde bul): metnin sonunda soluk öneri çıkar, `→` alır; `Tab` tek adayı yazar, çoksa süzülen liste açar (`↑↓`, `Enter`, `Esc`): klasörler, not adları, `.cpp` gibi tipler; `f` ve `/`'de `sort:` `type:` `in:` `size:` `updated:` `created:` `origin:` `sync:` `tag:` `view:` anahtarları ve değerleri. Arama satırında geçerli argüman renkli, bozuk değer anında kırmızıdır. `Ctrl+P` `Ctrl+N` metni içeren önceki aramalarda gezer (`↑↓` sonuçları gezmeye devam eder); geçmiş `tui-state.toml`da yereldir, en çok 200 kayıt, senkrona girmez, sır benzeri değer ya da not adı taşıyan sorgu yazılmaz.
+Girdiler zsh gibi çalışır (`s`, `/`, `n`, `F2`, ad istemi, editörde bul): metnin sonunda soluk öneri çıkar, `→` alır; `Tab` tek adayı yazar, çoksa süzülen liste açar (`↑↓`, `Enter`, `Esc`): klasörler, not adları, `.cpp` gibi tipler; `f` ve `/`'de `sort:` `type:` `in:` `size:` `updated:` `created:` `origin:` `sync:` `tag:` `view:` anahtarları ve değerleri. Arama satırında geçerli argüman renkli, bozuk değer anında kırmızıdır. `Ctrl+P` `Ctrl+N` metni içeren önceki aramalarda gezer (`↑↓` sonuçları gezmeye devam eder); geçmiş `tui-state.toml`da yereldir, en çok 200 kayıt, senkrona girmez, sır benzeri değer ya da not adı taşıyan sorgu yazılmaz.
 
 Ad verirken yazdığın uzantı değiştirilmez, yerine başkası konmaz, üstüne eklenmez (`a`, `n`, `F2`, `r`, `note -n`, GUI): `deneme.cpp`, `deneme.xyz`, `a.tar.gz`, `notlar.v2` aynen kalır; uzantı yazmadıysan `a` `default_type`, `n` ve `note -n` içerikten algılananı kullanır. `a` ve `n` gövdeyi slug'lar (`Toplantı Notu.CPP` → `toplanti-notu.CPP`); `F2`, `r` ve `note -n` yazdığını aynen alır.
 

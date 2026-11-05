@@ -39,9 +39,11 @@
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <expected>
 #include <filesystem>
@@ -56,6 +58,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -118,6 +121,21 @@ void notify_stray_files(ftxui::App& app, noteapp::tui::StatusLine& status,
     } catch (...) {
         noteapp::core::log_warn("event=stray_scan_failed detail=unknown_exception");
     }
+}
+
+// Yamalı FTXUI'nin, limits.tui.paste_bytes'ı aşan yapıştırma yerine gönderdiği olay (baytlar tutulmadı).
+constexpr std::string_view kPasteTooLarge = "\x1B[noteapp-paste-too-large";
+
+// Yamalı FTXUI bracketed paste'i tek özel olay yapar: girdisi bu önek ve ham metindir. Sınırı aşan
+// yapıştırmada kPasteTooLarge. Değilse nullopt.
+std::optional<std::string_view> pasted_text(const ftxui::Event& event) {
+    constexpr std::string_view kPasteStart = "\x1B[200~";
+    const std::string_view input = event.input();
+    if (input == kPasteTooLarge)
+        return input;
+    if (!input.starts_with(kPasteStart))
+        return std::nullopt;
+    return input.substr(kPasteStart.size());
 }
 
 // FTXUI olayını modelin tuşuna çevirir; tanınmayan olay (fare, boyut vb.) nullopt.
@@ -455,7 +473,9 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
     : config_(loaded.config), store_(core::NoteStore::for_config(config_)),
       preview_(tui::view_limits_of(config_.limits.tui), tui::syntax_limits_of(config_.limits.tui)),
       // Yükleme uyarıları (ör. bozuk config.toml -> varsayılanlar) açılışta alt çubukta görünür.
-      status_{core::tr("tui.sync_off"), tui::config_warnings_message(loaded.warnings)},
+      status_{.sync = core::tr("tui.sync_off"),
+              .message = tui::config_warnings_message(loaded.warnings),
+              .notices = app::NoticeQueue(app::NoticeQueue::lifetime_of(loaded.config.tuning.notice_ms.value))},
       sync_status_([this](app::SyncStates states) {
           // Aynı durumlar (her kayıttan sonraki istek, senkron kapalıyken hep) çizim istemez.
           app_.Post([this, states = std::move(states)]() mutable {
@@ -485,6 +505,7 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
           tui::LanguageServers::kChangeIdle, tui::LanguageServers::kMirrorIdle, tui::kBlockNetworkPaths,
           tui::lsp_limits_of(config_.limits.lsp)) {
     state_.set_icon_style(core::terminal_icon_style(config_.icons));
+    state_.layout().set_share(config_.tuning.tui_list_share);
     state_.set_recent_commands_limit(config_.limits.app.recent_commands);  // load_list_prefs'ten önce
     state_.set_map_node_limit(config_.limits.app.map_nodes);
     state_.set_map_depth_limit(config_.limits.app.map_depth);
@@ -526,6 +547,11 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
     if (const auto draw_log = core::get_env_utf8("NOTEAPP_TUI_DRAW_LOG"))
         draw_log_.open(std::filesystem::path(std::u8string(draw_log->begin(), draw_log->end())),
                        std::ios::app);
+    app_.SetPasteTimeout(std::chrono::milliseconds(  // 0 = hiç bitmez
+        static_cast<std::int64_t>(std::min<std::uint64_t>(config_.limits.tui.paste_timeout.value, INT64_MAX))));
+    // Sınırı aşan baytlar ayrıştırıcıda da tutulmaz: dev yapıştırma belleği doldurmaz (0 = sınırsız).
+    app_.SetPasteLimit(static_cast<std::size_t>(
+        std::min<std::uint64_t>(config_.limits.tui.paste_bytes.value, std::numeric_limits<std::size_t>::max())));
     app_.SetFrameWriter([this](const ftxui::Screen& screen, bool repaint, std::string& output) {
         const std::size_t before = output.size();
         frame_diff_.write(screen, repaint, output);
@@ -709,11 +735,16 @@ void TuiSession::start_auto_sync() {
                            app_.Post([this, result, running] {
                                if (!auto_sync_)
                                    return;
+                               const bool was_running =
+                                   sync_indicator_.state() == tui::SyncIndicator::State::Running;
                                sync_indicator_.set_status(result, running);
                                sync_status_.request(config_, state_.metas());
                                show_sync();
                                if (sync_indicator_.state() == tui::SyncIndicator::State::Failed)
-                                   status_.message = sync_indicator_.error_text();
+                                   status_.notify(app::NoticeKind::Error, sync_indicator_.error_text());
+                               else if (was_running && sync_indicator_.state() == tui::SyncIndicator::State::Ok)
+                                   status_.notices.post(app::NoticeKind::Success, core::tr("notice.sync_done"),
+                                                        std::chrono::steady_clock::now());
                            });
                            app_.Post(redraw_event());  // kapanış görevi çizimi tetiklemez
                        });
@@ -776,6 +807,8 @@ ftxui::Element TuiSession::render() {
     };
     if (const auto deadline = editor.autosave_deadline(); deadline && *deadline > now)
         wake_by(deadline);
+    status_.notices.expire(now);  // bildirimin düşme anı bir uyanmadır, yoklama değil
+    wake_by(status_.notices.next_deadline());
     // Gün dönünce listedeki "bugün" saatleri (HH:MM) tarihe döner (core::short_time_text): bir çizim.
     const auto wall = std::chrono::system_clock::now();
     wake_by(now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -880,7 +913,8 @@ void TuiSession::handle_dialog_key(tui::SaveDialogState& dialog, const Key key, 
         tabs_.follow_moved(from.string(), moved->string());
         refresh_notes();
         state_.reveal(*moved);
-        status_.message = core::tr("tui.moved", {{"from", from.string()}, {"to", moved->string()}});
+        status_.notify(app::NoticeKind::Success,
+                       core::tr("tui.moved", {{"from", from.string()}, {"to", moved->string()}}));
         notify_changed();
         break;
     }
@@ -979,7 +1013,7 @@ void TuiSession::handle_settings_key(tui::SettingsState& settings, const Key key
         if (const auto saved = settings.submit(config_, outcome == tui::SettingsState::Outcome::Replace)) {
             apply_settings(*saved);
             settings_.reset();
-            status_.message = core::tr("tui.settings_saved");
+            status_.notify(app::NoticeKind::Success, core::tr("tui.settings_saved"));
             if (outcome == tui::SettingsState::Outcome::SubmitAndQuit)
                 app_.Exit();
         }
@@ -995,6 +1029,10 @@ void TuiSession::start_connection_test(core::Config candidate) {
             connection_testing_ = false;
             if (settings_)
                 settings_->finish_test(outcome);
+            status_.notices.post(outcome ? app::NoticeKind::Success : app::NoticeKind::Error,
+                                 outcome ? core::tr("tui.test_ok")
+                                         : core::tr("tui.test_failed", {{"detail", core::format_error(outcome.error())}}),
+                                 std::chrono::steady_clock::now());
             if (outcome)
                 refresh_notes();  // çekilen notlar listeye yansısın
         });
@@ -1057,7 +1095,24 @@ bool TuiSession::on_event(ftxui::Event event) {
         return true;
     }
     std::string text;
-    const auto key = to_key(event, text);
+    std::optional<Key> key;
+    if (const auto pasted = pasted_text(event)) {
+        const std::size_t limit = config_.limits.tui.paste_bytes.cap();
+        tui::PasteChoice choice = *pasted == kPasteTooLarge
+                                      ? tui::PasteChoice{{}, tui::paste_too_large_message(limit)}
+                                      : tui::terminal_paste(*pasted, limit);
+        if (!choice.message.empty()) {  // Ctrl+V gibi: metin değişmez, neden editörde ya da altta
+            if (state_.focus() == tui::Focus::Editor)
+                tabs_.active().show_notice(std::move(choice.message));
+            else
+                status_.message = std::move(choice.message);
+            return true;
+        }
+        key = Key::Paste;
+        text = std::move(choice.text);
+    } else {
+        key = to_key(event, text);
+    }
     if (!key || tui::passes_to_terminal(*key, state_.focus()))
         return false;
     if (any_open(help_, confirm_, dialog_, settings_, new_row_, rename_)) {
@@ -1071,6 +1126,7 @@ bool TuiSession::on_event(ftxui::Event event) {
         return true;
     status_.message.clear();
     status_.notice.clear();
+    status_.notices.dismiss_all(app::NoticeKind::Error);  // hata bildirimi sonraki tuşla kapanır
     run_intent(state_.handle(*key, text), *key, text);
     settle_tabs();
     list_actions_.save_prefs_if_changed();

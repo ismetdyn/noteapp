@@ -314,6 +314,38 @@ TEST_CASE("editor: Ctrl+C copies the line, Ctrl+X too, the message says where it
 }
 #endif
 
+// NY-T: terminal satır sonunu CR'ye çevirir (Konsole, VTE, xterm) ya da CRLF'i olduğu gibi gönderir; ikisi de
+// tek satır sonudur.
+TEST_CASE("terminal paste text: CRLF, lone CR and LF are each one line break") {
+    CHECK(tui::terminal_paste_text("a\r\nb\r\n") == "a\nb\n");
+    CHECK(tui::terminal_paste_text("a\rb\r\r") == "a\nb\n\n");
+    CHECK(tui::terminal_paste_text("a\nb\n\n") == "a\nb\n\n");
+    CHECK(tui::terminal_paste_text("a\r\nb\rc\nd\r") == "a\nb\nc\nd\n");
+    CHECK(tui::terminal_paste_text("\tş - x") == "\tş - x");
+    CHECK(tui::terminal_paste_text("").empty());
+}
+
+TEST_CASE("terminal paste: limits.tui.paste_bytes refuses a larger paste with the Ctrl+V message") {
+    core::init_i18n("en");
+    const tui::PasteChoice over = tui::terminal_paste("a\r\nbcd", 5);
+    CHECK(over.text.empty());
+    CHECK(over.message.find("limits.tui.paste_bytes") != std::string::npos);
+    const tui::PasteChoice at = tui::terminal_paste("a\r\nbc", 5);
+    CHECK(at.text == "a\nbc");
+    CHECK(at.message.empty());
+    CHECK(tui::terminal_paste("x", SIZE_MAX).text == "x");  // 0 = sınırsız
+}
+
+TEST_CASE("editor: a terminal paste is one undo step, byte for byte, in the note's line ending") {
+    SessionFixture f;
+    f.type("x");
+    f.session.handle(tui::Key::Paste, "- a\n  b\tc\n\n");
+    CHECK(f.session.buffer()->text() == "x- a\n  b\tc\n\n");
+    CHECK(f.session.ghost().empty());  // yapıştırma öneri açmaz
+    f.session.handle(tui::Key::CtrlZ);
+    CHECK(f.session.buffer()->text() == "x");
+}
+
 TEST_CASE("editor: Ctrl+C copies only the selection") {
     SessionFixture f;
     f.type("abcd");

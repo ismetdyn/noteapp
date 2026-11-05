@@ -122,6 +122,15 @@ NoteEditor::NoteEditor(std::string text, bool writable, std::string type, Editor
     set_type(std::move(type));
 }
 
+void NoteEditor::set_writable(bool writable) {
+    writable_ = writable;
+    if (writable)
+        return;
+    ghost_.clear();
+    if (mode_ == Mode::Complete)
+        mode_ = Mode::Editing;
+}
+
 void NoteEditor::set_type(std::string type) {
     if (type == type_)
         return;

@@ -335,11 +335,11 @@ TEST_CASE("T shows the trash: u restores the selected, D purges after confirming
     f.press("d");
     f.select("work/a.md");
     f.press("d");
-    f.press("T");
+    f.press("t");
     REQUIRE(f.state.trash_view());
     CHECK(f.state.rows().size() == 2);
     CHECK(has(screen_text(f.state), "[trash]"));
-    for (const std::string_view ignored : {"e", "n", "a", "r", "s", "/", "f", "c", "o", "v", "d"})
+    for (const std::string_view ignored : {"e", "n", "a", "r", "s", "/", "f", "c", "o", "V", "d"})
         CHECK(f.state.handle(Key::Char, ignored) == Intent::None);
     CHECK(f.state.handle(Key::Enter) == Intent::None);
     CHECK(f.state.handle(Key::Right) == Intent::None);
@@ -356,7 +356,7 @@ TEST_CASE("T shows the trash: u restores the selected, D purges after confirming
     CHECK(f.state.rows().empty());
     f.press("q");
     CHECK_FALSE(f.state.trash_view());
-    f.press("T");
+    f.press("t");
     CHECK(f.state.trash_view());
     f.actions.run(f.state.handle(Key::Escape), f.confirm);
     CHECK_FALSE(f.state.trash_view());
@@ -406,7 +406,7 @@ TEST_CASE("REVIEW shows the trashed note, not a live note with the same name") {
     const tui::Preview& live = f.preview.current(f.state, *f.store);
     REQUIRE(live.lines.size() >= 1);
     CHECK(live.lines.front() == "canli metin");
-    f.press("T");
+    f.press("t");
     REQUIRE(f.state.trash_view());
     const tui::Preview& trashed = f.preview.current(f.state, *f.store);
     REQUIRE(trashed.kind == tui::Preview::Kind::Text);
@@ -421,7 +421,7 @@ TEST_CASE("REVIEW in the trash is read-only: letters never reach an editor") {
     f.put("a.md", "metin\n");
     f.load();
     f.press("d");
-    f.press("T");
+    f.press("t");
     CHECK(f.state.handle(Key::Enter) == Intent::None);
     CHECK(f.state.handle(Key::Char, "e") == Intent::None);
     CHECK(f.state.focus() == Focus::List);
@@ -434,7 +434,7 @@ TEST_CASE("E empties the trash only after confirming; the default is Cancel") {
     f.load();
     f.press("d");
     f.press("d");
-    f.press("T");
+    f.press("t");
     REQUIRE(f.state.rows().size() == 2);
     const int changes = f.changes;
     f.press("E");
@@ -465,7 +465,7 @@ TEST_CASE("cancelling Empty does not turn the next single purge into an empty") 
     f.load();
     f.press("d");
     f.press("d");
-    f.press("T");
+    f.press("t");
     f.press("E");
     REQUIRE(f.confirm);
     f.confirm.reset();  // Vazgeç: main yalnız sıfırlar
@@ -732,7 +732,7 @@ TEST_CASE("prefs: round trip through tui-state.toml; broken values fall back to 
     StoreFixture f;
     f.put("a.md", "a");
     f.load();
-    f.press("v");
+    f.press("V");
     f.state.handle(Key::Char, "o");
     f.actions.run(f.state.handle(Key::Char, "s"), f.confirm);
     const fs::path file = core::state_dir() / "tui-state.toml";
@@ -741,6 +741,55 @@ TEST_CASE("prefs: round trip through tui-state.toml; broken values fall back to 
     tui::load_list_prefs(fresh);
     CHECK(fresh.list_column() == Column::Size);
     CHECK(fresh.list_sort().field == search::SortField::Size);
+}
+
+// Kullanıcı kararı (NY-T3): `<` `>` ya da sürüklemeyle seçilen liste genişliği yeniden açılışta kalır ve
+// tuning.tui_list_share'i geçer; küçük terminalde sınırlara çekilir.
+TEST_CASE("prefs: the chosen list width survives a restart and beats tuning.tui_list_share") {
+    StoreFixture f;
+    f.put("a.md", "a");
+    f.load();
+    const int before = f.state.layout().list_width(kWidth);
+    f.press(">");
+    f.press(">");
+    f.actions.save_prefs_if_changed();  // main her olaydan sonra
+    const int chosen = f.state.layout().list_width(kWidth);
+    REQUIRE(chosen == before + 2 * tui::PaneLayout::kKeyStep);
+
+    tui::TuiState fresh;
+    fresh.layout().set_share(0.5);  // main: önce config, sonra tui-state.toml
+    tui::load_list_prefs(fresh);
+    CHECK(fresh.layout().list_width(kWidth) == chosen);
+    CHECK(fresh.layout().list_width(2 * kWidth) == 2 * chosen + 1);  // oran: pencereyle büyür
+
+    f.press("z");  // yakınlaştırma oturumluktur, genişliği yazmaz
+    CHECK_FALSE(f.state.take_prefs_changed());
+}
+
+TEST_CASE("prefs: a saved list width is pulled into the bounds of a small terminal; broken values are ignored") {
+    tui::TuiState wide;
+    wide.layout().set_share(0.5);
+    wide.set_list_prefs(tui::parse_list_prefs("list_share = 0.95\n"));
+    const tui::PaneGeometry geometry = wide.layout().geometry(60, false);  // en küçük yerleşim 60×15
+    CHECK(geometry.list_width == 60 - tui::PaneLayout::kMinRightWidth);
+    CHECK(geometry.right_width == tui::PaneLayout::kMinRightWidth);
+    tui::TuiState narrow;
+    narrow.set_list_prefs(tui::parse_list_prefs("list_share = 0\n"));
+    CHECK(narrow.layout().list_width(60) == tui::PaneLayout::kMinListWidth);
+
+    for (const char* broken : {"list_share = 1.5\n", "list_share = -0.1\n", "list_share = \"x\"\n",
+                               "list_share = nan\n", "list_share = inf\n", "list_share = 0.4x\n"}) {
+        CAPTURE(broken);
+        CHECK_FALSE(tui::parse_list_prefs(broken).list_share);
+        tui::TuiState fresh;
+        fresh.layout().set_share(0.5);
+        fresh.set_list_prefs(tui::parse_list_prefs(broken));
+        CHECK(fresh.layout().list_width(kWidth) == kWidth / 2);  // config'in oranı kalır
+    }
+    tui::ListPrefs prefs;
+    prefs.list_share = 0.435;
+    CHECK(tui::parse_list_prefs(tui::format_list_prefs(prefs)).list_share == 0.435);
+    CHECK(tui::format_list_prefs({}).find("list_share") == std::string::npos);  // seçilmedi: config geçerli
 }
 
 TEST_CASE("terminal_safe replaces control, C1 and bidi characters and keeps text") {

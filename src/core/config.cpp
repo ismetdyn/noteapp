@@ -413,6 +413,10 @@ void apply_tuning(Section& s, Tuning& tuning) {
         tuning.graph_batch_ops = static_cast<std::size_t>(*v);
     if (auto v = s.positive_integer("completion_min_prefix_bytes"))
         tuning.completion_min_prefix_bytes = static_cast<std::size_t>(*v);
+    if (auto v = s.limit_value("notice_ms", LimitUnit::Milliseconds))
+        tuning.notice_ms = std::move(*v);
+    if (auto v = s.fraction("tui_list_share"))
+        tuning.tui_list_share = *v;
     s.warn_unknown();
 }
 
@@ -521,6 +525,7 @@ std::span<const LimitKey> limit_keys() {
         {"tui.completion_table_bytes", LimitUnit::Bytes,
          &module_field<&Limits::tui, &TuiLimits::completion_table_bytes>},
         {"tui.paste_bytes", LimitUnit::Bytes, &module_field<&Limits::tui, &TuiLimits::paste_bytes>},
+        {"tui.paste_timeout", LimitUnit::Milliseconds, &module_field<&Limits::tui, &TuiLimits::paste_timeout>},
         {"tui.search_history", LimitUnit::Count, &module_field<&Limits::tui, &TuiLimits::search_history>},
         {"tui.search_entry_bytes", LimitUnit::Bytes, &module_field<&Limits::tui, &TuiLimits::search_entry_bytes>},
         {"tui.undo_bytes", LimitUnit::Bytes, &module_field<&Limits::tui, &TuiLimits::undo_bytes>},
@@ -729,6 +734,8 @@ std::span<const TuningKey> tuning_keys() {
         {"graph_batch_ops", [](const Tuning& t) { return std::to_string(t.graph_batch_ops); }},
         {"completion_min_prefix_bytes",
          [](const Tuning& t) { return std::to_string(t.completion_min_prefix_bytes); }},
+        {"notice_ms", [](const Tuning& t) { return limit_toml(t.notice_ms.text); }},
+        {"tui_list_share", [](const Tuning& t) { return fraction_text(t.tui_list_share); }},
     });
     return table;
 }

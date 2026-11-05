@@ -61,6 +61,9 @@ struct LayoutScene {
         state->layout().width = width;
         state->layout().height = height;
         state->select_row(state->model().index_of(*noteapp::core::NotePath::parse(kLongNotePath)));
+        // Sahneler düzenleme kipinin yerleşimini ölçer (editör, alanlar, bul satırı); seçilen not incelemede
+        // açılır, önizleme sahneleri toggle_preview ile incelemeye döner.
+        state->begin_edit();
         state->show_sync_status(
             {.last_success = std::nullopt, .last_error = long_error("sync.both_non_empty")}, false);
         state->show_config_warnings({long_error("sync.repo_busy_state")});
@@ -140,6 +143,7 @@ struct LayoutScene {
         for (int index = 0; index < count; ++index)
             state->open_in_new_tab(
                 *noteapp::core::NotePath::parse(std::format("sekme-{:02}-toplantı-ayrıntıları.md", index)));
+        state->begin_edit();  // sahneler düzenleme kipini ölçer
         settle_tab_scroll();
     }
 

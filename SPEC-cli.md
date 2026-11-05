@@ -33,6 +33,40 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `note export --all DİZİN` | Tüm notları bayt bayt düz dosya olarak çıkar |
 | `note --help` · `note help KOMUT` · `note KOMUT -h\|--help` · `note --version` | Yardım (i18n, aşağıda "Yardım"); genel yardım komutları gruplu listeler |
 | `note completion zsh\|bash\|fish` | Kabuk tamamlama betiğini stdout'a yazar (aşağıda "Kabuk tamamlama") |
+| `note -l` · `-s` · `-S` · `-E` · `-d` · `-m` · `-x` · `-T` · `-i` · `-a` · `note cat` | Komutların kısa bayrakları ve `show` eşi (aşağıda "Kısa komut bayrakları") |
+
+## Kısa komut bayrakları
+Harfler TUI tuşlarıyla aynıdır (kullanıcı kararı 2026-11-05, `tasks/todo.md` NY-C/NY-T2). Bayrak **yalnız ilk argüman**
+olarak komuttur; kalan argümanlar o komutun ayrıştırıcısına aynen gider (`note -i a.txt b.md --folder x` =
+`note import a.txt b.md --folder x`, `note -s sözcük -n 5` = `note find sözcük -n 5`). Kaynak `CommandSpec::flag` ve
+`CommandSpec::alias` (`command_table.hpp`); yardım ve tamamlama buradan türer.
+
+| Kısa | Uzun | Anlam |
+|---|---|---|
+| `-a METİN…` | `--add` | Düz ekleme (`note METİN…` ile aynı); ilk sözcük komut adı olsa da metindir (`note -a ls`) |
+| `-n AD METİN…` | `--name` | Adla ekleme (değişmedi) |
+| `-l` | `--ls` | `note ls` |
+| `-s` | `--find` | `note find` |
+| `-S` | `--show` | `note show`; `note cat` da aynı |
+| `-E` | `--edit` | `note edit` (`-e` editör seçeneği olarak kalır) |
+| `-d` | `--rm` | `note rm` |
+| `-m` | `--mv` | `note mv` |
+| `-x` | `--export` | `note export` |
+| `-T` | `--tags` | `note tags` |
+| `-i` | `--import` | `note import` |
+
+- Var olan seçenekler anlamını korur: `-t` tip, `-f` klasör, `-e` editör, `-q` sessiz, `-h` yardım. Komutun içinde
+  harfler o komutundur: `note -l -l` = `note ls -l` (uzun liste).
+- **Değer konumu kazanır:** değer alan seçeneğin ardındaki sözcük değerdir: `note -n -i` "-i" adlı not (metin stdin'den
+  ya da editörden), `note -t -l x` tipi "-l". İlk argüman olmayan bayrak komut değildir: `note x -i` bilinmeyen
+  seçenek (çıkış 2), önceki gibi.
+- `--` seçenekleri bitirir: `note -- -i` "-i" metnini ekler. Komut adı olan metin `note -a ls` ya da `note -- ls`.
+- Uzun eş yalnız kısa bayrağı olan komutta vardır: `--sync`, `--help` komut değildir (`--help` yardımdır).
+- Eski yazımlar (`note import x`) aynen çalışır; stdout, `--json` şemaları ve çıkış kodları komut adıyla yazılmış
+  hâlle bayt bayt aynıdır. `cat` artık ayrılmış sözcüktür: o metni not etmek için `note -a cat`.
+- Kabuk yönlendirmeleri `note`un değil kabuğun işidir: `note -n deneme < dosya.txt` ve `cat dosya | note -n deneme`
+  dosyayı "deneme" adıyla ekler, `note -S deneme | grep x` süzer, `note -S deneme >> cikti.txt` dosyanın sonuna ekler.
+  `<<` dosya değil heredoc'tur: `note -n deneme <<'EOF'` sonraki satırları `EOF`'a kadar stdin olarak verir.
 
 - Alt komut adıyla aynı metinde not eklemek için: `note -- ls`.
 - "En iyi eşleşme" = tam yol varsa o, yoksa `search::rank_notes` ilk sonucu; seçilen yol stderr'e yazılır.
@@ -51,6 +85,8 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
   sonrası metindir): başlık, `cli.help_<komut>` açıklaması, Kullanım (`cli.<komut>_usage`), Komutlar (fiiller) ve
   Seçenekler tablodan, Örnekler (`cli.examples_<komut>`, satır başına `komut<TAB>açıklama`) ve Ayrıca bakınız
   (`cli.see_also_<komut>`) katalogdan; anahtar yoksa bölüm basılmaz. Elle yazılmış seçenek listesi yoktur.
+- Kısa bayraklar: genel listede komutun yanında parantezde (`note show (-S, cat)`), komut yardımında
+  `cli.help_short_forms` satırı (`note -S, note --show, note cat`). `note help cat` = `note help -S` = `note help show`.
 - Satır en çok 80 sütun (terminal daha darsa onun genişliği, en az 40); sözcük sınırında sarılır, sütun = kod noktası.
   Başlıklar yalnız renk açıkken kalın.
 
@@ -244,6 +280,10 @@ Argüman ayrıştırma elle yazılır (ek kütüphane yok). Windows'ta UTF-8 arg
     düz çıktı ve çıkış 0; boruda pager yok (`cli_term_test.cpp`).
 19. Küçükler ve ilerleme: pty'de `show` satır sonuyla biter; `rm` `yes` yanıtı reddedilir + ipucu; `tags` hizalı;
     `sync`/`import` ilerleme satırı yazıp siler, stderr dosyada ve `TERM=dumb`'da ara çıktı yok (`cli_term_test.cpp`).
+20. Kısa komut bayrakları: her kısa ve uzun bayrak ilk argümanda komutu seçer, kalan argümanlar aynen gider; `-l`,
+    `-T`, `-s` çıktısı ve `--json`'u uzun yazımla aynı; `cat` = `show`; `-a ls` metin ekler; `-n -i` adı "-i";
+    ilk olmayan bayrak çıkış 2; yardım ve üç kabuğun tamamlaması bayrakları sunar (`cli_short_flags_test.cpp`,
+    `completion_shell_test.sh`).
 
 **Elle:** Windows Terminal ve Fedora'da `edit`/`micro`/`nano`/`vim` ile editör akışı; Türkçe karakterli argümanlar;
 Windows Terminal'de renk ve ilerleme satırı (VT kipi), pager yokluğu.
@@ -258,6 +298,8 @@ Windows Terminal'de renk ve ilerleme satırı (VT kipi), pager yokluğu.
   Salt okur: depo yoksa kurulmaz, eski notlar geçiş bekliyorsa açılmaz, türetilmiş dizin onarımı atlanır; açılamayan
   depo boş çıktı ve çıkış 0. stderr'e hiçbir şey yazmaz. Bilinmeyen tür çıkış 2.
 - Dosya yolları (`import`, `-o`, `graph import`) kabuğun kendi tamamlamasıdır.
+- Kısa komut bayrakları ve `cat` ilk sözcükte önerilir (`note -<Tab>`: bayraklar ve hızlı ekleme seçenekleri); betik
+  ilk sözcüğü komut adına çevirir, `note -S <Tab>` `note show <Tab>` gibi tamamlar. Sonraki sözcükte önerilmez.
 
 ## Kapsam dışı
 - `note font install`: gerekmiyor; GUI kendi ikon fontunu taşır, terminalde font kullanıcınındır (SPEC-tui "Dosya ikonları").
@@ -292,3 +334,9 @@ Etkileşimli seçici (fzf benzeri seçim TUI'nin işi), `mkdir/rmdir` komutları
 - **Kapsam dışı (bilinçli):** `--color` bayrağı (env yeter), kısa/uzun yardım ayrımı, alt komut kısaltması,
   `-v/--verbose`, hata başlığının kırmızı renklendirilmesi, `config list --json` ve `sync status --json`, Windows
   pager. (`import` `n/m` sayacı NX-C'de geldi: "İlerleme".)
+
+## Değişiklik 2026-11-05 (NY-C kısa komut bayrakları)
+- **ADDED** "Kısa komut bayrakları": ilk argümanda `-l -s -S -E -d -m -x -T -i` ve uzun eşleri komutu seçer, `-a/--add`
+  düz ekleme, `note cat` = `show`; kabul 20. Neden: kullanıcı kararı, harfler TUI tuşlarıyla aynı (NY-T2).
+- **MODIFIED** Ayrılmış sözcükler: `cat` ve komut bayrakları. Daha önce `note cat` "cat" notunu ekliyordu, `note -l`
+  bilinmeyen seçenekti (çıkış 2); şimdi ikisi de komuttur. Eski yazımların stdout'u, `--json`'u ve çıkış kodları aynı.

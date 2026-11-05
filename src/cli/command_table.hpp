@@ -5,6 +5,7 @@
 // i18n anahtarıdır, menüde kullanıcının dilinde görünür.
 #include <array>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace noteapp::cli {
@@ -50,6 +51,10 @@ struct CommandSpec {
     // options/operand alanları kullanılmaz.
     std::span<const VerbSpec> verbs;
     CommandGroup group;
+    // İlk argüman olarak komutun kendisi: kısa bayrak (`-l`, TUI tuşuyla aynı harf) ve onun uzun eşi `--ad`.
+    // Boşsa komutun bayrağı yoktur, uzun eşi de (`--help` hızlı eklemenin yardım seçeneği kalır).
+    std::string_view flag = "";
+    std::string_view alias = "";  // eş ad (`cat` = `show`) ya da boş
 };
 
 // Kabukların gizli yardımcı komutu: dinamik değerleri satır satır yazar. Ayrılmıştır ama yardımda ve
@@ -70,6 +75,8 @@ inline constexpr O kQuiet{"--quiet", "-q", K::None, "cli.opt_quiet"};
 inline constexpr O kNoPager{"--no-pager", "", K::None, "cli.opt_no_pager"};
 
 inline constexpr std::array kAdd{
+    // Düz ekleme, alt komutsuz `note` ile aynı; ilk argümanda komut adını metin yapar (`note -a ls`).
+    O{"--add", "-a", K::None, "cli.opt_add"},
     O{"--type", "-t", K::Type, "cli.opt_type"},   O{"--folder", "-f", K::Folder, "cli.opt_folder"},
     O{"--name", "-n", K::Text, "cli.opt_name"},   O{"--editor", "-e", K::None, "cli.opt_editor"},
     kQuiet,                                       kNoSync,
@@ -151,30 +158,37 @@ inline constexpr std::array<CommandSpec, 16> kCommands = [] {
     using namespace command_table_detail;
     using G = CommandGroup;
     return std::array<CommandSpec, 16>{{
-        {"ls", "cli.desc_ls", kLs, K::Query, {}, G::Notes},
-        {"find", "cli.desc_find", kFind, K::Query, {}, G::Notes},
-        {"show", "cli.desc_show", kNoPagerOnly, K::Note, {}, G::Notes},
-        {"edit", "cli.desc_edit", kNoSyncOnly, K::Note, {}, G::Notes},
-        {"rm", "cli.desc_rm", kRm, K::Note, {}, G::Notes},
-        {"mv", "cli.desc_mv", kMv, K::Note, {}, G::Notes},
-        {"export", "cli.desc_export", kExport, K::Note, {}, G::Notes},
+        {"ls", "cli.desc_ls", kLs, K::Query, {}, G::Notes, "-l"},
+        {"find", "cli.desc_find", kFind, K::Query, {}, G::Notes, "-s"},
+        {"show", "cli.desc_show", kNoPagerOnly, K::Note, {}, G::Notes, "-S", "cat"},
+        {"edit", "cli.desc_edit", kNoSyncOnly, K::Note, {}, G::Notes, "-E"},
+        {"rm", "cli.desc_rm", kRm, K::Note, {}, G::Notes, "-d"},
+        {"mv", "cli.desc_mv", kMv, K::Note, {}, G::Notes, "-m"},
+        {"export", "cli.desc_export", kExport, K::Note, {}, G::Notes, "-x"},
         {"sync", "cli.desc_sync", {}, K::None, kSync, G::Sync},
         {"config", "cli.desc_config", {}, K::None, kConfig, G::Advanced},
         {"query", "cli.desc_query", kQuery, K::Text, {}, G::Advanced},
         {"graph", "cli.desc_graph", {}, K::None, kGraph, G::Advanced},
-        {"tags", "cli.desc_tags", kJsonPaged, K::None, {}, G::Notes},
+        {"tags", "cli.desc_tags", kJsonPaged, K::None, {}, G::Notes, "-T"},
         {"view", "cli.desc_view", {}, K::None, kView, G::Advanced},
-        {"import", "cli.desc_import", kImport, K::File, {}, G::Notes},
+        {"import", "cli.desc_import", kImport, K::File, {}, G::Notes, "-i"},
         {"completion", "cli.desc_completion", {}, K::None, kShells, G::Other},
         {"help", "cli.desc_help", kNoPagerOnly, K::Command, {}, G::Other},
     }};
 }();
 
-// Tablodaki komut ya da nullptr (gizli `__complete` tabloda değildir).
-inline const CommandSpec* find_command(std::string_view name) {
-    for (const CommandSpec& command : kCommands)
-        if (command.name == name)
+// `--ls` gibi uzun komut bayrağı ya da boş (kısa bayrağı olmayan komutun uzun eşi de yoktur).
+inline std::string long_flag(const CommandSpec& command) {
+    return command.flag.empty() ? std::string() : "--" + std::string(command.name);
+}
+
+// Adı, eş adı, kısa ya da uzun bayrağı `word` olan komut ya da nullptr (gizli `__complete` tabloda değildir).
+inline const CommandSpec* find_command(std::string_view word) {
+    for (const CommandSpec& command : kCommands) {
+        const bool is_flag = !command.flag.empty() && (command.flag == word || long_flag(command) == word);
+        if (command.name == word || (!command.alias.empty() && command.alias == word) || is_flag)
             return &command;
+    }
     return nullptr;
 }
 

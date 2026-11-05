@@ -168,6 +168,7 @@ std::vector<core::NotePath> GuiState::trash_action_items() const {
 // Toplu işlemin iletisi: yapılan sayısı ve ilk hata (TUI'deki rapor satırı).
 void GuiState::publish(const app::BatchReport& report, const char* done_key) {
     status_ = core::tr(done_key, {{"count", std::to_string(report.done)}});
+    notify(app::NoticeKind::Success, status_);
     const auto failure =
         std::ranges::find_if(report.lines, [](const auto& line) { return line.error.has_value(); });
     if (failure != report.lines.end())
@@ -264,6 +265,7 @@ void GuiState::import_files(std::span<const std::filesystem::path> sources) {
             if (!report.imported.empty())
                 open_note(report.imported.front().note);
             status_ = tui::terminal_safe(app::import_status(report));
+            notify(app::NoticeKind::Success, status_);
         });
     if (!started)
         error_status_ = status_ = core::tr("cli.import_start_failed");
@@ -333,10 +335,12 @@ void GuiState::move_selected() {
         else
             open_note(moved.first->path);
     }
-    if (moved.failure)
+    if (moved.failure) {
         fail(*moved.failure);
-    else
+    } else {
         status_ = core::tr("gui.moved_to", {{"folder", chosen->folder.empty() ? "/" : chosen->folder}});
+        notify(app::NoticeKind::Success, status_);
+    }
 }
 
 // ---- Hızlı ekleme ----
@@ -401,7 +405,7 @@ void GuiState::submit_quick_add() {
     changed();
     rescan();
     open_note(created->path);
-    request_focus(FocusRequest::Editor);
+    begin_edit();  // TUI `a`: boş not düzenlemede açılır
 }
 
 // ---- Çöp önizlemesi ----

@@ -8,6 +8,7 @@ noteapp_add_test(app
     label_fold_test.cpp
     listing_test.cpp
     map_relations_test.cpp
+    notices_test.cpp
     settings_test.cpp
     stray_notice_test.cpp
     tabs_test.cpp

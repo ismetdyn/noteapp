@@ -282,9 +282,12 @@ void View::draw_link_row(const core::LinkLine& line) {
 void View::draw_header_row() {
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
     const float combo_width = state_.type_enabled() ? ImGui::GetFontSize() * 8.0F : 0.0F;
-    const bool previewable = state_.previewable_type();
-    const std::string toggle_label = core::tr(state_.showing_preview() ? "gui.edit" : "gui.preview");
-    const float toggle_width = previewable ? button_width(toggle_label) + spacing : 0.0F;
+    // İnceleme ↔ düzenleme düğmesi kayıtlı notta (TUI REVIEW / EDIT); taslak hep düzenlemededir.
+    const bool toggles = state_.type_enabled();
+    const bool reviewing = state_.reviewing();
+    const std::string toggle_label =
+        core::tr(reviewing ? "gui.edit" : (state_.previewable_type() ? "gui.preview" : "gui.review"));
+    const float toggle_width = toggles ? button_width(toggle_label) + spacing : 0.0F;
     const float trailing = toggle_width + (combo_width > 0.0F ? combo_width + spacing : 0.0F);
     // Gizli karakter uyarısı yoldan önce yer alır: yol kısalır, uyarı kısalmaz.
     const std::string hidden_badge = state_.hidden_controls_label();
@@ -306,11 +309,13 @@ void View::draw_header_row() {
     ImGui::SameLine();
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
                          std::max(0.0F, ImGui::GetContentRegionAvail().x - (trailing - spacing)));
-    if (previewable) {
-        // Önizlenemeyen md (metin değil) düğmeyi kapalı gösterir, nedeni ipucunda.
-        const bool can = state_.can_preview();
-        const std::string tip = !can ? core::tr("gui.preview_unavailable")
-                                     : core::tr(state_.showing_preview() ? "gui.edit_tip" : "gui.preview_tip");
+    if (toggles) {
+        // Salt-okunur not (ikili, geçersiz UTF-8, sınır üstü) düzenlenemez: düğme kapalı, nedeni ipucunda.
+        const bool can = !reviewing || state_.can_edit();
+        const std::string tip = !can         ? core::tr("gui.edit_unavailable")
+                                : reviewing  ? core::tr("gui.edit_tip")
+                                : state_.previewable_type() ? core::tr("gui.preview_tip")
+                                                            : core::tr("gui.review_tip");
         ImGui::BeginDisabled(!can);
         ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);  // kısayolu var; Tab sırası uzamasın
         if (button("preview_toggle", toggle_label))
@@ -345,7 +350,13 @@ void View::draw_preview(float reserved_height) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::current().canvas);  // zemin Begin'de çizilir
     ImGui::BeginChild(child.c_str(), size, theme::kPaneChildFlags, ImGuiWindowFlags_HorizontalScrollbar);
     ImGui::PopStyleColor();
-    // Önizleme odaktayken TUI REVIEW'un kaydırma tuşları (CommandScope::Preview); istek bir sonraki karede.
+    // İncelemeye dönüş (Esc, düğme) ve sekme geçişi odağı önizlemeye verir: `E`/Enter hemen çalışsın.
+    if (pending_focus_ == FocusRequest::Preview || pending_focus_ == FocusRequest::Editor) {
+        ImGui::SetWindowFocus();
+        pending_focus_ = FocusRequest::None;
+    }
+    // Önizleme odaktayken TUI REVIEW'un tuşları (CommandScope::Preview: kaydırma, `E`/Enter düzenle); istek bir
+    // sonraki karede.
     const float line = ImGui::GetTextLineHeightWithSpacing();
     state_.set_preview_rows(ImGui::GetWindowHeight() / line);
     if (ImGui::IsWindowFocused())
@@ -357,12 +368,17 @@ void View::draw_preview(float reserved_height) {
         request = std::clamp(ImGui::GetScrollY() + (lines * line), 0.0F, ImGui::GetScrollMaxY()) - ImGui::GetScrollY();
         ImGui::SetScrollY(ImGui::GetScrollY() + request);
     }
+    preview_link_hovered_ = false;
     if (state_.preview_too_large())
         draw_raw_preview();
     else if (state_.preview_kind() == app::PreviewKind::Markdown)
         draw_markdown_preview(request, lines >= FLT_MAX);  // End: scroll_preview(FLT_MAX)
     else
         draw_data_preview();
+    // Metne çift tık düzenlemeye geçer (bağlantı kendi tıkını alır).
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !preview_link_hovered_ &&
+        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        queue([this] { state_.begin_edit(); });
     ImGui::EndChild();
     remember_item_center("preview");
 }
@@ -433,6 +449,7 @@ void View::draw_preview_links(const PreviewLayout& layout, ImVec2 origin, float 
         ImGui::PopID();
         const std::string target(hit.target);
         if (ImGui::IsItemHovered()) {
+            preview_link_hovered_ = true;
             ImGui::SetMouseCursor(hit.wiki ? ImGuiMouseCursor_Hand : ImGuiMouseCursor_Arrow);
             if (!hit.wiki)  // dış adres açılmaz (not güvenilmez): yalnız gösterilir
                 ImGui::SetTooltip("%s", printable(target).c_str());

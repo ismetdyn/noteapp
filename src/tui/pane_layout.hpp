@@ -18,17 +18,25 @@ struct PaneGeometry {
     int right_width = 0;
 };
 
-// Panel genişliği ve yakınlaştırma: yalnız oturum boyunca yaşar, config'e yazılmaz. Sınırlar pencere
-// genişliğine göre okunurken uygulanır: pencere küçülünce de iki panel kullanılabilir kalır.
+// Panel genişliği ve yakınlaştırma. Seçilen genişlik `tui-state.toml`a pencere oranı olarak yazılır
+// (`chosen_share`; TuiState::store_list_share), yakınlaştırma oturumluktur. Sınırlar pencere genişliğine göre
+// okunurken uygulanır: pencere küçülünce de iki panel kullanılabilir kalır.
 class PaneLayout {
 public:
     static constexpr int kMinListWidth = 16;
     static constexpr int kMinRightWidth = 24;
     static constexpr int kKeyStep = 5;
+    // tuning.tui_list_share'in defaults.toml'daki değeri (config'siz kurulan nesneler ve testler için).
+    static constexpr double kDefaultListShare = 0.33;
 
     int list_width(int window_width) const;
+    // Kullanıcı genişlik seçene dek sol panelin pencereye oranı (0..1); seçilen genişlik bunu geçer.
+    void set_share(double share) { share_ = share; }
     void resize(int delta, int window_width);
     void set_list_width(int width, int window_width);
+    // Seçilen genişliğin pencereye oranı; seçilmediyse ya da pencere bilinmiyorsa yok. Oran, sütun sayısından
+    // iyi dayanır: terminal büyüyüp küçülünce liste orantılı kalır.
+    std::optional<double> chosen_share(int window_width) const;
     void toggle_zoom() { zoomed_ = !zoomed_; }
     void set_zoomed(bool zoomed) { zoomed_ = zoomed; }
     bool zoomed() const { return zoomed_; }
@@ -44,6 +52,7 @@ public:
 
 private:
     std::optional<int> width_;  // kullanıcı seçene dek pencere oranı
+    double share_ = kDefaultListShare;
     bool zoomed_ = false;
     bool dragging_ = false;
 };

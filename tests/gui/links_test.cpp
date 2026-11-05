@@ -90,6 +90,8 @@ TEST_CASE("gui links: a saved edit and an outside change refresh the lists") {
 TEST_CASE("gui links: a note without links has no panel and a full-height editor") {
     LinksScene scene;
     scene.open();
+    scene.state->edit_selected();  // seçilen not incelemede açılır; editörün boyu ölçülür
+    settle(*scene.view);
     REQUIRE(scene.shows("links_header"));
     REQUIRE(scene.shows("links_list"));
     const float short_editor =
@@ -97,6 +99,7 @@ TEST_CASE("gui links: a note without links has no panel and a full-height editor
     CHECK(scene.view->item_rects().at("links_list").min_y >= scene.view->item_rects().at("editor").max_y);
 
     scene.state->select_row(scene.state->model().index_of(np("hiç.md")));
+    scene.state->edit_selected();
     settle(*scene.view);
     CHECK_FALSE(scene.shows("links_header"));
     const float full_editor =
@@ -108,6 +111,7 @@ TEST_CASE("gui links: Ctrl+L collapses and opens the panel, also from the editor
     LinksScene scene;
     scene.open();
     REQUIRE(scene.shows("links_list"));
+    scene.state->edit_selected();  // seçilen not incelemede açılır
     scene.state->request_focus(noteapp::gui::FocusRequest::Editor);
     settle(*scene.view);
     REQUIRE(scene.view->editor_active());

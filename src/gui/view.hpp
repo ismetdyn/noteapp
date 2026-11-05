@@ -49,6 +49,9 @@ struct MapLineBatch {
     std::vector<float> coords;
 };
 
+// "Klasörü aç" adresi: file:// + yol baytları, ayırıcı ve güvenli karakterler dışında yüzde kodlu.
+std::string file_url(const std::string& path);
+
 // İnce çizim katmanı: her karede GuiState'i çizer, kullanıcı niyetini kuyruğa alır ve kare bittikten sonra
 // iletir. Sıra önemlidir: niyet bir karar (diyalog) açabilir ve diyalog kendi karelerini üretir; ImGui karesi
 // iç içe açılamaz.
@@ -130,6 +133,7 @@ private:
 
     void draw_root();
     void draw_notes_tab();
+    void draw_notices(float status_height);  // sağ altta bildirimler (toast), durum çubuğunun üstünde
     void draw_left_pane();
     // Kayıtlı boyutu yalnız kullanıcı değiştirdiyse günceller; bu karede bölmenin olması gereken boyutu
     // döner.
@@ -174,8 +178,10 @@ private:
     void handle_map_input(const NoteMap& map, ImVec2 origin, ImVec2 size, int hovered);
     void draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered);
     // MAP-R: Shift+sürüklemenin bırakılışı ve kenara sağ tık; seçim ve kaldırma menüleri.
-    void drop_map_link(const NoteMap& map, int hovered);
+    void drop_map_link(const NoteMap& map, std::size_t from, int hovered);
     void open_map_edge_menu(const NoteMap& map, ImVec2 origin);
+    void open_map_node_menu(const NoteMap& map, std::size_t node);
+    void start_map_connect(const NoteMap& map, std::size_t from);
     void draw_map_menus();
     void zoom_map(ImVec2 origin, ImVec2 anchor, float factor);
     void draw_trash_header();
@@ -299,6 +305,17 @@ private:
     };
     std::optional<MapPair> map_choice_;     // not → not bırakıldı: ilişki mi bağlantı mı
     std::optional<MapPair> map_edge_menu_;  // sağ tıklanan kenar
+    // Sağ tıklanan düğüm ve onun kaldırılabilir kenarları (ilişki, etiket): menü açılırken kopyalanır.
+    struct MapNodeMenu {
+        std::size_t generation{};  // açıldığı çizge: değiştiyse `node` başka düğümü gösterir
+        std::size_t node{};
+        MapNode subject;
+        std::vector<MapPair> removable;
+    };
+    std::optional<MapNodeMenu> map_node_menu_;
+    // "Bağla…" ya da `C`: kaynak düğüm; sonraki tıklanan düğüm hedeftir (Shift+sürüklemenin bırakması), Esc ya da
+    // boşluğa tıklama vazgeçer.
+    std::optional<std::size_t> map_connect_from_;
     int map_zoom_keys_ = 0;                 // SDL tuş kodundan: '+' ve '-' klavye düzeninden bağımsız okunur
     bool map_animating_ = false;            // bu karede yerleşim sürdü: boşta beklemeden yeni kare
     bool close_requested_ = false;
@@ -308,6 +325,7 @@ private:
     bool search_popup_hovered_ = false;  // fare tamamlama listesinde: kutu odağı bıraksa da liste kalır
     bool picker_shown_ = false;  // seçici açılır pencereyi geçen karede çizdi: kapanışı kullanıcı yaptı mı
     bool editor_active_ = false;
+    bool preview_link_hovered_ = false;  // bu karede önizlemede bir bağlantının üstünde: çift tık düzenlemez
     bool editor_drawn_ = false;  // bu karede editör çizildi: alanları ve iletisi durum çubuğunda
     // Boşta bekleyen dil sunucusu değişikliğinin gönderileceği an (LanguageServers::Update::send_at).
     std::optional<std::chrono::steady_clock::time_point> lsp_send_at_;

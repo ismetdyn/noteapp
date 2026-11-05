@@ -114,6 +114,7 @@ struct ListPrefs {
     std::set<std::string> open_folders = {};        // ağaçta yerinde açık klasörler
     std::vector<std::string> recent_commands = {};  // palet: en yeni başta; bilinmeyen ad yok sayılır
     app::SavedTabs tabs = {};  // açık editör sekmeleri (GUI gui-state.toml ile aynı anahtarlar)
+    std::optional<double> list_share = {};  // `<` `>` ya da sürüklemeyle seçilen liste genişliği (0..1)
 };
 
 // Listedeki bir satır. Ad modunda `positions` (yol içindeki bayt ofsetleri) vurgu içindir; içerik modunda
@@ -412,6 +413,8 @@ public:
     int window_height() const { return window_height_; }
     PaneLayout& layout() { return layout_; }
     const PaneLayout& layout() const { return layout_; }
+    // Seçilen liste genişliğini tercihlere alır (değiştiyse yazılır): `<` `>` her basışta, sürükleme bitince.
+    void store_list_share();
     const PreviewFind& preview_find() const { return preview_find_; }
 
     // Seçimi satır numarasına koyar (son satıra kenetlenir): silmeden sonra komşu satırda kalmak için.

@@ -451,6 +451,9 @@ void EditorSession::apply_edit(Key key, std::string_view text) {
     case Key::CtrlV:
         paste_from_clipboard();
         break;
+    case Key::Paste:
+        open_buffer().paste(text);
+        break;
     case Key::CtrlZ:
         open_buffer().undo();
         break;

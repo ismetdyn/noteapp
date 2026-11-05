@@ -32,6 +32,7 @@ void GuiState::new_note(const std::string& first_line) {
     selected_folder_.reset();
     draft_folder_ = std::move(folder);
     new_note_ = true;
+    review_ = false;  // taslak düzenlemede açılır; ilk kayıttan sonra da düzenlemede kalır
     shown_.reset();
     reload_links();
     current_row_ = -1;
@@ -161,8 +162,10 @@ bool GuiState::save_copy() {
     }
     changed();
     const bool adopted = adopt_saved(*created);
-    if (adopted)
+    if (adopted) {
         status_ = core::tr("gui.saved_copy", {{"path", created->string()}});
+        notify(app::NoticeKind::Success, status_);
+    }
     return adopted;
 }
 
@@ -405,6 +408,11 @@ void GuiState::export_pdf() {
         return;
     }
     status_ = core::tr("gui.exported", {{"path", *output}});
+    // Göreli yolun klasörü boş olurdu ("Klasörü aç" file:/// kökünü açardı): mutlak yoldan alınır.
+    std::error_code absolute_error;
+    const std::filesystem::path written = std::filesystem::absolute(std::filesystem::path(*output), absolute_error);
+    notify(app::NoticeKind::Success, status_,
+           absolute_error ? std::nullopt : std::optional(written.parent_path().string()));
 }
 
 bool GuiState::can_export() const {

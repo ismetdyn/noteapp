@@ -155,7 +155,7 @@ TEST_CASE("Turkish names render and match through the folded search") {
     tui::TuiState state;
     state.set_notes({note("çalışma-öğrenci-notları.md", 0), note("kişisel-İstanbul.md", 1)});
     const std::vector<std::string> lines = {"çğıİöşü ÇĞIÖŞÜ"};
-    auto screen = render_screen(state, text_preview(lines), 100);
+    auto screen = render_screen(state, text_preview(lines), 120);  // liste 1/3: uzun ad sığsın
     CHECK(contains(screen, "çalışma-öğrenci-notları.md"));
     CHECK(contains(screen, "çğıİöşü ÇĞIÖŞÜ"));
 
@@ -312,7 +312,7 @@ std::string list_corner(const ftxui::Screen& screen) {
 }
 
 std::string preview_corner(const ftxui::Screen& screen, int width) {
-    return frame_at(screen, width * 2 / 5);
+    return frame_at(screen, tui::PaneLayout{}.list_width(width));
 }
 
 std::string row_text(const ftxui::Screen& screen, int y) {
@@ -515,7 +515,7 @@ TEST_CASE("the frames use the panes' own height: all rows of a small window are 
     const auto screen = render_screen(state_in(Focus::List), text_preview({"body"}), 60, 15);
     CHECK(list_corner(screen) == "focused");
     CHECK(screen.PixelAt(0, 12).character == "╰");  // altta toplamlar ve kısayol satırı
-    CHECK(contains(screen, "T trash"));
+    CHECK(contains(screen, "t trash"));
 }
 
 TEST_CASE("moving the selection updates the preview in the same frame without Enter") {
@@ -553,7 +553,7 @@ TEST_CASE("moving the selection updates the preview in the same frame without En
 TEST_CASE("key hints change with the focus") {
     const auto list = render_screen(state_in(Focus::List), text_preview({}), 120, 40);
     CHECK(contains(list, "/ filter"));
-    CHECK(contains(list, "a add"));
+    CHECK(contains(list, "n add"));
     CHECK(contains(list, "d to trash"));
     CHECK(contains(list, "F1 help"));
     const auto search = render_screen(state_in(Focus::Search), text_preview({}), 120, 40);
@@ -608,8 +608,8 @@ TEST_CASE("the shortcut bar pins F1 help right and fills whole hints left, at ev
 
 TEST_CASE("the list hint bar starts with the keys users could not find, F1 help at the right from 60") {
     const std::pair<const char*, std::array<const char*, 7>> expected[] = {
-        {"en", {": cmd", "T trash", "Space open", "o sort", "v col", "f search", "F1 help"}},
-        {"tr", {": komut", "T çöp", "Space aç", "o sırala", "v sütun", "f ara", "F1 yardım"}},
+        {"en", {": cmd", "t trash", "Space open", "o sort", "V col", "s search", "F1 help"}},
+        {"tr", {": komut", "t çöp", "Space aç", "o sırala", "V sütun", "s ara", "F1 yardım"}},
     };
     for (const auto& [language, hints] : expected) {
         core::init_i18n(language);
@@ -619,7 +619,7 @@ TEST_CASE("the list hint bar starts with the keys users could not find, F1 help 
             const std::string bar =
                 row_text(render_screen(state_in(Focus::List), text_preview({}), width, 15), 14);
             CHECK(bar.ends_with(hints.back()));
-            // 60 sütunda Türkçe altıncı ipucu (`f ara`) bir hücreyle sığmaz: sağdaki F1 yer tutar.
+            // 60 sütunda Türkçe altıncı ipucu (`s ara`) bir hücreyle sığmaz: sağdaki F1 yer tutar.
             const std::size_t whole = width == 60 && std::string_view(language) == "tr" ? 5 : 6;
             std::size_t after = 0;
             for (std::size_t i = 0; i < whole; ++i) {
@@ -644,7 +644,7 @@ TEST_CASE("a long filter does not push the priority hints or F1 off the list bar
     CHECK(bar.starts_with("> "));
     CHECK(bar.find("itmedi") != std::string::npos);  // yazdığının sonu görünür
     // Sağda F1 yer tutar: süzgeç yanında ilk dört ipucu kalır.
-    for (const char* hint : {": komut", "T çöp", "Space aç", "o sırala"}) {
+    for (const char* hint : {": komut", "t çöp", "Space aç", "o sırala"}) {
         CAPTURE(hint);
         CHECK(bar.find(hint) != std::string::npos);
     }
@@ -846,8 +846,8 @@ TEST_CASE("the search input keeps whole hints beside it at 60 columns in both la
 
 TEST_CASE("help has sections for trash, row details, sorting and filter arguments in both languages") {
     const std::pair<const char*, std::array<const char*, 4>> expected[] = {
-        {"en", {"Trash (T", "Row details", "Sort and column", "Filter arguments"}},
-        {"tr", {"Çöp kutusu (T", "Satır ayrıntısı", "Sıralama ve sütun", "Süzme argümanları"}},
+        {"en", {"Trash (t", "Row details", "Sort and column", "Filter arguments"}},
+        {"tr", {"Çöp kutusu (t", "Satır ayrıntısı", "Sıralama ve sütun", "Süzme argümanları"}},
     };
     for (const auto& [language, sections] : expected) {
         core::init_i18n(language);
@@ -1089,7 +1089,8 @@ TEST_CASE("list rows show the icon in one cell before the name, keeping the arro
     const std::string md = core::icon_text(core::file_icon("a.md"), core::IconStyle::Nerd);
     const std::string java = core::icon_text(core::file_icon("a.java"), core::IconStyle::Nerd);
     CHECK(contains(screen, " 1   " + md + "  work-meeting.md"));
-    CHECK(contains(screen, " 3   " + java + "  snippets-sort.ja"));  // dar panelde boyut sütunu adı kısaltır
+    CHECK(contains(screen, " 3   " + java + "  snippets-"));  // dar panelde boyut sütunu adı kısaltır
+    CHECK_FALSE(contains(screen, "snippets-sort.java"));
     CHECK(screen.PixelAt(marker, kFirstRowY).character == " ");  // notta ok yok
     CHECK(screen.PixelAt(marker + 2, kFirstRowY).character == md);
     CHECK(screen.PixelAt(marker + 5, kFirstRowY).character == "w");
@@ -1148,4 +1149,28 @@ TEST_CASE("the trash indicator and title carry the trash icon") {
     CHECK(row_text(render_screen(state, text_preview({}), 60, 15), 0).starts_with(icon + "  trash: 3"));
     state.set_icon_style(core::IconStyle::Off);
     CHECK(row_text(render_screen(state, text_preview({}), 60, 15), 0).starts_with("trash: 3"));
+}
+
+// NY-G: işlem bildirimi (GUI ile ortak app::NoticeQueue) iki alt satırın üstünde sağa yaslı, en yenisi; alt
+// çubuk aynı metni yinelemez, ipuçları kalır. Hata ve başarı önekle ayrılır (renk tek sinyal değil).
+TEST_CASE("render: an operation notice is a toast above the bottom bar, shown once") {
+    tui::StatusLine status{"sync off", ""};
+    status.notify(app::NoticeKind::Success, "PDF yazıldı: a.pdf");
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth), ftxui::Dimension::Fixed(kHeight));
+    ftxui::Render(screen, tui::render(sample_state(), text_preview({}), status, {kWidth, kHeight}));
+    const auto at = find_text(screen, core::tr("notice.success") + "  PDF yazıldı: a.pdf");
+    REQUIRE(at.has_value());
+    CHECK(at->second == kHeight - 3);
+    for (int y = kHeight - 2; y < kHeight; ++y) {  // alt satırlarda yinelenmez
+        std::string row;
+        for (int x = 0; x < kWidth; ++x)
+            row += screen.PixelAt(x, y).character;
+        CHECK(row.find("PDF yazıldı") == std::string::npos);
+    }
+
+    status.notify(app::NoticeKind::Error, "senkron başarısız");
+    auto again = ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth), ftxui::Dimension::Fixed(kHeight));
+    ftxui::Render(again, tui::render(sample_state(), text_preview({}), status, {kWidth, kHeight}));
+    CHECK(contains(again, core::tr("notice.error") + "  senkron başarısız"));
+    CHECK(contains(again, core::tr("notice.more", {{"count", "1"}})));
 }

@@ -7,6 +7,7 @@
 #include "tui/view.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <ftxui/dom/node.hpp>
@@ -146,6 +147,20 @@ TEST_CASE("map: the neighbourhood, the depth keys, whole graph and tags follow t
     CHECK(f.state.map_model().options().show_tags);
 }
 
+// NY-T: Listede `t` çöptür; haritada etiket tuşu onu gölgeler, çöpe `gt` ile gidilir.
+TEST_CASE("map: t toggles the tags instead of the trash; gt still opens the trash") {
+    MapFixture f;
+    CHECK(f.state.handle(Key::Char, "t") == tui::Intent::None);
+    CHECK(f.state.map_model().options().show_tags);
+    CHECK_FALSE(f.state.trash_view());
+    f.state.handle(Key::Char, "t");
+    CHECK_FALSE(f.state.map_model().options().show_tags);
+    f.state.handle(Key::Char, "g");
+    CHECK(f.state.handle(Key::Char, "t") == tui::Intent::ToggleTrash);
+    run(f.state, "view.tree");
+    CHECK(f.state.handle(Key::Char, "t") == tui::Intent::ToggleTrash);  // haritasız Listede çöp
+}
+
 // NX-B (L1): derinlik tuşlarının üstü limits.app.map_depth (varsayılan 6, GUI adımlayıcısıyla aynı model
 // sınırı); 0'da tek haneli her derinlik. Sınır küçülürse geçerli derinlik ona iner.
 TEST_CASE("map: limits.app.map_depth bounds the depth keys and 0 lets every digit through") {
@@ -234,6 +249,44 @@ TEST_CASE("map: Tab cycles the notes, Enter opens the selected one and its label
     CHECK(f.state.handle(Key::Enter) == tui::Intent::OpenMapNode);
     const int list_width = f.state.layout().geometry(kWidth, false).list_width;
     CHECK(find(f.draw(), "[" + core::last_component(first->string()) + "]", list_width));
+}
+
+// NY-T: GUI'de düğüm seçilince diğerleri titriyordu; TUI'de seçim (Tab, düğüme tıklayıp bırakma) yalnız vurgudur:
+// merkez, yerleşim ve kamera değişmez, yeni yerleşim adımı (animasyon karesi) istenmez.
+TEST_CASE("map: selecting a node moves no node, keeps the camera and starts no layout frames") {
+    MapFixture f;
+    f.settle();
+    REQUIRE_FALSE(f.state.step_map());
+    const std::vector<app::LayoutPoint> positions = f.state.map_model().layout().positions();
+    const tui::MapCamera camera = f.state.map_camera();
+    const auto unchanged = [&] {
+        const std::vector<app::LayoutPoint>& now = f.state.map_model().layout().positions();
+        REQUIRE(now.size() == positions.size());
+        for (std::size_t i = 0; i < now.size(); ++i) {
+            CHECK(now[i].x == positions[i].x);
+            CHECK(now[i].y == positions[i].y);
+        }
+        CHECK(f.state.map_camera().x == camera.x);
+        CHECK(f.state.map_camera().y == camera.y);
+        CHECK(f.state.map_camera().zoom == camera.zoom);
+        CHECK_FALSE(f.state.step_map());
+    };
+    for (int i = 0; i < 4; ++i) {
+        f.state.handle(Key::Tab);
+        f.update();  // her karede olduğu gibi: merkez aynı not
+        unchanged();
+    }
+    // Düğüme basıp aynı yerde bırakmak vazgeçmektir: yine hiçbir şey kımıldamaz.
+    const auto& nodes = f.state.map_model().map().nodes;
+    const auto b = std::ranges::find_if(nodes, [](const app::MapNode& node) { return node.key == "b.md"; });
+    REQUIRE(b != nodes.end());
+    const app::LayoutPoint at = positions[static_cast<std::size_t>(b - nodes.begin())];
+    const int column = static_cast<int>(std::lround(camera.x + at.x * camera.zoom)) / tui::kMapDotsPerCellX;
+    const int row = static_cast<int>(std::lround(camera.y + at.y * camera.zoom)) / tui::kMapDotsPerCellY;
+    REQUIRE(f.state.begin_map_drag(column, row));
+    f.state.end_map_drag(column, row);
+    f.update();
+    unchanged();
 }
 
 TEST_CASE("map: a search lights the matching notes and dims the rest") {

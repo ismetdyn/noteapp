@@ -52,7 +52,7 @@ inline constexpr CommandSpec kCommandRegistry[] = {
     {"trash.empty", "command.trash_empty", kInTrash, CommandNeeds::Note},
     {"copy", "command.copy", kInList | kInPreview, CommandNeeds::Row},
     {"link", "command.link", kInList | kInPreview, CommandNeeds::Note},
-    {"export.pdf", "command.export_pdf", kInPreview | kInEditor, CommandNeeds::Note},
+    {"export.pdf", "command.export_pdf", kInList | kInPreview | kInEditor, CommandNeeds::Note},
     // Çoklu seçim ve yank
     {"mark", "command.mark", kInList | kInTrash},
     {"mark.clear", "command.mark_clear", kInList | kInTrash},

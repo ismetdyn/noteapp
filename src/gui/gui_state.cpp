@@ -133,10 +133,16 @@ GuiState::GuiState(core::Config config)
       }),
       settings_(config_, deciders,
                 SettingsHost{.flush = [this] { return flush(); },
-                             .applied = [this](const core::Config& before,
-                                               const core::Config& after) { apply_settings(before, after); },
+                             .applied =
+                                 [this](const core::Config& before, const core::Config& after) {
+                                     apply_settings(before, after);
+                                     notify(app::NoticeKind::Success, core::tr("tui.settings_saved"));
+                                 },
                              .synced = [this] { rescan(); },
-                             .post = [this](std::function<void()> work) { post(std::move(work)); }}) {
+                             .post = [this](std::function<void()> work) { post(std::move(work)); },
+                             .notify = [this](bool ok, std::string text) {
+                                 notify(ok ? app::NoticeKind::Success : app::NoticeKind::Error, std::move(text));
+                             }}) {
     // cppcheck-suppress useInitializationList ; tek seferlik kurulum; üye sırasına bağlanmasın
     sync_note_exe = sync::note_executable_beside_self();
     word_tables_.set_store(store_);
@@ -376,6 +382,8 @@ bool GuiState::run_posted() {
 
 bool GuiState::tick(std::chrono::steady_clock::time_point now) {
     bool worked = run_posted();
+    if (notices_.expire(now))
+        worked = true;
     if (autosave_.due(now)) {
         autosave_.cancel();
         if (dirty_ && shown_ && !new_note_ && doc_.autosaves())
@@ -556,7 +564,12 @@ void GuiState::search_enter() {
     if (current_path() || new_note_) {
         if (current_path() && !query_error())  // TUI: bulunan, bozuk olmayan arama geçmişe girer
             remember_query();
-        request_focus(FocusRequest::Editor);
+        // Bulunan not TUI gibi incelemede kalır, odak listeye (genel aramada önizlemeye); düzenleme `E` ile.
+        // Taslak düzenlemededir: odak editöre.
+        if (new_note_)
+            request_focus(FocusRequest::Editor);
+        else
+            request_focus(search_mode_ == app::SearchMode::Global ? FocusRequest::Preview : FocusRequest::List);
         return;
     }
     if (search_mode_ == app::SearchMode::Global)  // TUI: genel aramada eşleşmesiz Enter not açmaz
@@ -831,11 +844,26 @@ bool GuiState::can_preview() const {
 }
 
 void GuiState::toggle_preview() {
-    if (!can_preview())
+    if (reviewing())
+        begin_edit();
+    else
+        end_edit();
+}
+
+void GuiState::begin_edit() {
+    if (!can_edit())
         return;
-    preview_ = !preview_;
-    if (!preview_)
-        request_focus(FocusRequest::Editor);
+    review_ = false;
+    lock_for_review();
+    request_focus(FocusRequest::Editor);
+}
+
+void GuiState::end_edit() {
+    if (!shown_ || new_note_ || reviewing() || !flush_shown())
+        return;
+    review_ = true;
+    lock_for_review();
+    request_focus(FocusRequest::Preview);
 }
 
 bool GuiState::resolves_link(std::string_view target) const {
@@ -883,6 +911,8 @@ void GuiState::show_note(core::NoteInfo info) {  // cppcheck-suppress passedByVa
         }
     }
     claim_active_tab();
+    if (!shown_ || shown_->path != info.path)
+        review_ = true;  // başka not: TUI gibi incelemede açılır, düzenleme açık eylemle
     // Aynı notun diskten yenilenmesi imleci aynı satır/sütunda tutar (TUI EditorBuffer::reload ile aynı).
     const std::optional<tui::TextPosition> kept =
         shown_ && shown_->path == info.path ? std::optional(editor_.buffer().position()) : std::nullopt;
@@ -911,6 +941,7 @@ void GuiState::set_editor(std::string content, bool editable) {
     buffer_generation_ = ++editor_generations_;
     editable_ = editable;
     dirty_ = false;
+    lock_for_review();
 }
 
 // Salt-okunur kuralı TUI ile ortaktır (app::classify): ikili, NUL, geçersiz UTF-8 ve max_note_bytes üstü.
@@ -941,10 +972,25 @@ void GuiState::restore_selection() {
 
 void GuiState::report(const core::Error& error) {
     error_status_ = status_ = core::tr("gui.save_failed", {{"detail", core::format_error(error)}});
+    notify(app::NoticeKind::Error, status_);
 }
 
 void GuiState::fail(const core::Error& error) {
     error_status_ = status_ = core::tr("gui.op_failed", {{"detail", core::format_error(error)}});
+    notify(app::NoticeKind::Error, status_);
+}
+
+void GuiState::notify(app::NoticeKind kind, std::string text, std::optional<std::string> folder) {
+    notices_.post(kind, std::move(text), std::chrono::steady_clock::now(), std::move(folder));
+}
+
+void GuiState::open_notice_folder(std::uint64_t id) {
+    const auto& items = notices_.items();
+    const auto found = std::ranges::find(items, id, &app::Notice::id);
+    if (found == items.end() || !found->folder)
+        return;
+    if (!deciders.open_folder(*found->folder))
+        notify(app::NoticeKind::Error, core::tr("notice.open_folder_failed", {{"path", *found->folder}}));
 }
 
 std::string GuiState::header() const {
@@ -1032,6 +1078,7 @@ void GuiState::editor_changed(std::uint64_t edits_before) {
 }
 
 void GuiState::edit_text(std::string_view text) {
+    begin_edit();  // programatik yazım düzenlemedir
     const std::uint64_t edits = editor_.buffer().edit_count();
     editor_.replace_all(text);
     editor_changed(edits);
@@ -1042,6 +1089,16 @@ void GuiState::editor_key(tui::Key key, std::string_view text) {
     const std::uint64_t edits = editor_.buffer().edit_count();
     const std::shared_ptr<const tui::WordTable> words = word_table();
     if (editor_.mode() == NoteEditor::Mode::Editing) {
+        // TUI REVIEW: `e` ve Enter düzenlemeye geçer. Düzenlemede seçim yokken Esc incelemeye döner (seçimi
+        // kaldıran Esc önce gelir; hiçbir şey atılmaz, bekleyen düzenleme kayıt kuralıyla yazılır).
+        if (reviewing() && (key == tui::Key::Enter || (key == tui::Key::Char && text == "e"))) {
+            begin_edit();
+            return;
+        }
+        if (key == tui::Key::Escape && shown_ && !new_note_ && !reviewing() && !editor_.buffer().selection()) {
+            end_edit();
+            return;
+        }
         switch (key) {
         case tui::Key::CtrlC:
             copy_from_editor(editor_.copy());

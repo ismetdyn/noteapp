@@ -46,13 +46,14 @@ inline int shorten_wait(int timeout_ms, std::optional<std::chrono::steady_clock:
     const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - now).count();
     return static_cast<int>(std::clamp<decltype(left)>(left, 0, timeout_ms));
 }
-// Tipografi, ölçek 1 pikseli (.engineering/design/ui-redesign.md §3.2): gövde 15; bilgi yoğun metin (durum
-// çubuğu, satırdaki boyut ve tarih, ipucu) bir kademe küçük; önizlemenin gövdesi okuma için bir kademe büyük.
-// İkincil boy PushFont(nullptr, kSmallFontPixels) ile alınır: aynı font, ek atlas yok.
-inline constexpr float kFontPixels = 15.0F;
-inline constexpr float kSmallFontPixels = 13.0F;
-inline constexpr float kPreviewFontPixels = 16.0F;
-inline constexpr float kTitleFontPixels = 17.0F;  // sayfa başlığı (Ayarlar)
+// Tipografi, ölçek 1 pikseli (.engineering/design/ui-redesign.md §3.2; NY-G'de bir kademe büyüdü, kullanıcı
+// isteği): gövde 16; bilgi yoğun metin (durum çubuğu, satırdaki boyut ve tarih, ipucu) bir kademe küçük;
+// önizlemenin gövdesi okuma için bir kademe büyük. İkincil boy PushFont(nullptr, kSmallFontPixels) ile alınır:
+// aynı font, ek atlas yok.
+inline constexpr float kFontPixels = 16.0F;
+inline constexpr float kSmallFontPixels = 14.0F;
+inline constexpr float kPreviewFontPixels = 17.0F;
+inline constexpr float kTitleFontPixels = 18.0F;  // sayfa başlığı (Ayarlar)
 // ImGui bir etkileşimi birkaç karede tamamlar (fare üzerinde, odak, açılır kutu).
 inline constexpr int kFramesAfterEvent = 3;
 inline constexpr float kFormWidth = 420.0F;

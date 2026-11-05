@@ -350,14 +350,15 @@ TEST_CASE("tabs: with the default limit more tabs open than the old fixed cap") 
 TEST_CASE("tabs: each tab keeps its own preview toggle; links, info and the map follow the active tab") {
     TabsScene scene;
     scene.open("a.md");
-    scene.state->toggle_preview();
-    REQUIRE(scene.state->showing_preview());
+    REQUIRE(scene.state->showing_preview());  // açılan not incelemede
+    scene.state->toggle_preview();            // a.md düzenlemede
+    REQUIRE_FALSE(scene.state->showing_preview());
     scene.state->open_in_new_tab(np("c.md"));
-    CHECK_FALSE(scene.state->showing_preview());
+    CHECK(scene.state->showing_preview());
     CHECK(scene.state->links().outgoing.empty());
     CHECK(scene.state->note_map().nodes.size() == 1);
     REQUIRE(scene.state->activate_tab(tab_id(*scene.state, "a.md")));
-    CHECK(scene.state->showing_preview());
+    CHECK_FALSE(scene.state->showing_preview());  // a.md'nin sekmesi düzenlemede kaldı
     REQUIRE(scene.state->links().outgoing.size() == 1);
     CHECK(scene.state->links().outgoing[0] == np("b.md"));
     CHECK(scene.state->note_map().nodes.size() == 2);
@@ -400,6 +401,7 @@ TEST_CASE("tabs: returning to a tab puts the editor cursor back where it was") {
 TEST_CASE("tabs: Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab and Ctrl+PageUp/PageDown") {
     TabsScene scene;
     auto view = make_view(*scene.state);
+    scene.state->edit_selected();  // seçilen not incelemede açılır
     scene.state->request_focus(noteapp::gui::FocusRequest::Editor);
     settle(*view);
     REQUIRE(view->editor_active());

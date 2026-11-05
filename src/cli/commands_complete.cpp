@@ -104,10 +104,29 @@ std::string join(const std::vector<std::string>& parts, std::string_view separat
     return out;
 }
 
+// Komut adları ve eş adlar (`cat`).
 std::vector<std::string> all_command_names() {
     std::vector<std::string> names;
     for (const CommandSpec& command : kCommands)
         names.emplace_back(command.name);
+    for (const CommandSpec& command : kCommands)
+        if (!command.alias.empty())
+            names.emplace_back(command.alias);
+    return names;
+}
+
+// Komutu ilk sözcükte seçen bayraklar (`-l`, `--ls`); bayraksız komutta boş.
+std::vector<std::string> command_flags(const CommandSpec& command) {
+    if (command.flag.empty())
+        return {};
+    return {std::string(command.flag), long_flag(command)};
+}
+
+// Betiklerin komut adına çevirdiği öbür ilk sözcükler: bayraklar ve eş ad.
+std::vector<std::string> other_names(const CommandSpec& command) {
+    std::vector<std::string> names = command_flags(command);
+    if (!command.alias.empty())
+        names.emplace_back(command.alias);
     return names;
 }
 
@@ -124,6 +143,44 @@ std::vector<std::string> option_names(const OptionSpec& option) {
     if (!option.alias.empty())
         names.emplace_back(option.alias);
     return names;
+}
+
+// ---- fish: ilk sözcük (komut bayrakları ve eş adlar) ----
+
+std::string fish_option(std::string_view name) {
+    if (name.starts_with("--"))
+        return "-l " + std::string(name.substr(2));
+    return (name.size() == 2 ? "-s " : "-o ") + std::string(name.substr(1));
+}
+
+// `__note_command`: ilk sözcüğün bayrağı ya da eş adı (`-l`, `--ls`, `cat`) aynı sıradaki komut adına çevrilir.
+std::string fish_command_function() {
+    std::vector<std::string> others;
+    std::vector<std::string> targets;
+    for (const CommandSpec& command : kCommands)
+        for (const std::string& name : other_names(command)) {
+            others.push_back(fish_quote(name));
+            targets.emplace_back(command.name);
+        }
+    const std::string list = join(others, " ");
+    return "function __note_command\n    set -l names " + join(targets, " ") + "\n    if contains -- \"$argv[1]\" " +
+           list + "\n        echo $names[(contains -i -- \"$argv[1]\" " + list +
+           ")]\n    else\n        echo \"$argv[1]\"\n    end\nend\n";
+}
+
+// İlk sözcükte önerilenler: komut adı, eş adı ve bayrakları, komutun açıklamasıyla.
+std::string fish_command_entries() {
+    std::string out;
+    for (const CommandSpec& command : kCommands) {
+        const std::string description = " -d " + fish_quote(describe(command.description)) + "\n";
+        out += "complete -c note -n __note_needs_command -a " + fish_quote(command.name) + description;
+        if (!command.alias.empty())
+            out += "complete -c note -n __note_needs_command -a " + fish_quote(command.alias) + description;
+        if (!command.flag.empty())
+            out += "complete -c note -n __note_needs_command " + fish_option(command.flag) + " " +
+                   fish_option(long_flag(command)) + description;
+    }
+    return out;
 }
 
 // ---- zsh ----
@@ -146,6 +203,45 @@ std::string zsh_patterns(const std::vector<std::string>& names) {
     return join(quoted, "|");
 }
 
+// İlk sözcüğü (`-l`, `--ls`, `cat`) komut adına çeviren `case $cmd in ... esac`; `pattern` kabuğun desen
+// biçimidir (zsh `('-l'|'--ls')`, bash `-l|--ls)`).
+template <class Pattern>
+std::string first_word_cases(Pattern pattern) {
+    std::string out = "  case $cmd in";
+    for (const CommandSpec& command : kCommands)
+        if (const std::vector<std::string> names = other_names(command); !names.empty())
+            out += "\n    " + pattern(names) + " cmd=" + std::string(command.name) + " ;;";
+    return out + "\n  esac";
+}
+
+// `__note_commands` (komut adları ve eş adlar) ve `__note_command_flags` (`-l`, `--ls`...), açıklamalı.
+std::string zsh_command_functions() {
+    std::string out = "__note_commands() {\n  local -a list\n  list=(";
+    for (const CommandSpec& command : kCommands)
+        out += "\n    " + zsh_item(command.name, command.description);
+    for (const CommandSpec& command : kCommands)
+        if (!command.alias.empty())
+            out += "\n    " + zsh_item(command.alias, command.description);
+    out += ")\n  _describe -t commands command list\n}\n\n__note_command_flags() {\n  local -a list\n  list=(";
+    for (const CommandSpec& command : kCommands)
+        for (const std::string& flag : command_flags(command))
+            out += "\n    " + zsh_item(flag, command.description);
+    return out + ")\n  _describe -o option list\n}\n";
+}
+
+// `_note`un ilk sözcük bölümü: çeviri, ilk sözcükte komutlar ya da (`-` ile) komut bayrakları.
+std::string zsh_first_word() {
+    return first_word_cases([](const std::vector<std::string>& names) { return "(" + zsh_patterns(names) + ")"; }) +
+           R"SH(
+  if (( CURRENT == 2 )) && [[ $PREFIX != -* ]]; then
+    __note_commands
+    return
+  fi
+  if (( CURRENT == 2 )); then
+    __note_command_flags
+  fi)SH";
+}
+
 std::string zsh_script() {
     std::string out = R"SH(#compdef note
 # zsh completion for note. Generated by `note completion zsh`; regenerate after upgrading note.
@@ -163,15 +259,8 @@ __note_values() {
   return ret
 }
 
-__note_commands() {
-  local -a list
-  list=()SH";
-    for (const CommandSpec& command : kCommands)
-        out += "\n    " + zsh_item(command.name, command.description);
-    out += R"SH()
-  _describe -t commands command list
-}
-
+)SH" + zsh_command_functions() +
+                      R"SH(
 __note_value() {
   case $1 in
     (file) _files ;;
@@ -185,10 +274,8 @@ __note_value() {
 _note() {
   local cmd=${words[2]} prev=${words[CURRENT-1]} ctx=
   local -a list
-  if (( CURRENT == 2 )) && [[ $PREFIX != -* ]]; then
-    __note_commands
-    return
-  fi
+)SH" + zsh_first_word() +
+           R"SH(
   if (( CURRENT > 2 )); then
     case $cmd in
       ()SH" + zsh_patterns(command_names(false)) +
@@ -251,6 +338,22 @@ std::string bash_words(const std::vector<std::string>& words) {
     return "__note_words " + join(quoted, " ");
 }
 
+// `_note`un ilk sözcük bölümü: çeviri, ilk sözcükte komutlar ya da (`-` ile) komut bayrakları.
+std::string bash_first_word() {
+    std::vector<std::string> flags;
+    for (const CommandSpec& command : kCommands)
+        std::ranges::move(command_flags(command), std::back_inserter(flags));
+    return first_word_cases([](const std::vector<std::string>& names) { return join(names, "|") + ")"; }) +
+           R"SH(
+  if (( i == 1 )) && [[ $cur != -* ]]; then
+    __note_value command
+    return 0
+  fi
+  if (( i == 1 )); then
+    )SH" + bash_words(flags) +
+           "\n  fi";
+}
+
 std::string bash_script() {
     std::string out = R"SH(# bash completion for note. Generated by `note completion bash`; regenerate after upgrading note.
 
@@ -292,10 +395,8 @@ _note() {
   cur=${cur//\\/}
   cur=${cur#[\"\']}
   local prev=${COMP_WORDS[i-1]} cmd=${COMP_WORDS[1]} ctx=
-  if (( i == 1 )) && [[ $cur != -* ]]; then
-    __note_value command
-    return 0
-  fi
+)SH" + bash_first_word() +
+                      R"SH(
   if (( i > 1 )); then
     case $cmd in
       )SH" + join(command_names(false), "|") +
@@ -352,12 +453,6 @@ complete -F _note note
 
 // ---- fish ----
 
-std::string fish_option(std::string_view name) {
-    if (name.starts_with("--"))
-        return "-l " + std::string(name.substr(2));
-    return (name.size() == 2 ? "-s " : "-o ") + std::string(name.substr(1));
-}
-
 // Seçeneğin ya da konumlu argümanın fish bayrakları.
 std::string fish_value(ValueKind kind, bool option) {
     switch (kind) {
@@ -390,10 +485,12 @@ function __note_tokens
     or commandline -opc
 end
 
+)SH" + fish_command_function() +
+                      R"SH(
 function __note_in_add
     set -l tokens (__note_tokens)
     test (count $tokens) -eq 1; and return 0
-    not contains -- $tokens[2] )SH" + join(all_command_names(), " ") +
+    not contains -- (__note_command "$tokens[2]") )SH" + join(all_command_names(), " ") +
                       R"SH(
 end
 
@@ -409,7 +506,7 @@ end
 function __note_in
     set -l tokens (__note_tokens)
     test (count $tokens) -gt (count $argv); or return 1
-    test "$tokens[2]" = "$argv[1]"; or return 1
+    test (__note_command "$tokens[2]") = "$argv[1]"; or return 1
     test (count $argv) -eq 1; or test "$tokens[3]" = "$argv[2]"
 end
 
@@ -418,10 +515,7 @@ function __note_values
 end
 
 complete -c note -f
-)SH";
-    for (const CommandSpec& command : kCommands)
-        out += "complete -c note -n __note_needs_command -a " + fish_quote(command.name) + " -d " +
-               fish_quote(describe(command.description)) + "\n";
+)SH" + fish_command_entries();
     for (const CommandSpec& command : kCommands)
         for (const VerbSpec& verb : command.verbs)
             out += "complete -c note -n " + fish_quote("__note_needs_verb " + std::string(command.name)) + " -a " +

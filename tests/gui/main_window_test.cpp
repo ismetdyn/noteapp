@@ -121,7 +121,8 @@ TEST_CASE_FIXTURE(WindowFixture, "Up/Down in the search box move the list select
     CHECK(current(*state) == "gamma.md");
 }
 
-TEST_CASE_FIXTURE(WindowFixture, "Enter in the search box focuses the editor") {
+// NY-G inceleme: arama kutusunda Enter bulunan notu TUI gibi incelemede bırakır, odak listeye; düzenleme `E`.
+TEST_CASE_FIXTURE(WindowFixture, "Enter in the search box keeps the found note in review and focuses the list") {
     add_note("alpha.md", "alpha body");
     auto state = make_state();
     auto view = make_view(*state);
@@ -130,10 +131,30 @@ TEST_CASE_FIXTURE(WindowFixture, "Enter in the search box focuses the editor") {
     settle(*view);
     CHECK(view->search_active());
     press(*view, ImGuiKey_Enter);
-    CHECK(view->editor_active());
+    CHECK(state->reviewing());
+    CHECK_FALSE(view->editor_active());
+    CHECK_FALSE(view->search_active());
+    type_text(*view, "x");
+    CHECK(state->buffer() == "alpha body");
+    press(*view, ImGuiKey_E);  // listede düzenle
+    REQUIRE(view->editor_active());
     // Odak metni seçmemeli: yazılan harf notu ezerse veri kaybı olurdu.
     type_text(*view, "x");
     CHECK(state->buffer() == "xalpha body");
+}
+
+TEST_CASE_FIXTURE(WindowFixture, "E typed in the search box is text, it does not start editing") {
+    add_note("egg.md", "egg body");
+    auto state = make_state();
+    auto view = make_view(*state);
+    state->focus_search();
+    settle(*view);
+    type_text(*view, "e");
+    settle(*view);
+    CHECK(state->query() == "e");
+    CHECK(state->reviewing());
+    CHECK_FALSE(view->editor_active());
+    CHECK(state->buffer() == "egg body");
 }
 
 TEST_CASE_FIXTURE(WindowFixture, "focus_search selects the existing query; settings tab switches") {
@@ -351,6 +372,7 @@ TEST_CASE_FIXTURE(WindowFixture, "typing Turkish text in the editor edits the bu
     add_note("alpha.md", "a");
     auto state = make_state();
     auto view = make_view(*state);
+    state->edit_selected();  // seçilen not incelemede açılır
     state->request_focus(FocusRequest::Editor);
     settle(*view);
     REQUIRE(view->editor_active());
@@ -369,19 +391,22 @@ TEST_CASE_FIXTURE(WindowFixture, "Escape in the editor keeps typed text") {
     add_note("alpha.md", "a");
     auto state = make_state();
     auto view = make_view(*state);
+    state->edit_selected();  // seçilen not incelemede açılır
     state->request_focus(FocusRequest::Editor);
     settle(*view);
 
     type_text(*view, "typed");
     press(*view, ImGuiKey_Escape);
     CHECK(state->buffer() == "typeda");
-    CHECK(view->editor_active());
+    CHECK(read_note("alpha.md") == "typeda");  // NY-G: Esc kaydedip incelemeye döner, metin atılmaz
+    CHECK(state->reviewing());
 }
 
 TEST_CASE_FIXTURE(WindowFixture, "a read-only note ignores typing") {
     add_note("latin.txt", "caf\xe9");
     auto state = make_state();
     auto view = make_view(*state);
+    state->edit_selected();  // seçilen not incelemede açılır
     state->request_focus(FocusRequest::Editor);
     settle(*view);
 
@@ -396,6 +421,7 @@ TEST_CASE_FIXTURE(WindowFixture, "a clean note reloaded from disk stays editable
     add_note("alpha.md", "old", 10);
     auto state = make_state();
     auto view = make_view(*state);
+    state->edit_selected();  // seçilen not incelemede açılır
     state->request_focus(FocusRequest::Editor);
     settle(*view);
     REQUIRE(view->editor_active());
@@ -427,7 +453,7 @@ TEST_CASE_FIXTURE(WindowFixture, "the shortcut table drives the same actions as 
     settle(*view);
     CHECK(view->search_active());
     press(*view, ImGuiKey_Enter);
-    REQUIRE(view->editor_active());
+    REQUIRE(state->reviewing());  // NY-G: bulunan not incelemede
     settle(*view);
     press(*view, ImGuiMod_Ctrl | ImGuiKey_P);
     settle(*view);
@@ -465,6 +491,8 @@ TEST_CASE_FIXTURE(WindowFixture, "Ctrl+M asks only for the folder, Del trashes, 
 
     press(*view, ImGuiMod_Ctrl | ImGuiKey_M);
     CHECK(moves == 1);
+
+    state->edit_selected();  // seçilen not incelemede açılır
 
     state->request_focus(FocusRequest::Editor);  // Del editördeyken karakter siler, not silmez
     settle(*view);
@@ -632,6 +660,7 @@ TEST_CASE_FIXTURE(WindowFixture, "an idle focused editor draws no frames") {
     add_note("alpha.md", "a");
     auto state = make_state();
     auto view = make_view(*state);
+    state->edit_selected();  // seçilen not incelemede açılır
     state->request_focus(FocusRequest::Editor);
     settle(*view);
     REQUIRE(view->editor_active());
@@ -692,7 +721,10 @@ TEST_CASE_FIXTURE(WindowFixture, "an open dialog draws no frames while nothing h
     auto state = make_state();
     auto view = make_view(*state);
     view->install_deciders();
-    const std::size_t quick = frames_in_idle_dialog(*state, *view, std::chrono::milliseconds(100));
+    // İlk ölçüm açılış karelerinden ve karartma uyanmasından (kModalDimWake) sonra biter: yüklü makinede açılış
+    // kareleri 100 ms'yi aşıp Esc'i yutuyordu (quick=3, slow=5). Eski hata (500 ms'de bir kare) 600'e karşı
+    // 2500 ms'de de ≥ 3 fazla kare verir: sınama gücü aynı.
+    const std::size_t quick = frames_in_idle_dialog(*state, *view, std::chrono::milliseconds(600));
     const std::size_t slow = frames_in_idle_dialog(*state, *view, std::chrono::milliseconds(2500));
     MESSAGE("dialog frames: quick=", quick, " slow=", slow);
     CHECK(quick > 0);
@@ -736,6 +768,7 @@ TEST_CASE_FIXTURE(WindowFixture, "the search box caret blinks in the trash view 
     add_note("alpha.md", "a");
     auto state = make_state();
     auto view = make_view(*state);
+    state->edit_selected();  // seçilen not incelemede açılır
     state->request_focus(FocusRequest::Editor);
     settle(*view);
     REQUIRE(view->editor_active());

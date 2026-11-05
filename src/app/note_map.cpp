@@ -8,7 +8,9 @@
 #include <numeric>
 #include <set>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
+#include <utility>
 
 namespace noteapp::app {
 
@@ -59,6 +61,23 @@ std::vector<std::size_t> neighbourhood(std::size_t count, const std::vector<MapE
         }
     }
     return order;
+}
+
+// Sıradan bağımsız çizge imzası: (tür, anahtar) düğümler ve uçları anahtarla kenarlar, sıralı.
+using GraphSignature = std::pair<std::vector<std::pair<MapNodeKind, std::string_view>>,
+                                 std::vector<std::tuple<std::string_view, std::string_view, MapEdgeKind>>>;
+
+GraphSignature signature(const NoteMap& map) {
+    GraphSignature out;
+    out.first.reserve(map.nodes.size());
+    for (const MapNode& node : map.nodes)
+        out.first.emplace_back(node.kind, node.key);
+    out.second.reserve(map.edges.size());
+    for (const MapEdge& edge : map.edges)
+        out.second.emplace_back(map.nodes[edge.from].key, map.nodes[edge.to].key, edge.kind);
+    std::ranges::sort(out.first);
+    std::ranges::sort(out.second);
+    return out;
 }
 
 }  // namespace
@@ -158,7 +177,13 @@ void MapModel::update(const EdgeReader& read, std::span<const core::NoteMeta> no
     if (!stale_)
         return;
     stale_ = false;
-    map_ = build_note_map(notes, edges_, center_, options_, node_limit_.cap());
+    NoteMap built = build_note_map(notes, edges_, center_, options_, node_limit_.cap());
+    // Merkez değişti ama çevre aynı not ve kenar kümesi: yalnız BFS sırası farklıdır. Yeni çizge sayılsaydı
+    // yerleşim ılınır, oturmuş düğümler kare kare sıçrar ve kamera yeniden sığardı (seçimde titreme). Eski
+    // sıra ve konumlar kalır.
+    if (built.total == map_.total && signature(built) == signature(map_))
+        return;
+    map_ = std::move(built);
     std::vector<std::string> keys;
     keys.reserve(map_.nodes.size());
     for (const MapNode& node : map_.nodes)  // önek: "#x.md" adlı not, x.md etiketiyle karışmasın

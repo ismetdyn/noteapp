@@ -60,6 +60,9 @@ enum class Key {
     AltP,
     CtrlPageDown,
     CtrlPageUp,
+    // Terminalden yapıştırılan metin (bracketed paste) tek olaydır; metni (satır sonları LF) handle()'a ayrıca
+    // verilir. Tuş tuş gelseydi CRLF iki Enter, Tab öneri kabulü, harfler Listede kısayol olurdu.
+    Paste,
 };
 
 }  // namespace noteapp::tui

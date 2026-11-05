@@ -19,15 +19,16 @@ constexpr float kDropTargetAlpha = 0.12F;
 
 void apply_style(ImGuiStyle& style) {
     style.WindowPadding = {12.0F, 12.0F};
-    style.FramePadding = {8.0F, 5.0F};
-    style.ItemSpacing = {8.0F, 6.0F};
-    style.ItemInnerSpacing = {6.0F, 4.0F};
-    style.CellPadding = {8.0F, 4.0F};
+    // NY-G: düğmeler ve satırlar bir kademe büyük (kullanıcı isteği): düğme yüksekliği 16 + 2×7 = 30 px.
+    style.FramePadding = {10.0F, 7.0F};
+    style.ItemSpacing = {8.0F, 7.0F};
+    style.ItemInnerSpacing = {6.0F, 5.0F};
+    style.CellPadding = {8.0F, 5.0F};
     style.IndentSpacing = 16.0F;
-    style.ScrollbarSize = 10.0F;
+    style.ScrollbarSize = 12.0F;
     style.ScrollbarRounding = 4.0F;
     style.ScrollbarPadding = 2.0F;
-    style.GrabMinSize = 10.0F;
+    style.GrabMinSize = 12.0F;
     style.GrabRounding = 4.0F;
     style.WindowRounding = 8.0F;  // yalnız modal/popup: kök pencere kendi PushStyleVar'ıyla 0
     style.ChildRounding = 6.0F;

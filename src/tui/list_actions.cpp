@@ -13,8 +13,11 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
+#include <cmath>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -68,6 +71,17 @@ std::string_view unquoted(std::string_view value) {
     if (first == std::string_view::npos)
         return {};
     return value.substr(first, value.find_last_not_of(" \t\r\"") - first + 1);
+}
+
+// `list_share`: 0..1 arası sonlu sayı; değilse yok sayılır, config'in oranı kalır.
+std::optional<double> parse_share(std::string_view value) {
+    double share = 0.0;
+    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), share);
+    if (error == std::errc{} && end == value.data() + value.size() && std::isfinite(share) && share >= 0.0 &&
+        share <= 1.0)
+        return share;
+    core::log_warn("event=tui_state_value_ignored value=" + terminal_safe(value));
+    return std::nullopt;
 }
 
 std::vector<app::TrashTarget> trash_targets(const std::vector<ListItem>& items) {
@@ -134,6 +148,7 @@ std::string format_list_prefs(const ListPrefs& prefs) {
            (prefs.recent_commands.empty()
                 ? std::string{}
                 : "recent_commands = " + format_search_history(prefs.recent_commands) + "\n") +
+           (prefs.list_share ? std::format("list_share = {}\n", *prefs.list_share) : std::string{}) +
            app::format_saved_tabs(prefs.tabs);  // `[[tabs]]` tabloları: TOML'da en sonda
 }
 
@@ -165,6 +180,8 @@ ListPrefs parse_list_prefs(std::string_view text, const SearchHistoryLimits& his
                               std::inserter(prefs.open_folders, prefs.open_folders.end()));
         else if (key == "recent_commands")
             prefs.recent_commands = parse_quoted_list(line.substr(equals + 1));  // sınır: set_list_prefs
+        else if (key == "list_share")
+            prefs.list_share = parse_share(value);
     }
     if (!versioned && prefs.column == ListColumn::None)
         prefs.column = ListColumn::SizeAndDate;
@@ -198,7 +215,7 @@ struct ListActions::BatchReport {
 // Sorun yoksa tek satır; hata ya da ad değişimi varsa öğe öğe küçük pencere.
 void ListActions::publish(BatchReport& report, const char* done_key) {
     if (report.lines.empty()) {
-        host_.status.message = core::tr(done_key, {{"count", count_text("tui.count_items", report.done)}});
+        host_.status.notify(app::NoticeKind::Success, core::tr(done_key, {{"count", count_text("tui.count_items", report.done)}}));
     } else {
         report.lines.insert(report.lines.begin(),
                             core::tr("tui.batch_counts", {{"done", std::to_string(report.done)},
@@ -481,12 +498,12 @@ void ListActions::trash_selected() {
         return trash_.trash_note(*host_.store, path);
     }();
     if (!trashed) {
-        host_.status.message = core::format_error(trashed.error());
+        host_.status.notify(app::NoticeKind::Error, core::format_error(trashed.error()));
         return;
     }
     host_.refresh_notes();
     host_.state.select_index(index);
-    host_.status.message = core::tr("tui.trashed", {{"path", terminal_safe(path.string())}});
+    host_.status.notify(app::NoticeKind::Success, core::tr("tui.trashed", {{"path", terminal_safe(path.string())}}));
     host_.notify_changed();
 }
 
@@ -509,7 +526,7 @@ void ListActions::restore_last() {
         }
         host_.refresh_notes();
         host_.state.select_note(*undone->first);
-        host_.status.message = core::tr("tui.restored", {{"path", terminal_safe(undone->first->string())}});
+        host_.status.notify(app::NoticeKind::Success, core::tr("tui.restored", {{"path", terminal_safe(undone->first->string())}}));
         host_.notify_changed();
         return;
     }
@@ -559,13 +576,13 @@ void ListActions::restore_selected() {
         return trash_.restore(*host_.store, item);
     }();
     if (!restored) {
-        host_.status.message = core::format_error(restored.error());
+        host_.status.notify(app::NoticeKind::Error, core::format_error(restored.error()));
         return;
     }
     host_.refresh_notes();
     refresh_trash_view();
     host_.state.select_index(index);
-    host_.status.message = core::tr("tui.restored", {{"path", terminal_safe(restored->string())}});
+    host_.status.notify(app::NoticeKind::Success, core::tr("tui.restored", {{"path", terminal_safe(restored->string())}}));
     host_.notify_changed();
 }
 
@@ -625,10 +642,10 @@ void ListActions::delete_note(const core::NotePath& target, const app::Prompts& 
     refresh_trash_view();
     host_.state.select_index(index);
     if (!removed) {
-        host_.status.message = core::format_error(removed.error());
+        host_.status.notify(app::NoticeKind::Error, core::format_error(removed.error()));
         return;
     }
-    host_.status.message = core::tr("tui.deleted", {{"path", terminal_safe(target.string())}});
+    host_.status.notify(app::NoticeKind::Success, core::tr("tui.deleted", {{"path", terminal_safe(target.string())}}));
     host_.notify_changed();
 }
 
@@ -647,10 +664,10 @@ void ListActions::empty_trash(const app::Prompts& prompts) {
     host_.refresh_notes();
     refresh_trash_view();
     if (!emptied) {
-        host_.status.message = core::format_error(emptied.error());
+        host_.status.notify(app::NoticeKind::Error, core::format_error(emptied.error()));
         return;
     }
-    host_.status.message = core::tr("tui.trash_emptied");
+    host_.status.notify(app::NoticeKind::Success, core::tr("tui.trash_emptied"));
     host_.notify_changed();
 }
 
@@ -719,7 +736,7 @@ void ListActions::finish_import(std::optional<RenameState>& rename, const app::I
     }
     if (!report.imported.empty() && host_.state.focus() != Focus::Editor)  // yazan kullanıcının odağı kalır
         host_.state.open_note_in_review(report.imported.front().note);
-    host_.status.message = status;
+    host_.status.notify(app::NoticeKind::Success, status);
 }
 
 bool ListActions::cancel_import_on(Key key, Focus focus) {
@@ -754,7 +771,7 @@ void ListActions::submit_link(std::optional<RenameState>& rename) {
         input.set_error(core::format_error(added.error()));
         return;
     }
-    host_.status.message = core::tr("tui.related", {{"path", terminal_safe(target->string())}});
+    host_.status.notify(app::NoticeKind::Success, core::tr("tui.related", {{"path", terminal_safe(target->string())}}));
     rename.reset();
     host_.refresh_notes();
     host_.notify_changed();
@@ -809,7 +826,7 @@ void ListActions::submit_export(std::optional<RenameState>& rename) {
         return;
     }
     rename.reset();
-    host_.status.message = core::tr("tui.exported", {{"path", shown_path}});
+    host_.status.notify(app::NoticeKind::Success, core::tr("tui.exported", {{"path", shown_path}}));
 }
 
 std::expected<void, core::Error> ListActions::export_note(const core::NotePath& note,
@@ -847,10 +864,10 @@ void ListActions::finish_unlink() {
         return host_.store->remove_relation(first, second);
     }();
     if (!removed) {
-        host_.status.message = terminal_safe(core::format_error(removed.error()));
+        host_.status.notify(app::NoticeKind::Error, terminal_safe(core::format_error(removed.error())));
         return;
     }
-    host_.status.message = core::tr("tui.unlinked", {{"path", terminal_safe(second.string())}});
+    host_.status.notify(app::NoticeKind::Success, core::tr("tui.unlinked", {{"path", terminal_safe(second.string())}}));
     host_.refresh_notes();
     host_.notify_changed();
 }
@@ -877,10 +894,10 @@ void ListActions::apply_map_edit() {
                    : app::disconnect_map_nodes(store, request->from, request->to, *request->kind);
     }();
     if (!done) {
-        host_.status.message = terminal_safe(core::format_error(done.error()));
+        host_.status.notify(app::NoticeKind::Error, terminal_safe(core::format_error(done.error())));
         return;
     }
-    host_.status.message = terminal_safe(*done);
+    host_.status.notify(app::NoticeKind::Success, terminal_safe(*done));
     host_.state.map_edges_changed();  // ilişki listeyi değiştirmez: kenarlar sonraki çizimde okunur
     host_.refresh_notes();
     host_.notify_changed();
@@ -911,7 +928,7 @@ void ListActions::delete_folder(const std::string& folder, const app::Prompts& p
         host_.status.message = core::format_error(removed.error());
         return;
     }
-    host_.status.message = core::tr("tui.deleted", {{"path", terminal_safe(folder)}});
+    host_.status.notify(app::NoticeKind::Success, core::tr("tui.deleted", {{"path", terminal_safe(folder)}}));
     host_.notify_changed();
 }
 
@@ -979,7 +996,7 @@ void ListActions::submit_move_to(std::optional<RenameState>& rename) {
         host_.state.select_folder(result.first->path.string());
     else
         host_.state.reveal(result.first->path);
-    host_.status.message = core::tr("tui.moved_to", {{"to", terminal_safe(dest)}});
+    host_.status.notify(app::NoticeKind::Success, core::tr("tui.moved_to", {{"to", terminal_safe(dest)}}));
 }
 
 void ListActions::create_folder_from_row(std::optional<NewRowState>& row) {

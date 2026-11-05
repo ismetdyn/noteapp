@@ -137,7 +137,7 @@ cmd_why_links = "this note has no links"
 cmd_why_folder_view = "only in the folder view"
 palette_title = "Commands"
 palette_hints = "↑↓ select  Enter run  Esc close"
-key_hints_list = ": cmd  T trash  Space open  o sort  v col  f search  F1 help  Enter edit  → preview  / filter  n new  a add  d to trash  ← up  u undo  x select  y copy  p paste  m move  L relate  gg top  F2 rename  PgDn page  c copy  q quit  D delete  E external  r move  s sync  Alt+→ details  I all  </> width  z zoom  Tab content  , config"
+key_hints_list = ": cmd  t trash  Space open  o sort  V col  s search  F1 help  Enter edit  → preview  / filter  n add  a new  d to trash  ← up  u undo  v select  y copy  p paste  m move  L relate  gg top  F2 rename  PgDn page  c copy  q quit  D delete  E external  x export  T tags  i import  r move  ^S sync  Alt+→ details  I all  </> width  z zoom  Tab content  , config"
 key_hints_search = "Enter keep  Esc close  ↑↓ select  Tab complete  ^T content  ^P history  → accept  F1 help  ^O new  ^R move  ^D trash  ^S sync  F9 config"
 key_hints_preview = ": cmd  ← list  e edit  ↑↓ scroll  / find  b links  L relate  n/N next  c copy  R raw/rendered  q quit  g/G top/end  J/K 5 lines  ^U/^D half page  F2 rename  z zoom  </> width  E external  F1 help  , config"
 key_hints_links = "↑↓ select  Enter open  Esc back  L relate/remove  PgDn page  z zoom  F1 help"
@@ -218,14 +218,14 @@ List
 ↑ ↓  k j      move, the right pane follows
 gg G          first / last row
 gh gt         root folder, trash
-x             select the row, moves down
+v             select the row, moves down
 X  Ctrl+A     clear selection, select all
 y             copy the selection or row
 p             paste here; a taken name gets -2
 m             move to a folder (input, Tab lists)
 L             relate to a note (input, Tab lists)
 Esc           cancel the pending y
-→ l           preview; on a folder: enter
+→ l S         preview; on a folder: enter
 ← h           parent folder (root: nothing);
               on a search result: go to its folder
 Mouse         click selects, double click enters,
@@ -234,21 +234,24 @@ Enter e       edit in the right pane
 E             open in external editor ($EDITOR)
 F2 r on folder rename, relative to here
 F2            change path and name (below)
-n ^O          new note: full-screen editor
-a  name/      new folder here, stays in the list
-a             new note: name atop the list
+a ^O          new note: full-screen editor
+n  name/      new folder here, stays in the list
+n             new note: name atop the list
 c             copy the whole note
-f             search names and content, args too
+s f           search names and content, args too
+T             search by tag (Tab lists the tags)
 d ^D          to trash, no question  u undo
 d D on folder  ask, show counts; u undoes d
 c on folder   copy its path
 D             delete for good (asks first)
-T             trash (see below)
-Space i I     row details (see below)
+t             trash (see below)
+Space I       row details (see below)
+x             export as PDF (path below)
+i             import files, folders (path below)
 PgUp PgDn     move by a page in the list
-o  v          sort, right column (see below)
+o  V          sort, right column (see below)
 r             move / rename / change type
-s             sync now
+^S            sync now (also in the preview)
 Tab           switch name / content search
 < >           pane width  z zoom pane
 ?             this help
@@ -264,34 +267,34 @@ Tab           complete: one inserts, else a list
 →             take the dim suggestion at the end
 ← → Home End  move the cursor
 Esc           close the list, then the input
-Inputs (a, F2, name, editor find)
+Inputs (n, F2, name, editor find)
 →             take the dim suggestion at the end
 Tab           complete: one inserts, else a list
 List and search
 ^P ^N         move the selection (List)
 PgUp PgDn     move by a page
 ^O new  ^R move  ^D to trash  ^S sync
-Trash (T, or click trash: N on the top line)
-x  Ctrl+A     select rows for u and D
+Trash (t, or click trash: N on the top line)
+v  Ctrl+A     select rows for u and D
 u             restore the selected note
 D             delete for good (asks first)
 E             empty it all (asks first)
 ↑ ↓  k j      move, the right pane is read-only
 PgUp PgDn     scroll the right pane
-Esc q T       back to the list
+Esc q t       back to the list
 Tree
 ▸ ▾           folder closed / open; click arrow
 Space         folder: open in place; note: details
 Row details
-i             open / close the selected row
+i             trash: open / close the selected row
 I             open / close all rows
 Alt+→ Alt+←   open / close
               size, dates, sync, origin
 Sort and column
 o             n name  u updated  c created
               s size  r reverse  Esc cancel
-v             cycle the right column
-Filter arguments (/ and f)
+V             cycle the right column
+Filter arguments (/ and s)
 sort:-size    largest first (- reverses)
 type:md       by type
 in:work/      in a folder
@@ -346,6 +349,7 @@ Map (palette view.map; view.tree returns)
 ← → ↑ ↓       pan  + -  zoom  0 fit
 Tab ⇧Tab      select a note, Enter opens it
 w t           whole graph, tags  1-9 depth
+gt            trash (t is tags on the map)
 /             search lights matching notes
 C             connect from the selected note:
               Tab target, Enter connect (note:
@@ -424,7 +428,7 @@ mode_global = "[all]"
 mode_trash = "[trash]"
 global_label = "All>"
 key_hints_global = "Enter open  Esc close  ↑↓ select  Tab complete  ^P history  → accept  F1 help"
-key_hints_trash = ": cmd  u restore  D delete forever  E empty  Esc/q back  x select  ↑↓ select  F1 help  PgUp/PgDn scroll  Alt+→ details  z zoom"
+key_hints_trash = ": cmd  u restore  D delete forever  E empty  Esc/q back  v select  ↑↓ select  F1 help  PgUp/PgDn scroll  Alt+→ details  z zoom"
 trash_title = "TRASH"
 totals = "Total {total}"
 totals_matches = " · {count}"
@@ -453,7 +457,7 @@ folder_trash_title = "Trash folder"
 folder_delete_title = "Delete folder"
 confirm_trash_folder = "Move {notes} in '{path}' to trash and remove the folder and its {folders}?"
 confirm_delete_folder = "Permanently delete '{path}' with {notes} and {folders}? This cannot be undone."
-key_hints_folder = ": cmd  → open  ← up  a add, name/ = folder  F2 rename  d to trash  Space open  i details  T trash  o sort  v column  f search  F1 help  Enter open  c copy path  u undo  x select  y copy  p paste  m move  gg top  D delete  q quit  / filter  n new  r rename  s sync  I all  </> width  z zoom  , settings"
+key_hints_folder = ": cmd  → open  ← up  n add, name/ = folder  F2 rename  d to trash  Space open  Alt+→ details  t trash  o sort  V column  s search  F1 help  Enter open  c copy path  u undo  v select  y copy  p paste  m move  gg top  D delete  q quit  / filter  a new  r rename  ^S sync  I all  </> width  z zoom  , settings"
 rename_label = "New path:"
 move_to_label = "Move to:"
 moved_to = "Moved to: {to}"
@@ -691,7 +695,7 @@ view_tree_tip = "Folders and notes in one tree; arrows open and close folders"
 view_details = "Details"
 view_details_tip = "Only the current folder, with size and dates; double-click or Enter opens a folder"
 view_map = "Map"
-view_map_tip = "Notes as a graph of links and relations. Click opens a note, double-click opens it in the tree, drag pins it; wheel or +/- zooms, arrows or dragging pan, 0 fits. Shift+drag a node onto another to relate, link or tag them; right-click an edge to remove it"
+view_map_tip = "Notes as a graph of links and relations. Click opens a note, double-click opens it in the tree, drag pins it; wheel or +/- zooms, arrows or dragging pan, 0 fits. Shift+drag a node onto another (or right-click a node → Connect…, then click the target) to relate, link or tag them; right-click an edge or a node to remove relations"
 map_whole = "Whole graph"
 map_whole_tip = "Off: only the neighbourhood of the shown note"
 map_depth = "Depth {depth}"
@@ -733,10 +737,12 @@ ui_font_inter = "Inter"
 "editor_font_jetbrains-mono" = "JetBrains Mono"
 details_number = "#"
 preview = "Preview"
+review = "Review"
 edit = "Edit"
-preview_tip = "Show the formatted Markdown, read-only; [[links]] open their note (Ctrl+Shift+V)"
-edit_tip = "Back to editing the text (Ctrl+Shift+V)"
-preview_unavailable = "Preview needs an editable text note"
+preview_tip = "Back to the formatted preview; pending edits are saved first (Esc, Ctrl+Shift+V)"
+review_tip = "Back to read-only review; pending edits are saved first (Esc, Ctrl+Shift+V)"
+edit_tip = "Edit the text (E, Enter, double-click, Ctrl+Shift+V)"
+edit_unavailable = "This note is read-only"
 preview_too_large = "Too large for the rendered preview (limit {limit}, limits.tui.view_bytes), raw text"
 preview_rows_cut = "… {count} more rows not shown (limits.tui.table_rows)"
 preview_columns_cut = "… {count} more columns not shown (limits.tui.table_columns)"
@@ -875,6 +881,7 @@ help_heading_commands = "Commands:"
 help_heading_options = "Options:"
 help_heading_examples = "Examples:"
 help_heading_see_also = "See also:"
+help_short_forms = "Short forms (first argument only): {forms}"
 value_text = "VALUE"
 value_note = "NOTE"
 value_folder = "FOLDER"
@@ -887,7 +894,7 @@ value_file = "FILE"
 value_directory = "DIR"
 examples_ls = "note ls\tnewest first\nnote ls tag:project sort:-size\ttagged, biggest first\nnote ls meeting -f work\tfuzzy order in one folder"
 examples_find = "note find budget 2026\tnotes that contain both words\nnote find todo --limit 5\tat most five notes"
-examples_show = "note show plan\tprint the best match\nnote show work/plan.md > plan.md\tthe bytes as stored"
+examples_show = "note show plan\tprint the best match\nnote show work/plan.md > plan.md\tthe bytes as stored\nnote -S plan | grep todo\tonly the lines with todo\nnote -S plan >> all.txt\tappend to a file"
 examples_edit = "note edit plan\topen the best match in your editor"
 examples_rm = "note rm work/plan.md\task, then delete\nnote rm -y work/plan.md\tdelete without asking"
 examples_mv = "note mv plan.md work/plan.md\tmove into a folder\nnote mv notes.txt notes.md\tchange the type"
@@ -931,8 +938,8 @@ query_usage = "Usage: note query [--write] [--json] [--param KEY=VALUE]... CYPHE
 query_no_database = "No graph database at {path}; 'note query --write' creates it"
 query_bad_param = "--param needs KEY=VALUE with a plain name, got '{param}'"
 help_config = "Manage the configuration (types takes a comma-separated list)"
-help = "note [OPTIONS] TEXT...\tAdd a note from the arguments\n... | note [OPTIONS]\tAdd a note from stdin\nnote [OPTIONS]\tAdd a note in your editor\nnote -e [OPTIONS] [TEXT...]\tAlways open the editor; TEXT is the initial content\nnote COMMAND [ARGS...]\tRun one of the commands below"
-help_footer = "Details: 'note help COMMAND' or 'note COMMAND --help'.\nUse 'note -- ls' to add a note whose text is a command name.\nEnvironment: NO_COLOR, NOTEAPP_COLOR=auto|always|never, NOTEAPP_PAGER, PAGER, NOTEAPP_HOME.\n\nExit codes: 0 ok, 1 user error, 2 usage error, 3 I/O or internal error, 4 sync error."
+help = "note [OPTIONS] TEXT...\tAdd a note from the arguments\n... | note [OPTIONS]\tAdd a note from stdin\nnote -n NAME < FILE\tAdd a file's text under a name\nnote [OPTIONS]\tAdd a note in your editor\nnote -e [OPTIONS] [TEXT...]\tAlways open the editor; TEXT is the initial content\nnote COMMAND [ARGS...]\tRun one of the commands below\nnote -l [ARGS...]\tShort flag of a command, in parentheses below"
+help_footer = "Details: 'note help COMMAND' or 'note COMMAND --help'.\nUse 'note -a ls' or 'note -- ls' to add a note whose text is a command name, 'note -- -i' for text that starts with a dash.\nEnvironment: NO_COLOR, NOTEAPP_COLOR=auto|always|never, NOTEAPP_PAGER, PAGER, NOTEAPP_HOME.\n\nExit codes: 0 ok, 1 user error, 2 usage error, 3 I/O or internal error, 4 sync error."
 group_notes = "Notes:"
 group_sync = "Sync:"
 group_advanced = "Advanced:"
@@ -1035,6 +1042,7 @@ opt_output = "Write to this file"
 opt_type = "Note type (extension)"
 opt_folder = "Put the notes in this folder"
 opt_in_folder = "Only notes in this folder"
+opt_add = "Add the text as a note (the default; 'note -a ls' adds the word ls)"
 opt_name = "Note name"
 opt_editor = "Always open the editor"
 opt_help = "Show help"
@@ -1120,6 +1128,11 @@ choose_link = "Link ([[wiki]] link added to {from})"
 remove_related = "Remove relation"
 remove_tag = "Remove tag #{tag} from {path}"
 remove_link = "Remove link"
+connect = "Connect…"
+connect_hint = "To relate notes: Shift+drag, or right-click a node → Connect… (C on the canvas)"
+connect_pending = "{from} → click the node to connect to; Esc cancels"
+remove_relations = "Remove relations"
+remove_related_to = "Remove relation: {path}"
 
 [graph]
 cypher_syntax = "Query syntax error at line {line}, column {col}: {what}"
@@ -1142,6 +1155,16 @@ storage_error = "Graph database error"
 txn_poisoned = "The transaction failed and was rolled back"
 wal_unavailable = "The graph database could not enable its write-ahead log"
 bad_frame = "Invalid operation log frame: {reason}"
+
+[notice]
+success = "Done"
+error = "Error"
+info = "Info"
+more = "+{count} more"
+open_folder = "Open folder"
+open_folder_failed = "Could not open the folder: {path}"
+dismiss_tip = "Click to dismiss"
+sync_done = "Sync finished"
 
 [command]
 new = "New note"

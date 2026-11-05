@@ -155,6 +155,8 @@ sync_stale_lock_minutes = 10   # okunamayan sync.lock bundan eskiyse bayat; sahi
 sync_timeout_seconds = 120     # AutoSync bir `note sync --background` sürecini en çok bu kadar bekler (SPEC-sync karar 3)
 graph_batch_ops = 30000        # bir graf yazma işleminin işlem bütçesi; aşan iş bölünür, reddedilmez
 completion_min_prefix_bytes = 2   # TUI gölge önerisinin beklediği en kısa önek (alt sınır, `0` geçersiz)
+notice_ms = 4000              # işlem bildiriminin süresi ("4s" yazılabilir); hata kalıcı; 0 = kendiliğinden kapanmaz
+tui_list_share = 0.33   # TUI ilk açılışta sol listenin pencereye oranı (0..1); seçilen genişlik geçer
 
 [limits.search]          # kapasite sınırları; aşağıdaki "Sınırlar"
 content_results = 1000   # içerik aramasında (TUI, GUI) listelenen en çok not; 0 = hepsi
@@ -238,7 +240,7 @@ config'tedir.
   dosya sistemi arızasına karşı; kapasite sınırı değildir).
 - **TUI ve dil sunucusu (L2, L5):** `[limits.tui]` biçimli görünüm (`view_bytes` 256 KiB, `view_lines`, `table_rows`,
   `table_columns`), renklendirme (`highlight_bytes` 2 MiB, `highlight_line_bytes` 64 KiB), yazım satırı, tamamlama
-  (`completion_*`), yapıştırma (`paste_bytes` 32 MiB), arama geçmişi, geri alma (`undo_bytes` 64 MiB), taşıma
+  (`completion_*`), yapıştırma (`paste_bytes` 32 MiB, terminal yapıştırmasında da; bitiş işareti gelmeyen yapıştırmanın sessizlik süresi `paste_timeout` 1 sn, 0 = hiç), arama geçmişi, geri alma (`undo_bytes` 64 MiB), taşıma
   diyaloğu önerileri ve açılıştaki geçiş dışı dosya ipucu bütçesi (`stray_notice_files`, `stray_notice_bytes`).
   `[limits.lsp]` sunucu çıktısı korumaları (çerçeve, JSON iç içeliği/değer sayısı, tanı, öneri, bekleyen cevap),
   yansıtılan not boyu ve üç süre (`initialize_timeout`, `write_timeout`, `shutdown_timeout`). Değerler ve neyi

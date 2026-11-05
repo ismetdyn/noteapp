@@ -3,8 +3,62 @@ a time, so one key costs ~3 KiB on the terminal and queued keys need many frames
 App has no output hook, so noteapp (T75) adds the smallest one:
 - App::SetFrameWriter: noteapp's src/tui/frame_diff.cpp writes changed cells only.
 - FetchTerminalEvents: 4096-byte read, all queued input lands in one frame.
-Drop this patch when upstream offers an output hook; re-check at every FTXUI bump.
+FTXUI 7.0.3 has no bracketed paste either: a terminal paste came as key events,
+CR LF as two Return events (an extra blank line per line). noteapp (NY-T) adds:
+- Install: DECSET 2004 (bracketed paste), reset on Uninstall.
+- TerminalInputParser: ESC[200~ text ESC[201~ is one Event::Special whose input
+  is "\x1B[200~" + the raw text (no CR -> LF uniformization); outside a paste,
+  CR LF within the 50 ms key timeout is one Return.
+- App::SetPasteTimeout: a paste with no input for that long ends as if
+  ESC[201~ came (a lost end mark must not swallow every key); 0 = never.
+  Bytes that come after that are the rest of the paste, delivered as one more
+  paste event at ESC[201~ or after one more silent timeout, never as keys.
+- App::SetPasteLimit: bytes past the limit are not kept; the paste ends as
+  Event::Special("\x1B[noteapp-paste-too-large"). Event::SpecialOwned moves
+  the kept bytes into the event: no copy on the parser -> event queue path.
+  App still hands the Event by value to ComponentBase::OnEvent (a copy per
+  layer, as for any event). The limit counts the end mark too: a paste that
+  times out without it may carry up to 6 bytes more (the app checks again).
+Drop this patch when upstream offers an output hook and bracketed paste;
+re-check at every FTXUI bump. cmake/Dependencies.cmake refetches FTXUI when
+this file changes (FetchContent alone would keep the old patched sources).
 
+--- a/include/ftxui/component/app.hpp
++++ b/include/ftxui/component/app.hpp
+@@ -167,6 +167,22 @@
+   /// @brief Return the terminal emulator version.
+   const std::string& TerminalEmulatorVersion() const;
+ 
++  /// @brief Replaces the full-frame write: called with each rendered frame.
++  /// Fullscreen on the alternate screen only: the writer owns cursor placement.
++  /// `repaint` is true on the first frame after the terminal was (re)installed.
++  using FrameWriter =
++      std::function<void(const Screen&, bool repaint, std::string& output)>;
++  void SetFrameWriter(FrameWriter writer);
++
++  /// @brief noteapp: a bracketed paste with no input for this long is
++  /// delivered as if its end mark came; zero waits for the end mark forever.
++  void SetPasteTimeout(std::chrono::milliseconds timeout);
++
++  /// @brief noteapp: a bracketed paste longer than this many bytes is not
++  /// kept; it ends as Event::Special("\x1B[noteapp-paste-too-large").
++  /// Zero keeps any size.
++  void SetPasteLimit(std::size_t bytes);
++
+   /// @brief Return the terminal capabilities.
+   const std::vector<int>& TerminalCapabilities() const;
+ 
+--- a/include/ftxui/component/event.hpp
++++ b/include/ftxui/component/event.hpp
+@@ -39,6 +39,8 @@
+   static Event Character(wchar_t);
+   static Event Special(std::string_view);
+   static Event Special(std::initializer_list<char>);
++  // noteapp: takes the bytes over without a copy (a large paste).
++  static Event SpecialOwned(std::string input);
+   static Event Mouse(std::string_view, Mouse mouse);
+   static Event CursorPosition(std::string_view, int x, int y);  // Internal
+   static Event CursorShape(std::string_view, int shape);        // Internal
 --- a/src/ftxui/component/app.cpp
 +++ b/src/ftxui/component/app.cpp
 @@ -118,6 +118,9 @@
@@ -17,7 +71,15 @@ Drop this patch when upstream offers an output hook; re-check at every FTXUI bum
    bool force_handle_ctrl_c_ = true;
    bool force_handle_ctrl_z_ = true;
  
-@@ -561,6 +564,7 @@
+@@ -307,6 +310,7 @@
+   kMouseUrxvtMode = 1015,
+   kMouseSgrPixelsMode = 1016,
+   kAlternateScreen = 1049,
++  kBracketedPaste = 2004,  // noteapp
+ };
+ 
+ // Device Status Report (DSR) {
+@@ -561,6 +565,7 @@
  
  void App::Internal::Install() {
    frame_valid_ = false;
@@ -25,7 +87,17 @@ Drop this patch when upstream offers an output hook; re-check at every FTXUI bum
  
    // Flush the buffer for stdout to ensure whatever the user has printed before
    // is fully applied before we start modifying the terminal configuration. This
-@@ -1019,13 +1023,17 @@
+@@ -682,6 +687,9 @@
+       DECMode::kLineWrap,
+   });
+ 
++  // noteapp: a paste arrives as ESC[200~ text ESC[201~ (TerminalInputParser).
++  enable({DECMode::kBracketedPaste});
++
+   if (track_mouse_) {
+     enable({DECMode::kMouseVt200});
+     enable({DECMode::kMouseAnyEvent});
+@@ -1019,13 +1027,17 @@
    }
  
    // Hide cursor to prevent flickering during reset.
@@ -46,7 +118,7 @@ Drop this patch when upstream offers an output hook; re-check at every FTXUI bum
      // Reset the cursor position to the lower left corner to start drawing the
      // new frame.
      public_->ResetPosition(output_buffer, resized);
-@@ -1065,6 +1073,18 @@
+@@ -1065,6 +1077,18 @@
                           selection_data_.end_x, selection_data_.end_y);
    Render(*public_, document.get(), *selection_);
  
@@ -65,7 +137,7 @@ Drop this patch when upstream offers an output hook; re-check at every FTXUI bum
    // Set cursor position for user using tools to insert CJK characters.
    {
      const int dx = public_->dimx_ - 1 - public_->cursor_.x +
-@@ -1395,7 +1415,7 @@
+@@ -1395,7 +1419,7 @@
    last_char_time = std::chrono::steady_clock::now();
  
    // Read chars from the terminal.
@@ -74,7 +146,7 @@ Drop this patch when upstream offers an output hook; re-check at every FTXUI bum
    const ssize_t l = read(tty_fd_, out.data(), out.size());
    if (l <= 0) {
      return 0;
-@@ -1572,6 +1592,10 @@
+@@ -1572,6 +1596,18 @@
    };
  }
  
@@ -82,22 +154,214 @@ Drop this patch when upstream offers an output hook; re-check at every FTXUI bum
 +  internal_->frame_writer_ = std::move(writer);
 +}
 +
++void App::SetPasteTimeout(std::chrono::milliseconds timeout) {
++  internal_->terminal_input_parser.SetPasteTimeout(timeout);
++}
++
++void App::SetPasteLimit(std::size_t bytes) {
++  internal_->terminal_input_parser.SetPasteLimit(bytes);
++}
++
  void App::ForceHandleCtrlC(bool force) {
    internal_->force_handle_ctrl_c_ = force;
  }
---- a/include/ftxui/component/app.hpp
-+++ b/include/ftxui/component/app.hpp
-@@ -167,6 +167,13 @@
-   /// @brief Return the terminal emulator version.
-   const std::string& TerminalEmulatorVersion() const;
+--- a/src/ftxui/component/event.cpp
++++ b/src/ftxui/component/event.cpp
+@@ -250,6 +250,14 @@
+   return Event::Special(std::string(input));
+ }
  
-+  /// @brief Replaces the full-frame write: called with each rendered frame.
-+  /// Fullscreen on the alternate screen only: the writer owns cursor placement.
-+  /// `repaint` is true on the first frame after the terminal was (re)installed.
-+  using FrameWriter =
-+      std::function<void(const Screen&, bool repaint, std::string& output)>;
-+  void SetFrameWriter(FrameWriter writer);
++// noteapp
++// static
++Event Event::SpecialOwned(std::string input) {
++  Event event;
++  event.input_ = std::move(input);
++  return event;
++}
 +
-   /// @brief Return the terminal capabilities.
-   const std::vector<int>& TerminalCapabilities() const;
+ /// @internal
+ // static
+ Event Event::CursorPosition(std::string_view input, int x, int y) {
+--- a/src/ftxui/component/terminal_input_parser.cpp
++++ b/src/ftxui/component/terminal_input_parser.cpp
+@@ -98,24 +98,116 @@
+     : out_(std::move(out)) {}
  
+ void TerminalInputParser::Timeout(int time) {
++  // noteapp: a paste may arrive across many reads; ESC[201~ ends it, or no
++  // input for paste_timeout_ (a lost end mark must not swallow keys forever).
++  if (in_paste_) {
++    const auto now = std::chrono::steady_clock::now();
++    if (paste_input_) {
++      paste_input_ = false;
++      paste_quiet_since_ = now;
++    } else if (paste_timeout_.count() > 0 &&
++               now - paste_quiet_since_ >= paste_timeout_) {
++      // What came is handed over; bytes that come late are the rest of
++      // the same paste (text, never keys) until ESC[201~ or one more
++      // silent timeout.
++      const bool drained = paste_draining_;
++      EndPaste();
++      if (!drained) {
++        StartPaste(true);
++      }
++    }
++    return;
++  }
+   timeout_ += time;
+   const int timeout_threshold = 50;
+   if (timeout_ < timeout_threshold) {
+     return;
+   }
+   timeout_ = 0;
++  after_cr_ = false;
+   if (!pending_.empty()) {
+     Send(SPECIAL);
+   }
+ }
+ 
+ void TerminalInputParser::Add(char c) {
++  if (in_paste_) {
++    AddPasted(c);
++    return;
++  }
++  // noteapp: CR LF in one burst is one line break (a paste without bracketed
++  // mode, or a terminal in newline mode), not two Return events.
++  const bool after_cr = after_cr_;
++  after_cr_ = c == '\r' && pending_.empty();
++  if (c == '\n' && after_cr) {
++    return;
++  }
+   pending_ += c;
+   timeout_ = 0;
+   position_ = -1;
+   Send(Parse());
+ }
+ 
++namespace {
++const std::string kPasteStart = "\x1B[200~";  // NOLINT
++const std::string kPasteEnd = "\x1B[201~";    // NOLINT
++}  // namespace
++
++// noteapp: a draining paste keeps the size verdict of the part before it:
++// the rest of a too large paste is dropped without a second notice.
++void TerminalInputParser::StartPaste(bool draining) {
++  in_paste_ = true;
++  paste_draining_ = draining;
++  paste_discard_ = draining && paste_too_large_;
++  paste_too_large_ = paste_discard_;
++  paste_ = kPasteStart;
++  paste_tail_.clear();
++  paste_input_ = false;
++  paste_quiet_since_ = std::chrono::steady_clock::now();
++}
++
++// noteapp: the pasted bytes go out as one event, untouched (no CR -> LF
++// uniformization, no key parsing): Event::Special("\x1B[200~" + text).
++// Over paste_limit_ the bytes are dropped as they come; only the tail is
++// kept to find the end mark.
++void TerminalInputParser::AddPasted(char c) {
++  paste_input_ = true;
++  paste_tail_ += c;
++  if (paste_tail_.size() > kPasteEnd.size()) {
++    paste_tail_.erase(0, 1);
++  }
++  if (!paste_too_large_) {
++    paste_ += c;
++    const std::size_t marks = kPasteStart.size() + kPasteEnd.size();
++    if (paste_limit_ > 0 && paste_.size() > marks &&
++        paste_.size() - marks > paste_limit_) {
++      paste_too_large_ = true;
++      paste_ = std::string();
++    }
++  }
++  if (paste_tail_ != kPasteEnd) {
++    return;
++  }
++  if (!paste_too_large_) {
++    paste_.resize(paste_.size() - kPasteEnd.size());
++  }
++  EndPaste();
++}
++
++void TerminalInputParser::EndPaste() {
++  in_paste_ = false;
++  paste_draining_ = false;
++  if (paste_too_large_) {
++    if (!paste_discard_) {
++      out_(Event::Special("\x1B[noteapp-paste-too-large"));
++    }
++  } else if (paste_.size() > kPasteStart.size()) {
++    out_(Event::SpecialOwned(std::move(paste_)));
++  }
++  paste_ = std::string();  // a large paste does not keep its buffer
++  paste_tail_.clear();
++}
++
+ unsigned char TerminalInputParser::Current() {
+   return pending_[position_];
+ }
+@@ -140,6 +232,12 @@
+       return;
+ 
+     case SPECIAL: {
++      if (pending_ == kPasteStart) {  // noteapp: bracketed paste starts
++        paste_too_large_ = false;
++        StartPaste(false);
++        pending_.clear();
++        return;
++      }
+       auto it = g_uniformize.find(pending_);
+       if (it != g_uniformize.end()) {
+         pending_ = it->second;
+--- a/src/ftxui/component/terminal_input_parser.hpp
++++ b/src/ftxui/component/terminal_input_parser.hpp
+@@ -4,6 +4,7 @@
+ #ifndef FTXUI_COMPONENT_TERMINAL_INPUT_PARSER
+ #define FTXUI_COMPONENT_TERMINAL_INPUT_PARSER
+ 
++#include <chrono>  // noteapp: paste timeout
+ #include <functional>
+ #include <string>  // for string
+ #include <vector>  // for vector
+@@ -19,6 +20,14 @@
+   explicit TerminalInputParser(std::function<void(Event)> out);
+   void Timeout(int time);
+   void Add(char c);
++  // noteapp: a paste with no input for this long ends as if ESC[201~ came;
++  // zero waits for ESC[201~ forever.
++  void SetPasteTimeout(std::chrono::milliseconds timeout) {
++    paste_timeout_ = timeout;
++  }
++  // noteapp: a paste over this many bytes is not kept and ends as
++  // Event::Special("\x1B[noteapp-paste-too-large"); zero keeps any size.
++  void SetPasteLimit(std::size_t bytes) { paste_limit_ = bytes; }
+ 
+  private:
+   unsigned char Current();
+@@ -85,10 +94,25 @@
+                                bool altered_question,
+                                std::vector<int> arguments);
+ 
++  void StartPaste(bool draining);
++  void AddPasted(char c);
++  void EndPaste();
++
+   std::function<void(Event)> out_;
+   int position_ = -1;
+   int timeout_ = 0;
+   std::string pending_;
++  bool in_paste_ = false;  // noteapp: between ESC[200~ and ESC[201~
++  std::string paste_;      // noteapp: "\x1B[200~" + pasted bytes, raw
++  bool paste_input_ = false;  // noteapp: bytes came since the last Timeout
++  std::chrono::milliseconds paste_timeout_{0};
++  std::size_t paste_limit_ = 0;
++  std::string paste_tail_;   // noteapp: last bytes, to find ESC[201~
++  bool paste_draining_ = false;  // noteapp: the rest of a timed-out paste
++  bool paste_too_large_ = false;
++  bool paste_discard_ = false;  // noteapp: too large and already told
++  std::chrono::steady_clock::time_point paste_quiet_since_;
++  bool after_cr_ = false;  // noteapp: the last byte was a lone CR
+ };
+ 
+ }  // namespace ftxui

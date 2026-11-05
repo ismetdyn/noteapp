@@ -1205,7 +1205,9 @@ ftxui::Element bottom_bar(const TuiState& state, const StatusLine& status, const
     if (state.awaiting_prefix())
         return text(fit_hints(core::tr("tui.g_hints"), width)) | bold;
     // İleti ve ipucu çoğu kez yol taşır; her kaynağı ayrı ayrı arındırmak yerine burada tek yerde.
-    if (!status.message.empty())
+    const auto& notices = status.notices.items();
+    const bool shown_as_notice = !notices.empty() && notices.back().text == status.message;
+    if (!status.message.empty() && !shown_as_notice)
         return text(terminal_safe(status.message)) | bold;
     if (!status.notice.empty())
         return text(fit_hints(terminal_safe(status.notice), width)) | dim;
@@ -1894,6 +1896,29 @@ EditorViewport editor_viewport(ftxui::Dimensions window, const PaneLayout& layou
             std::max(window.dimy - TuiState::kChromeLines, 1)};
 }
 
+// En yeni bildirim: tür öneki (renk tek sinyal değil), metin, yineleme sayısı, bekleyen diğerleri. Sığmazsa
+// sonu kısalır. Bildirim yoksa nullptr.
+ftxui::Element notice_line(const app::NoticeQueue& queue, int width) {
+    using namespace ftxui;
+    const auto& items = queue.items();
+    if (items.empty())
+        return nullptr;
+    const app::Notice& notice = items.back();
+    const char* prefix_key = notice.kind == app::NoticeKind::Error     ? "notice.error"
+                             : notice.kind == app::NoticeKind::Success ? "notice.success"
+                                                                       : "notice.info";
+    std::string line = " " + core::tr(prefix_key) + "  " + terminal_safe(notice.text);
+    if (notice.repeats > 1)
+        line += "  (×" + std::to_string(notice.repeats) + ")";
+    if (items.size() > 1)
+        line += "  " + core::tr("notice.more", {{"count", std::to_string(items.size() - 1)}});
+    line += " ";
+    const Color tint = notice.kind == app::NoticeKind::Error     ? Color::Red
+                       : notice.kind == app::NoticeKind::Success ? Color::Green
+                                                                 : Color::Cyan;
+    return text(fit_hints(line, std::max(width - 2, 1))) | inverted | color(tint) | clear_under;
+}
+
 ftxui::Element render(const TuiState& state, const Preview& preview, const StatusLine& status,
                       ftxui::Dimensions window, const SaveDialogState* dialog, const ConfirmState* confirm,
                       const HelpState* help, const SettingsState* settings, const NewRowState* new_row,
@@ -1926,6 +1951,8 @@ ftxui::Element render(const TuiState& state, const Preview& preview, const Statu
     lines.push_back(editor_open ? editor_status_bar(*editing, window.dimx, mode.color)
                                 : bottom_bar(state, status, new_row, rename, window.dimx, mode.color));
     Element main = vbox(std::move(lines));
+    if (Element toast = notice_line(status.notices, window.dimx))
+        main = dbox({main, vbox({filler(), hbox({filler(), toast}), text(""), text("")})});
     if (!modal)
         modal = inner_modal(state, editing, new_row, rename);
     if (!modal)

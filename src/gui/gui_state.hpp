@@ -7,6 +7,7 @@
 #include "app/item_ops.hpp"
 #include "app/listing.hpp"
 #include "app/note_map.hpp"
+#include "app/notices.hpp"
 #include "app/sync_status_worker.hpp"
 #include "app/tabs.hpp"
 #include "app/trash_ops.hpp"
@@ -99,12 +100,14 @@ struct Deciders {
     // Arayüzü tutan iş (AutoSync durdurma, enable): üretimde bekleme imleciyle.
     std::function<void(const std::function<void()>& work)> while_busy =
         [](const std::function<void()>& work) { work(); };
+    // Bildirimdeki "Klasörü aç": sistemin dosya yöneticisi (SDL_OpenURL). false = açılamadı.
+    std::function<bool(const std::string& folder)> open_folder = [](const std::string&) { return false; };
 };
 
 enum class Tab { Notes, Settings };
 // Durum çubuğundaki senkron göstergesinin anlamı (etiketin rengi ve simgesi).
 enum class SyncIndicator { Off, Running, Ok, Error };
-enum class FocusRequest { None, Search, Editor, List, QuickAdd, Links };
+enum class FocusRequest { None, Search, Editor, List, QuickAdd, Links, Preview };
 enum class BrowserView { Tree, Details, Map };
 // Ayrıntılar'ın üst veri sütunları (TUI'deki sağ sütun, `column` komutları). Sıra `column` döngüsüdür; kalıcı
 // adlar TUI'ninkilerle aynıdır (kDetailsColumnNames).
@@ -207,8 +210,13 @@ public:
     void post_quiet(std::function<bool()> work);
     void set_wake(std::function<void()> wake);
     // Bekleyen autosave'in anı; yoksa boş. Tarama buraya girmez: döngü onun aralığından sık uyanır.
+    // Bildirimin düşme anı da bir uyanmadır (yoklama değil): boşta kare üretilmez.
     std::optional<std::chrono::steady_clock::time_point> next_deadline() const {
-        return autosave_.deadline();
+        const auto autosave = autosave_.deadline();
+        const auto notice = notices_.next_deadline();
+        if (!autosave || !notice)
+            return autosave ? autosave : notice;
+        return std::min(*autosave, *notice);
     }
 
     // --- Liste ve arama ---
@@ -415,7 +423,8 @@ public:
     update_language_servers(std::chrono::steady_clock::time_point now);
     // Editörün tek seferlik iletisi (dil sunucusu durdu, bulunamadı); sonraki editör tuşu siler (TUI).
     const std::string& editor_notice() const { return editor_notice_; }
-    void edit_text(std::string_view text);  // tüm metin, tek geri alma adımı (testler ve programatik yazım)
+    // Tüm metin, tek geri alma adımı (testler ve programatik yazım); incelemedeyse önce düzenlemeye geçer.
+    void edit_text(std::string_view text);
     std::size_t buffer_generation() const { return buffer_generation_; }
     bool editable() const { return editable_; }
     bool dirty() const { return dirty_; }
@@ -453,9 +462,19 @@ public:
     bool can_preview() const;  // önizlenen tür ve düzenlenebilir metin
     // limits.tui.view_bytes'ın üstü: önizleme reddedilmez, TUI REVIEW gibi ham metin ve nedeni gösterilir.
     bool preview_too_large() const { return !view_limits().view_bytes.allows(buffer().size()); }
-    // Oturum boyunca tüm önizlenen notlarda (TUI'deki `R`); not önizlenemiyorsa editör görünür.
-    bool showing_preview() const { return preview_ && can_preview(); }
-    void toggle_preview();  // Ctrl+Shift+V; düzenlemeye dönünce odak editöre
+    // İnceleme (TUI REVIEW): listeden, haritadan ya da bağlantıdan açılan kayıtlı not salt okunur açılır; md,
+    // csv ve json biçimli önizlemede, diğerleri kilitli editörde (renkli, imleç ve kopya var, yazı yok).
+    // Düzenleme yalnız açık eylemle başlar (Düzenle düğmesi, `E`/Enter, çift tık, Ctrl+Shift+V); yeni not ve
+    // taslak hep düzenlemededir. Kip sekmeyle saklanır.
+    bool reviewing() const { return review_ && shown_.has_value() && !new_note_; }
+    bool showing_preview() const { return reviewing() && can_preview(); }
+    // İncelemedeki not düzenlenebilir mi (salt-okunur not, klasör ve çöp hayır).
+    bool can_edit() const { return reviewing() && editable_ && !selected_folder_ && !trash_view_; }
+    void begin_edit();  // odak editöre
+    // Düzenlemeden incelemeye: bekleyen düzenleme kayıt kuralıyla yazılır (flush_shown); kayıt olmazsa
+    // düzenlemede kalınır. Taslakta etkisiz (kaydedilene dek düzenlemededir).
+    void end_edit();
+    void toggle_preview();  // Ctrl+Shift+V: inceleme ↔ düzenleme
     // Önizlemedeki [[hedef]]: bekleyen düzenleme önce kendi notuna yazılır, hedef sonra çözülür.
     void open_wiki_link(const std::string& target, bool new_tab = false);
     // Önizlemedeki [[hedef]] canlı bir nota çözülüyor mu (çözülmeyen soluk, üstü çizili ve tıklanmaz).
@@ -582,6 +601,13 @@ public:
     void request_focus(FocusRequest focus) { focus_request_ = focus; }
     FocusRequest take_focus_request();
 
+    // --- Bildirimler (toast; SPEC-gui "Bildirimler", model app::NoticeQueue, TUI ile ortak) ---
+    // İşlem sonucu (dışa aktarma, içe alma, çöp, taşıma, senkron, ayar, bağlantı testi, harita ilişkisi) sağ
+    // altta görünür; bilgi `tuning.notice_ms` sonra düşer (tick), hata kapatılana dek kalır.
+    const app::NoticeQueue& notices() const { return notices_; }
+    void dismiss_notice(std::uint64_t id) { notices_.dismiss(id); }
+    void open_notice_folder(std::uint64_t id);  // dışa aktarmanın klasörü; açılamazsa hata bildirimi
+
     // --- Durum çubuğu ---
     const std::string& status() const { return status_; }
     // İleti bir hata mı (kayıt, işlem, içe alma, config ve depo uyarısı): durum çubuğunda danger rengi.
@@ -593,6 +619,7 @@ public:
     const std::optional<core::Error>& store_issue() const { return store_issue_; }
     const std::string& sync_label() const { return sync_label_; }
     SyncIndicator sync_indicator() const { return sync_indicator_; }  // etiketin rengi ve simgesi
+    // Koşu bitince (Running -> Ok/Error) sonuç bildirimi.
     void show_sync_status(const sync::SyncStatus& status, bool running);
 
     SettingsPage& settings() { return settings_; }
@@ -625,7 +652,7 @@ private:
         bool editable = false;
         bool dirty = false;
         bool new_note = false;
-        bool preview = false;
+        bool review = true;
     };
     struct NoteTab {
         std::uint64_t id = 0;
@@ -668,6 +695,7 @@ private:
     void set_document_text(std::string text);
     bool binary() const { return doc_.read_only() == app::ReadOnly::Binary; }
     void set_editor(std::string content, bool editable);
+    void lock_for_review() { editor_.set_writable(editable_ && !reviewing()); }
     EditorLimits editor_limits() const;
     void editor_changed(std::uint64_t edits_before);            // editor_key ve edit_text'in ortak sonu
     std::string detected_type(std::string_view content) const;  // config'in detect ayarlarıyla
@@ -682,6 +710,7 @@ private:
     bool shown_in(const std::string& folder) const;
     void report(const core::Error& error);
     void fail(const core::Error& error);
+    void notify(app::NoticeKind kind, std::string text, std::optional<std::string> folder = std::nullopt);
     SaveDialogRequest move_request(const core::NotePath& note) const;
     bool flush_for(const core::NotePath& note);
     bool flush_shown();
@@ -706,6 +735,7 @@ private:
     const char* command_block(app::CommandNeeds needs);
     void set_sort(search::SortSpec sort);
     void request_sync_states();
+    void show_sync_label(const sync::SyncStatus& status, bool running);
     bool apply_sync_states(app::SyncStates states);  // durumlar değiştiyse true
     void ensure_map();
     void edit_map(const MapNode& from, const MapNode& to, MapEdgeKind kind, bool connect);
@@ -797,6 +827,7 @@ private:
     bool zoomed_ = false;
     bool quit_requested_ = false;
     app::TrashOps trash_{config_.limits.app.trash_undo_steps};  // çöp kuralı TUI ile ortak
+    app::NoticeQueue notices_{app::NoticeQueue::lifetime_of(config_.tuning.notice_ms.value)};
     std::string undo_status_;
     // Editörde şu an görünen not (yol, liste ve sekme kimliği). Yazmanın beklediği revizyon belgededir
     // (doc_).
@@ -811,7 +842,7 @@ private:
     bool links_open_ = true;
     std::vector<InfoField> note_info_;
     bool info_open_ = false;  // yalnız oturum boyunca; kapalı başlar, editöre yer kalsın
-    bool preview_ = false;    // yalnız oturum boyunca
+    bool review_ = true;      // REVIEW; düzenleme açık eylemle (reviewing)
     bool editable_ = false;
     bool new_note_ = false;  // editörde henüz diske yazılmamış yeni not var (shown_ boş)
     bool dirty_ = false;     // editör, diskteki sürümden farklı

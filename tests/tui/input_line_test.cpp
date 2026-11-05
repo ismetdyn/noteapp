@@ -123,6 +123,20 @@ TEST_CASE("InputLine edits at a UTF-8 cursor and reports what changed") {
     CHECK(line.text() == "a");
 }
 
+// NY-T: tek satırlık girdiye çok satırlı yapıştırma Enter gibi erken göndermez; satırlar tek ad/sorgu olur.
+TEST_CASE("InputLine takes a multi-line paste as one line: inner breaks become spaces, trailing ones go") {
+    InputLine line;
+    line.handle(Key::Char, ">");
+    CHECK(line.handle(Key::Paste, "weekly\nplan\n\n") == InputLine::Result::Edited);
+    CHECK(line.text() == ">weekly plan");
+    CHECK(line.cursor() == line.text().size());
+    line.handle(Key::Home);
+    CHECK(line.handle(Key::Paste, "a\tb") == InputLine::Result::Edited);
+    CHECK(line.text() == "a b>weekly plan");
+    CHECK(line.handle(Key::Paste, "\n\n") == InputLine::Result::Consumed);
+    CHECK(line.text() == "a b>weekly plan");
+}
+
 TEST_CASE("search ghost offers recent searches first, then matching note names") {
     const std::vector<std::string> recent = {"sort:name plan", "plan b"};
     InputLine line = typed(InputKind::Search, "pl");

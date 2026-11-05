@@ -85,7 +85,7 @@ bool contains(const ftxui::Screen& screen, std::string_view needle) {
 // satır.
 constexpr int kTestGutter = 3;
 int pane_x(int width) {
-    return width * 2 / 5 + 2 + kTestGutter;
+    return tui::PaneLayout{}.list_width(width) + 2 + kTestGutter;
 }
 constexpr int kPaneY = 2;
 
@@ -96,9 +96,9 @@ TEST_CASE("editor view: the focused pane is colored, the list is dim, the select
     const auto screen = f.frame();
     CHECK(screen.PixelAt(0, 1).character == "╭");
     CHECK(screen.PixelAt(0, 1).dim);
-    CHECK(screen.PixelAt(kWidth * 2 / 5, 1).character == "╭");
-    CHECK_FALSE(screen.PixelAt(kWidth * 2 / 5, 1).dim);
-    CHECK(screen.PixelAt(kWidth * 2 / 5, 1).foreground_color == ftxui::Color(ftxui::Color::Magenta));
+    CHECK(screen.PixelAt(tui::PaneLayout{}.list_width(kWidth), 1).character == "╭");
+    CHECK_FALSE(screen.PixelAt(tui::PaneLayout{}.list_width(kWidth), 1).dim);
+    CHECK(screen.PixelAt(tui::PaneLayout{}.list_width(kWidth), 1).foreground_color == ftxui::Color(ftxui::Color::Magenta));
     CHECK(contains(screen, " 1   a.md"));
     CHECK_FALSE(screen.PixelAt(2, kPaneY).inverted);
 }

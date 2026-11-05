@@ -45,6 +45,8 @@ public:
     const tui::EditorBuffer& buffer() const { return buffer_; }
     const std::string& text() const { return buffer_.text(); }
     bool writable() const { return writable_; }
+    // İnceleme kipi (REVIEW) tamponu kilitler: hareket, kopya ve bul kalır; açık tamamlama ve öneri düşer.
+    void set_writable(bool writable);
     Mode mode() const { return mode_; }
     const std::string& type() const { return type_; }
     void set_type(std::string type);

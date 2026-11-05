@@ -155,6 +155,7 @@ TEST_CASE("parse_config falls back to the default and warns on each invalid valu
         {"[tuning]\nsync_stale_lock_minutes = 0", "tuning.sync_stale_lock_minutes"},
         {"[tuning]\nsync_timeout_seconds = 0", "tuning.sync_timeout_seconds"},
         {"[tuning]\ngraph_batch_ops = 0", "tuning.graph_batch_ops"},
+        {"[tuning]\ntui_list_share = 1.5", "tuning.tui_list_share"},
     };
     for (const Case& tc : cases) {
         CAPTURE(tc.toml);
@@ -337,6 +338,7 @@ TEST_CASE("save_config round-trips every [tuning] key that differs from the defa
     c.tuning.sync_stale_lock_minutes += 1;
     c.tuning.sync_timeout_seconds += 1;
     c.tuning.completion_min_prefix_bytes += 1;
+    c.tuning.tui_list_share = 0.25;
     REQUIRE(save_config(c).has_value());
 
     const LoadedConfig reloaded = load_config();
@@ -871,6 +873,7 @@ TEST_CASE("limits.tui and limits.lsp keep today's defaults, accept 0 as unlimite
     CHECK(tui.save_suggestions.value == 5U);
     CHECK(tui.stray_notice_files.value == 2000U);
     CHECK(tui.stray_notice_bytes.value == 8U * 1024U * 1024U);
+    CHECK(tui.paste_timeout.value == 1000U);  // ms; 0 = bitiş işaretini sonsuza dek bekler
     const LspLimits& lsp = defaults.limits.lsp;
     CHECK(lsp.note_bytes.value == 2U * 1024U * 1024U);
     CHECK(lsp.body_bytes.value == 16U * 1024U * 1024U);
@@ -1017,6 +1020,20 @@ TEST_CASE("tuning.max_note_bytes accepts 0 as unlimited and size units") {
     const LoadedConfig bad = parse_config("[tuning]\nmax_note_bytes = -1\n");
     CHECK(bad.config.tuning.max_note_bytes.value == 10485760U);
     CHECK(has_warning_about(bad, "tuning.max_note_bytes", "config.invalid_value"));
+}
+
+// NY-G: bildirim süresi; 0 = kendiliğinden kapanmaz (sabit tavan yok), süre birimi yazılabilir.
+TEST_CASE("tuning.notice_ms defaults to 4 s, accepts 0 as never and duration units") {
+    CHECK(parse_config("").config.tuning.notice_ms == Limit{4000, "4000"});
+    const LoadedConfig zero = parse_config("[tuning]\nnotice_ms = 0\n");
+    CHECK(zero.warnings.empty());
+    CHECK(zero.config.tuning.notice_ms.unlimited());
+    const LoadedConfig units = parse_config("[tuning]\nnotice_ms = \"6s\"\n");
+    CHECK(units.warnings.empty());
+    CHECK(units.config.tuning.notice_ms.value == 6000U);
+    const LoadedConfig bad = parse_config("[tuning]\nnotice_ms = -1\n");
+    CHECK(bad.config.tuning.notice_ms.value == 4000U);
+    CHECK(has_warning_about(bad, "tuning.notice_ms", "config.invalid_value"));
 }
 
 TEST_CASE("set_config_value sets limits keys with the file rules and limit_entries lists them") {

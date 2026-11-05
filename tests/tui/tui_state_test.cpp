@@ -443,15 +443,42 @@ TEST_CASE("List: slash goes to Search without entering the query") {
 TEST_CASE("List: action letters map to the same intents as their Ctrl keys") {
     auto s = in_focus(Focus::List);
     CHECK(s.handle(Key::Enter) == Intent::EnterEditor);
-    CHECK(s.handle(Key::Char, "n") == Intent::NewNote);
-    CHECK(s.handle(Key::Char, "a") == Intent::NewRow);
+    CHECK(s.handle(Key::Char, "a") == Intent::NewNote);
+    CHECK(s.handle(Key::Char, "n") == Intent::NewRow);
     CHECK(s.handle(Key::Char, "d") == Intent::TrashSelected);
     CHECK(s.handle(Key::Char, "r") == Intent::MoveSelected);
-    CHECK(s.handle(Key::Char, "s") == Intent::SyncNow);
+    CHECK(s.handle(Key::CtrlS) == Intent::SyncNow);
     CHECK(s.handle(Key::Char, "?") == Intent::ShowHelp);
     CHECK(s.handle(Key::Char, "q") == Intent::Quit);
     CHECK(s.query().empty());
     CHECK(s.focus() == Focus::List);
+}
+
+// NY-T: Liste harfleri CLI kısa bayraklarıdır (-n -a -s -S -x -T -i); senkron Ctrl+S, seçim v, sütun V, çöp t.
+TEST_CASE("List: letters follow the CLI short flags, sync is Ctrl+S in the list and in REVIEW") {
+    auto s = in_focus(Focus::List);
+    CHECK(s.handle(Key::Char, "x") == Intent::ExportPdf);
+    CHECK(s.handle(Key::Char, "i") == Intent::ImportFiles);
+    CHECK(s.handle(Key::Char, "t") == Intent::ToggleTrash);
+    for (const std::string_view search : {"s", "f"}) {
+        CAPTURE(search);
+        auto searching = in_focus(Focus::List);
+        searching.handle(Key::Char, search);
+        CHECK(searching.focus() == Focus::Search);
+        CHECK(searching.mode() == Mode::Global);
+    }
+    auto tags = in_focus(Focus::List);
+    tags.handle(Key::Char, "T");
+    CHECK(tags.focus() == Focus::Search);
+    CHECK(tags.query().starts_with("tag:"));
+    auto marks = in_focus(Focus::List);
+    marks.handle(Key::Char, "v");
+    CHECK(marks.marked_count() == 1);
+    CHECK(marks.handle(Key::Char, "V") == Intent::SavePrefs);  // sağ sütun döngüsü
+    auto shown = in_focus(Focus::List);
+    shown.handle(Key::Char, "S");
+    CHECK(shown.focus() == Focus::Preview);
+    CHECK(shown.handle(Key::CtrlS) == Intent::SyncNow);
 }
 
 TEST_CASE("List: Tab toggles the mode") {
@@ -504,19 +531,19 @@ TEST_CASE("List: Backspace and Left are ignored") {
     CHECK(s.focus() == Focus::List);
 }
 
-TEST_CASE("Ctrl-O is the same as n and never opens the external editor") {
+TEST_CASE("Ctrl-O is the same as a and never opens the external editor") {
     auto s = in_focus(Focus::List);
-    CHECK(s.handle(Key::CtrlO) == s.handle(Key::Char, "n"));
+    CHECK(s.handle(Key::CtrlO) == s.handle(Key::Char, "a"));
     CHECK(s.handle(Key::CtrlO) == Intent::NewNote);
 }
 
-TEST_CASE("empty list: d, r and Enter are no-ops in List while a, n, / still work") {
+TEST_CASE("empty list: d, r and Enter are no-ops in List while n, a, / still work") {
     tui::TuiState s;
     for (const std::string_view letter : {"d", "r", "g", "g", "G", "j", "k"})
         CHECK(s.handle(Key::Char, letter) == Intent::None);
     CHECK(s.handle(Key::Enter) == Intent::None);
-    CHECK(s.handle(Key::Char, "a") == Intent::NewRow);
-    CHECK(s.handle(Key::Char, "n") == Intent::NewNote);
+    CHECK(s.handle(Key::Char, "n") == Intent::NewRow);
+    CHECK(s.handle(Key::Char, "a") == Intent::NewNote);
     CHECK(s.handle(Key::Char, "/") == Intent::None);
     CHECK(s.focus() == Focus::Search);
 }
@@ -687,8 +714,8 @@ TEST_CASE("Preview: list command letters and unknown letters are ignored") {
     }
 }
 
-TEST_CASE("Preview: list commands are ignored in their Ctrl forms too") {
-    for (const Key key : {Key::CtrlD, Key::CtrlR, Key::CtrlO, Key::CtrlS, Key::CtrlP, Key::CtrlN, Key::Tab}) {
+TEST_CASE("Preview: list commands are ignored in their Ctrl forms too; Ctrl+S syncs") {
+    for (const Key key : {Key::CtrlD, Key::CtrlR, Key::CtrlO, Key::CtrlP, Key::CtrlN, Key::Tab}) {
         CAPTURE(static_cast<int>(key));
         auto s = in_focus(Focus::Preview);
         CHECK(s.handle(key) == Intent::None);
@@ -1080,4 +1107,5 @@ TEST_CASE("tui and lsp limit structs default to the values in defaults.toml") {
     CHECK(config.limits.tui.search_history.value == tui::SearchHistoryLimits{}.entries);
     CHECK(config.limits.tui.search_entry_bytes.value == tui::SearchHistoryLimits{}.entry_bytes);
     CHECK(config.limits.search.fuzzy_candidate_chars.value == search::kDefaultFuzzyCandidateChars);
+    CHECK(config.tuning.tui_list_share == tui::PaneLayout::kDefaultListShare);
 }

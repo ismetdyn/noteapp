@@ -257,9 +257,34 @@ PasteChoice choose_paste(SystemClipboard& clipboard, const std::string& internal
     case Status::Binary:
         return {{}, core::tr("tui.paste_binary")};
     case Status::TooLarge:
-        return {{}, core::tr("tui.paste_too_large", {{"limit", size_limit(clipboard.max_paste_bytes())}})};
+        return {{}, paste_too_large_message(clipboard.max_paste_bytes())};
     }
     return {internal, {}};
+}
+
+std::string paste_too_large_message(std::size_t max_bytes) {
+    return core::tr("tui.paste_too_large", {{"limit", size_limit(max_bytes)}});
+}
+
+PasteChoice terminal_paste(std::string_view raw, std::size_t max_bytes) {
+    if (raw.size() > max_bytes)
+        return {{}, paste_too_large_message(max_bytes)};
+    return {terminal_paste_text(raw), {}};
+}
+
+std::string terminal_paste_text(std::string_view raw) {
+    std::string text;
+    text.reserve(raw.size());
+    for (std::size_t at = 0; at < raw.size(); ++at) {
+        if (raw[at] != '\r') {
+            text += raw[at];
+            continue;
+        }
+        text += '\n';
+        if (at + 1 < raw.size() && raw[at + 1] == '\n')
+            ++at;
+    }
+    return text;
 }
 
 }  // namespace noteapp::tui

@@ -23,7 +23,9 @@ using noteapp::gui::View;
 
 namespace {
 
+// Seçilen not incelemede açılır (TUI REVIEW): düzenleme açık eylemle başlar; taslak zaten düzenlemededir.
 void focus_editor(GuiState& state, View& view) {
+    state.edit_selected();
     state.request_focus(FocusRequest::Editor);
     settle(view);
     REQUIRE(view.editor_active());

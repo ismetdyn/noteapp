@@ -196,8 +196,7 @@ void GuiState::browse_left() {
 
 void GuiState::browse_enter() {
     if (!browsing()) {
-        if (!trash_view_ && current_path())
-            request_focus(FocusRequest::Editor);
+        edit_selected();  // TUI listede Enter: düzenle
         return;
     }
     const int index = browser_row();
@@ -205,7 +204,7 @@ void GuiState::browse_enter() {
         return;
     const BrowserRow row = browser_rows()[static_cast<std::size_t>(index)];
     if (row.kind == BrowserRowKind::Note)
-        request_focus(FocusRequest::Editor);
+        edit_selected();
     else if (layout_.browser_view == BrowserView::Details)
         enter_folder(row.path);
     else

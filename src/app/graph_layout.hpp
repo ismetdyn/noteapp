@@ -55,6 +55,8 @@ private:
     std::vector<LayoutPoint> positions_;
     std::vector<char> pinned_;  // vector<bool>'un bit vekili yerine düz bayt
     std::vector<LayoutPoint> displacement_;
+    std::vector<LayoutPoint> last_steps_;  // düğümün son adımı: yön değişimi salınımdır
+    std::vector<float> reaches_;           // düğümün sönümlü adım tavanı (sıcaklıktan ayrı)
     // (ızgara hücresi, düğüm); adımlar arası yeniden kullanılır.
     std::vector<std::pair<std::uint64_t, std::size_t>> cells_;
     float temperature_ = 0.0F;

@@ -937,7 +937,7 @@ TEST_CASE("render: the box names the target, or the count when rows are marked")
     state.handle(Key::Char, ":");
     CHECK(has(screen_text(state), "a.md"));
     state.handle(Key::Escape);
-    state.handle(Key::Char, "x");
+    state.handle(Key::Char, "v");
     state.handle(Key::Char, ":");
     CHECK(has(screen_text(state), core::tr("tui.marked_count", {{"count", "1"}})));
 }

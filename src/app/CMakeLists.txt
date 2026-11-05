@@ -14,6 +14,7 @@ add_library(noteapp_app
     listing.cpp
     map_relations.cpp
     note_map.cpp
+    notices.cpp
     settings.cpp
     stray_notice.cpp
     sync_status_worker.cpp
