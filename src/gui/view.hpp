@@ -185,6 +185,8 @@ private:
     void draw_map_menus();
     void draw_map_node_items(const MapNode& subject, std::size_t node, std::size_t generation);  // F2 keşif
     void draw_map_find(const NoteMap& map);  // F2: Ctrl+F satırı
+    void draw_map_query();                   // F3: sorgu çubuğu (görünümler, metin, Çalıştır, Tablo), hata satırı
+    void draw_map_query_table();             // F3: sonucun tablosu, tuvalin yerinde (ImGuiListClipper)
     void focus_map_node(const NoteMap& map, std::size_t node, ImVec2 size);
     void draw_relation_tooltip(const NoteMap& map, ImVec2 origin);  // F1: işaretçinin yakınındaki ilişki
     void zoom_map(ImVec2 origin, ImVec2 anchor, float factor);
@@ -231,6 +233,17 @@ private:
     void draw_links_panel();
     void draw_link_row(const core::LinkLine& line);
     void draw_relation_row_menu(const core::RelatedNote& selected);  // F1: ilişkili satırın sağ tık menüsü
+    // F4 özellik denetçisi; list_height 0: panel en alttadır, kalan alanı alır.
+    void draw_inspector_panel(float list_height);
+    void draw_inspector_row(const app::InspectorRow& row);
+    void draw_inspector_add_row();
+    std::optional<std::string> inspector_editing_;  // satır içi düzenlenen özelliğin anahtarı (ham)
+    std::string inspector_edit_text_;
+    int inspector_edit_type_ = 0;  // 0 otomatik, 1 metin, 2 sayı, 3 mantıksal
+    bool inspector_edit_focus_ = false;
+    std::string inspector_new_key_;
+    std::string inspector_new_value_;
+    int inspector_new_type_ = 0;
     void draw_status_bar();
     void draw_fitted_text(const std::string& name, const std::string& text, float width,
                           std::string (*shorten)(std::string_view, float));
@@ -344,6 +357,8 @@ private:
     std::optional<std::size_t> map_focus_node_;  // kamera bu düğüme ortalanacak (tuvalin boyu bilinince)
     std::size_t map_found_version_ = SIZE_MAX;  // eşleşmelerin kurulduğu harita sürümü
     std::string map_tag_filter_;                // etiket süzgecinin kutusu (MapOptions::tag'a yazılır)
+    bool map_query_focus_ = false;              // sorgu çubuğu açılınca ve çalıştırınca odak kutuda kalsın
+    std::vector<std::string> map_view_names_;   // görünümler listesi açılınca okunur, kare başına değil
     std::vector<core::RelationName> map_relation_names_;  // seçici açılınca okunur, kare başına değil
     int map_zoom_keys_ = 0;                 // SDL tuş kodundan: '+' ve '-' klavye düzeninden bağımsız okunur
     bool map_animating_ = false;            // bu karede yerleşim sürdü: boşta beklemeden yeni kare

@@ -5,6 +5,11 @@
 invalid_path = "Invalid path '{path}': {reason}"
 invalid_relation_name = "Invalid relation name '{name}': {reason}"
 relation_not_found = "This relation no longer exists: it was removed or changed, possibly on another device"
+property_key = "Invalid property key '{key}': {reason}"
+property_reserved = "'{key}' is managed by the app and is read-only; change the note itself (rename, move, edit)"
+property_relation_reserved = "A relation's '{key}' is not a property: use Rename or the direction actions"
+property_value = "Invalid property value: {reason}"
+property_not_found = "No property '{key}'"
 out_of_memory = "Not enough memory to read '{path}'; it was not imported"
 io = "I/O error at '{path}': {detail}"
 not_found = "Not found: {path}"
@@ -26,6 +31,14 @@ view_exists = "A view named '{name}' already exists"
 view_writes = "View '{view}' writes to the graph (line {line}, column {col}); views are read-only, nothing was run or saved"
 view_param = "View '{view}' needs parameter ${name} (line {line}, column {col}); views take no parameters"
 view_no_notes = "View '{view}' returns no notes: return the note node (RETURN n) or its path"
+query_writes = "This query changes data (line {line}, column {col}); confirm it to run it"
+query_protected_property = "'{key}' of a {label} node is managed by the app (line {line}, column {col}); change it through the note, folder, tag or view itself"
+query_protected_label = "The {label} label is managed by the app (line {line}, column {col}); notes, folders, tags and views are created and removed in the app"
+query_protected_node = "A {label} node cannot be deleted by a query (line {line}, column {col}); use trash, delete or the view commands"
+query_protected_edge = "{type} relationships come from note text and folders (line {line}, column {col}); edit or move the note instead"
+query_relation_name = "Invalid relation name (line {line}, column {col}): {reason}"
+query_relation_directed = "A relation's 'directed' is true or removed (line {line}, column {col})"
+query_relation_create = "Relations are not created by a query (line {line}, column {col}); use Connect… on the map, L in the TUI or note relation add. Renaming, directing and deleting a relation work here"
 migration_required = "Run 'note graph migrate': notes in {path} use the old file layout, nothing can be saved until then"
 graph_too_new = "This database was written by a newer version and cannot be opened: {path}"
 graph_corrupt = "The note database is damaged or is not a noteapp database: {path}"
@@ -84,6 +97,7 @@ must_be_folder = "must be a valid folder inside the notes folder"
 must_be_tag = "must be a tag name (#name, name/sub)"
 must_be_view_name = "must be a saved view name (see 'note view ls')"
 view_name_slash = "a view name cannot contain '/'"
+view_name_space = "a view name cannot start or end with a space"
 too_large = "larger than the 60 MiB limit"
 unreadable = "it cannot be read"
 unreadable_folder = "this folder cannot be read (no permission, or the path is too long); what is inside is unknown and was not migrated"
@@ -94,6 +108,15 @@ too_many_collisions = "too many notes share this name"
 new_file = "not in the database: new or changed since the migration"
 import_link = "it is a link (symbolic link or junction); links are not followed"
 import_not_file = "not a regular file or folder (device, pipe or socket)"
+empty_name = "the key is empty"
+name_too_long = "longer than 256 bytes"
+name_not_utf8 = "not valid UTF-8"
+name_has_nul = "contains a NUL character"
+not_number = "not a number (an integer or a finite decimal such as 2.5)"
+not_bool = "must be true or false"
+non_finite = "not a finite number"
+value_not_utf8 = "not valid UTF-8"
+must_be_property = "must look like prop:key or prop:key=value"
 
 [config]
 unknown_key = "Unknown setting '{key}' ignored"
@@ -175,7 +198,7 @@ tab_closed_missing = "Tab closed: '{path}' no longer exists"
 map_whole = "whole graph"
 map_depth = "depth {depth}"
 map_tags = " · tags"
-map_status = "{scope}{tags}{filters}  Tab select  Enter open  x neighbours  / find  R path  C connect  P pin  e # N filter  w whole  t tags  1-{max} depth  arrows + - 0"
+map_status = "{scope}{tags}{filters}  Tab select  Enter open  x neighbours  / find  Q query  R path  C connect  P pin  e # N filter  w whole  t tags  1-{max} depth  arrows + - 0"
 map_filter_links = " · links only"
 map_filter_related = " · relations only"
 map_filter_named = " · relation '{name}'"
@@ -188,6 +211,13 @@ map_tag_label = "Tag filter:"
 map_relation_label = "Relation filter:"
 map_find_hints = "Enter Tab next  ⇧Tab previous  Esc close"
 map_filter_hints = "Enter apply  Tab list  empty = off  Esc cancel"
+map_query_label = "Query:"
+map_query_hints = "Enter run  ↑↓ history  Tab views  Esc close"
+map_query_status = "Q query  O table  Esc clear  {summary}"
+map_query_table_hints = "↑↓ row  Enter open  O map  Q query  Esc clear"
+map_query_no_columns = "The query returns no columns"
+query_confirm_title = "Run a writing query?"
+query_apply = "Apply"
 map_link = "{from} → {to}  Tab target  Enter connect  d remove edge  Esc cancel"
 map_choose = "{from} → {to}  r related  l link ([[wiki]] in {from})  Esc cancel"
 map_no_edge = "No edge between {from} and {to}"
@@ -340,6 +370,7 @@ E             external editor ($EDITOR)
 /             find in note (I = ı = i)
 n N           next / previous match
 b             links section under the preview
+p             properties of the shown note
 Tab ⇧Tab      next / prev [[link]], Enter opens
 L             relate to a note (input, Tab lists)
               then a name: Tab names, ^D directed
@@ -353,9 +384,18 @@ L             on a related row: remove (asks)
               on any other row: relate to a note
 n f u         on a related row: rename it, flip
               its direction, make it undirected
+p             on a related row: its properties
 Esc b         back to the preview
 [[name]]      no such note; a renamed target stays
               stale here, text is not rewritten
+Properties (p: preview, links, map)
+↑ ↓  k j      select a row
+a             add: key, then value; a #key
+              adds a label to the note's text
+e Enter       edit the value; text: number:
+              bool: choose the type, else auto
+d             delete (asks); app keys read-only
+Esc p         back
 Editor (right pane): all keys edit
 ^S save  ^Q close (asks if unsaved)
 Esc closes find, clears the selection
@@ -387,8 +427,15 @@ R             shortest path from the selected
               note: Tab target, d directed,
               Enter finds it, Esc clears it
 P U           pin/unpin the selected, unpin all
+p             properties of the selected note
+              (C mode: of the relation edge)
 n d u         new note here, trash the
               selected, u brings it back
+Q             Cypher query: Enter runs, ↑↓
+              history, Tab view names; result
+              lit on the map, writes ask first
+O             query result as a table: ↑↓ row,
+              Enter opens its note; Esc clears
 C             connect from the selected note:
               Tab target, Enter connect (note:
               r related, l [[link]]; tag: adds
@@ -735,7 +782,7 @@ view_tree_tip = "Folders and notes in one tree; arrows open and close folders"
 view_details = "Details"
 view_details_tip = "Only the current folder, with size and dates; double-click or Enter opens a folder"
 view_map = "Map"
-view_map_tip = "Notes as a graph of links and relations. Click opens a note, double-click opens or closes its neighbours, drag or P pins it (U unpins all), Ctrl+F finds a node; wheel or +/- zooms, arrows or dragging pan, 0 fits. Shift+drag a node onto another (or right-click a node → Connect…, then click the target) to relate, link or tag them; right-click a node for its menu (open, neighbours, pin, shortest path, trash), an edge to remove it, empty space for a new note"
+view_map_tip = "Notes as a graph of links and relations. Click opens a note, double-click opens or closes its neighbours, drag or P pins it (U unpins all), Ctrl+F finds a node; wheel or +/- zooms, arrows or dragging pan, 0 fits. Shift+drag a node onto another (or right-click a node → Connect…, then click the target) to relate, link or tag them; right-click a node for its menu (open, neighbours, pin, shortest path, trash), an edge to remove it, empty space for a new note. Q opens the Cypher query bar"
 map_whole = "Whole graph"
 map_whole_tip = "Off: only the neighbourhood of the shown note"
 map_depth = "Depth {depth}"
@@ -751,6 +798,19 @@ map_relation_tip = "Only relations with this name"
 map_tag_hint = "#tag"
 map_tag_tip = "Only notes with this tag (like tag: in search; the shown note stays)"
 map_capped = "Showing {shown} of {total} nodes. Turn off Whole graph or lower the depth to see a part in full."
+map_query = "Query"
+map_query_tip = "Cypher query bar (Q on the map): results are highlighted; writing queries ask first"
+map_query_hint = "MATCH (n:Note) RETURN n — Enter runs, Up/Down history, a view's name runs the view"
+map_query_run = "Run"
+map_query_table = "Table"
+map_query_table_tip = "Show the result as a table instead of the map"
+map_query_views = "Views"
+map_query_views_tip = "Run a saved view (note view save)"
+map_query_no_views = "No saved views"
+map_query_no_columns = "The query returns no columns"
+map_query_columns_hidden = "{count} column(s) not shown: the table holds {shown}; note query shows them all"
+query_confirm_title = "Run a writing query?"
+query_apply = "Apply"
 details_up = "Up"
 details_up_tip = "Go to the parent folder (Left)"
 details_name = "Name"
@@ -902,7 +962,9 @@ import_busy = "An import is already running; wait for it or cancel it"
 import_start_failed = "The import could not start; see the log"
 import_summary = "Imported: {imported}, skipped: {skipped}, not imported: {failed}"
 view_usage = "Usage: note view save NAME CYPHER [--force] | ls [--json] | run NAME [--json] | rm NAME | show NAME"
-relation_usage = "Usage: note relation add A B [--name NAME] [--directed] | rm A B [--name NAME | --id ID] | rename A B OLD NEW | ls [NOTE] [--json]"
+relation_usage = "Usage: note relation add A B [--name NAME] [--directed] | rm A B [--name NAME | --id ID] | rename A B OLD NEW | ls [NOTE] [--json] | prop get ID [KEY] [--json] | prop set ID KEY VALUE [--type T] | prop rm ID KEY"
+prop_usage = "Usage: note prop get NOTE [KEY] [--json] | set NOTE KEY VALUE [--type text|number|bool] | rm NOTE KEY"
+prop_bad_type = "'{type}' is not a property type: text, number or bool"
 relation_bad_id = "'{id}' is not a relation id (32 hex digits, see 'note relation ls NOTE')"
 relation_no_name = "No relation named '{name}' between {from} and {to}"
 relation_none = "No relation between {from} and {to}"
@@ -1093,6 +1155,11 @@ desc_relation_add = "Relate two notes"
 desc_relation_rm = "Remove a relation"
 desc_relation_rename = "Rename a relation"
 desc_relation_ls = "List relation names, or a note's relations"
+desc_relation_prop = "A relation's properties by id: prop get|set|rm ID …"
+desc_prop = "Note properties (key = value)"
+desc_prop_get = "Print a note's properties, or one value"
+desc_prop_set = "Set a property (type from the value, or --type)"
+desc_prop_rm = "Remove a property"
 desc_completion_zsh = "Script for zsh"
 desc_completion_bash = "Script for bash"
 desc_completion_fish = "Script for fish"
@@ -1129,6 +1196,7 @@ opt_force = "Replace a view with the same name"
 opt_relation_name = "Relation name (empty: unnamed)"
 opt_directed = "Point the relation from the first note to the second"
 opt_relation_id = "Relation id from note relation ls NOTE"
+opt_prop_type = "Value type: text, number or bool (default: from the value)"
 completion_usage = "Usage: note completion zsh | bash | fish"
 help_completion = "Print a completion script for your shell: Tab then offers commands, options, note paths, folders, types, tags, views and config keys, with descriptions in your language. zsh: note completion zsh > ~/.local/share/zsh/site-functions/_note (that directory must be in fpath before compinit); bash: source <(note completion bash) in ~/.bashrc; fish: note completion fish > ~/.config/fish/completions/note.fish"
 migrate_backup_hint = "Backup kept at {path} (private). When you no longer need it, delete it yourself: rm -r {path}"
@@ -1245,6 +1313,20 @@ trash = "Move to trash"
 find_hint = "Find on the map"
 find_count = "{at}/{count}"
 find_none = "no match"
+query_read = "Query: {rows} row(s), {notes} note(s) highlighted"
+query_view = "View ran: {name} — {rows} row(s), {notes} note(s) highlighted"
+query_written = "Query applied: {changes}"
+query_written_unnamed = "Query applied: {changes}; the result could not be read back: {error}"
+query_confirm = "This query changes data: {changes}. Apply it? There is no undo."
+query_trashed = "{path} (trash)"
+changes_none = "no changes"
+changes_nodes_created = "nodes created: {count}"
+changes_nodes_deleted = "nodes deleted: {count}"
+changes_relationships_created = "relationships created: {count}"
+changes_relationships_deleted = "relationships deleted: {count}"
+changes_properties_set = "properties set: {count}"
+changes_labels_added = "labels added: {count}"
+changes_labels_removed = "labels removed: {count}"
 
 [graph]
 cypher_syntax = "Query syntax error at line {line}, column {col}: {what}"
@@ -1369,3 +1451,41 @@ reason_relation = "relation: {name} {arrow} {path}"
 reason_linked = "linked: {path}"
 reason_linked_named = "linked: {path} ({name})"
 reason_linked_far = "linked: {path}, {hops} steps"
+
+# Property inspector (app::Inspector; GUI panel, TUI section, `note prop`). Keys and values are untrusted.
+[inspector]
+title = "Properties ({count})"
+set = "Set {key} = {value}"
+removed = "Removed property {key}"
+confirm_remove = "Remove property '{key}' ({value})? There is no undo."
+confirm_remove_label = "Remove label #{tag} from {path}? The tag is taken out of the note's text."
+remove_title = "Remove"
+labels_on_notes = "Labels belong to notes; a relation has no labels"
+nothing = "Nothing is being inspected"
+empty = "No properties"
+read_only = "read-only (managed by the app)"
+type_text = "text"
+type_number = "number"
+type_bool = "bool"
+type_time = "time"
+type_bytes = "bytes"
+type_large = "large"
+type_label = "label"
+type_auto = "auto"
+key = "Key"
+value = "Value"
+type = "Type"
+add = "Add"
+edit = "Edit"
+delete = "Delete"
+save = "Save"
+cancel = "Cancel"
+key_hint = "key, or #label"
+value_hint = "value"
+inspect_relation = "Properties…"
+show_note = "Show the note"
+hint = "Properties of the note or relation shown; type is taken from the value unless chosen"
+key_prompt = "Property key (or #label):"
+value_prompt = "{key} = (text: number: bool: or auto)"
+hints = "a add  e edit  d delete  ↑↓ move  Esc back"
+none_shown = "Open a note to see its properties"

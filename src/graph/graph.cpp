@@ -119,6 +119,38 @@ Result<void> require_same_edge_if_exists(Store& store, const EdgeId& id, const N
     return {};
 }
 
+// PropVersions satırlarından en büyük (hlc, cihaz) head; kaybedenler çözülmez (büyük değerli kaybeden
+// yüklenmez). `stored` boşsa head yok.
+struct Winner {
+    detail::DeviceId device{};
+    std::uint64_t seq = 0;
+    std::uint64_t hlc = 0;
+    std::string stored;  // kısa değerde yığın ayırmaz: bu yol sorgu başına on binlerce kez koşar
+};
+
+Result<Winner> winning_head(Statement& statement) {
+    Winner best;
+    while (true) {
+        const Result<bool> row = statement.step();
+        if (!row)
+            return std::unexpected(row.error());
+        if (!*row)
+            return best;
+        const auto hlc = static_cast<std::uint64_t>(statement.column_int(2));
+        const std::span<const std::byte> device = statement.column_blob(0);
+        if (device.size() != best.device.size())
+            return std::unexpected(corrupt("bad_device"));
+        if (best.stored.empty() || hlc > best.hlc ||
+            (hlc == best.hlc && std::ranges::lexicographical_compare(best.device, device))) {
+            best.hlc = hlc;
+            best.seq = static_cast<std::uint64_t>(statement.column_int(1));
+            std::ranges::copy(device, best.device.begin());
+            const std::span<const std::byte> stored = statement.column_blob(3);
+            best.stored.assign(reinterpret_cast<const char*>(stored.data()), stored.size());
+        }
+    }
+}
+
 }  // namespace
 
 struct NeighborCursor::Impl {
@@ -329,32 +361,39 @@ Result<Value> ReadTxn::property(OwnerId owner, std::string_view key) {
     if (!statement)
         return std::unexpected(statement.error());
     statement->bind_blob(1, owner_bytes(owner)).bind_text(2, key);
-
-    // Yalnız kazanan çözülür: büyük değerli kaybeden head yüklenmez.
-    std::uint64_t best_hlc = 0;
-    detail::DeviceId best_device{};
-    std::string best_stored;  // kısa değerde yığın ayırmaz: bu yol sorgu başına on binlerce kez koşar
-    while (true) {
-        const Result<bool> row = statement->step();
-        if (!row)
-            return std::unexpected(row.error());
-        if (!*row)
-            break;
-        const auto hlc = static_cast<std::uint64_t>(statement->column_int(2));
-        const std::span<const std::byte> device = statement->column_blob(0);
-        if (device.size() != best_device.size())
-            return std::unexpected(corrupt("bad_device"));
-        if (best_stored.empty() || hlc > best_hlc ||
-            (hlc == best_hlc && std::ranges::lexicographical_compare(best_device, device))) {
-            best_hlc = hlc;
-            std::ranges::copy(device, best_device.begin());
-            const std::span<const std::byte> stored = statement->column_blob(3);
-            best_stored.assign(reinterpret_cast<const char*>(stored.data()), stored.size());
-        }
-    }
-    if (best_stored.empty())
+    const Result<Winner> best = winning_head(*statement);
+    if (!best)
+        return std::unexpected(best.error());
+    if (best->stored.empty())
         return Value{};
-    return store_->load_value(std::as_bytes(std::span(best_stored.data(), best_stored.size())));
+    return store_->load_value(std::as_bytes(std::span(best->stored.data(), best->stored.size())));
+}
+
+Result<std::optional<PropertyHead>> ReadTxn::property_head(OwnerId owner, std::string_view key) {
+    if (const Result<void> open = require_open(store_); !open)
+        return std::unexpected(open.error());
+    Result<Statement> statement = store_->statement(StatementId::PropVersions);
+    if (!statement)
+        return std::unexpected(statement.error());
+    statement->bind_blob(1, owner_bytes(owner)).bind_text(2, key);
+    const Result<Winner> best = winning_head(*statement);
+    if (!best)
+        return std::unexpected(best.error());
+    if (best->stored.empty())
+        return std::nullopt;
+    Result<Store::StoredValue> stored =
+        store_->peek_value(std::as_bytes(std::span(best->stored.data(), best->stored.size())));
+    if (!stored)
+        return std::unexpected(stored.error());
+    PropertyHead head;
+    head.device = best->device;
+    head.seq = best->seq;
+    head.hlc = best->hlc;
+    head.value = std::move(stored->value);
+    head.key = std::string(key);
+    head.size = stored->size;
+    head.large = stored->large;
+    return head;
 }
 
 Result<std::vector<Version>> ReadTxn::versions(OwnerId owner, std::string_view key) {
@@ -657,8 +696,9 @@ std::size_t Graph::max_stored_bytes() const {
 
 Result<QueryResult>
 Graph::query(std::string_view cypher, const Params& params, QueryMode mode,
-             QueryLimits limits) {  // cppcheck-suppress passedByValue ; küçük, kopyası ucuz
-    return detail::cypher::run_query(*this, *store_, cypher, params, mode, limits);
+             QueryLimits limits,  // cppcheck-suppress passedByValue ; küçük, kopyası ucuz
+             const QueryHooks& hooks) {
+    return detail::cypher::run_query(*this, *store_, cypher, params, mode, limits, hooks);
 }
 
 Result<void> check_query(std::string_view cypher, QueryMode mode, const Params& params,

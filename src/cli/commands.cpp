@@ -609,11 +609,12 @@ int run_ls(const ParsedArgs& args, const core::Config& config) {
         std::cerr << sanitize_for_terminal(core::format_error(query.error().error)) << '\n';
         return kExitUsage;
     }
-    if (search::has_graph_filter(query->filters)) {  // `rel:`, `linked:`: kenarlar bir kez okunur
-        const auto edges = app::search_edges(store);
-        search::bind_graph_filters(query->filters,
-                                   search::GraphInput{edges ? std::span<const core::NoteEdge>(*edges)
-                                                            : std::span<const core::NoteEdge>{}});
+    {  // `rel:`, `linked:`: kenarlar bir kez okunur; `prop:` anahtar başına
+        const auto edges = search::has_graph_filter(query->filters) ? app::search_edges(store) : nullptr;
+        search::GraphInput graph{edges ? std::span<const core::NoteEdge>(*edges)
+                                       : std::span<const core::NoteEdge>{}};
+        graph.properties = [&store](std::string_view key) { return app::search_properties(store, key); };
+        search::bind_graph_filters(query->filters, graph);
     }
     std::vector<core::NoteMeta> metas = store.list_meta();
     std::erase_if(metas, [&](const core::NoteMeta& n) { return !n.path.string().starts_with(prefix); });
@@ -946,6 +947,8 @@ int run_reserved(const ParsedArgs& args, const core::Config& config) {
         return run_view(args, config);
     if (args.command == "relation")
         return run_relation(args, config);
+    if (args.command == "prop")
+        return run_prop(args, config);
     if (args.command == "import")
         return run_import(args, config);
     if (args.command == "completion")

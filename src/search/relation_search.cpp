@@ -244,6 +244,18 @@ std::set<core::NotePath> graph_filter_notes(const Filter& filter, const Relation
     return notes;
 }
 
+// Değer metni katlanarak tam eşleşir (`prop:durum=bitti` "Bitti"yi bulur, "bitti mi"yi bulmaz).
+std::shared_ptr<const std::set<core::NotePath>> property_filter_notes(const Filter& filter,
+                                                                      const PropertyLookup& lookup) {
+    auto notes = std::make_shared<std::set<core::NotePath>>();
+    const auto found = lookup ? lookup(filter.text) : nullptr;
+    if (found)
+        for (const auto& [path, value] : *found)
+            if (!filter.value || fold_to_utf8(value) == *filter.value)
+                notes->insert(path);
+    return notes;
+}
+
 bool is_graph_filter(const Filter& filter) {
     return filter.kind == Filter::Kind::Relation || filter.kind == Filter::Kind::Linked;
 }
@@ -296,6 +308,9 @@ std::vector<std::size_t> note_nodes(const RelationGraph& index, std::span<const 
 }
 
 void bind_graph_filters(std::span<Filter> filters, const GraphInput& graph) {
+    for (Filter& filter : filters)
+        if (filter.kind == Filter::Kind::Property)
+            filter.notes = property_filter_notes(filter, graph.properties);
     if (!has_graph_filter(filters))
         return;
     const IndexOf index(graph);

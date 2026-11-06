@@ -48,12 +48,12 @@ struct Command {
 
 private:
     static consteval const app::CommandSpec& registered(std::string_view command_id, unsigned views) {
-        const app::CommandSpec* spec = app::find_command(command_id);
-        if (spec == nullptr)
+        if (!app::has_command(command_id))
             throw "TUI command id is not in app::kCommandRegistry";
-        if ((views & ~spec->contexts) != 0)
+        const app::CommandSpec& spec = *app::find_command(command_id);
+        if ((views & ~spec.contexts) != 0)
             throw "TUI view is outside the registry contexts of the command";
-        return *spec;
+        return spec;
     }
 };
 

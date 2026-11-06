@@ -725,11 +725,16 @@ TEST_CASE("names from sync are sanitized on a terminal and stay byte-exact in a 
     // Etiketin gösterim adı graph'tan gelir (senkronla başka cihazdan): C1 (OSC/ST) taşıyan ad `note tags`ta
     // temizlenmeli. Ayrıştırıcı içerikten böyle etiket üretmez; düğüm doğrudan yazılır.
     box.put(evil, "#etiket içerik\n");
-    REQUIRE(box.run({"query", "--write", "--param",
-                     "d=etiket\xC2\x9D"
-                     "52;c;ZXZpbA==\xC2\x9C",
-                     "MATCH (t:Tag) SET t.display = $d"})
-                .exit_code == 0);
+    {
+        // `query --write` Tag.display'e yazamaz (türetilmiş, korunan): başka cihazdan gelmiş gibi doğrudan motora.
+        auto raw = noteapp::graph::Graph::open(box.data() / "graph.db");
+        REQUIRE(raw.has_value());
+        REQUIRE(raw->query("MATCH (t:Tag) SET t.display = $d",
+                           {{"d", noteapp::graph::QueryValue(std::string("etiket\xC2\x9D"
+                                                                         "52;c;ZXZpbA==\xC2\x9C"))}},
+                           noteapp::graph::QueryMode::ReadWrite)
+                    .has_value());
+    }
     // Etiket adı çekirdekte okunurken temizlenir (ilişki adı kuralı): boruda da C1 yok, U+FFFD var. Not adı
     // ise yoldur, boruda bayt bayt kalır (aşağıda).
     const std::string piped_tags = box.run({"tags"}).out;

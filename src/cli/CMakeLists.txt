@@ -6,6 +6,7 @@ add_executable(note
     commands_export.cpp
     commands_graph.cpp
     commands_import.cpp
+    commands_props.cpp
     commands_query.cpp
     commands_view.cpp
     help.cpp

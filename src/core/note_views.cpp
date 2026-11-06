@@ -2,6 +2,7 @@
 #include "core/note_views.hpp"
 
 #include "core/note_store_impl.hpp"
+#include "core/text.hpp"
 
 #include <algorithm>
 #include <map>
@@ -16,8 +17,18 @@ namespace {
 namespace chr = std::chrono;
 using graph::NodeId;
 
-constexpr std::string_view kViewLabel = "View";
-constexpr std::string_view kViewQuery = "query";
+// Görünen boşluklar (ASCII ve Unicode Zs): adın başında ya da sonunda yasak.
+bool is_edge_space(char32_t cp) {
+    constexpr char32_t kNoBreak = 0xA0;
+    constexpr char32_t kOgham = 0x1680;
+    constexpr char32_t kEnQuad = 0x2000;
+    constexpr char32_t kHairSpace = 0x200A;
+    constexpr char32_t kNarrowNoBreak = 0x202F;
+    constexpr char32_t kMediumMath = 0x205F;
+    constexpr char32_t kIdeographic = 0x3000;
+    return cp == U' ' || cp == U'\t' || cp == kNoBreak || cp == kOgham || (cp >= kEnQuad && cp <= kHairSpace) ||
+           cp == kNarrowNoBreak || cp == kMediumMath || cp == kIdeographic;
+}
 
 struct ViewNode {
     NodeId id;
@@ -63,6 +74,10 @@ graph::Result<std::optional<ViewNode>> read_view(graph::ReadTxn& txn, const Node
     const auto* text = std::get_if<std::string>(&*name);
     if (text == nullptr || text->empty())
         return std::nullopt;  // adsız düğüm görünüm değildir: senkronla gelen yarım veri
+    // Senkronla ya da ham Cypher'la gelen ad kayıt kuralından geçmemiş olabilir (satır sonu, denetim, `/`, `:`):
+    // okuma da aynı kuralı uygular, böyle görünüm yoktur (listede, Tab tamamlamasında, `view:`de).
+    if (!validate_view_name(*text))
+        return std::nullopt;
     return ViewNode{id, SavedView{*text, text_of(*query), time_of(*created), time_of(*updated)}};
 }
 
@@ -146,6 +161,9 @@ std::expected<std::map<std::string, ViewNode>, Error> views_locked(NoteStore::Im
 }
 
 std::expected<SavedView, Error> find_locked(NoteStore::Impl& impl, std::string_view name) {
+    if (impl.view_lookup_fault)
+        if (auto fault = impl.view_lookup_fault())
+            return std::unexpected(std::move(*fault));
     auto views = views_locked(impl);
     if (!views)
         return std::unexpected(views.error());
@@ -214,6 +232,12 @@ std::expected<void, Error> validate_view_name(std::string_view name) {
         return std::unexpected(parsed.error());
     if (name.find('/') != std::string_view::npos)
         return std::unexpected(invalid_path("view_name_slash", name));
+    // Baştaki ya da sondaki boşluk adı yazılan metinden ayırır: harita sorgusu metni kırpıp görünümü arar
+    // (app::MapQuery), ` MATCH …` adlı senkron görünüm bulunmaz, Cypher olarak çalışırdı (güvenlik incelemesi,
+    // Sev-2). Kayıt ve okuma aynı kural: saklı ad hiç kenar boşluğu taşımaz, kırpılmış arama onunla eşleşir.
+    const auto decoded = decode_utf8(name);
+    if (decoded && !decoded->empty() && (is_edge_space(decoded->front()) || is_edge_space(decoded->back())))
+        return std::unexpected(invalid_path("view_name_space", name));
     return {};
 }
 

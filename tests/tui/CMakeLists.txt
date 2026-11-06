@@ -9,6 +9,7 @@ noteapp_add_test(tui
     command_parity_test.cpp
     completion_test.cpp
     input_line_test.cpp
+    inspector_test.cpp
     link_panel_test.cpp
     list_ui_test.cpp
     list_nav_test.cpp
@@ -18,6 +19,7 @@ noteapp_add_test(tui
     import_test.cpp
     map_test.cpp
     map_explore_test.cpp
+    map_query_test.cpp
     map_relations_test.cpp
     markdown_view_test.cpp
     paste_parser_test.cpp

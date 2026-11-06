@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -107,6 +108,9 @@ public:
                                      std::optional<std::string_view> type = {});
     // En büyük (hlc, device) head'i; özellik yoksa veya head null ise null.
     Result<Value> property(OwnerId owner, std::string_view key);
+    // property'nin head'i, büyük değer yüklenmeden (PropertyHead: large true, value null, size bilinir);
+    // özellik yoksa nullopt. Head null ise (silinmiş) value null, large false.
+    Result<std::optional<PropertyHead>> property_head(OwnerId owner, std::string_view key);
     // Tüm eşzamanlı head'ler. Sıra (device, seq).
     Result<std::vector<Version>> versions(OwnerId owner, std::string_view key);
     // Sahibin tüm anahtarlarının head'leri, tek aralık okumasıyla. Sıra (key, device, seq).
@@ -238,6 +242,28 @@ struct GraphLimits {
     bool operator==(const GraphLimits&) const = default;
 };
 
+// Yazma sorgusunun tek değişikliği (Graph::query, QueryHooks). Uygulama kendi şemasını bununla korur ve
+// özeti sayar; motor anlamını bilmez (SPEC-graph ilke 5).
+struct QueryChange {
+    enum class Kind { CreateNode, DeleteNode, AddLabel, RemoveLabel, CreateEdge, DeleteEdge, SetProperty };
+    Kind kind{};
+    OwnerId target;
+    // AddLabel/RemoveLabel: etiket; CreateEdge/DeleteEdge: kenar tipi; SetProperty: anahtar; düğümde boş.
+    // Kancanın dönüşüne dek geçerlidir.
+    std::string_view name = {};
+    const Value* value = nullptr;  // yalnız SetProperty: yazılacak değer (null kaldırır)
+};
+
+struct QueryHooks {
+    // Her değişiklikten hemen önce, sorgunun işlemiyle (txn değişiklik öncesini görür). Hata sorguyu durdurur,
+    // işlem geri alınır; motor hataya değişikliğin sorgudaki konumunu (line, col) ekler. DETACH DELETE'te önce
+    // düğüm, sonra kenarlarının her biri sorulur.
+    std::function<Result<void>(ReadTxn& txn, const QueryChange& change)> before_change;
+    // false: yazma sorgusu çalışır ve sonucunu döner ama işlem commit edilmez (önizleme): graf ve günlük
+    // değişmez.
+    bool commit = true;
+};
+
 // Thread-safe değildir: her thread kendi Graph'ını açar. Süreçler aynı dosyayı birlikte kullanabilir.
 class Graph {
 public:
@@ -252,9 +278,10 @@ public:
     // Yazıcılar süreçler arası sıralanır; kilit busy_timeout içinde alınamazsa Busy döner.
     Result<WriteTxn> write();
     // Cypher alt kümesi (SPEC-graph "Sorgu dili"). Kendi işlemini açar: açık işlem varken hata döner. Hata
-    // veren yazma sorgusunun hiçbir etkisi kalmaz.
+    // veren yazma sorgusunun hiçbir etkisi kalmaz. `hooks` yalnız yazma işleçlerine dokunur.
     Result<QueryResult> query(std::string_view cypher, const Params& params = {},
-                              QueryMode mode = QueryMode::ReadOnly, QueryLimits limits = {});
+                              QueryMode mode = QueryMode::ReadOnly, QueryLimits limits = {},
+                              const QueryHooks& hooks = {});
 
     // Bu cihazın işlemlerini `<directory>/<cihaz>.oplog` dosyasına ekler. Dosya bozuk veya yarımsa ops'tan
     // yeniden üretir. Dosya bu veritabanından ileride veya farklıysa dokunmaz, hata döner.

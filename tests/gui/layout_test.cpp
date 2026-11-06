@@ -464,8 +464,9 @@ TEST_CASE("the map view and its controls fit at every scale, also in the smalles
             scene.show_map_view();
             const ItemRects rects = scene.view->item_rects();
             const View::ItemRect frame = window_frame();
-            std::vector<std::string> fixed = {"search",     "mode",   "map_whole", "map_depth", "map_tags",
-                                              "map_canvas", "editor", "count",     "status",    "sync"};
+            std::vector<std::string> fixed = {"search", "mode",       "map_whole", "map_depth", "map_tags",
+                                              "map_query_toggle", "map_canvas", "editor",   "count",
+                                              "status", "sync"};
             for (const auto& [name, rect] : rects) {
                 if (name.starts_with("toolbar_"))
                     fixed.push_back(name);
@@ -874,11 +875,13 @@ TEST_CASE("the editor fields and notice live in the one status bar at every scal
     state->edit_selected();  // seçilen not incelemede açılır; editör ölçülür
     gui_test::settle(*view);
     const ItemRects rects = view->item_rects();
-    // Bağlantısız notta editörün altında yalnız kapalı Bilgi başlığı var: ondan sonra durum çubuğu gelir, arada
-    // ayrı bir editör satırı yok.
+    // Bağlantısız notta editörün altında yalnız kapalı Bilgi ve Özellikler (F4) başlıkları var: ondan sonra durum
+    // çubuğu gelir, arada ayrı bir editör satırı yok.
     REQUIRE(rects.contains("info_header"));
+    REQUIRE(rects.contains("inspector_header"));
     CHECK(rects.at("info_header").min_y - rects.at("editor").max_y < ImGui::GetFrameHeight());
-    CHECK(rects.at("count").min_y - rects.at("info_header").max_y < ImGui::GetFrameHeight());
+    CHECK(rects.at("inspector_header").min_y - rects.at("info_header").max_y < ImGui::GetFrameHeight());
+    CHECK(rects.at("count").min_y - rects.at("inspector_header").max_y < ImGui::GetFrameHeight());
 }
 
 // G10: önizlemenin okuma ölçüsü 46 em (UI boyu), geniş pencerede ortalı; dar pencerede tam genişlik.

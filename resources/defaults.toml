@@ -79,6 +79,9 @@ map_nodes = 2000
 # Harita çevre kapsamının en çok adımı (TUI `1`–`9`, GUI `− n +`). 0: sınırsız; çevre en çok bağlı bileşenin
 # tamamıdır (her not bir kez gezilir), iş düğüm + kenar sayısıyla doğrusaldır.
 map_depth = 6
+# Harita sorgu tablosunun hücresi (TUI `O`, GUI `Tablo`): daha uzunu `…` ile kısalır (tamamı `note query`de).
+# 0: sınırsız; gövde döndüren büyük sonuçta (satır × sütun × gövde boyu) bellek ve tablo kurulumu büyür.
+query_cell_bytes = "4KiB"
 
 # Not deposu. Görüntü her klasörün tam yolunu tutar: 0'da senkronla gelen N düzeylik klasör zinciri ~N² bayt
 # bellek ister (100.000 düzey ~10 GB). Aşan klasörün notları açılmaz, unreachable listesinde raporlanır.
@@ -95,6 +98,10 @@ fuzzy_candidate_chars = 1024
 # Aramada adı eşleşen notun kaç adım uzağındaki bağlı notlar da bulunur (TUI, GUI, `note find`). 0: sınırsız;
 # bağlı bileşenin tamamı gezilir (her not bir kez), iş not + kenar sayısıyla doğrusaldır.
 relation_depth = 1
+# `prop:` süzgecinde depo görüntüsü başına önbellekte tutulan anahtar sayısı (en son kullanılanlar kalır). Her
+# anahtar not başına bir değer metni tutar; yazdıkça her kısmi anahtar (`prop:s`, `prop:st`…) bir girdidir.
+# 0: sınırsız (görüntü değişene dek büyür).
+property_keys = 32
 
 [limits.sync]
 # Üç yönlü birleştirmenin en büyük girdisi; aşan çakışma kopya not olur (içerik kaybı yok). Birleştirme yazma

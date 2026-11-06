@@ -147,11 +147,22 @@ inline constexpr std::array kRelationAddOptions{O{"--name", "", K::Text, "cli.op
                                                 O{"--directed", "", K::None, "cli.opt_directed"}};
 inline constexpr std::array kRelationRmOptions{O{"--name", "", K::Text, "cli.opt_relation_name"},
                                                O{"--id", "", K::Text, "cli.opt_relation_id"}};
+inline constexpr O kPropType{"--type", "", K::Text, "cli.opt_prop_type"};
+inline constexpr std::array kPropGetOptions{kJson};
+inline constexpr std::array kPropSetOptions{kPropType};
+inline constexpr std::array kRelationPropOptions{kJson, kPropType};  // get --json, set --type
 inline constexpr std::array kRelation{
     V{"add", "cli.desc_relation_add", kRelationAddOptions, K::Note},
     V{"rm", "cli.desc_relation_rm", kRelationRmOptions, K::Note},
     V{"rename", "cli.desc_relation_rename", {}, K::Note},
     V{"ls", "cli.desc_relation_ls", kJsonPaged, K::Note},
+    // `relation prop get|set|rm KİMLİK …` (F4); seçenekler alt fiilindir (commands_props.cpp denetler).
+    V{"prop", "cli.desc_relation_prop", kRelationPropOptions, K::Text},
+};
+inline constexpr std::array kProp{
+    V{"get", "cli.desc_prop_get", kPropGetOptions, K::Note},
+    V{"set", "cli.desc_prop_set", kPropSetOptions, K::Note},
+    V{"rm", "cli.desc_prop_rm", {}, K::Note},
 };
 inline constexpr std::array kShells{
     V{"zsh", "cli.desc_completion_zsh", {}, K::None},
@@ -164,10 +175,10 @@ inline constexpr std::array kShells{
 // Hızlı eklemenin (alt komutsuz `note`) seçenekleri.
 inline constexpr std::span<const OptionSpec> kAddOptions = command_table_detail::kAdd;
 
-inline constexpr std::array<CommandSpec, 17> kCommands = [] {
+inline constexpr std::array<CommandSpec, 18> kCommands = [] {
     using namespace command_table_detail;
     using G = CommandGroup;
-    return std::array<CommandSpec, 17>{{
+    return std::array<CommandSpec, 18>{{
         {"ls", "cli.desc_ls", kLs, K::Query, {}, G::Notes, "-l"},
         {"find", "cli.desc_find", kFind, K::Query, {}, G::Notes, "-s"},
         {"show", "cli.desc_show", kNoPagerOnly, K::Note, {}, G::Notes, "-S", "cat"},
@@ -181,6 +192,7 @@ inline constexpr std::array<CommandSpec, 17> kCommands = [] {
         {"graph", "cli.desc_graph", {}, K::None, kGraph, G::Advanced},
         {"tags", "cli.desc_tags", kJsonPaged, K::None, {}, G::Notes, "-T"},
         {"relation", "cli.desc_relation", {}, K::None, kRelation, G::Notes},
+        {"prop", "cli.desc_prop", {}, K::None, kProp, G::Notes},
         {"view", "cli.desc_view", {}, K::None, kView, G::Advanced},
         {"import", "cli.desc_import", kImport, K::File, {}, G::Notes, "-i"},
         {"completion", "cli.desc_completion", {}, K::None, kShells, G::Other},

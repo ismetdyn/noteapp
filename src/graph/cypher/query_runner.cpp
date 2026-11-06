@@ -86,15 +86,18 @@ Result<QueryResult> run_read(Graph& graph, Store& store, Plan& plan, const Query
     return result;
 }
 
-Result<QueryResult> run_write(Graph& graph, Store& store, Plan& plan, const QueryLimits& limits) {
+Result<QueryResult> run_write(Graph& graph, Store& store, Plan& plan, const QueryLimits& limits,
+                              const QueryHooks& hooks) {
     Result<WriteTxn> txn = graph.write();
     if (!txn)
         return std::unexpected(std::move(txn).error());
     // Yazma görünür olmalı: anlık görüntü sabit değil, önbellek kapalı.
     ExecContext context(*txn, &*txn, store, limits, 0);
+    context.hooks = &hooks;
     Result<QueryResult> result = drain(plan, context);
     plan.root.reset();
-    if (!result)
+    // Önizleme: commit edilmeyen işlem yıkıcıda geri alınır, günlüğe girmez.
+    if (!result || !hooks.commit)
         return result;
     CYPHER_TRY(txn->commit());
     return result;
@@ -113,14 +116,15 @@ Result<Plan> checked_plan(std::string_view cypher, const Params& params, QueryMo
 }
 
 Result<QueryResult> run_guarded(Graph& graph, Store& store, std::string_view cypher, const Params& params,
-                                QueryMode mode, const QueryLimits& limits) {
+                                QueryMode mode, const QueryLimits& limits, const QueryHooks& hooks) {
     Result<Plan> plan = checked_plan(cypher, params, mode, limits);
     if (!plan)
         return std::unexpected(std::move(plan).error());
     if (store.has_open_txn())
         return std::unexpected(
             Error{Error::Code::InvalidArgument, "graph.invalid_argument", {{"reason", "txn_already_open"}}});
-    return plan->first_write ? run_write(graph, store, *plan, limits) : run_read(graph, store, *plan, limits);
+    return plan->first_write ? run_write(graph, store, *plan, limits, hooks)
+                             : run_read(graph, store, *plan, limits);
 }
 
 }  // namespace
@@ -137,10 +141,10 @@ Result<void> check_query(std::string_view cypher, const Params& params, QueryMod
 }
 
 Result<QueryResult> run_query(Graph& graph, Store& store, std::string_view cypher, const Params& params,
-                              QueryMode mode, const QueryLimits& limits) {
+                              QueryMode mode, const QueryLimits& limits, const QueryHooks& hooks) {
     // API istisna fırlatmaz: limitin altında kalsa da ayırma düşerse kesilmiş sonuç değil hata olur.
     try {
-        return run_guarded(graph, store, cypher, params, mode, limits);
+        return run_guarded(graph, store, cypher, params, mode, limits, hooks);
     } catch (const std::bad_alloc&) {
         return std::unexpected(limit_error("memory"));
     }

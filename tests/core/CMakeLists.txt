@@ -26,5 +26,6 @@ noteapp_add_test(note_graph note_graph_test.cpp note_limits_test.cpp note_links_
 target_link_libraries(note_graph_tests PRIVATE noteapp_core)
 
 # Etiketler (T80): iki cihazın birleşimi gerçek üç yönlü birleştirmeyle sınanır.
-target_sources(note_graph_tests PRIVATE note_tags_test.cpp note_views_test.cpp note_budget_test.cpp)
+target_sources(note_graph_tests PRIVATE note_tags_test.cpp note_views_test.cpp note_budget_test.cpp
+    note_query_test.cpp note_props_test.cpp)
 target_link_libraries(note_graph_tests PRIVATE noteapp_sync)

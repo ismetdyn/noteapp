@@ -20,6 +20,9 @@ enum class InputKind {
     Path,    // `a` `F2` ad istemi: metnin tamamı bir yoldur
     Find,    // editörde bul: metnin tamamı düz metindir, adaylar nottaki sözcüklerdir
     Folder,  // `m`: metnin tamamı bir klasördür, adaylar yalnız klasörler
+    // Harita sorgusu (F3): metnin tamamı tek değerdir, geçmiş vardır (Search gibi); adaylar `names`tadır
+    // (çağıran kayıtlı görünüm adlarını verir, word_input_sources).
+    Query,
 };
 
 // Değişmez anlık görüntü: açık girdi, yeniden tarama listeyi değiştirse de kendi kopyasını tutar. Hepsi

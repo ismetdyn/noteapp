@@ -391,6 +391,27 @@ TEST_CASE("gui preview: table rows and columns follow limits.tui and say what th
     CHECK(text.contains(noteapp::core::tr("gui.preview_columns_cut", {{"count", "1"}})));
 }
 
+// ImGui tablosu IMGUI_TABLE_MAX_COLUMNS'tan (512) az sütun alır; tam 512 sütun BeginTable assert'iydi.
+TEST_CASE("gui preview: a csv with exactly ImGui's column ceiling draws one column fewer and says so") {
+    WindowFixture fixture;
+    fixture.config.limits.tui.table_columns = {0, "0"};  // sınırsız: yalnız ImGui tavanı keser
+    std::string header;
+    std::string row;
+    for (int column = 0; column < IMGUI_TABLE_MAX_COLUMNS; ++column) {
+        header += (column == 0 ? "" : ",") + std::format("h{}", column);
+        row += (column == 0 ? "" : ",") + std::format("v{}", column);
+    }
+    fixture.add_note("genis.csv", header + "\n" + row + "\n", 10);
+    const auto state = fixture.make_state();
+    const auto view = make_view(*state);
+    select(*state, "genis.csv");
+    settle(*view);
+    const RenderedText text;
+    settle(*view);
+    CHECK(view->item_rects().contains("preview_table"));
+    CHECK(text.contains(noteapp::core::tr("gui.preview_columns_cut", {{"count", "1"}})));
+}
+
 TEST_CASE("gui preview: a csv that is no table shows its raw text and why") {
     WindowFixture fixture;
     fixture.add_note("liste.csv", "tek sütun\nbaşka satır\n", 10);
@@ -526,6 +547,10 @@ TEST_CASE("gui review: the header button, E in the preview and a double-click st
     REQUIRE(state->showing_preview());
 
     const View::ItemRect area = view->item_rects().at("preview");
+    ImGuiIO& io = ImGui::GetIO();
+    constexpr float kUnboundedDoubleClickSeconds = 3600.0F;  // gerçek zaman: ASan altında iki tık 0.3 sn'yi aşar
+    io.MouseDoubleClickTime = kUnboundedDoubleClickSeconds;
+    io.MouseSingleClickDelay = kUnboundedDoubleClickSeconds + 1.0F;
     // Sol iç boşluk: metin hizasında ama bağlantı ve kaydırma çubuğu dışında.
     ImGui::GetIO().AddMousePosEvent(area.min_x + 4.0F, (area.min_y + area.max_y) / 2.0F);
     view->draw_frame();

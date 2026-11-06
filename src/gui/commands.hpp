@@ -182,7 +182,7 @@ inline constexpr GuiCommand kGuiCommands[] = {
 };
 
 static_assert(std::ranges::all_of(kGuiCommands,
-                                  [](const GuiCommand& command) { return app::find_command(command.id); }),
+                                  [](const GuiCommand& command) { return app::has_command(command.id); }),
               "every GUI command id is in app::kCommandRegistry");
 
 // Kimliğin ilk satırı; bilinmeyen kimlik derleme hatasıdır.

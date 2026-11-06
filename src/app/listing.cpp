@@ -48,6 +48,15 @@ std::shared_ptr<const std::vector<core::NoteEdge>> search_edges(const core::Note
     return nullptr;
 }
 
+std::shared_ptr<const core::PropertyNotes> search_properties(const core::NoteStore& store,
+                                                             std::string_view key) {
+    auto notes = core::notes_with_property(store, key);
+    if (notes)
+        return std::move(*notes);
+    core::log_warn("search: cannot read properties: " + notes.error().message_key);
+    return nullptr;
+}
+
 std::optional<std::size_t> relation_depth(const core::Config& config) {
     if (!config.tuning.search_relations)
         return std::nullopt;
@@ -262,7 +271,8 @@ std::expected<std::vector<ListRow>, search::QueryError> Listing::rows_for(search
                                    relation_depth_, index,
                                    index == nullptr ? std::span<const std::size_t>{}
                                    : scope.empty()  ? std::span<const std::size_t>(meta_nodes_)
-                                                    : std::span<const std::size_t>(scoped_nodes)};
+                                                    : std::span<const std::size_t>(scoped_nodes),
+                                   property_source_};
     search::bind_graph_filters(parsed.filters, graph);
 
     std::vector<ListRow> rows;

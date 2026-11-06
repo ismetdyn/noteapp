@@ -4,6 +4,8 @@
 #include "core/graph_limits.hpp"
 #include "core/i18n.hpp"
 #include "core/json_text.hpp"
+#include "core/note_query.hpp"
+#include "core/note_store.hpp"
 #include "core/paths.hpp"
 #include "core/text.hpp"
 #include "graph/graph.hpp"
@@ -322,21 +324,46 @@ std::string to_utf8(const fs::path& path) {
     return std::string(text.begin(), text.end());
 }
 
-// Uygulamanın deposu: NoteStore'la aynı dosya, ayrı bağlantı (WAL; bağlantı başına tek iş parçacığı).
-std::expected<graph::Graph, int> open_database(bool write, const core::Config& config) {
+// Okumanın deposu: NoteStore'la aynı dosya, ayrı bağlantı (WAL; bağlantı başına tek iş parçacığı). Yazma
+// NoteStore'dan geçer (run_write).
+std::expected<graph::Graph, int> open_database(const core::Config& config) {
     const fs::path path = core::data_dir() / fs::path(kGraphFile);
     std::error_code code;
-    if (!write && !fs::exists(path, code)) {
+    if (!fs::exists(path, code)) {
         std::cerr << sanitize_for_terminal(core::tr("cli.query_no_database", {{"path", to_utf8(path)}}))
                   << '\n';
         return std::unexpected(kExitUser);
     }
-    if (write)
-        code = core::create_private_directories(path.parent_path());
     auto opened = graph::Graph::open(path, core::graph_limits_of(config.limits.graph));
     if (!opened)
         return std::unexpected(report(opened.error()));
     return std::move(*opened);
+}
+
+// Yazmanın hatası çekirdekten (core::run_user_query) gelir: sorgunun kendi sorunu (sözdizimi, desteklenmeyen öğe,
+// eksik parametre) 2, korunan veri, çalışma anı hatası ve sınır 1, depo hatası 3 (SPEC-cli "Graph sorgusu").
+int write_exit_code(const core::Error& error) {
+    if (error.code != core::Error::Code::InvalidQuery)
+        return error.code == core::Error::Code::NotFound ? kExitUser : kExitInternal;
+    constexpr std::array kUsageKeys = {std::string_view("graph.cypher_syntax"),
+                                       std::string_view("graph.cypher_unsupported"),
+                                       std::string_view("graph.cypher_missing_param")};
+    return std::ranges::find(kUsageKeys, error.message_key) != kUsageKeys.end() ? kExitUsage : kExitUser;
+}
+
+// Yazma haritanın sorgu çubuğuyla aynı korumadan geçer (lead kararı, F3 incelemesi): türetilmiş not verisi
+// (gövde, yol, bağlantı, etiket, klasör, görünüm) ve ilişki kurmak reddedilir; NoteStore'un deposu ve kilidiyle
+// çalışır, depoyu gerekirse kurar. Çıktı ham motor sonucudur (okumayla aynı biçim).
+int run_write(const QueryArgs& parsed, const core::Config& config, const graph::QueryLimits& limits) {
+    core::NoteStore store = core::NoteStore::for_config(config);
+    const auto done =
+        core::run_user_query(store, parsed.positional.front(), core::QueryAction::Write, limits, parsed.params);
+    if (!done) {
+        std::cerr << sanitize_for_terminal(core::format_error(done.error())) << '\n';
+        return write_exit_code(done.error());
+    }
+    std::cout << query_output(done->result, parsed.json);
+    return kExitOk;
 }
 
 }  // namespace
@@ -349,12 +376,14 @@ int run_query(const ParsedArgs& args, const core::Config& config) {
     auto parsed = parse_query_args(args.rest);
     if (!parsed)
         return parsed.error();
-    auto database = open_database(parsed->write, config);
+    const graph::QueryLimits limits = core::query_limits_of(config.limits.query);
+    if (parsed->write)
+        return run_write(*parsed, config, limits);
+    auto database = open_database(config);
     if (!database)
         return database.error();
-    const auto mode = parsed->write ? graph::QueryMode::ReadWrite : graph::QueryMode::ReadOnly;
-    const auto result = database->query(parsed->positional.front(), parsed->params, mode,
-                                        core::query_limits_of(config.limits.query));
+    const auto result = database->query(parsed->positional.front(), parsed->params, graph::QueryMode::ReadOnly,
+                                        limits);
     if (!result)
         return report(result.error());
     std::cout << query_output(*result, parsed->json);

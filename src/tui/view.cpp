@@ -994,7 +994,9 @@ ftxui::Element confirm_box(const ConfirmState& confirm) {
     using namespace ftxui;
     const std::string title = confirm.title().empty() ? core::tr("tui.delete_title") : confirm.title();
     return window(text(" " + title + " ") | bold,
-                  vbox(confirm_body(confirm.message(), core::tr("tui.delete_yes"), confirm.yes_selected()))) |
+                  vbox(confirm_body(confirm.message(),
+                                    confirm.yes().empty() ? core::tr("tui.delete_yes") : confirm.yes(),
+                                    confirm.yes_selected()))) |
            size(WIDTH, EQUAL, kDialogWidth) | clear_under;
 }
 
@@ -1072,6 +1074,8 @@ const char* hints_key(const TuiState& state) {
         return "tui.key_hints_preview";
     if (state.focus() == Focus::Links)
         return "tui.key_hints_links";
+    if (state.focus() == Focus::Inspector)
+        return "inspector.hints";
     // Boş alt klasörde de `a` ve üst klasör söylenir; boş kök liste ipuçlarında kalır.
     const bool empty_folder =
         state.in_folder_view() && state.rows().empty() && !state.current_folder().empty();
@@ -1095,6 +1099,13 @@ std::string totals_text(const TuiState& state, int panel_height) {
 
 // Yol girdisi: imleç metnin içindedir; uzun yolda imleç çevresi görünür kalır.
 ftxui::Element rename_bar(const RenameState& rename, int width) {
+    if (rename.is_property()) {
+        const std::string label =
+            rename.property_key().empty()
+                ? core::tr("inspector.key_prompt")
+                : core::tr("inspector.value_prompt", {{"key", terminal_safe(rename.property_key())}});
+        return input_line_bar(label, rename.line(), {}, rename.ghost(), core::tr("tui.rename_hints"), width);
+    }
     if (rename.is_relation()) {
         // Yön işareti kutunun yerine: → yönlü, — yönsüz (Ctrl+D değiştirir).
         const std::string label = core::tr(
@@ -1459,11 +1470,43 @@ ftxui::Element links_section(const TuiState& state, int rows, int columns) {
     return vbox(std::move(lines));
 }
 
+// Denetçi (F4): ayırıcıda başlık (konu), sonra `anahtar = değer  tür`; salt okunur satır soluk. Metin
+// app::Inspector'da temizlenmiş ve kesilmiştir; panele sığmayan değer sağdan kısalır. Yalnız görünen
+// satırlar.
+ftxui::Element inspector_section(const TuiState& state, int rows, int columns) {
+    using namespace ftxui;
+    const app::Inspector& inspector = state.inspector();
+    const auto room = static_cast<std::size_t>(std::max(columns - 4, 1));
+    Elements lines = {hbox({text(tail_cells(terminal_safe(inspector.title()), room / 2) + " ") | bold,
+                            separatorCharacter("─") | flex})};
+    if (!inspector.error().empty()) {
+        lines.push_back(paragraph(terminal_safe(inspector.error())) | color(Color::Red));
+    } else if (inspector.rows().empty()) {
+        lines.push_back(text(core::tr("inspector.empty")) | dim);
+    }
+    const auto visible = static_cast<std::size_t>(std::max(rows, 0));
+    const std::size_t top = state.inspector_top(visible);
+    for (std::size_t i = top; i < inspector.rows().size() && i < top + visible; ++i) {
+        const app::InspectorRow& row = inspector.rows()[i];
+        std::string line =
+            row.kind == app::InspectorRow::Kind::Label ? row.key_text : row.key_text + " = " + row.value_text;
+        line += "  (" + core::tr("inspector.type_" + row.type) + ")";
+        Element cell = text(head_cells(line, static_cast<int>(room)));
+        if (row.read_only)
+            cell = std::move(cell) | dim;
+        lines.push_back(i == inspector.selected() ? std::move(cell) | inverted : std::move(cell));
+    }
+    return vbox(std::move(lines));
+}
+
 ftxui::Element right_pane(const TuiState& state, const Preview& preview, const EditorSession* editing,
                           int height, int columns, bool show_cursor, SpellChecker* spell) {
     using namespace ftxui;
     if (editing && editing->is_open())
         return editor_pane(*editing, show_cursor, spell);
+    if (const int inspector = state.inspector_reserved_rows(height); inspector > 0)
+        return vbox({preview_pane(state, preview, height - inspector, columns, spell) | yflex,
+                     inspector_section(state, inspector - 1, columns)});
     const int reserved = state.links_reserved_rows(height);
     Element body = preview_pane(state, preview, height - reserved, columns, spell);
     if (reserved == 0)

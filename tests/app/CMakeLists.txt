@@ -4,10 +4,12 @@ noteapp_add_test(app
     document_test.cpp
     graph_layout_test.cpp
     import_files_test.cpp
+    inspector_test.cpp
     item_ops_test.cpp
     label_fold_test.cpp
     listing_test.cpp
     map_explore_test.cpp
+    map_query_test.cpp
     map_relations_test.cpp
     notices_test.cpp
     settings_test.cpp

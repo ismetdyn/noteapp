@@ -8,10 +8,12 @@ add_library(noteapp_app
     document.cpp
     graph_layout.cpp
     import_files.cpp
+    inspector.cpp
     ui_args.cpp
     item_ops.cpp
     label_fold.cpp
     listing.cpp
+    map_query.cpp
     map_relations.cpp
     note_map.cpp
     notices.cpp

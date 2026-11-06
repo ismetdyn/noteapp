@@ -24,7 +24,7 @@ constexpr int kMaxYear = 2200;
 constexpr int kMaxAgeDays = 36500;
 constexpr std::size_t kDateChars = 10;  // YYYY-MM-DD
 
-enum class Key { Sort, Type, In, Size, Updated, Created, Origin, Sync, Tag, View, Rel, Linked };
+enum class Key { Sort, Type, In, Size, Updated, Created, Origin, Sync, Tag, View, Rel, Linked, Prop };
 
 // Geçersiz değerin gerekçesi: i18n "reason.<ad>".
 using Reason = std::string_view;
@@ -37,6 +37,7 @@ constexpr Reason kMustBeTypeName = "must_be_type_name";
 constexpr Reason kMustNotBeEmpty = "must_not_be_empty";
 constexpr Reason kMustBeTag = "must_be_tag";
 constexpr Reason kMustBeViewName = "must_be_view_name";
+constexpr Reason kMustBeProperty = "must_be_property";
 
 bool is_space(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
@@ -67,7 +68,7 @@ std::vector<Token> tokenize(std::string_view query) {
     return tokens;
 }
 
-constexpr std::array<std::pair<std::string_view, Key>, 12> kKeys{{{"sort", Key::Sort},
+constexpr std::array<std::pair<std::string_view, Key>, 13> kKeys{{{"sort", Key::Sort},
                                                                   {"type", Key::Type},
                                                                   {"in", Key::In},
                                                                   {"size", Key::Size},
@@ -78,7 +79,8 @@ constexpr std::array<std::pair<std::string_view, Key>, 12> kKeys{{{"sort", Key::
                                                                   {"tag", Key::Tag},
                                                                   {"view", Key::View},
                                                                   {"rel", Key::Rel},
-                                                                  {"linked", Key::Linked}}};
+                                                                  {"linked", Key::Linked},
+                                                                  {"prop", Key::Prop}}};
 
 std::optional<Key> known_key(std::string_view name) {
     const std::string folded = fold_to_utf8(name);
@@ -231,8 +233,24 @@ std::expected<Filter, Reason> parse_tag(std::string_view folded) {
     return filter;
 }
 
+// `anahtar` ya da `anahtar=değer`: anahtar tam (graf anahtarı büyük/küçük harf ayırır), değer katlanır.
+// Notları bind_graph_filters kurar.
+std::expected<Filter, Reason> parse_property(std::string_view raw) {
+    const auto equals = raw.find('=');
+    const std::string_view key = raw.substr(0, equals);
+    if (key.empty())
+        return std::unexpected(kMustBeProperty);
+    Filter filter{Filter::Kind::Property};
+    filter.text = key;
+    if (equals != std::string_view::npos)
+        filter.value = fold_to_utf8(raw.substr(equals + 1));
+    return filter;
+}
+
 std::expected<Filter, Reason> parse_filter(Key key, std::string_view raw, std::string_view folded) {
     switch (key) {
+    case Key::Prop:
+        return parse_property(raw);
     case Key::Tag:
         return parse_tag(folded);
     case Key::Type:
@@ -363,6 +381,7 @@ bool matches(const Filter& filter, const core::NoteMeta& note, fs::file_time_typ
     case Filter::Kind::View:
     case Filter::Kind::Relation:
     case Filter::Kind::Linked:
+    case Filter::Kind::Property:
         return filter.notes && filter.notes->contains(note.path);
     case Filter::Kind::Sync:
         break;

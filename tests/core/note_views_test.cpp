@@ -330,3 +330,41 @@ TEST_CASE("the limits in defaults.toml are the engine's own defaults") {
     CHECK(query_limits_of(limits.query) == graph::QueryLimits{});
     CHECK(query_limits_of(limits.view) == graph::QueryLimits{});
 }
+
+// Güvenlik incelemesi (F3, Sev-2): baştaki ya da sondaki boşluk adı yazılan metinden ayırır (harita sorgusu
+// metni kırpar): ` MATCH …` adlı senkron görünüm Tab'la satıra gelir, görünüm olarak bulunmaz, Cypher olarak
+// çalışırdı. Kayıt da okuma da baş ve sondaki boşluğu (Unicode boşlukları dahil) reddeder.
+TEST_CASE("views: a name with leading or trailing whitespace is refused on save and ignored on read") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    REQUIRE(seed_note(store, "x.md", "x\n"));
+    for (const std::string_view name : {" lead", "trail ", "\xC2\xA0nbsp", "ideo\xE3\x80\x80"}) {
+        INFO(std::string(name));
+        const auto saved = save_view(store, name, "MATCH (n:Note) RETURN n", false);
+        REQUIRE_FALSE(saved.has_value());
+        CHECK(saved.error().code == Error::Code::InvalidPath);
+    }
+    REQUIRE(save_view(store, "inner space ok", "MATCH (n:Note) RETURN n", false).has_value());
+    write_raw(dir.path(), "CREATE (:View {name: \" MATCH (n) SET n.status = 'x'\", query: 'MATCH (n:Note) RETURN n'})");
+    CHECK(view_names(store) == Texts{"inner space ok"});
+    CHECK(find_view(store, " MATCH (n) SET n.status = 'x'").error().code == Error::Code::NotFound);
+}
+
+// İnceleme (F3, Sev-2): senkronla gelen görünümün adı kayıt kuralından geçmemiş olabilir (satır sonu, denetim,
+// yasak karakter). Okuma da aynı kuralı uygular: böyle görünüm listelenmez, bulunmaz, çalıştırılmaz.
+TEST_CASE("views: a synced view whose name breaks the name rule is neither listed nor run") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    REQUIRE(seed_note(store, "x.md", "x\n"));
+    REQUIRE(save_view(store, "kept", "MATCH (n:Note) RETURN n", false).has_value());
+    write_raw(dir.path(), "CREATE (:View {name: 'two\\nlines', query: 'MATCH (n:Note) RETURN n'})");
+    write_raw(dir.path(), "CREATE (:View {name: 'a:b', query: 'MATCH (n:Note) RETURN n'})");
+    write_raw(dir.path(), "CREATE (:View {name: 'x/y', query: 'MATCH (n:Note) RETURN n'})");
+    CHECK(view_names(store) == Texts{"kept"});
+    for (const std::string_view name : {"two\nlines", "a:b", "x/y"}) {
+        const auto found = find_view(store, name);
+        REQUIRE_FALSE(found.has_value());
+        CHECK(found.error().code == Error::Code::NotFound);
+        CHECK_FALSE(run_view(store, name).has_value());
+    }
+}

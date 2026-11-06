@@ -225,8 +225,12 @@ metne (yoksa `pdf.image_placeholder`) iner; hiçbir görsel/bağlantı hedefine 
 ## Graph sorgusu
 
 `note query` uygulamanın deposu `<veri dizini>/graph.db` üzerinde çalışır. Dosya yoksa çıkış 1; yalnız
-`--write` oluşturur. `--write` olmadan yazan sorgu çıkış 2. Söz dizimi, desteklenmeyen öğe, eksik parametre, geçersiz
-`--param`: 2. Çalışma anı hatası ve aşılan sınır: 1. Bozuk veya yeni sürüm dosya, G/Ç: 3. Dil: [SPEC-graph](SPEC-graph.md).
+`--write` oluşturur. `--write` olmadan yazan sorgu çıkış 2. `--write` haritanın sorgu çubuğuyla aynı korumadan geçer
+(`core::run_user_query`, SPEC-graph "Sorgu çubuğu"; F3 incelemesi, lead kararı): not gövdesi, yolu ve üst verisi,
+`[[bağlantı]]`, `#etiket`, klasör ve görünüm düğümleri/kenarları ile `RELATED_TO` kurmak reddedilir (çıkış 1, konumlu
+ileti; ilişki `note relation add` ile kurulur), kullanıcının kendi düğümleri, özellikleri ve var olan ilişkinin adı,
+yönü, silinmesi yazılır. Okuma değişmedi. Söz dizimi, desteklenmeyen öğe, eksik parametre, geçersiz
+`--param`: 2. Çalışma anı hatası, korunan veri ve aşılan sınır: 1. Bozuk veya yeni sürüm dosya, G/Ç: 3. Dil: [SPEC-graph](SPEC-graph.md).
 Sınırlar kullanıcının profilidir: `limits.query.*` (satır, süre, bellek, metin, iç içelik…; `0` = sınırsız, SPEC-core
 "Sınırlar"). Görünüm (`note view run`, `view:`) bundan etkilenmez, `limits.view.*` ile çalışır. Graf `limits.graph.*`
 ile açılır (`note graph import`/`export` de).
@@ -360,3 +364,11 @@ Etkileşimli seçici (fzf benzeri seçim TUI'nin işi), `mkdir/rmdir` komutları
   dikkate alınsın" (TUI/GUI ile aynı kural, `search::relation_hits`). Eski içerik satırları ve sıraları aynı.
 - **ADDED** `note find -l/--long` (nedeni yazar) ve `--json`'da `reason` alanı (içerik kaydında `"content"`).
 - **ADDED** `note ls` sorgusunda `rel:` ve `linked:` (SPEC-search).
+
+## Değişiklik 2026-11-06 (F4 özellikler, CLI)
+- **ADDED** `note prop get NOT [ANAHTAR] [--json]`, `note prop set NOT ANAHTAR DEĞER [--type text|number|bool]`, `note prop rm NOT ANAHTAR`; `note relation prop get|set|rm KİMLİK …` (kimlik `note relation ls NOT`tan). Kural SPEC-graph "Özellikler (F4)", ileti `app::Inspector` (GUI/TUI ile aynı).
+  - `get`: `ANAHTAR<TAB>TÜR<TAB>DEĞER`, uygulamanın anahtarında sonda `<TAB>read-only`; `--json` `[{"key","type","value","read_only"}]` (sayı ve bool yalın, büyük değer null). Tek anahtar yalnız değeri yazar (`--json`'da JSON değeri). Çıktı `sanitize_for_terminal`'dan geçer.
+  - `set`: tür değerden (önek ya da kendiliğinden) ya da `--type`; eksi sayı (`-5`) değerdir, `-` ile başlayan metin `--` sonrası verilir. `rm`: olmayan anahtar 1.
+  - Çıkış: ayrılmış ya da geçersiz anahtar, geçersiz değer, bilinmeyen tür, bozuk kimlik, kullanım 2; olmayan not, ilişki ya da anahtar 1.
+- **ADDED** `note ls`/`find` sorgusunda `prop:anahtar` ve `prop:anahtar=değer` (SPEC-search).
+- **MODIFIED** Ayrılmış sözcükler: `prop`. Daha önce `note prop` metin olarak eklenirdi.

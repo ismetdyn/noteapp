@@ -5,6 +5,11 @@
 invalid_path = "Geçersiz yol '{path}': {reason}"
 invalid_relation_name = "Geçersiz ilişki adı '{name}': {reason}"
 relation_not_found = "Bu ilişki artık yok: kaldırılmış ya da değişmiş, belki başka bir cihazda"
+property_key = "Geçersiz özellik anahtarı '{key}': {reason}"
+property_reserved = "'{key}' uygulamanındır ve salt okunurdur; notun kendisini değiştirin (ad, taşıma, düzenleme)"
+property_relation_reserved = "İlişkinin '{key}' değeri özellik değildir: Yeniden adlandır ya da yön eylemlerini kullanın"
+property_value = "Geçersiz özellik değeri: {reason}"
+property_not_found = "'{key}' özelliği yok"
 out_of_memory = "'{path}' okunamadı: bellek yetmiyor; içe alınmadı"
 io = "'{path}' için G/Ç hatası: {detail}"
 not_found = "Bulunamadı: {path}"
@@ -26,6 +31,14 @@ view_exists = "'{name}' adlı görünüm zaten var"
 view_writes = "'{view}' görünümü grafa yazıyor (satır {line}, sütun {col}); görünümler salt okunurdur, hiçbir şey çalıştırılmadı ya da kaydedilmedi"
 view_param = "'{view}' görünümü ${name} parametresini istiyor (satır {line}, sütun {col}); görünümler parametre almaz"
 view_no_notes = "'{view}' görünümü not döndürmüyor: not düğümünü (RETURN n) ya da yolunu döndürün"
+query_writes = "Bu sorgu veriyi değiştiriyor (satır {line}, sütun {col}); çalıştırmak için onaylayın"
+query_protected_property = "{label} düğümünün '{key}' özelliğini uygulama yönetir (satır {line}, sütun {col}); notun, klasörün, etiketin ya da görünümün kendisinden değiştirin"
+query_protected_label = "{label} etiketini uygulama yönetir (satır {line}, sütun {col}); not, klasör, etiket ve görünüm uygulamada oluşturulur ve silinir"
+query_protected_node = "{label} düğümü sorguyla silinemez (satır {line}, sütun {col}); çöp, silme ya da görünüm komutlarını kullanın"
+query_protected_edge = "{type} kenarları not metninden ve klasörlerden gelir (satır {line}, sütun {col}); bunun yerine notu düzenleyin ya da taşıyın"
+query_relation_name = "Geçersiz ilişki adı (satır {line}, sütun {col}): {reason}"
+query_relation_directed = "İlişkinin 'directed' değeri true olur ya da kaldırılır (satır {line}, sütun {col})"
+query_relation_create = "İlişki sorguyla kurulmaz (satır {line}, sütun {col}); haritada Bağla…, TUI'de L ya da note relation add kullanın. Ad, yön ve silme burada çalışır"
 migration_required = "'note graph migrate' çalıştırın: {path} içindeki notlar eski düzende, o zamana dek hiçbir şey kaydedilmez"
 graph_too_new = "Bu veritabanı daha yeni bir sürümle yazılmış, açılamıyor: {path}"
 graph_corrupt = "Not veritabanı bozuk ya da noteapp veritabanı değil: {path}"
@@ -84,6 +97,7 @@ must_be_folder = "not klasörü içinde geçerli bir klasör olmalı"
 must_be_tag = "bir etiket adı olmalı (#ad, ad/alt)"
 must_be_view_name = "kayıtlı bir görünüm adı olmalı (bkz. 'note view ls')"
 view_name_slash = "görünüm adında '/' olamaz"
+view_name_space = "görünüm adı boşlukla başlayamaz ya da bitemez"
 too_large = "60 MiB sınırından büyük"
 unreadable = "okunamıyor"
 unreadable_folder = "bu klasör okunamıyor (izin yok ya da yol çok uzun); içinde ne olduğu bilinmiyor, geçirilmedi"
@@ -94,6 +108,15 @@ too_many_collisions = "bu adı çok fazla not paylaşıyor"
 new_file = "veritabanında yok: geçişten sonra eklenmiş ya da değişmiş"
 import_link = "bir bağ (sembolik bağ ya da junction); bağlar izlenmez"
 import_not_file = "normal dosya ya da klasör değil (aygıt, boru ya da soket)"
+empty_name = "anahtar boş"
+name_too_long = "256 bayttan uzun"
+name_not_utf8 = "geçerli UTF-8 değil"
+name_has_nul = "NUL karakteri içeriyor"
+not_number = "sayı değil (tamsayı ya da 2.5 gibi sonlu ondalık)"
+not_bool = "true ya da false olmalı"
+non_finite = "sonlu bir sayı değil"
+value_not_utf8 = "geçerli UTF-8 değil"
+must_be_property = "prop:anahtar ya da prop:anahtar=değer biçiminde olmalı"
 
 [config]
 unknown_key = "Bilinmeyen ayar '{key}' yok sayıldı"
@@ -175,7 +198,7 @@ tab_closed_missing = "Sekme kapandı: '{path}' artık yok"
 map_whole = "bütün çizge"
 map_depth = "derinlik {depth}"
 map_tags = " · etiketler"
-map_status = "{scope}{tags}{filters}  Tab seç  Enter aç  x komşu  / bul  R yol  C bağla  P sabitle  e # N süz  w bütün  t etiket  1-{max} derinlik  oklar + - 0"
+map_status = "{scope}{tags}{filters}  Tab seç  Enter aç  x komşu  / bul  Q sorgu  R yol  C bağla  P sabitle  e # N süz  w bütün  t etiket  1-{max} derinlik  oklar + - 0"
 map_filter_links = " · yalnız bağlantılar"
 map_filter_related = " · yalnız ilişkiler"
 map_filter_named = " · '{name}' ilişkisi"
@@ -188,6 +211,13 @@ map_tag_label = "Etiket süzgeci:"
 map_relation_label = "İlişki süzgeci:"
 map_find_hints = "Enter Tab sonraki  ⇧Tab önceki  Esc kapat"
 map_filter_hints = "Enter uygula  Tab liste  boş = kapalı  Esc vazgeç"
+map_query_label = "Sorgu:"
+map_query_hints = "Enter çalıştır  ↑↓ geçmiş  Tab görünümler  Esc kapat"
+map_query_status = "Q sorgu  O tablo  Esc temizle  {summary}"
+map_query_table_hints = "↑↓ satır  Enter aç  O harita  Q sorgu  Esc temizle"
+map_query_no_columns = "Sorgu sütun döndürmüyor"
+query_confirm_title = "Yazan sorgu çalıştırılsın mı?"
+query_apply = "Uygula"
 map_link = "{from} → {to}  Tab hedef  Enter bağla  d kenarı kaldır  Esc vazgeç"
 map_choose = "{from} → {to}  r ilişkili  l bağlantı ({from} içine [[wiki]])  Esc vazgeç"
 map_relation = "{from} {arrow} {to}  {name}  n ad  f yön çevir  u yönsüz  d kaldır  Esc vazgeç"
@@ -340,6 +370,7 @@ E             harici editör ($EDITOR)
 /             notta bul (I = ı = i)
 n N           sonraki / önceki eşleşme
 b             önizleme altındaki bağlantılar
+p             gösterilen notun özellikleri
 Tab ⇧Tab      [[bağlantı]] seç, Enter açar
 L             nota bağla (girdi, Tab listeler)
               sonra adı: Tab adlar, ^D yönlü
@@ -353,9 +384,19 @@ L             ilişkili satırda: kaldır (sorar)
               diğer satırda: nota bağla
 n f u         ilişkili satırda: yeniden adlandır,
               yönü çevir, yönsüz yap
+p             ilişkili satırda: özellikleri
 Esc b         önizlemeye dön
 [[ad]]        böyle not yok; adı değişen hedef
               eski kalır, metin yeniden yazılmaz
+Özellikler (p: önizleme, bağlantılar, harita)
+↑ ↓  k j      satır seç
+a             ekle: anahtar, sonra değer;
+              #anahtar notun metnine etiket
+e Enter       değeri düzenle; text: number:
+              bool: türü seçer, yoksa otomatik
+d             sil (sorar); uygulamanın
+              anahtarları salt okunur
+Esc p         geri
 Editör (sağ panel): her tuş metne gider
 ^S kaydet  ^Q kapat (kaydedilmediyse sorar)
 Esc aramayı kapatır, seçimi kaldırır
@@ -387,8 +428,15 @@ R             seçili nottan en kısa yol: Tab
               hedef, d yönlü, Enter bulur, Esc
               yolu temizler
 P U           seçiliyi sabitle/çöz, hepsini çöz
+p             seçili notun özellikleri
+              (C kipinde: ilişki kenarının)
 n d u         buraya yeni not, seçiliyi çöpe,
               u geri getirir
+Q             Cypher sorgusu: Enter çalıştırır,
+              ↑↓ geçmiş, Tab görünüm adları;
+              sonuç haritada yanar, yazma sorar
+O             sorgu sonucu tablo: ↑↓ satır,
+              Enter notunu açar; Esc temizler
 C             seçili nottan bağla: Tab hedef,
               Enter bağlar (not: r ilişkili,
               l [[bağlantı]]; etiket: ekler),
@@ -736,7 +784,7 @@ view_tree_tip = "Klasörler ve notlar tek ağaçta; oklar klasörü açar ve kap
 view_details = "Ayrıntılar"
 view_details_tip = "Yalnız geçerli klasör, boyut ve tarihlerle; çift tıklama ya da Enter klasöre girer"
 view_map = "Harita"
-view_map_tip = "Notlar bağlantı ve ilişkileriyle çizge olarak. Tıklama notu açar, çift tıklama komşularını açar ya da kapar, sürükleme ya da P sabitler (U hepsini çözer), Ctrl+F düğüm bulur; tekerlek ya da +/- yakınlaştırır, oklar ya da sürükleme kaydırır, 0 sığdırır. Shift+sürükleme (ya da düğüme sağ tık → Bağla…, sonra hedefe tıklama) düğümü ötekine ilişkilendirir, bağlar ya da etiketler; düğüme sağ tık menüsünü (aç, komşular, sabitle, en kısa yol, çöp), kenara sağ tık kaldırmayı, boşluğa sağ tık yeni notu açar"
+view_map_tip = "Notlar bağlantı ve ilişkileriyle çizge olarak. Tıklama notu açar, çift tıklama komşularını açar ya da kapar, sürükleme ya da P sabitler (U hepsini çözer), Ctrl+F düğüm bulur; tekerlek ya da +/- yakınlaştırır, oklar ya da sürükleme kaydırır, 0 sığdırır. Shift+sürükleme (ya da düğüme sağ tık → Bağla…, sonra hedefe tıklama) düğümü ötekine ilişkilendirir, bağlar ya da etiketler; düğüme sağ tık menüsünü (aç, komşular, sabitle, en kısa yol, çöp), kenara sağ tık kaldırmayı, boşluğa sağ tık yeni notu açar. Q Cypher sorgu çubuğunu açar"
 map_whole = "Tüm çizge"
 map_whole_tip = "Kapalı: yalnız gösterilen notun çevresi"
 map_depth = "Derinlik {depth}"
@@ -752,6 +800,19 @@ map_relation_tip = "Yalnız bu adı taşıyan ilişkiler"
 map_tag_hint = "#etiket"
 map_tag_tip = "Yalnız bu etiketli notlar (aramadaki tag: gibi; gösterilen not kalır)"
 map_capped = "{total} düğümden {shown} tanesi gösteriliyor. Bir bölümü tam görmek için Tüm çizge'yi kapatın ya da derinliği düşürün."
+map_query = "Sorgu"
+map_query_tip = "Cypher sorgu çubuğu (haritada Q): sonuçlar vurgulanır; yazan sorgu önce sorar"
+map_query_hint = "MATCH (n:Note) RETURN n — Enter çalıştırır, Yukarı/Aşağı geçmiş, görünümün adı görünümü çalıştırır"
+map_query_run = "Çalıştır"
+map_query_table = "Tablo"
+map_query_table_tip = "Sonucu harita yerine tablo olarak göster"
+map_query_views = "Görünümler"
+map_query_views_tip = "Kayıtlı görünümü çalıştır (note view save)"
+map_query_no_views = "Kayıtlı görünüm yok"
+map_query_no_columns = "Sorgu sütun döndürmüyor"
+map_query_columns_hidden = "{count} sütun gösterilmiyor: tablo {shown} sütun alır; note query hepsini gösterir"
+query_confirm_title = "Yazan sorgu çalıştırılsın mı?"
+query_apply = "Uygula"
 details_up = "Yukarı"
 details_up_tip = "Üst klasöre çık (Sol ok)"
 details_name = "Ad"
@@ -903,7 +964,9 @@ import_busy = "Bir içe alma sürüyor; bitmesini bekleyin ya da durdurun"
 import_start_failed = "İçe alma başlatılamadı; ayrıntı günlükte"
 import_summary = "İçe alınan: {imported}, atlanan: {skipped}, alınamayan: {failed}"
 view_usage = "Kullanım: note view save AD CYPHER [--force] | ls [--json] | run AD [--json] | rm AD | show AD"
-relation_usage = "Kullanım: note relation add A B [--name AD] [--directed] | rm A B [--name AD | --id KİMLİK] | rename A B ESKİ YENİ | ls [NOT] [--json]"
+relation_usage = "Kullanım: note relation add A B [--name AD] [--directed] | rm A B [--name AD | --id KİMLİK] | rename A B ESKİ YENİ | ls [NOT] [--json] | prop get KİMLİK [ANAHTAR] [--json] | prop set KİMLİK ANAHTAR DEĞER [--type T] | prop rm KİMLİK ANAHTAR"
+prop_usage = "Kullanım: note prop get NOT [ANAHTAR] [--json] | set NOT ANAHTAR DEĞER [--type text|number|bool] | rm NOT ANAHTAR"
+prop_bad_type = "'{type}' bir özellik türü değil: text, number ya da bool"
 relation_bad_id = "'{id}' bir ilişki kimliği değil (32 onaltılık hane, bkz. 'note relation ls NOT')"
 relation_no_name = "{from} ile {to} arasında '{name}' adlı ilişki yok"
 relation_none = "{from} ile {to} arasında ilişki yok"
@@ -1094,6 +1157,11 @@ desc_relation_add = "İki notu ilişkilendir"
 desc_relation_rm = "İlişkiyi kaldır"
 desc_relation_rename = "İlişkiyi yeniden adlandır"
 desc_relation_ls = "İlişki adlarını ya da notun ilişkilerini listele"
+desc_relation_prop = "Kimliği verilen ilişkinin özellikleri: prop get|set|rm KİMLİK …"
+desc_prop = "Not özellikleri (anahtar = değer)"
+desc_prop_get = "Notun özelliklerini ya da tek değeri yaz"
+desc_prop_set = "Özellik yaz (tür değerden ya da --type ile)"
+desc_prop_rm = "Özelliği kaldır"
 desc_completion_zsh = "zsh betiği"
 desc_completion_bash = "bash betiği"
 desc_completion_fish = "fish betiği"
@@ -1130,6 +1198,7 @@ opt_force = "Aynı adlı görünümün yerine yaz"
 opt_relation_name = "İlişkinin adı (boş: adsız)"
 opt_directed = "İlişkiyi ilk nottan ikinciye yönlendir"
 opt_relation_id = "note relation ls NOT çıktısındaki ilişki kimliği"
+opt_prop_type = "Değer türü: text, number ya da bool (varsayılan: değerden)"
 completion_usage = "Kullanım: note completion zsh | bash | fish"
 help_completion = "Kabuğun için tamamlama betiğini yazdırır: Tab sonra komutları, seçenekleri, not yollarını, klasörleri, tipleri, etiketleri, görünümleri ve config anahtarlarını senin dilindeki açıklamalarla önerir. zsh: note completion zsh > ~/.local/share/zsh/site-functions/_note (bu dizin compinit'ten önce fpath'te olmalı); bash: ~/.bashrc'ye source <(note completion bash); fish: note completion fish > ~/.config/fish/completions/note.fish"
 migrate_backup_hint = "Yedek {path} altında (özel). Gerekmediğinde kendiniz silin: rm -r {path}"
@@ -1246,6 +1315,20 @@ trash = "Çöpe at"
 find_hint = "Haritada bul"
 find_count = "{at}/{count}"
 find_none = "eşleşme yok"
+query_read = "Sorgu: {rows} satır, {notes} not vurgulandı"
+query_view = "Görünüm çalıştı: {name} — {rows} satır, {notes} not vurgulandı"
+query_written = "Sorgu uygulandı: {changes}"
+query_written_unnamed = "Sorgu uygulandı: {changes}; sonuç geri okunamadı: {error}"
+query_confirm = "Bu sorgu veriyi değiştiriyor: {changes}. Uygulansın mı? Geri alma yok."
+query_trashed = "{path} (çöp)"
+changes_none = "değişiklik yok"
+changes_nodes_created = "oluşan düğüm: {count}"
+changes_nodes_deleted = "silinen düğüm: {count}"
+changes_relationships_created = "oluşan kenar: {count}"
+changes_relationships_deleted = "silinen kenar: {count}"
+changes_properties_set = "yazılan özellik: {count}"
+changes_labels_added = "eklenen etiket: {count}"
+changes_labels_removed = "kaldırılan etiket: {count}"
 
 [graph]
 cypher_syntax = "Sorgu söz dizimi hatası, satır {line}, sütun {col}: {what}"
@@ -1370,3 +1453,41 @@ reason_relation = "ilişki: {name} {arrow} {path}"
 reason_linked = "bağlı: {path}"
 reason_linked_named = "bağlı: {path} ({name})"
 reason_linked_far = "bağlı: {path}, {hops} adım"
+
+# Özellik denetçisi (app::Inspector; GUI paneli, TUI bölümü, `note prop`). Anahtar ve değer güvenilmezdir.
+[inspector]
+title = "Özellikler ({count})"
+set = "{key} = {value} yazıldı"
+removed = "{key} özelliği kaldırıldı"
+confirm_remove = "'{key}' özelliği ({value}) kaldırılsın mı? Geri alınamaz."
+confirm_remove_label = "#{tag} etiketi {path} notundan kaldırılsın mı? Etiket notun metninden çıkar."
+remove_title = "Kaldır"
+labels_on_notes = "Etiketler notlarındır; ilişkinin etiketi olmaz"
+nothing = "İncelenen bir şey yok"
+empty = "Özellik yok"
+read_only = "salt okunur (uygulamanın)"
+type_text = "metin"
+type_number = "sayı"
+type_bool = "mantıksal"
+type_time = "zaman"
+type_bytes = "bayt"
+type_large = "büyük"
+type_label = "etiket"
+type_auto = "otomatik"
+key = "Anahtar"
+value = "Değer"
+type = "Tür"
+add = "Ekle"
+edit = "Düzenle"
+delete = "Sil"
+save = "Kaydet"
+cancel = "Vazgeç"
+key_hint = "anahtar ya da #etiket"
+value_hint = "değer"
+inspect_relation = "Özellikler…"
+show_note = "Notu göster"
+hint = "Gösterilen notun ya da ilişkinin özellikleri; tür seçilmezse değerden anlaşılır"
+key_prompt = "Özellik anahtarı (ya da #etiket):"
+value_prompt = "{key} = (text: number: bool: ya da otomatik)"
+hints = "a ekle  e düzenle  d sil  ↑↓ gez  Esc geri"
+none_shown = "Özelliklerini görmek için bir not açın"

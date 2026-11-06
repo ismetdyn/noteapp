@@ -1,6 +1,7 @@
 #include "core/text.hpp"
 #include "edit/editor_buffer.hpp"
 
+#include <algorithm>
 #include <array>
 #include <doctest/doctest.h>
 #include <random>
@@ -17,8 +18,11 @@ namespace {
 int test_width(char32_t cp) {
     if (cp >= 0x0300 && cp <= 0x036F)
         return 0;
-    if (cp >= 0x4E00 && cp <= 0x9FFF)
-        return 2;
+    if (cp == 0x200D)  // ZWJ
+        return 0;
+    if ((cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x1F1E6 && cp <= 0x1F1FF) ||
+        (cp >= 0x1F300 && cp <= 0x1FAFF))
+        return 2;  // CJK, bölgesel gösterge, emoji
     return 1;
 }
 
@@ -550,6 +554,141 @@ TEST_CASE("buffer: a random edit sequence undoes back to the exact original byte
         while (b.redo()) {
         }
         CHECK(b.text() == edited);
+    }
+}
+
+namespace {
+
+// Önbelleksiz, grapheme grapheme kaynak hesap (glyph_at): konum ve sarmanın toplu ve artımlı yolları buna
+// eşit.
+TextPosition position_by_glyphs(const EditorBuffer& b) {
+    std::size_t line = 0;
+    while (line + 1 < b.line_count() && b.line_start(line + 1) <= b.cursor())
+        ++line;
+    std::size_t column = 0;
+    for (std::size_t at = b.line_start(line); at < b.cursor(); at = b.glyph_at(at, 0).next)
+        ++column;
+    return {line, column};
+}
+
+std::vector<noteapp::tui::VisualRow> rows_by_glyphs(const EditorBuffer& b, std::size_t line, int columns) {
+    const int limit = std::max(columns, EditorBuffer::kMinColumns);
+    const std::size_t end = b.line_start(line) + b.line_text(line).size();
+    std::vector<noteapp::tui::VisualRow> rows;
+    std::size_t row_begin = b.line_start(line);
+    int cell = 0;
+    for (std::size_t at = row_begin; at < end;) {
+        const noteapp::tui::Glyph glyph = b.glyph_at(at, cell);
+        int cells = glyph.cells;
+        if (cell > 0 && cell + cells > limit) {
+            rows.push_back({line, row_begin, at, false});
+            row_begin = at;
+            cell = 0;
+            cells = b.glyph_at(at, cell).cells;
+        }
+        cell += cells;
+        at = glyph.next;
+    }
+    if (cell >= limit) {
+        rows.push_back({line, row_begin, end, false});
+        row_begin = end;
+    }
+    rows.push_back({line, row_begin, end, true});
+    return rows;
+}
+
+}  // namespace
+
+// Uzun satırda konum ve sarma önbelleği düzenlemeden sonra yalnız eskiyen kısmı yeniden hesaplar, ASCII
+// koşusunu toplu atlar: her adımda grapheme grapheme kaynak hesapla aynı sonucu vermeli.
+TEST_CASE("buffer: cached position and wrapped rows match a glyph-by-glyph walk after every edit") {
+    static constexpr std::array kSnippets = {
+        std::string_view("a"),
+        std::string_view("abc d"),
+        std::string_view("ş"),
+        std::string_view("\t"),
+        std::string_view("漢"),
+        std::string_view(kCombiningCedilla),
+        std::string_view("\xCC\xA7"),
+        std::string_view("\x1b"),
+        std::string_view("\xE2\x80\xAE"),
+        std::string_view("\r"),
+        std::string_view("字"),                                            // 3 bayt, geniş
+        std::string_view("\xF0\x9F\x87\xB9\xF0\x9F\x87\xB7"),              // U+1F1F9 U+1F1F7: bayrak
+        std::string_view("\xF0\x9F\x87\xA6"),                              // U+1F1E6: tek bölgesel gösterge
+        std::string_view("\xF0\x9F\x98\x80"),                              // U+1F600
+        std::string_view("\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9"),  // U+1F468 ZWJ U+1F469
+        std::string_view("\xE2\x80\x8D"),                                  // tek ZWJ
+    };
+    constexpr int kColumns = 7;
+    const auto same_rows = [](const std::vector<noteapp::tui::VisualRow>& a,
+                              const std::vector<noteapp::tui::VisualRow>& b) {
+        return std::ranges::equal(a, b, [](const auto& x, const auto& y) {
+            return x.line == y.line && x.begin == y.begin && x.end == y.end &&
+                   x.last_of_line == y.last_of_line;
+        });
+    };
+    for (const unsigned seed : {3U, 11U, 99U}) {
+        CAPTURE(seed);
+        std::mt19937 random(seed);
+        auto pick = [&](std::size_t bound) {
+            return std::uniform_int_distribution<std::size_t>(0, bound - 1)(random);
+        };
+        auto b = buffer_of("uzun bir satır\tsekmeli s\xCC\xA7 漢字 ve daha fazlası\r\nikinci\nson");
+        std::string clipboard;
+        const auto apply_step = [&] {
+            switch (pick(13)) {
+            case 0:
+            case 1:
+            case 2:
+            case 3:
+                b.type_text(kSnippets[pick(kSnippets.size())]);
+                break;
+            case 4:
+                b.backspace();
+                break;
+            case 5:
+                b.delete_forward();
+                break;
+            case 6:
+                b.newline();
+                break;
+            case 7:
+                b.move_left(false);
+                break;
+            case 8:
+                b.undo();
+                break;
+            case 9:
+                b.redo();
+                break;
+            case 10:
+                clipboard = b.cut();
+                break;
+            case 11:
+                b.paste(clipboard);
+                break;
+            default:
+                b.select_range({pick(b.text().size() + 1), pick(b.text().size() + 1)});
+                break;
+            }
+        };
+        for (int step = 0; step < 3000; ++step) {
+            // Bazen iki-üç düzenleme arada sorgu olmadan: önbellek eskime noktalarının en küçüğünden kurulur.
+            const std::size_t burst = pick(5) == 0 ? 2 + pick(2) : 1;
+            for (std::size_t i = 0; i < burst; ++i)
+                apply_step();
+            const TextPosition got = b.position();
+            const TextPosition want = position_by_glyphs(b);
+            REQUIRE(got.line == want.line);
+            REQUIRE(got.column == want.column);
+            REQUIRE(same_rows(b.rows_of_line(want.line, kColumns), rows_by_glyphs(b, want.line, kColumns)));
+            if (pick(8) == 0) {  // başka satır ya da genişlik önbelleği değiştirir: tam yeniden kurulum yolu
+                const std::size_t line = pick(b.line_count());
+                const int columns = pick(2) == 0 ? kColumns : 3;
+                REQUIRE(same_rows(b.rows_of_line(line, columns), rows_by_glyphs(b, line, columns)));
+            }
+        }
     }
 }
 

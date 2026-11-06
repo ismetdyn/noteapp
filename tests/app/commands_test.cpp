@@ -57,6 +57,13 @@ TEST_CASE("find_command returns the registry row, nullptr for an unknown id") {
     static_assert(app::find_command("new")->id == "new");
 }
 
+TEST_CASE("has_command is true only for registry ids, at compile time") {
+    static_assert(app::has_command("new"));
+    static_assert(!app::has_command("no.such.command"));
+    CHECK(app::has_command("paste"));
+    CHECK_FALSE(app::has_command(""));
+}
+
 TEST_CASE("rank_palette keeps candidates matching the id or the translated label, best score first") {
     core::init_i18n("en");
     const std::vector<PaletteCandidate> candidates = {

@@ -1,7 +1,9 @@
 #pragma once
 
+#include "app/inspector.hpp"
 #include "app/item_ops.hpp"
 #include "app/listing.hpp"
+#include "app/map_query.hpp"
 #include "app/note_map.hpp"
 #include "app/notices.hpp"
 #include "app/tabs.hpp"
@@ -60,40 +62,46 @@ enum class Intent {
     SyncNow,
     ShowHelp,
     ShowSettings,
-    EnterEditor,      // `e`/Enter: seçili not sağ panelde düzenlenir
-    EditorKey,        // Editör odağı: tuş EditorSession'a gider
-    CopyNote,         // `c`: notun özgün baytları sistem panosuna
-    TrashSelected,    // `d`: onaysız çöpe; `u` geri alır
-    RestoreLast,      // `u`: bu oturumda son çöpe atılan
-    RestoreSelected,  // çöp görünümünde `u`
-    EmptyTrash,       // çöp görünümünde `E`: onaylı
-    RenameSelected,   // `F2`: altta tek satırlık yol girdisi
-    ToggleTrash,      // `T`, çöp görünümünde `q` `Esc`
-    SavePrefs,        // sıralama ya da sağ sütun değişti
-    Paste,            // `p`: bekleyen yank geçerli klasöre
-    MoveTo,           // `m`: altta hedef klasör girdisi
-    LinkNote,         // `L`: altta ilişkilendirilecek not girdisi
-    UnlinkSelected,   // `L` ilişkili satırda: onaylı kaldırma
-    RenameRelation,   // `n` ilişkili satırda: altta ad girdisi (o ilişkinin kimliğiyle)
-    FlipRelation,     // `f` ilişkili satırda: yön çevrilir (yönsüz: bu nottan çıkan olur)
-    UndirectRelation, // `u` ilişkili satırda: yönsüz yapılır
-    LinkMissing,     // bağlantı panelinde gidilecek notu olmayan satır: nedeni söylenir
-    ToggleIcons,      // palet: `icons` ayarını çevirir, config.toml'a yazar
-    ExportPdf,        // REVIEW `P`: altta çıktı yolu girdisi
-    FollowLink,       // REVIEW'da seçili [[bağlantı]]: depo çözer, hedef not açılır
+    EnterEditor,       // `e`/Enter: seçili not sağ panelde düzenlenir
+    EditorKey,         // Editör odağı: tuş EditorSession'a gider
+    CopyNote,          // `c`: notun özgün baytları sistem panosuna
+    TrashSelected,     // `d`: onaysız çöpe; `u` geri alır
+    RestoreLast,       // `u`: bu oturumda son çöpe atılan
+    RestoreSelected,   // çöp görünümünde `u`
+    EmptyTrash,        // çöp görünümünde `E`: onaylı
+    RenameSelected,    // `F2`: altta tek satırlık yol girdisi
+    ToggleTrash,       // `T`, çöp görünümünde `q` `Esc`
+    SavePrefs,         // sıralama ya da sağ sütun değişti
+    Paste,             // `p`: bekleyen yank geçerli klasöre
+    MoveTo,            // `m`: altta hedef klasör girdisi
+    LinkNote,          // `L`: altta ilişkilendirilecek not girdisi
+    UnlinkSelected,    // `L` ilişkili satırda: onaylı kaldırma
+    RenameRelation,    // `n` ilişkili satırda: altta ad girdisi (o ilişkinin kimliğiyle)
+    FlipRelation,      // `f` ilişkili satırda: yön çevrilir (yönsüz: bu nottan çıkan olur)
+    UndirectRelation,  // `u` ilişkili satırda: yönsüz yapılır
+    LinkMissing,       // bağlantı panelinde gidilecek notu olmayan satır: nedeni söylenir
+    ToggleIcons,       // palet: `icons` ayarını çevirir, config.toml'a yazar
+    ExportPdf,         // REVIEW `P`: altta çıktı yolu girdisi
+    FollowLink,        // REVIEW'da seçili [[bağlantı]]: depo çözer, hedef not açılır
     // Sekmeler (SPEC-tui "Sekmeler"): yürütme main'de, sekmeler EditorTabs'tadır.
-    TabNew,           // Ctrl+T: yeni sekmede boş taslak
-    TabClose,         // Ctrl+W (editör): etkin sekme kaydedilmemiş akışıyla kapanır
-    TabNext,          // Alt+N, Ctrl+PgDn
-    TabPrevious,      // Alt+P, Ctrl+PgUp
-    TabOpenSelected,  // satır menüsü / palet: seçili not yeni sekmede
-    ParkEditor,       // Ctrl+K (editör): sekme açık kalır, arama girdisine geçilir
-    OpenMapNode,      // haritada Tab ile seçilen not açılır (map_selected)
-    MapEdit,          // haritada kenar kur ya da kaldır (take_map_edit; app::map_relations)
-    MapNotice,        // haritanın sonucu alt satıra (take_map_notice): en kısa yol, bütün çizgede açma
+    TabNew,             // Ctrl+T: yeni sekmede boş taslak
+    TabClose,           // Ctrl+W (editör): etkin sekme kaydedilmemiş akışıyla kapanır
+    TabNext,            // Alt+N, Ctrl+PgDn
+    TabPrevious,        // Alt+P, Ctrl+PgUp
+    TabOpenSelected,    // satır menüsü / palet: seçili not yeni sekmede
+    ParkEditor,         // Ctrl+K (editör): sekme açık kalır, arama girdisine geçilir
+    OpenMapNode,        // haritada Tab ile seçilen not açılır (map_selected)
+    MapEdit,            // haritada kenar kur ya da kaldır (take_map_edit; app::map_relations)
+    MapNotice,          // haritanın sonucu alt satıra (take_map_notice): en kısa yol, bütün çizgede açma
     MapRelationFilter,  // haritada `N`: ilişki adı süzgeci; adlar depodan (begin_map_relation_filter)
-    TrashMapNode,     // haritada `d`: hedef not seçilip onaysız çöpe (işaretler değil); `u` geri alır
-    ImportFiles,      // palet `import`: altta dosya sistemi yolu girdisi, hedef app::new_note_folder
+    TrashMapNode,       // haritada `d`: hedef not seçilip onaysız çöpe (işaretler değil); `u` geri alır
+    RunMapQuery,  // haritada `Q` satırında Enter: map_query_text() çalışır (app::MapQuery; yazmada onay)
+    ImportFiles,  // palet `import`: altta dosya sistemi yolu girdisi, hedef app::new_note_folder
+    // Özellik denetçisi (F4; app::Inspector): satırlar depodan, yazma alt satırdaki girdiyle.
+    InspectorLoad,    // `p`: konu seçildi, satırlar okunur
+    InspectorAdd,     // denetçide `a`: anahtar satırı (ya da #etiket), sonra değer satırı
+    InspectorEdit,    // denetçide `e` / Enter: seçili özelliğin değer satırı, düzenleme metniyle dolu
+    InspectorDelete,  // denetçide `d`: onaylı silme (özellik ya da etiket)
 };
 
 // Çoklu seçimin ya da yank'in bir öğesi (GUI ile ortak: app/item_ops.hpp).
@@ -107,7 +115,7 @@ struct PendingYank {
 using Mode = app::SearchMode;
 
 // Tuşların kime gideceğini belirler: harfler aynı anda hem süzüp hem eylem yapamaz (SPEC-tui "Tuşlar").
-enum class Focus { List, Search, Preview, PreviewFind, Editor, SortMenu, Links };
+enum class Focus { List, Search, Preview, PreviewFind, Editor, SortMenu, Links, Inspector };
 
 // Listede sağ sütunun gösterdiği üst veri (`v`).
 // Sıra `v` döngüsüdür.
@@ -192,6 +200,10 @@ public:
     void set_fuzzy_candidate_chars(std::size_t chars) { listing_.set_fuzzy_candidate_chars(chars); }
     // İlişki araması (SPEC-search): kenarlar depodan arama başına bir kez, derinlik config'ten.
     void set_edge_source(app::EdgeSource source) { listing_.set_edge_source(std::move(source)); }
+    // `prop:` süzgecinin notları (app::search_properties); bağlanmazsa `prop:` hiçbir notu geçirmez.
+    void set_property_source(search::PropertyLookup source) {
+        listing_.set_property_source(std::move(source));
+    }
     // Ayarlar kaydında da çağrılır: açık arama yeni derinlikle yeniden süzülür.
     void set_relation_depth(std::optional<std::size_t> depth);
     void set_views(std::vector<std::string> names);
@@ -258,8 +270,23 @@ public:
     // Hedef Tab'la seçilen not, yoksa gösterilen not: `x` komşuları aç/kapat (geçerli kenar süzgecinin türü ve
     // adıyla), `X` bir adım daha, `P` sabitle/çöz, `U` hepsini çöz, `R` yol kipi, `d` çöpe, `n` yeni not. `e`
     // kenar türü süzgeci, `#` etiket ve `N` ilişki adı satırı, `/` haritada bul.
-    enum class MapInputKind { Find, Tag, Relation };
+    enum class MapInputKind { Find, Tag, Relation, Query };
     const std::optional<MapInputKind>& map_input_kind() const { return map_input_kind_; }
+
+    // --- Sorgu (F3, SPEC-tui "Harita" → "Sorgu"; akış app::MapQuery, GUI çubuğuyla ortak) ---
+    // `Q` tek satır açar: ↑ ↓ (Ctrl+P/N) oturumluk geçmiş, Tab kayıtlı görünüm adları, Enter Intent::RunMapQuery.
+    // Sonuç haritada vurgudur, `O` liste panelinde tablodur, `Esc` sonucu kaldırır. Depo işi ListActions'tadır.
+    app::MapQuery& map_query() { return map_query_; }
+    const app::MapQuery& map_query() const { return map_query_; }
+    void set_query_limits(const graph::QueryLimits& limits) { map_query_.set_limits(limits); }
+    // limits.app.query_cell_bytes (SIZE_MAX: sınırsız): tablo hücresi bundan uzunsa `…` ile kısalır.
+    void set_query_cell_bytes(std::size_t bytes) { map_query_.set_cell_bytes(bytes); }
+    const std::string& map_query_text() const { return map_query_text_; }  // çalışacak (ya da vazgeçilen) metin
+    // ListActions'ın sonucu: Ran → vurgu haritaya, metin boşalır; Failed → satır metin ve hatayla yeniden açılır.
+    void map_query_finished();
+    void map_query_failed();
+    bool map_query_table() const { return map_view() && map_query_.table_shown(); }
+    std::size_t map_query_row() const { return map_query_row_; }  // tablonun seçili satırı
     const InputLine& map_input() const { return map_input_; }
     // Intent::MapRelationFilter'ın işi: `names` (NoteStore::relation_names) Tab listesi olur.
     void begin_map_relation_filter(std::span<const core::RelationName> names);
@@ -413,6 +440,16 @@ public:
     int links_reserved_rows(int pane_rows) const;
     // Bölümün `row`. görünen satırına tıklama: nota gider; eksik hedef ve başlıkta yalnız odaklar.
     void click_link(std::size_t row);
+
+    // --- Özellik denetçisi (F4; model app::Inspector, GUI ile ortak; SPEC-tui "Denetçi") ---
+    // `p` REVIEW'da gösterilen notu, bağlantı bölümünün ilişkili satırında o ilişkiyi, haritada `C` kipinin
+    // ilişki kenarını ya da Tab'la seçilen notu açar; bölüm sağ panelde bağlantıların yerindedir. Satırları
+    // ListActions okur ve yazar (Intent::Inspector*).
+    app::Inspector& inspector() { return inspector_; }
+    const app::Inspector& inspector() const { return inspector_; }
+    void set_inspector_cell_bytes(std::size_t bytes) { inspector_.set_cell_bytes(bytes); }
+    int inspector_reserved_rows(int pane_rows) const;
+    std::size_t inspector_top(std::size_t visible) const;  // seçili satır görünür kalır
     void scroll_links(int delta);
     // REVIEW'da seçili [[bağlantı]] (Tab/Shift+Tab, tıklama): hedef anahtarı (core::link_target); yoksa
     // nullopt. Seçim not, görünüm ya da metin değişince düşer.
@@ -563,7 +600,10 @@ private:
     // F2 keşif
     std::optional<std::string> map_target() const;  // Tab'la seçilen, yoksa haritadaki gösterilen not
     std::optional<Intent> handle_map_explore_key(std::string_view text);
+    std::optional<Intent> handle_map_table_key(Key key);
+    void clear_map_query();  // sonuç, hata ve vurgu düşer
     Intent handle_map_input(Key key, std::string_view text);
+    Intent handle_map_query_key(Key key, std::string_view text);
     void begin_map_input(MapInputKind kind, std::vector<std::string> candidates, std::string text);
     void submit_map_input();
     void refresh_map_found();
@@ -644,6 +684,10 @@ private:
     Intent handle_preview(Key key);
     Intent handle_preview_find(Key key, std::string_view text);
     Intent handle_links(Key key, std::string_view text);
+    Intent open_inspector(app::InspectTarget target);
+    Intent inspect_review();  // REVIEW ve bağlantı bölümünde `p`
+    Intent inspect_map();     // haritada `p`
+    Intent handle_inspector(Key key, std::string_view text);
     Intent handle_links_letter(std::string_view text);
     Intent jump_to_selected_link();
     int pane_rows() const { return window_height_ - kChromeLines; }
@@ -688,6 +732,10 @@ private:
     std::size_t map_found_at_ = 0;                  // bul: gösterilen eşleşme
     std::size_t map_found_version_ = 0;             // eşleşmelerin kurulduğu harita sürümü (MapModel::version)
     std::optional<MapNotice> map_notice_;           // Intent::MapNotice bekleyen ileti
+    app::MapQuery map_query_;                       // limitler: set_query_limits (limits.query.*)
+    std::string map_query_text_;
+    std::vector<std::string> map_query_history_;    // en yeni başta, oturumluk
+    std::size_t map_query_row_ = 0;
     std::optional<app::LayoutPoint> map_new_at_;    // `n`: oluşturulacak notun yeri
     std::optional<std::string> saved_spot_;   // düz listeye geçerken klasördeki seçim; dönüşte geri gelir
     mutable SharedInputSources relative_sources_;
@@ -714,6 +762,8 @@ private:
     std::optional<PreviewPoint> wiki_link_;  // REVIEW'da seçili [[bağlantı]]: satır ve bayt aralığı
     LinkPanel links_;
     bool links_hidden_ = false;  // `links.toggle`: bu oturumda bölüm gizli
+    app::Inspector inspector_;
+    Focus inspector_back_ = Focus::Preview;  // Esc dönüşü: REVIEW ya da harita (Liste)
     std::size_t links_generation_ = 0;
     std::optional<core::NotePath> links_note_;
     bool review_rendered_ = true;

@@ -50,6 +50,38 @@ TEST_CASE("properties returns every head of an owner without loading large value
     CHECK(large->seq == small->seq);
 }
 
+// F4 `prop:`: tek anahtarın kazanan head'i, büyük değer yüklenmeden (property ile aynı kazanan).
+TEST_CASE("property_head returns one key's winning head without loading a large value") {
+    const TempDir dir;
+    Graph graph = open_graph(dir.path() / "graph.db");
+    const NodeId node = node_named("n");
+    const std::string big(1000, 'x');
+    {
+        WriteTxn txn = begin_write(graph);
+        GRAPH_OK(txn.put_node(node));
+        GRAPH_OK(txn.set_property(node, "small", Value{std::string("abc")}));
+        GRAPH_OK(txn.set_property(node, "big", Value{Bytes{big}}));
+        GRAPH_OK(txn.commit());
+    }
+    ReadTxn txn = begin_read(graph);
+    const auto small = txn.property_head(node, "small");
+    GRAPH_OK(small);
+    REQUIRE(small->has_value());
+    CHECK((*small)->key == "small");
+    CHECK_FALSE((*small)->large);
+    CHECK(std::get<std::string>((*small)->value) == "abc");
+    const auto large = txn.property_head(node, "big");
+    GRAPH_OK(large);
+    REQUIRE(large->has_value());
+    CHECK((*large)->large);
+    CHECK((*large)->size == big.size());
+    CHECK(std::holds_alternative<std::monostate>((*large)->value));
+    CHECK((*large)->device == graph.device());
+    const auto missing = txn.property_head(node, "none");
+    GRAPH_OK(missing);
+    CHECK_FALSE(missing->has_value());
+}
+
 TEST_CASE("saw tells a write that saw another apart from a concurrent one") {
     Device alpha;
     Device beta;

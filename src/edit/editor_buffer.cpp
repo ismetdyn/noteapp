@@ -14,6 +14,9 @@ constexpr std::string_view kCrlf = "\r\n";
 constexpr std::string_view kLf = "\n";
 constexpr std::string_view kUnprintable = "\xEF\xBF\xBD";  // U+FFFD: kontrol baytı ve gizli karakterin yerine
 constexpr std::string_view kDottedCircle = "\xE2\x97\x8C";  // U+25CC: tabansız birleşen işaretin tabanı
+// Bir sınıra yürürken okunan en ileri bayt sınırdaki kod noktasının sonudur (birleşen işaret ve CRLF
+// denetimi): bu kadar ötesindeki düzenleme o sınırı ve öncesini değiştirmez.
+constexpr std::size_t kMaxCodePointBytes = 4;
 
 struct Decoded {
     char32_t code_point = 0;
@@ -51,6 +54,22 @@ bool is_control(char32_t cp) {
 // atlar, silme görünmeyen baytı da götürürdü.
 bool stands_alone(char32_t cp) {
     return is_control(cp) || core::find_hidden_control(cp) != nullptr;
+}
+
+bool is_printable_ascii(unsigned char byte) {
+    return byte >= 0x20 && byte < 0x7F;
+}
+
+// `from`dan başlayıp `limit`i aşmayan, her baytı tek hücrelik ayrı bir grapheme olan aralığın sonu:
+// yazdırılabilir ASCII ve ardından birleşen işaret gelemeyen (ASCII ya da metin sonu) baytlar.
+// next_boundary'nin ASCII hızlı yolunun toplu hali: uzun satırda sınırlar bayt bayt yürünmesin.
+std::size_t plain_run_end(std::string_view text, std::size_t from, std::size_t limit) {
+    std::size_t end = from;
+    while (end < limit && is_printable_ascii(static_cast<unsigned char>(text[end])))
+        ++end;
+    if (end > from && end < text.size() && static_cast<unsigned char>(text[end]) >= 0x80)
+        --end;  // son baytın ardından birleşen işaret gelebilir: o grapheme tek tek yürünür
+    return end;
 }
 
 std::size_t code_point_start(std::string_view text, std::size_t at) {
@@ -96,6 +115,7 @@ std::string_view EditorBuffer::line_text(std::size_t line) const {
 
 void EditorBuffer::rebuild_line_starts() {
     row_cache_.reset();
+    column_mark_.reset();
     changed_from_ = 0;
     line_starts_.assign(1, 0);
     for (std::size_t at = text_.find('\n'); at != std::string::npos; at = text_.find('\n', at + 1))
@@ -177,10 +197,16 @@ std::size_t EditorBuffer::line_end(std::size_t line) const {
 
 // Satır dizini baştan kurulmaz: 10 MB'ta her tuşta tüm metni taramak gecikme bütçesini yerdi.
 void EditorBuffer::replace_range(std::size_t at, std::size_t length, std::string_view inserted) {
-    changed_from_ = std::min(changed_from_, line_of(at));
+    const std::size_t line = line_of(at);
+    changed_from_ = std::min(changed_from_, line);
     ++edit_count_;
     text_.replace(at, length, inserted);
-    row_cache_.reset();
+    if (row_cache_ && row_cache_->line == line)
+        row_cache_->stale_from = std::min(row_cache_->stale_from, at);
+    else
+        row_cache_.reset();
+    if (column_mark_ && at < column_mark_->offset + kMaxCodePointBytes)
+        column_mark_.reset();
     const auto first = std::upper_bound(line_starts_.begin(), line_starts_.end(), at);
     const auto last = std::upper_bound(first, line_starts_.end(), at + length);
     const auto index = first - line_starts_.begin();
@@ -450,10 +476,30 @@ void EditorBuffer::set_scroll_line(std::size_t line) {
 
 TextPosition EditorBuffer::position() const {
     const std::size_t line = line_of(cursor_);
-    std::size_t column = 0;
-    for (std::size_t at = line_starts_[line]; at < cursor_; at = next_boundary(at))
-        ++column;
-    return {line, column};
+    ColumnMark walk{line, line_starts_[line], 0};
+    if (column_mark_ && column_mark_->line == line && column_mark_->offset <= cursor_)
+        walk = *column_mark_;
+    // İmleçteki yazım işareti düşürmesin: imlecin kod noktası payı kadar gerisindeki son sınır saklanır.
+    std::optional<ColumnMark> mark;
+    while (walk.offset < cursor_) {
+        const std::size_t plain_end = plain_run_end(text_, walk.offset, cursor_);
+        if (plain_end > walk.offset) {  // aradaki her bayt bir sınır ve bir sütun
+            if (walk.offset + kMaxCodePointBytes <= cursor_) {
+                const std::size_t at = std::min(plain_end, cursor_ - kMaxCodePointBytes);
+                mark = ColumnMark{line, at, walk.column + (at - walk.offset)};
+            }
+            walk.column += plain_end - walk.offset;
+            walk.offset = plain_end;
+            continue;
+        }
+        if (walk.offset + kMaxCodePointBytes <= cursor_)
+            mark = walk;
+        ++walk.column;
+        walk.offset = next_boundary(walk.offset);
+    }
+    if (mark)
+        column_mark_ = mark;
+    return {line, walk.column};
 }
 
 Glyph EditorBuffer::glyph_at(std::size_t offset, int cell) const {
@@ -475,18 +521,42 @@ Glyph EditorBuffer::glyph_at(std::size_t offset, int cell) const {
 }
 
 const std::vector<VisualRow>& EditorBuffer::cached_rows(std::size_t line, int columns) const {
-    if (!row_cache_ || row_cache_->line != line || row_cache_->columns != columns)
-        row_cache_ = RowCache{line, columns, compute_rows(line, columns)};
+    if (!row_cache_ || row_cache_->line != line || row_cache_->columns != columns) {
+        row_cache_ = RowCache{line, columns, {}};
+        append_rows(line, columns, row_cache_->rows);
+    } else if (row_cache_->stale_from != std::string_view::npos) {
+        // Sınırı düzenlemeden kod noktası payı kadar önde biten satırlar kalır, gerisi yeniden sarılır.
+        std::vector<VisualRow>& rows = row_cache_->rows;
+        const std::size_t stale_from = std::exchange(row_cache_->stale_from, std::string_view::npos);
+        while (!rows.empty() &&
+               (rows.back().last_of_line || rows.back().end + kMaxCodePointBytes > stale_from))
+            rows.pop_back();
+        append_rows(line, columns, rows);
+    }
     return row_cache_->rows;
 }
 
-std::vector<VisualRow> EditorBuffer::compute_rows(std::size_t line, int columns) const {
+// `rows`un son satırının bittiği yerden (boşsa satır başından) satır sonuna dek sarar.
+void EditorBuffer::append_rows(std::size_t line, int columns, std::vector<VisualRow>& rows) const {
     const int limit = std::max(columns, kMinColumns);
     const std::size_t end = line_end(line);
-    std::vector<VisualRow> rows;
-    std::size_t row_begin = line_starts_[line];
+    std::size_t row_begin = rows.empty() ? line_starts_[line] : rows.back().end;
     int cell = 0;
     for (std::size_t at = row_begin; at < end;) {
+        // ASCII koşusu hücre hücre değil, sınıra kalan yer kadar atlanır; kırılma yeri bayt baytla aynıdır.
+        if (const std::size_t plain_end = plain_run_end(text_, at, end); plain_end > at) {
+            while (at < plain_end) {
+                if (cell >= limit) {
+                    rows.push_back({line, row_begin, at, false});
+                    row_begin = at;
+                    cell = 0;
+                }
+                const std::size_t take = std::min(plain_end - at, static_cast<std::size_t>(limit - cell));
+                at += take;
+                cell += static_cast<int>(take);
+            }
+            continue;
+        }
         const auto lead = static_cast<unsigned char>(text_[at]);
         const std::size_t next = next_boundary(at);
         // ASCII'de Glyph kurulmaz: uzun satırda her tuşta milyonlarca dizgi ayırmak gecikme bütçesini yerdi.
@@ -506,7 +576,6 @@ std::vector<VisualRow> EditorBuffer::compute_rows(std::size_t line, int columns)
         row_begin = end;
     }
     rows.push_back({line, row_begin, end, true});
-    return rows;
 }
 
 CursorCell EditorBuffer::cursor_cell(int columns) const {

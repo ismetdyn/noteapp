@@ -150,3 +150,10 @@ Kalıcı indeks, regex araması, fzf genişletilmiş sözdizimi (`^`, `$`, `!`, 
   kurulur; `app::Listing` görüntü değişene dek tuş başına yeniden kullanır (`GraphInput::index`, notların düğümleri `GraphInput::nodes`).
   Komşu gezintisi izinli hedeflerin hepsine ulaşınca durur. Ölçüm (Release, 10^6 kenar, tuş başına ad araması): 5.000 notta
   1,4–13,7 ms (önbelleksiz 159–205 ms); 50.000 notta 30–66 ms, her notu listeleyen sorguda ilişkisiz taban 20 ms (bütçe 5.000 not içindir).
+
+## Değişiklik 2026-11-06 — `prop:` (F4)
+- **ADDED** `prop:anahtar` (özelliği taşıyan notlar) ve `prop:anahtar=değer` (değer metni katlanarak tam eşit: `prop:durum=bitti` "Bitti"yi bulur, "bitti mi"yi bulmaz). Anahtar tam yazılır (graf anahtarı büyük/küçük harf ayırır); boşluklu değer tırnakla: `prop:"durum=devam ediyor"`. Boş anahtar `must_be_property`. Değer metni `core::property_text`'tir (`true`, `3`, `2.5`).
+- Eşleme **metinseldir**: değer `core::property_text` biçimiyle karşılaştırılır, sayı olarak değil (`prop:fiyat=2.5` saklı `2.5`'i bulur, `2.50` yazmak bulmaz; `prop:n=1` tamsayı `1`'i bulur, ondalık `1.0`'ı bulmaz). Büyük değer (motorun ayrı sakladığı) yüklenmez, metni `<N bytes>`'tır: `prop:k` eşleşir, `prop:k=…` eşleşmez.
+- Önbellek: görüntü başına en son kullanılan `limits.search.property_keys` (32; `0` sınırsız) anahtar; yazdıkça her kısmi anahtar bir girdidir, en eskisi düşer.
+- Notları `bind_graph_filters` kurar, kenar istemez (`GraphInput::properties`, ön yüzde `app::search_properties` → `core::notes_with_property`; görüntü başına anahtar başına tek okuma). Bağlanmamış süzgeç hiçbir notu geçirmez (`view:` kuralı). Uygulamanın anahtarları (`type`, `created_at`…) aranmaz: kendi süzgeçleri var.
+- **Kapsam dışı (şimdilik):** ilişki aramasında kenar özelliklerinin değerleri; `NoteEdge` özellik taşımaz, her aramada tüm kenar özelliklerini okumak bütçeyi aşardı. Cypher (`MATCH ()-[r:RELATED_TO]->() WHERE r.weight > 1`) bunu karşılar.

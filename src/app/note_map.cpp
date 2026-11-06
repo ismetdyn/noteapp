@@ -426,7 +426,11 @@ void MapModel::update(const EdgeReader& read, std::span<const core::NoteMeta> no
         return;
     stale_ = false;
     forget_missing(notes);
-    NoteMap built = build_note_map(notes, edges_, center_, options_, node_limit_.cap(), scope_);
+    // Sorgunun notları (F3) tutulan notlar gibi kapsama girer: sonuç çevre kapsamında da görünür.
+    MapScope scope = scope_;
+    if (highlight_)
+        scope.kept.insert(highlight_->notes.begin(), highlight_->notes.end());
+    NoteMap built = build_note_map(notes, edges_, center_, options_, node_limit_.cap(), scope);
     // Merkez değişti ama çevre aynı not ve kenar kümesi: yalnız BFS sırası farklıdır. Yeni çizge sayılsaydı
     // yerleşim ılınır, oturmuş düğümler kare kare sıçrar ve kamera yeniden sığardı (seçimde titreme). Eski
     // sıra ve konumlar kalır; yalnız yol (F2) eski sıranın dizinlerine çevrilir.
@@ -439,7 +443,11 @@ void MapModel::update(const EdgeReader& read, std::span<const core::NoteMeta> no
         const bool moved = path != map_.path;
         map_.path = std::move(path);
         mark_path_edges(map_, scope_.path && scope_.path->directed);
-        if (moved || map_.path_edges != marked)  // çizim önbelleği yeni yolu görsün
+        const std::vector<char> lit = highlighted_nodes_;
+        const std::vector<char> lit_edges = highlighted_edges_;
+        mark_highlight();
+        // Çizim önbelleği yeni yolu ve vurguyu görsün.
+        if (moved || map_.path_edges != marked || lit != highlighted_nodes_ || lit_edges != highlighted_edges_)
             ++version_;
         apply_pins(map_, layout_, pending_pins_);
         return;
@@ -458,6 +466,7 @@ void MapModel::update(const EdgeReader& read, std::span<const core::NoteMeta> no
         ++generation_;
     apply_pins(map_, layout_, pending_pins_);
     matched_.reset();
+    mark_highlight();
 }
 
 const std::vector<char>&
@@ -561,6 +570,36 @@ void MapModel::clear_path() {
         return;
     scope_.path.reset();
     stale_ = true;
+}
+
+void MapModel::set_highlight(std::optional<MapHighlight> highlight) {
+    if (highlight == highlight_)
+        return;
+    highlight_ = std::move(highlight);
+    stale_ = true;
+}
+
+void MapModel::mark_highlight() {
+    highlighted_nodes_.clear();
+    highlighted_edges_.clear();
+    if (!highlight_)
+        return;
+    highlighted_nodes_.assign(map_.nodes.size(), 0);
+    for (std::size_t i = 0; i < map_.nodes.size(); ++i) {
+        const MapNode& node = map_.nodes[i];
+        const auto& keys = node.kind == MapNodeKind::Note ? highlight_->notes : highlight_->tags;
+        highlighted_nodes_[i] = keys.contains(node.key) ? 1 : 0;
+    }
+    highlighted_edges_.assign(map_.edges.size(), 0);
+    for (std::size_t e = 0; e < map_.edges.size(); ++e) {
+        const MapEdge& edge = map_.edges[e];
+        const std::pair ends(map_.nodes[edge.from].key, map_.nodes[edge.to].key);
+        const bool returned = edge.kind == MapEdgeKind::Related ? highlight_->relations.contains(edge.relation)
+                              : edge.kind == MapEdgeKind::Link  ? highlight_->links.contains(ends)
+                                                                : highlight_->tagged.contains(ends);
+        highlighted_edges_[e] =
+            returned ? 2 : (highlighted_nodes_[edge.from] != 0 && highlighted_nodes_[edge.to] != 0 ? 1 : 0);
+    }
 }
 
 }  // namespace noteapp::app

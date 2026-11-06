@@ -195,3 +195,37 @@ TEST_CASE("a prebuilt relation index gives the same hits as the edge list") {
     for (std::size_t i = 0; i < plain.size(); ++i)
         CHECK(indexed[i].reason == plain[i].reason);
 }
+
+TEST_CASE("prop: binds from the property source without edges; values match folded and whole") {
+    const std::vector notes{meta("a.md"), meta("b.md"), meta("c.md")};
+    const PropertyLookup lookup = [](std::string_view key) -> std::shared_ptr<const core::PropertyNotes> {
+        if (key != "status")
+            return std::make_shared<const core::PropertyNotes>();
+        return std::make_shared<const core::PropertyNotes>(
+            core::PropertyNotes{{np("a.md"), "İptal"}, {np("b.md"), "open"}});
+    };
+    const auto passing_props = [&](std::string_view query, const PropertyLookup& source) {
+        auto parsed = parse_query(query);
+        REQUIRE(parsed.has_value());
+        CHECK_FALSE(has_graph_filter(parsed->filters));  // `prop:` kenar istemez
+        GraphInput graph;
+        graph.properties = source;
+        bind_graph_filters(parsed->filters, graph);
+        std::vector<std::string> out;
+        for (const std::size_t i : apply(parsed->filters, std::nullopt, notes))
+            out.push_back(notes[i].path.string());
+        return out;
+    };
+    CHECK(passing_props("prop:status", lookup) == std::vector<std::string>{"a.md", "b.md"});
+    CHECK(passing_props("prop:status=iptal", lookup) == std::vector<std::string>{"a.md"});
+    CHECK(passing_props("prop:status=OPEN", lookup) == std::vector<std::string>{"b.md"});
+    CHECK(passing_props("prop:status=op", lookup).empty());
+    CHECK(passing_props("prop:other", lookup).empty());
+    CHECK(passing_props("prop:status", {}).empty());  // kaynak yok: `view:` kuralı
+    CHECK(passing_props("prop:status", [](std::string_view) { return nullptr; }).empty());
+    const auto bad = parse_query("prop:=open");
+    REQUIRE_FALSE(bad.has_value());
+    CHECK(bad.error().error.args.back().second == "must_be_property");
+    const auto keys = query_key_names();
+    CHECK(std::ranges::find(keys, "prop") != keys.end());
+}

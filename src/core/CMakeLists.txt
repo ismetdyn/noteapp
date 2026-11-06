@@ -14,6 +14,8 @@ add_library(noteapp_core
     migration.cpp
     note_links.cpp
     note_path.cpp
+    note_props.cpp
+    note_query.cpp
     note_snapshot.cpp
     note_store.cpp
     note_tags.cpp

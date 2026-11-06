@@ -4,8 +4,10 @@
 #include "app/data_preview.hpp"
 #include "app/document.hpp"
 #include "app/import_files.hpp"
+#include "app/inspector.hpp"
 #include "app/item_ops.hpp"
 #include "app/listing.hpp"
+#include "app/map_query.hpp"
 #include "app/note_map.hpp"
 #include "app/notices.hpp"
 #include "app/sync_status_worker.hpp"
@@ -15,6 +17,7 @@
 #include "core/error.hpp"
 #include "core/file_icons.hpp"
 #include "core/folder_tree.hpp"
+#include "core/graph_limits.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
 #include "edit/completion.hpp"
@@ -22,8 +25,8 @@
 #include "edit/language_servers.hpp"
 #include "edit/spellcheck.hpp"
 #include "gui/browser_rows.hpp"
-#include "gui/note_list_model.hpp"
 #include "gui/note_editor.hpp"
+#include "gui/note_list_model.hpp"
 #include "gui/save_dialog.hpp"
 #include "gui/settings_page.hpp"
 #include "sync/auto_sync.hpp"
@@ -86,6 +89,9 @@ struct Deciders {
     std::function<CloseChoice()> close_unsaved_settings = [] { return CloseChoice::Cancel; };
     // Silme onayı: true = sil. Üretimde varsayılan düğme Vazgeç.
     std::function<bool(const std::string& message)> confirm_delete = [](const std::string&) { return false; };
+    // Harita sorgusunun yazması (F3): `message` özetidir (app::MapQuery::confirm_text). true = uygula.
+    // Üretimde varsayılan düğme Vazgeç.
+    std::function<bool(const std::string& message)> confirm_query = [](const std::string&) { return false; };
     // Klasör adı istemi; nullopt = vazgeçti.
     std::function<std::optional<std::string>(const std::string& title, const std::string& initial)>
         folder_name = [](const std::string&, const std::string&) { return std::nullopt; };
@@ -447,6 +453,33 @@ public:
     // İlişki adı seçicisi (NoteStore::relation_names); hata durum satırına, liste boş döner.
     std::vector<core::RelationName> map_relation_names();
 
+    // --- Sorgu çubuğu (F3; akış app::MapQuery, TUI `Q` ile ortak). Oturumluktur. ---
+    bool map_query_open() const { return map_query_open_; }
+    // Açar ya da kapatır; kapanış sonucu, hatayı ve haritadaki vurguyu kaldırır.
+    void toggle_map_query();
+    std::string& map_query_buffer() { return map_query_text_; }  // ImGui doğrudan yazar
+    // Programla değişen metin (çalıştırınca boşalır) kutuyu yeniden kurdurur: etkin kutu dış değişikliği görmez.
+    std::size_t map_query_generation() const { return map_query_generation_; }
+    // Çubuğun metni: okuma hemen; yazma önizlenir, deciders.confirm_query evetse uygulanır, liste ve harita
+    // tazelenir. Başarıda metin geçmişe girer ve boşalır, sonuç durum satırında, bildirimde ve haritada; hata
+    // çubuğun altında kalır (map_query().error()), metin de düzeltilmek üzere kalır.
+    void run_map_query();
+    void run_map_view(const std::string& name);  // kayıtlı görünümler listesi
+    // ↑ ↓: `current` kutunun metnidir; geçmişte bir adım (tui::InputLine, InputKind::Query). Değişmezse nullopt.
+    std::optional<std::string> map_query_history_step(std::string_view current, bool older);
+    void toggle_map_query_table() { map_query_.toggle_table(); }
+    const app::MapQuery& map_query() const { return map_query_; }
+    std::vector<std::string> map_view_names();  // liste açılınca bir kez okunur
+    // Sorgu vurgusu (MapModel::highlighted_*): vurgu yokken boş.
+    const std::vector<char>& map_highlighted_nodes() {
+        ensure_map();
+        return map_.highlighted_nodes();
+    }
+    const std::vector<char>& map_highlighted_edges() {
+        ensure_map();
+        return map_.highlighted_edges();
+    }
+
     // --- Editör ---
     // Etkin sekmenin editörü (EditorBuffer üstünde, TUI ile aynı düzenleme kuralları). Metni değiştiren her
     // şey aşağıdaki editor_* yollarından geçer: kirli durum, otomatik kayıt ve sekme koruması orada yürür.
@@ -502,6 +535,24 @@ public:
     void toggle_links() { links_open_ = !links_open_; }  // Ctrl+L
     // Satıra tıklama: tampon kaydedilir, hedefi gizleyen süzgeç gevşer.
     void open_link(const core::NotePath& path);
+
+    // --- Özellik denetçisi (F4; model app::Inspector, TUI ile ortak; SPEC-gui "Özellik denetçisi") ---
+    // Gösterilen notun ya da seçilen ilişkinin özellikleri. Panel kapalıyken depo okunmaz; not değişince konu
+    // yeniden nota döner. Oturumluktur.
+    bool inspector_open() const { return inspector_open_; }
+    void set_inspector_open(bool open);
+    void toggle_inspector() { set_inspector_open(!inspector_open_); }
+    const app::Inspector& inspector() const { return inspector_; }
+    // Kenar menüsü ve bağlantı panelinin "Özellikler…" öğesi: konu o ilişki olur, panel açılır.
+    void inspect_relation(const core::NotePath& first, const core::NotePath& second,
+                          const core::RelationId& relation, const std::string& name, bool directed);
+    void inspect_shown_note();  // "Notu göster": ilişkiden nota dönüş
+    // Ekle ya da düzenle: `key` `#` ile başlıyorsa notun etiketidir (label = etiket, notun metnine yazılır).
+    // Sonuç ve hata bildirimdedir; hata satırı yazmaz.
+    bool set_property(const std::string& key, const std::string& input,
+                      std::optional<core::PropertyType> type);
+    // Onaydan (deciders.confirm_delete) sonra özellik ya da etiket kaldırılır.
+    void remove_inspector_row(app::InspectorRow row);  // kopya: yeniden okuma satırları değiştirir
 
     // --- Biçimli önizleme (md, csv, json) ---
     // Tür TUI REVIEW'la aynı kuraldan (app::preview_kind_for); önizleme düğmesi yalnız bu türlerde görünür.
@@ -790,7 +841,8 @@ private:
     void show_sync_label(const sync::SyncStatus& status, bool running);
     bool apply_sync_states(app::SyncStates states);  // durumlar değiştiyse true
     void ensure_map();
-    void edit_map(const MapNode& from, const MapNode& to, MapEdgeKind kind, bool connect,
+    // false: yazılmadı (kayıt olmadı ya da hata; hata bildirimdedir).
+    bool edit_map(const MapNode& from, const MapNode& to, MapEdgeKind kind, bool connect,
                   const core::RelationId& relation = {});
     // Ad penceresi: adlar depodan bir kez okunur; okunamazsa hata bildirilir, nullopt.
     std::optional<core::RelationSpec> ask_relation(const std::string& from, const std::string& to,
@@ -798,6 +850,8 @@ private:
     // İlişki işinin sonu: hata ya da ileti (temizlenmiş) durum satırında ve bildirimde, kenarlar ve panel
     // tazelenir.
     void finish_relation(const std::expected<std::string, core::Error>& done);
+    // Sorgu adımının sonu: onay, uygulama, tazeleme, vurgu ve ileti (run_map_query, run_map_view).
+    void finish_map_query(app::MapQuery::Step step);
     bool show_folder(const std::string& folder, bool scope);
     bool select_nearest_note(int from);
     void activate_row(int index);
@@ -852,6 +906,13 @@ private:
     // ortak.
     app::MapModel map_{config_.limits.app.map_nodes, config_.limits.app.map_depth};  // config_ önce kurulur
     std::optional<app::LayoutPoint> map_new_at_;  // begin_map_note: hızlı eklemeyle oluşacak notun yeri
+    // limits.query.*: kullanıcının profili; limits.app.query_cell_bytes: tablo hücresi.
+    app::MapQuery map_query_{core::query_limits_of(config_.limits.query), config_.limits.app.query_cell_bytes.cap()};
+    bool map_query_open_ = false;
+    std::string map_query_text_;
+    std::size_t map_query_generation_ = 0;
+    tui::InputLine map_query_line_{tui::InputKind::Query};  // yalnız geçmiş yürüyüşü
+    std::vector<std::string> map_query_history_;           // en yeni başta, oturumluk
     std::uint64_t data_version_ = 0;
     bool rows_stale_ = true;
     std::size_t browser_rebuilds_ = 0;
@@ -900,6 +961,12 @@ private:
     core::NoteLinks links_;
     std::vector<core::LinkLine> link_lines_;
     bool links_open_ = true;
+    void reload_inspector();
+    void finish_inspector_write(const std::expected<std::string, core::Error>& done);
+    app::Inspector inspector_{config_.limits.app.query_cell_bytes.cap()};
+    bool inspector_open_ = false;
+    std::optional<core::NotePath>
+        inspector_shown_;  // konunun seçildiği andaki not: değişince konu nota döner
     std::vector<InfoField> note_info_;
     bool info_open_ = false;  // yalnız oturum boyunca; kapalı başlar, editöre yer kalsın
     bool review_ = true;      // REVIEW; düzenleme açık eylemle (reviewing)

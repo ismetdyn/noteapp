@@ -1836,5 +1836,54 @@ check "P pins the selected note" screen_has "Pinned fc.md"
 keys q
 wait_exit >/dev/null
 
+# F4: özellik denetçisi. REVIEW'da `p` açar, `a` anahtar sonra değer yazar, `d` onaylı siler; ayrılmış anahtar
+# reddedilir. Sonuç `note prop get` ile ayrı süreçten okunur.
+prop_of() {
+    podman run --rm -e NOTEAPP_HOME=/data/home -v "$work:/data:z" -v "$volume:/build:ro,z" "$image" \
+        /build/src/cli/note prop get "$1" "$2" 2>/dev/null || true
+}
+prop_is() { [[ "$(prop_of "$1" "$2")" == "$3" ]]; }
+clear_notes
+printf 'pa\n' | put_note pa.md
+start_app
+keys /
+literal pa.md
+keys Enter
+sleep 0.3
+literal 'l'
+sleep 0.3
+literal 'p'
+wait_screen "type = md"
+check "p in REVIEW shows the note's properties" screen_has "Esc back"
+literal 'a'
+wait_screen "Property key (or #label):"
+literal status
+keys Enter
+wait_screen "status = (text: number: bool: or auto)"
+literal 3
+keys Enter
+wait_screen "Set status = 3"
+check "a writes a typed property" prop_is pa.md status 3
+literal 'a'
+wait_screen "Property key (or #label):"
+literal type
+keys Enter
+literal txt
+keys Enter
+wait_screen "managed by the app"
+check "a reserved key is refused and the line stays" screen_has "type = (text:"
+keys Escape
+sleep 0.3
+literal 'd'
+wait_screen "Remove property 'status'"
+keys Left
+keys Enter
+wait_screen "Removed property status"
+check "d removes the property after Yes" prop_is pa.md status ""
+keys Escape
+sleep 0.3
+keys q
+wait_exit >/dev/null
+
 echo "passed=$passed failed=$failed"
 [[ "$failed" -eq 0 ]]

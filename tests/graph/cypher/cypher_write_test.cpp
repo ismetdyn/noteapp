@@ -328,3 +328,120 @@ TEST_CASE("merge_refuses_to_overwrite_a_changed_node_with_the_same_derived_id") 
     check_rejected(f.graph, "MERGE (n:A {k: 1})", Error::Code::InvalidArgument, QueryMode::ReadWrite);
     CHECK(lines(must_query(f.graph, "MATCH (n:A) RETURN n.k")) == Strings{"2"});
 }
+
+// F3: uygulamanın yazma denetimi (QueryHooks). Her değişiklik yapılmadan önce, değişiklik öncesini gören işlemle
+// sorulur; ret işlemi geri alır ve sorgudaki konumu taşır; commit=false önizlemedir, graf değişmez.
+namespace {
+
+std::string change_text(const QueryChange& change) {
+    using Kind = QueryChange::Kind;
+    switch (change.kind) {
+    case Kind::CreateNode:
+        return "node+";
+    case Kind::DeleteNode:
+        return "node-";
+    case Kind::AddLabel:
+        return "label+:" + std::string(change.name);
+    case Kind::RemoveLabel:
+        return "label-:" + std::string(change.name);
+    case Kind::CreateEdge:
+        return "edge+:" + std::string(change.name);
+    case Kind::DeleteEdge:
+        return "edge-:" + std::string(change.name);
+    case Kind::SetProperty: {
+        const std::string value =
+            change.value == nullptr
+                ? std::string("?")
+                : show(std::visit([](const auto& v) { return QueryValue(v); }, *change.value));
+        return "set:" + std::string(change.name) + "=" + value;
+    }
+    }
+    return "?";
+}
+
+}  // namespace
+
+TEST_CASE("query_hooks_see_every_change_before_it_happens") {
+    GraphFixture f;
+    must_write(f.graph, "CREATE (a:L {k: 1})-[:T]->(b:L {k: 2})");
+    Strings seen;
+    Strings labels_seen;
+    QueryHooks hooks;
+    hooks.before_change = [&](ReadTxn& txn, const QueryChange& change) -> Result<void> {
+        seen.push_back(change_text(change));
+        if (change.kind == QueryChange::Kind::DeleteNode) {
+            // İşlem değişiklikten önceki durumu görür: silinecek düğümün etiketi okunur.
+            const auto labels = txn.labels(std::get<NodeId>(change.target));
+            REQUIRE(labels.has_value());
+            labels_seen = *labels;
+        }
+        return {};
+    };
+    const auto write = [&](std::string_view text) {
+        seen.clear();
+        const Result<QueryResult> done = f.graph.query(text, {}, QueryMode::ReadWrite, {}, hooks);
+        REQUIRE_MESSAGE(done.has_value(), (done ? "" : describe_error(done.error())));
+    };
+    write("MATCH (a:L {k: 1}) SET a.x = 5, a:M REMOVE a:L CREATE (a)-[:U {w: 'v'}]->(c:N)");
+    CHECK(seen == Strings{"set:x=5", "label+:M", "label-:L", "node+", "label+:N", "edge+:U", "set:w=v"});
+    write("MATCH ()-[r:U]->() SET r.w = null");
+    CHECK(seen == Strings{"set:w=null"});
+    // DETACH: düğümden sonra kenarları da tek tek sorulur (tipleriyle).
+    write("MATCH (b:L {k: 2}) DETACH DELETE b");
+    CHECK(seen == Strings{"node-", "edge-:T"});
+    CHECK(labels_seen == Strings{"L"});
+    write("MATCH ()-[r:U]->() DELETE r");
+    CHECK(seen == Strings{"edge-:U"});
+    // Okuma sorgusu kancayı hiç çağırmaz.
+    seen.clear();
+    REQUIRE(f.graph.query("MATCH (n) RETURN n", {}, QueryMode::ReadWrite, {}, hooks).has_value());
+    CHECK(seen.empty());
+}
+
+TEST_CASE("query_hook_rejection_rolls_back_and_carries_the_position") {
+    GraphFixture f;
+    must_write(f.graph, "CREATE (a:L {k: 1})");
+    const Strings before = logical_dump(f.path());
+    const std::int64_t ops_before = ops_count(f.path());
+    QueryHooks hooks;
+    hooks.before_change = [](ReadTxn&, const QueryChange& change) -> Result<void> {
+        if (change.kind == QueryChange::Kind::SetProperty && change.name == "locked")
+            return std::unexpected(Error{Error::Code::InvalidArgument, "test.locked", {{"key", "locked"}}});
+        return {};
+    };
+    const Result<QueryResult> rejected =
+        f.graph.query("MATCH (a:L) SET a.free = 1\nSET a.locked = 2", {}, QueryMode::ReadWrite, {}, hooks);
+    REQUIRE_FALSE(rejected.has_value());
+    CHECK(rejected.error().message_key == "test.locked");
+    CHECK(arg_of(rejected.error(), "key") == "locked");
+    CHECK(arg_of(rejected.error(), "line") == "2");
+    CHECK_FALSE(arg_of(rejected.error(), "col").empty());
+    // İlk SET de geri alınır: işlem commit edilmedi.
+    CHECK(logical_dump(f.path()) == before);
+    CHECK(ops_count(f.path()) == ops_before);
+}
+
+TEST_CASE("query_preview_runs_the_write_and_leaves_the_graph_unchanged") {
+    GraphFixture f;
+    must_write(f.graph, "CREATE (a:L {k: 1})");
+    const Strings before = logical_dump(f.path());
+    const std::int64_t ops_before = ops_count(f.path());
+    std::size_t changes = 0;
+    QueryHooks hooks;
+    hooks.commit = false;
+    hooks.before_change = [&](ReadTxn&, const QueryChange&) -> Result<void> {
+        ++changes;
+        return {};
+    };
+    const Result<QueryResult> preview = f.graph.query("MATCH (a:L) SET a.k = 2 CREATE (n:L {k: 9}) RETURN n.k",
+                                                      {}, QueryMode::ReadWrite, {}, hooks);
+    REQUIRE(preview.has_value());
+    CHECK(lines(*preview) == Strings{"9"});
+    CHECK(changes == 4);  // k'nin değeri, düğüm, etiket, özellik
+    CHECK(logical_dump(f.path()) == before);
+    CHECK(ops_count(f.path()) == ops_before);
+    CHECK(lines(must_query(f.graph, "MATCH (n:L) RETURN n.k")) == Strings{"1"});
+    // Önizleme açık işlem bırakmaz: hemen ardından yazma çalışır.
+    must_write(f.graph, "MATCH (a:L) SET a.k = 3");
+    CHECK(lines(must_query(f.graph, "MATCH (n:L) RETURN n.k")) == Strings{"3"});
+}

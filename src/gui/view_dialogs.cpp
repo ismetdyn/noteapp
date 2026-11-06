@@ -143,6 +143,15 @@ void View::install_deciders() {
                             1,
                             0});
     };
+    state_.deciders.confirm_query = [this](const std::string& message) {
+        // Güvenli varsayılan: Enter ve Esc vazgeçer; geri alma yok.
+        return ask_choice(ChoiceBox<bool>{core::tr("gui.query_confirm_title"),
+                                          message,
+                                          {{core::tr("gui.query_apply"), true}, {core::tr("gui.cancel"), false}},
+                                          1,
+                                          1,
+                                          0});
+    };
     state_.deciders.info = [this](const std::string& message) {
         ask_choice(ChoiceBox<bool>{"noteapp", message, {{core::tr("gui.ok"), true}}, 0, 0, std::nullopt});
     };

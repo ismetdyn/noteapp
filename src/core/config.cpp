@@ -446,6 +446,8 @@ template <QueryLimits Limits::* Profile, Limit QueryLimits::* Field> Limit& quer
 constexpr auto kUserQuery = &Limits::query;
 constexpr auto kView = &Limits::view;
 constexpr auto kSearch = &Limits::search;
+constexpr auto kApp = &Limits::app;
+constexpr auto kSync = &Limits::sync;
 
 // Modül struct'ının alanı: satır başına ayrı lambda yazılmasın.
 template <auto Module, auto Field> Limit& module_field(Limits& limits) {
@@ -456,11 +458,11 @@ template <auto Module, auto Field> Limit& module_field(Limits& limits) {
 std::span<const LimitKey> limit_keys() {
     static const auto table = std::to_array<LimitKey>({
         {"app.recent_commands", LimitUnit::Count, [](Limits& l) -> Limit& { return l.app.recent_commands; }},
-        {"app.trash_undo_steps", LimitUnit::Count,
-         [](Limits& l) -> Limit& { return l.app.trash_undo_steps; }},
+        {"app.trash_undo_steps", LimitUnit::Count, module_field<kApp, &AppLimits::trash_undo_steps>},
         {"app.tabs", LimitUnit::Count, [](Limits& l) -> Limit& { return l.app.tabs; }},
         {"app.map_nodes", LimitUnit::Count, [](Limits& l) -> Limit& { return l.app.map_nodes; }},
         {"app.map_depth", LimitUnit::Count, [](Limits& l) -> Limit& { return l.app.map_depth; }},
+        {"app.query_cell_bytes", LimitUnit::Bytes, module_field<kApp, &AppLimits::query_cell_bytes>},
         {"core.folder_path_bytes", LimitUnit::Bytes,
          [](Limits& l) -> Limit& { return l.core.folder_path_bytes; }},
         {"search.content_results", LimitUnit::Count, module_field<kSearch, &SearchLimits::content_results>},
@@ -469,8 +471,8 @@ std::span<const LimitKey> limit_keys() {
         {"search.fuzzy_candidate_chars", LimitUnit::Count,
          [](Limits& l) -> Limit& { return l.search.fuzzy_candidate_chars; }},
         {"search.relation_depth", LimitUnit::Count, module_field<kSearch, &SearchLimits::relation_depth>},
-        {"sync.merge_input_bytes", LimitUnit::Bytes,
-         [](Limits& l) -> Limit& { return l.sync.merge_input_bytes; }},
+        {"search.property_keys", LimitUnit::Count, module_field<kSearch, &SearchLimits::property_keys>},
+        {"sync.merge_input_bytes", LimitUnit::Bytes, module_field<kSync, &SyncLimits::merge_input_bytes>},
         {"graph.frame_bytes", LimitUnit::Bytes, [](Limits& l) -> Limit& { return l.graph.frame_bytes; }},
         {"graph.frame_ops", LimitUnit::Count, [](Limits& l) -> Limit& { return l.graph.frame_ops; }},
         {"graph.group_bytes", LimitUnit::Bytes, [](Limits& l) -> Limit& { return l.graph.group_bytes; }},

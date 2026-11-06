@@ -159,7 +159,7 @@ private:
     bool is_boundary(std::size_t offset) const;
     std::size_t line_of(std::size_t offset) const;
     std::size_t line_end(std::size_t line) const;
-    std::vector<VisualRow> compute_rows(std::size_t line, int columns) const;
+    void append_rows(std::size_t line, int columns, std::vector<VisualRow>& rows) const;
     const std::vector<VisualRow>& cached_rows(std::size_t line, int columns) const;
     std::size_t offset_at_cell(const VisualRow& row, int cell, int columns) const;
 
@@ -169,13 +169,23 @@ private:
     std::string eol_ = "\n";
     std::vector<std::size_t> line_starts_;
     // Son sorulan satırın yerleşimi. Tek karede aynı satır birkaç kez istenir; 10 MiB'lik tek satırda bunu
-    // yeniden hesaplamak tuş başına 80 ms ölçüldü (bütçe 50 ms). Metin değişince düşer.
+    // yeniden hesaplamak tuş başına 80 ms ölçüldü (bütçe 50 ms). Aynı satırdaki düzenleme yalnız `stale_from`
+    // ve sonrasını eskitir: sarma soldan sağa açgözlüdür, öncesindeki görsel satırlar değişmez.
     struct RowCache {
         std::size_t line = 0;
         int columns = 0;
         std::vector<VisualRow> rows;
+        std::size_t stale_from = std::string_view::npos;
     };
     mutable std::optional<RowCache> row_cache_;
+    // position() için satırdaki bilinen bir grapheme sınırı ve sütunu: uzun satırda imlece her karede satır
+    // başından yürünmesin. Sınırın önündeki (ve sınırdaki kod noktasındaki) düzenleme onu düşürür.
+    struct ColumnMark {
+        std::size_t line = 0;
+        std::size_t offset = 0;
+        std::size_t column = 0;
+    };
+    mutable std::optional<ColumnMark> column_mark_;
     mutable std::size_t changed_from_ = 0;
     std::uint64_t edit_count_ = 0;
     std::size_t cursor_ = 0;

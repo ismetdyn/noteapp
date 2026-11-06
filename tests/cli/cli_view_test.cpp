@@ -1,5 +1,6 @@
 // T81: `note view save|ls|run|rm|show` ve `note ls` içinde `view:`. Görünüm salt-okunurdur: yazan sorgu
 // kayıtta ve çalıştırmada reddedilir, grafa doğrudan yazılmış kötü niyetli görünüm hiçbir şey değiştirmez.
+#include "graph/graph.hpp"
 #include "support/cli_sandbox.hpp"
 
 #include <doctest/doctest.h>
@@ -121,10 +122,15 @@ TEST_CASE("view save rejects a write clause and saves nothing") {
 TEST_CASE("a view with a write clause written straight into the graph is rejected at run, nothing changes") {
     const Sandbox box("en");
     seed(box);
-    // Senkronla gelmiş gibi: kayıt denetimini atlayan görünüm.
-    const auto planted = box.run(
-        {"query", "--write", "CREATE (:View {name: 'evil', query: 'MATCH (n:Note) DETACH DELETE n'})"});
-    REQUIRE(planted.exit_code == 0);
+    // Senkronla gelmiş gibi: kayıt denetimini atlayan görünüm. `query --write` View kuramaz (korunan etiket):
+    // ayrı bağlantıdan, motora doğrudan yazılır.
+    {
+        auto raw = noteapp::graph::Graph::open(box.data() / "graph.db");
+        REQUIRE(raw.has_value());
+        REQUIRE(raw->query("CREATE (:View {name: 'evil', query: 'MATCH (n:Note) DETACH DELETE n'})", {},
+                           noteapp::graph::QueryMode::ReadWrite)
+                    .has_value());
+    }
     const auto before = box.run({"query", "MATCH (n) RETURN count(n)"}).out;
 
     const auto ran = box.run({"view", "run", "evil"});

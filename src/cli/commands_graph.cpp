@@ -1179,11 +1179,17 @@ int run_relation_ls(const RelationArgs& args, const core::NoteStore& store) {
 
 }  // namespace
 
+std::optional<core::RelationId> relation_id_from_hex(std::string_view text) {
+    return id_from_hex<core::RelationId>(text);
+}
+
 int run_relation(const ParsedArgs& args, const core::Config& config) {
     static constexpr std::array<std::string_view, 2> kRelationAdd{"--name", "--directed"};
     static constexpr std::array<std::string_view, 2> kRelationRm{"--name", "--id"};
     static constexpr std::array<std::string_view, 1> kRelationLs{"--json"};
     const std::string verb = args.rest.empty() ? std::string() : args.rest.front();
+    if (verb == "prop")  // `relation prop get|set|rm KİMLİK …` (F4)
+        return run_relation_prop(std::span(args.rest).subspan(1), config);
     std::span<const std::string_view> allowed;
     if (verb == "add")
         allowed = kRelationAdd;

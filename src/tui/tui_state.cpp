@@ -157,7 +157,7 @@ void TuiState::go_root() {
 
 bool right_pane_focused(Focus focus) {
     return focus == Focus::Preview || focus == Focus::PreviewFind || focus == Focus::Editor ||
-           focus == Focus::Links;
+           focus == Focus::Links || focus == Focus::Inspector;
 }
 
 bool passes_to_terminal(Key key, Focus focus) {
@@ -399,8 +399,15 @@ std::optional<Intent> TuiState::handle_map_key(Key key, std::string_view text) {
     if (map_link_)
         if (const auto intent = handle_map_link_key(key, text))
             return intent;
+    if (map_query_table())
+        if (const auto intent = handle_map_table_key(key))
+            return intent;
     switch (key) {
     case Key::Escape:
+        if (map_query_.outcome() || !map_query_.error().empty()) {  // F3: önce sorgunun sonucu kalkar
+            clear_map_query();
+            return Intent::None;
+        }
         if (!map_.scope().path)
             return std::nullopt;  // liste: süzgeci temizler
         map_.clear_path();
@@ -446,6 +453,8 @@ std::optional<Intent> TuiState::handle_map_key(Key key, std::string_view text) {
     } else if (text == "C") {
         begin_map_link();
         return Intent::None;
+    } else if (text == "p") {  // F4 (properties): liste görünmez, yapıştırma `p`si haritada gölgelenir
+        return inspect_map();
     } else if (text.size() == 1 && text[0] >= '0' + app::MapOptions::kMinDepth && text[0] <= '9' &&
                text[0] - '0' <= map_.max_depth()) {
         options.depth = text[0] - '0';
@@ -687,8 +696,20 @@ void TuiState::open_map_edge(int column, int row) {
 }
 
 // Keşif tuşları (F2, SPEC-tui "Harita"). Harfler İngilizce adlardan: (e)X(pand), e(dges), N(ame), P(in),
-// U(npin), R(oute), n(ew), d(elete → çöp). Listenin `x` `X` `e` `/` tuşları haritada gölgelenir; liste görünmez.
+// U(npin), R(oute), n(ew), d(elete → çöp); F3 Q(uery), O(utput: tablo). Listenin `x` `X` `e` `/` tuşları haritada
+// gölgelenir; liste görünmez.
 std::optional<Intent> TuiState::handle_map_explore_key(std::string_view text) {
+    if (text == "Q") {  // vazgeçilen ya da hatalı sorgunun metniyle açılır
+        begin_map_input(MapInputKind::Query, views_, map_query_text_);
+        return Intent::None;
+    }
+    if (text == "O") {
+        if (map_query_.outcome()) {
+            map_query_.toggle_table();
+            map_query_row_ = 0;
+        }
+        return Intent::None;
+    }
     if (text == "/") {
         begin_map_input(MapInputKind::Find, {}, {});
         return Intent::None;
@@ -799,7 +820,7 @@ void TuiState::begin_map_relation_filter(std::span<const core::RelationName> nam
 void TuiState::begin_map_input(MapInputKind kind, std::vector<std::string> candidates, std::string text) {
     map_link_.reset();
     map_input_kind_ = kind;
-    map_input_ = InputLine(InputKind::Find);
+    map_input_ = InputLine(kind == MapInputKind::Query ? InputKind::Query : InputKind::Find);
     map_input_.set_sources(word_input_sources(std::move(candidates)));
     map_input_.set_text(std::move(text));
     map_found_.clear();
@@ -815,6 +836,8 @@ Intent TuiState::handle_map_input(Key key, std::string_view text) {
         map_found_.clear();  // seçim eşleşmede kalır: Enter onu açar
         return Intent::None;
     }
+    if (map_input_kind_ == MapInputKind::Query && !listing)
+        return handle_map_query_key(key, text);
     if (find && (key == Key::Enter || key == Key::Tab || key == Key::ShiftTab)) {
         step_map_found(key == Key::ShiftTab ? -1 : 1);
         return Intent::None;
@@ -826,6 +849,24 @@ Intent TuiState::handle_map_input(Key key, std::string_view text) {
     if (map_input_.handle(key, text) == InputLine::Result::Edited && find)
         refresh_map_found();
     return Intent::None;
+}
+
+// Sorgu satırı (F3): ↑ ↓ ve Ctrl+P/N geçmişte gezer (arama geçmişinin yardımcısı), Enter çalıştırır. Geçmiş
+// oturumluktur; sır benzeri metin girmez.
+Intent TuiState::handle_map_query_key(Key key, std::string_view text) {
+    if (key == Key::Up || key == Key::Down)
+        key = key == Key::Up ? Key::CtrlP : Key::CtrlN;
+    if (key != Key::Enter) {
+        map_input_.handle(key, text, map_query_history_);
+        return Intent::None;
+    }
+    const std::string typed = trimmed(map_input_.text());
+    map_input_kind_.reset();
+    if (typed.empty())
+        return Intent::None;
+    remember_search(map_query_history_, typed, nullptr, search_history_limits_);
+    map_query_text_ = typed;
+    return Intent::RunMapQuery;
 }
 
 void TuiState::submit_map_input() {
@@ -869,6 +910,61 @@ void TuiState::center_map_on(std::size_t node) {
     camera.x = static_cast<float>(columns * kMapDotsPerCellX) / 2.0F - at.x * camera.zoom;
     camera.y = static_cast<float>(rows * kMapDotsPerCellY) / 2.0F - at.y * camera.zoom;
     map_camera_ = camera;
+}
+
+void TuiState::map_query_finished() {
+    if (const auto& outcome = map_query_.outcome())
+        map_.set_highlight(outcome->highlight);
+    map_query_text_.clear();
+    map_query_row_ = 0;
+}
+
+void TuiState::map_query_failed() {
+    begin_map_input(MapInputKind::Query, views_, map_query_text_);
+}
+
+void TuiState::clear_map_query() {
+    map_query_.clear();
+    map_.set_highlight(std::nullopt);
+    map_query_row_ = 0;
+}
+
+// Tablo görünümü (`O`): ↑↓ PgUp PgDn satır seçer, Enter satırın ilk notunu açar, Esc sonucu kaldırır. Başka tuş
+// haritanın tuşlarına düşer (`O` haritaya döner, `Q` sorgu).
+std::optional<Intent> TuiState::handle_map_table_key(Key key) {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- map_query_table() sonucu gerektirir
+    const auto& rows = map_query_.outcome()->table.rows;
+    const std::size_t last = rows.empty() ? 0 : rows.size() - 1;
+    const auto page = static_cast<std::size_t>(std::max(map_cells().second - 2, 1));
+    switch (key) {
+    case Key::Up:
+        map_query_row_ -= map_query_row_ > 0 ? 1 : 0;
+        return Intent::None;
+    case Key::Down:
+        map_query_row_ = std::min(map_query_row_ + 1, last);
+        return Intent::None;
+    case Key::PageUp:
+        map_query_row_ -= std::min(map_query_row_, page);
+        return Intent::None;
+    case Key::PageDown:
+        map_query_row_ = std::min(map_query_row_ + page, last);
+        return Intent::None;
+    case Key::Enter: {
+        if (map_query_row_ >= rows.size())
+            return Intent::None;
+        const auto& cells = rows[map_query_row_];
+        const auto note = std::ranges::find(cells, app::QueryCell::Kind::Note, &app::QueryCell::kind);
+        if (note == cells.end())
+            return Intent::None;
+        map_selected_ = note->note;
+        return map_selected() ? Intent::OpenMapNode : Intent::None;
+    }
+    case Key::Escape:
+        clear_map_query();
+        return Intent::None;
+    default:
+        return std::nullopt;
+    }
 }
 
 void TuiState::map_note_created(const core::NotePath& path) {
@@ -1677,6 +1773,11 @@ Intent TuiState::handle(Key key, std::string_view text) {
 }
 
 Intent TuiState::handle_focused(Key key, std::string_view text) {
+    if (focus_ == Focus::Inspector)  // harfler komut tablosundan önce: `a` `e` `d` denetçinindir
+        return handle_inspector(key, text);
+    if ((focus_ == Focus::Preview || focus_ == Focus::Links) && key == Key::Char && text == "p" &&
+        !trash_view_)
+        return inspect_review();
     if (focus_ == Focus::List && map_view())
         if (const auto intent = handle_map_key(key, text))
             return *intent;

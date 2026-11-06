@@ -7,6 +7,7 @@
 #include "core/dll_search.hpp"
 #include "core/editor.hpp"
 #include "core/file_icons.hpp"
+#include "core/graph_limits.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
 #include "core/migration.hpp"
@@ -511,6 +512,9 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
     state_.set_recent_commands_limit(config_.limits.app.recent_commands);  // load_list_prefs'ten önce
     state_.set_map_node_limit(config_.limits.app.map_nodes);
     state_.set_map_depth_limit(config_.limits.app.map_depth);
+    state_.set_query_limits(core::query_limits_of(config_.limits.query));  // F3 sorgu: kullanıcının profili
+    state_.set_query_cell_bytes(config_.limits.app.query_cell_bytes.cap());
+    state_.set_inspector_cell_bytes(config_.limits.app.query_cell_bytes.cap());
     state_.set_search_history_limits({.entries = config_.limits.tui.search_history.cap(),
                                       .entry_bytes = config_.limits.tui.search_entry_bytes.cap()});
     state_.set_fuzzy_candidate_chars(config_.limits.search.fuzzy_candidate_chars.cap());
@@ -709,6 +713,10 @@ void TuiSession::connect_search() {
         const std::scoped_lock lock(list_mutex_);
         return noteapp::app::search_edges(store());
     });
+    state_.set_property_source([this](std::string_view key) {
+        const std::scoped_lock lock(list_mutex_);
+        return noteapp::app::search_properties(store(), key);
+    });
     state_.set_relation_depth(noteapp::app::relation_depth(config_));
     state_.set_global_searcher([this](std::string_view query, std::span<const core::NoteMeta> notes,
                                       const noteapp::search::GraphInput& graph) {
@@ -788,6 +796,7 @@ void TuiSession::refresh_notes() {
     state_.set_folders(list_folders());
     state_.set_trash_count(trash_count());
     sync_status_.request(config_, state_.metas());
+    list_actions_.refresh_inspector();  // çekilen senkron özellik yazmış olabilir
 }
 
 void TuiSession::show_error(const core::Error& error) {
@@ -1286,6 +1295,7 @@ void TuiSession::rescan_loop(const std::stop_token& stop, std::vector<core::Note
             state_.set_trash_count(latest.trash);
             sync_status_.request(config_, state_.metas());
             list_actions_.refresh_trash_view();
+            list_actions_.refresh_inspector();  // senkron ya da başka süreç özellik yazmış olabilir
             settle_tabs();
             list_actions_.save_prefs_if_changed();
             sync_preview();

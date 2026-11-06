@@ -78,6 +78,17 @@ public:
     // `F2`: girdi seçili notun yoluyla açılır. Enter NoteStore::move'dan geçer: hedef varsa hata girdide
     // kalır, ezme yok. Esc ya da değişmeyen yol hiçbir şey yazmaz.
     void begin_rename(std::optional<RenameState>& rename);
+    // F4 denetçi (Intent::Inspector*): satırları okur, ekleme/düzenleme satırını açar, onaylı siler.
+    void load_inspector();
+    // Yeniden tarama ve liste tazelemesinden sonra (main): odak denetçideyse satırlar yeniden okunur; senkron
+    // ya da başka süreç yazmış olabilir.
+    void refresh_inspector();
+    void begin_inspector_edit(std::optional<RenameState>& rename, bool add);
+    void begin_inspector_delete(std::optional<ConfirmState>& confirm);
+    void submit_property(std::optional<RenameState>& rename);
+    bool finish_inspector_write(
+        const std::function<std::expected<std::string, core::Error>(core::NoteStore&)>& write,
+        RenameState* input = nullptr);
     // `m`: seçim ya da satır için hedef klasör girdisi, geçerli klasörle dolu; Tab klasörleri önerir.
     void begin_move_to(std::optional<RenameState>& rename);
     // `L`: boş girdi, Tab not yollarını önerir; Enter hedefi doğrular ve ad satırını açar (F1, RenameState
@@ -137,6 +148,8 @@ private:
     // Haritada kenar kur, kaldır, ilişkinin adını ya da yönünü değiştir (TuiState::take_map_edit,
     // app::map_relations); sonuç durum satırında. İlişki kurma ve ad değişimi `rename` doluysa ad satırı açar.
     void apply_map_edit(std::optional<RenameState>* rename);
+    void run_map_query(std::optional<ConfirmState>& confirm);
+    void show_map_query(app::MapQuery::Step step);
     void run_intent(Intent intent, std::optional<ConfirmState>& confirm, std::optional<RenameState>* rename);
     // Ad satırı (RenameState::RelationName); adlar depodan bir kez okunur.
     void open_relation_line(std::optional<RenameState>& rename, const core::NotePath& from,

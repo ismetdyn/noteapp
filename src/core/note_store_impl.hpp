@@ -4,6 +4,7 @@
 #include "core/config.hpp"
 #include "core/error.hpp"
 #include "core/note_path.hpp"
+#include "core/note_props.hpp"
 #include "core/note_store.hpp"
 #include "core/text_merger.hpp"
 #include "graph/graph.hpp"
@@ -47,6 +48,9 @@ inline constexpr std::string_view kLinksTo = "LINKS_TO";
 inline constexpr std::string_view kRelatedTo = "RELATED_TO";
 inline constexpr std::string_view kTagLabel = "Tag";
 inline constexpr std::string_view kTagged = "TAGGED";
+// Kaydedilmiş görünüm (core/note_views.hpp): (:View {name, query, created_at, updated_at}).
+inline constexpr std::string_view kViewLabel = "View";
+inline constexpr std::string_view kViewQuery = "query";
 // Tag.name eşleştirme anahtarıdır (tag_key); gösterim etiketin ilk yazıldığı hali.
 inline constexpr std::string_view kTagDisplay = "display";
 inline constexpr std::string_view kName = "name";
@@ -139,6 +143,11 @@ struct Snapshot {
     // shared_edges() sonucu; ilk istekte kurulur, görüntüyle düşer (arama her tuşta sorar). Impl::mutex
     // altında.
     mutable std::shared_ptr<const std::vector<NoteEdge>> edges;
+    // notes_with_property() sonucu, anahtar başına; ilk istekte kurulur, görüntüyle düşer (`prop:` her tuşta
+    // sorar). Impl::mutex altında.
+    mutable std::map<std::string, std::shared_ptr<const PropertyNotes>> property_notes;
+    mutable std::vector<std::string>
+        property_order;  // property_notes'un anahtarları, en eski kullanılan önde
     std::size_t folder_path_bytes =
         kDefaultFolderPathBytes;                         // görüntünün kurulduğu sınır; yazma da bunu dayatır
     std::size_t name_bytes = kDefaultRelationNameBytes;  // okunan etiket adının sınırı (build_snapshot)
@@ -174,6 +183,13 @@ std::array<std::string, 4> link_keys(std::string_view path);
 std::vector<std::string> placed_keys(std::span<const std::string> paths);
 // Canlı ya da çöpteki notun yolu; görüntüde yoksa boş.
 std::optional<std::string> note_path_in(const Snapshot& snapshot, const graph::NodeId& id);
+
+// Sorgu çubuğunun koruması (core/note_query.cpp SchemaGuard), tek değişiklik için: özellik denetçisi de aynı
+// kancadan geçer, iki yol aynı anahtarları reddeder. Ret InvalidArgument'tır.
+graph::Result<void> check_user_change(graph::ReadTxn& txn, const graph::QueryChange& change,
+                                      std::size_t relation_name_bytes);
+// Note düğümünün uygulamaya ait anahtarı mı (gövde, ad, tip, zamanlar...).
+bool protected_note_key(std::string_view key);
 
 std::expected<bool, Error> verify_import(graph::ReadTxn& txn, const ImportedNote& note);
 // Geçiş notunun baytlarını tutabilecek düğümler (asıl ve kopya), UnreachableNote::id biçiminde.
@@ -404,6 +420,8 @@ struct NoteStore::Impl {
     std::size_t batch_ops = kDefaultGraphBatchOps;
     // Ayar: limits.graph.relation_name_bytes (for_config); sınırsız SIZE_MAX.
     std::size_t relation_name_bytes = kDefaultRelationNameBytes;
+    // Ayar: limits.search.property_keys (for_config): `prop:` önbelleğinin anahtar sayısı; sınırsız SIZE_MAX.
+    std::size_t property_cache_keys = kDefaultPropertyCacheKeys;
     // Ayar: limits.core.folder_path_bytes (for_config); sınırsız SIZE_MAX.
     std::size_t folder_path_bytes = kDefaultFolderPathBytes;
     // Test dikişi: commit edilmiş bir kullanıcı işleminin ardından gelen işlemlerden önce sorulur; false
@@ -416,6 +434,11 @@ struct NoteStore::Impl {
     // Test dikişi: görünüm sorgusu motora gitmeden hemen önce. Önbelleğin motoru kaç kez çalıştırdığını
     // sayar.
     std::function<void()> before_view_run;
+    // Test dikişi: kullanıcı sorgusunun sonucu adlanmadan hemen önce (core/note_query); dolu hata adlandırmanın
+    // düşmesi gibi davranır (commit edilmiş yazmanın raporu sınanır).
+    std::function<std::optional<Error>()> query_naming_fault;
+    // Test dikişi: görünüm aranırken (find_view); dolu hata deponun okunamaması gibi davranır (Busy, G/Ç).
+    std::function<std::optional<Error>()> view_lookup_fault;
 
 private:
     struct Pass {

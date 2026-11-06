@@ -1,9 +1,12 @@
 #pragma once
 
+#include "core/note_props.hpp"
 #include "core/note_store.hpp"
 #include "search/query.hpp"
 
 #include <cstddef>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -58,6 +61,10 @@ struct RelationGraph {
     }
 };
 
+// `prop:` süzgecinin kaynağı: anahtarı taşıyan notlar ve değer metinleri (core::notes_with_property; ön yüz
+// depoya bağlar: app::search_properties). nullptr: okunamadı, not geçmez.
+using PropertyLookup = std::function<std::shared_ptr<const core::PropertyNotes>(std::string_view key)>;
+
 // İlişki araması girdisi. Arayüz kenarları depodan bir kez okur (app::search_edges), derinliği config'ten
 // verir (app::relation_depth).
 struct GraphInput {
@@ -70,6 +77,8 @@ struct GraphInput {
     // index varken: notes[i]'nin düğümü (kNoNode: kenarı yok), notes ile aynı boyda. Boşsa yoldan bulunur;
     // ön yüz bunu da önbellekler (50.000 notta tuş başına yol üretimi olmasın).
     std::span<const std::size_t> nodes = {};
+    // `prop:` süzgeci (SPEC-search); verilmezse süzgeç hiçbir notu geçirmez.
+    PropertyLookup properties = {};
 };
 
 inline constexpr std::size_t kNoNode = SIZE_MAX;
@@ -83,10 +92,10 @@ std::vector<std::size_t> note_nodes(const RelationGraph& index, std::span<const 
 std::vector<RelationHit> relation_hits(std::string_view text, std::span<const core::NoteMeta> notes,
                                        std::span<const std::size_t> allowed, const GraphInput& graph);
 
-// `rel:` ve `linked:` süzgeçlerinin notlarını (Filter::notes) kenarlardan kurar. Bağlanmamış süzgeç hiçbir
-// notu geçirmez (`view:` kuralı). graph.index varsa o kullanılır.
+// `rel:` ve `linked:` süzgeçlerinin notlarını (Filter::notes) kenarlardan, `prop:`unkini graph.properties'ten
+// kurar. Bağlanmamış süzgeç hiçbir notu geçirmez (`view:` kuralı). graph.index varsa o kullanılır.
 void bind_graph_filters(std::span<Filter> filters, const GraphInput& graph);
-// Sorguda kenar isteyen süzgeç var mı (`rel:`, `linked:`).
+// Sorguda kenar isteyen süzgeç var mı (`rel:`, `linked:`; `prop:` kenar istemez).
 bool has_graph_filter(std::span<const Filter> filters);
 
 }  // namespace noteapp::search

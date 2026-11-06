@@ -10,6 +10,7 @@
 #include <cmath>
 #include <imgui.h>
 #include <imgui_impl_sdlrenderer3.h>
+#include <imgui_internal.h>  // IMGUI_TABLE_MAX_COLUMNS
 #include <imgui_stdlib.h>
 #include <limits>
 #include <utility>
@@ -162,6 +163,11 @@ void View::draw_map() {
     draw_map_controls(map);
     draw_quick_add();  // F2 "Buraya yeni not…": hızlı ekleme satırı haritada da açılır
     draw_map_find(map);
+    draw_map_query();
+    if (state_.map_query_open() && state_.map_query().table_shown()) {  // F3: tablo tuvalin yerinde
+        draw_map_query_table();
+        return;
+    }
     ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::current().canvas);  // zemin Begin'de çizilir
     ImGui::BeginChild("##map", ImVec2(0.0F, 0.0F), theme::kPaneChildFlags,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
@@ -498,6 +504,12 @@ void View::draw_relation_items(const MapPair& edge) {
             state_.rename_relation(first, second, edge.relation, edge.name);
         });
     remember_item_center("map_edge_rename");
+    // F4: ilişkinin özellikleri denetçide (ad ve yön orada salt okunur, bu menüden değişir).
+    if (ImGui::MenuItem((core::tr("inspector.inspect_relation") + "###map_edge_inspect").c_str()))
+        queue([this, edge, first = *from, second = *to] {
+            state_.inspect_relation(first, second, edge.relation, edge.name, edge.directed);
+        });
+    remember_item_center("map_edge_inspect");
     if (edge.directed) {
         if (ImGui::MenuItem((core::tr("map.flip_relation") + "###map_edge_flip").c_str()))
             direct(*to);
@@ -617,6 +629,15 @@ void View::draw_map_controls(const NoteMap& map) {
     remember_item_center("map_tag");
     if (changed)
         queue([this, options] { state_.set_map_options(options); });
+    // F3 sorgu çubuğu: açıp kapatan çip (tuvalde `Q`); kapanış sonucu ve vurguyu kaldırır.
+    const std::string query = core::tr("gui.map_query");
+    flow_after_previous(button_width(query), row_start_x, row_width);
+    bool query_open = state_.map_query_open();
+    chip("map_query_toggle", query, query_open, "gui.map_query_tip");
+    if (query_open != state_.map_query_open()) {  // çipin `changed`i seçenekleri yukarıda kuyruğa almıştı
+        map_query_focus_ = query_open;
+        queue([this] { state_.toggle_map_query(); });
+    }
 
     // İlişki kurmanın yolu görünür olsun (MAP-R keşfedilmiyordu): kipteyken kaynağı ve vazgeçmeyi söyler.
     ImGui::PushFont(nullptr, kSmallFontPixels);
@@ -766,6 +787,11 @@ void View::handle_map_input(const NoteMap& map, ImVec2 origin, ImVec2 size, int 
     }
     if (ImGui::IsKeyChordPressed(ImGuiKey_U))
         queue([this] { state_.unpin_map(); });
+    // F3, TUI ile aynı harf: Q(uery) sorgu çubuğunu açar (açıksa kapatır).
+    if (ImGui::IsKeyChordPressed(ImGuiKey_Q)) {
+        map_query_focus_ = !state_.map_query_open();
+        queue([this] { state_.toggle_map_query(); });
+    }
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_F)) {
         map_find_open_ = true;
         map_find_focus_ = true;
@@ -814,6 +840,156 @@ void View::draw_map_find(const NoteMap& map) {
     }
     if (entered)
         map_find_focus_ = true;  // Enter girdiyi bırakır: sonraki Enter da eşleşmeyi değiştirsin
+}
+
+namespace {
+
+// ↑ ↓ sorgu geçmişi (tui::InputLine, arama geçmişiyle aynı yardımcı): yürüyüşün metni kutuya yazılır.
+int map_query_callback(ImGuiInputTextCallbackData* data) {
+    if (data->EventFlag != ImGuiInputTextFlags_CallbackHistory)
+        return 0;
+    auto& state = *static_cast<GuiState*>(data->UserData);
+    const auto next = state.map_query_history_step(
+        std::string_view(data->Buf, static_cast<std::size_t>(data->BufTextLen)), data->EventKey == ImGuiKey_UpArrow);
+    if (next) {
+        data->DeleteChars(0, data->BufTextLen);
+        data->InsertChars(0, next->data(), next->data() + next->size());
+    }
+    return 0;
+}
+
+}  // namespace
+
+// Sorgu çubuğu (F3): kayıtlı görünümler, tek satırlık Cypher (Enter ya da Ctrl+Enter çalıştırır, ↑ ↓ geçmiş),
+// Çalıştır ve Tablo. Hata çubuğun altında; metin güvenilmez olabilir (sorgu motorun iletisine girer).
+void View::draw_map_query() {
+    if (!state_.map_query_open())
+        return;
+    const float font = ImGui::GetFontSize();
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    ImGui::SetNextItemWidth(kMapFilterEms * font);
+    if (ImGui::BeginCombo("##map_query_views", core::tr("gui.map_query_views").c_str())) {
+        if (ImGui::IsWindowAppearing())  // depo açılışta bir kez okunur, kare başına değil
+            map_view_names_ = state_.map_view_names();
+        if (map_view_names_.empty())
+            ImGui::TextDisabled("%s", core::tr("gui.map_query_no_views").c_str());
+        for (const std::string& name : map_view_names_) {
+            // Ad senkronla gelebilir: etikette `##` kimliği kesemez, gizli karakter çizilmez.
+            if (ImGui::Selectable((label_safe(tui::terminal_safe(name)) + "###map_query_view:" + name).c_str()))
+                queue([this, name] { state_.run_map_view(name); });
+            remember_item_center("map_query_view:" + name);
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip("%s", core::tr("gui.map_query_views_tip").c_str());
+    remember_item_center("map_query_views");
+
+    const std::string run = core::tr("gui.map_query_run");
+    const std::string table = core::tr("gui.map_query_table");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(
+        std::max(ImGui::GetContentRegionAvail().x - button_width(run) - button_width(table) - 2.0F * spacing,
+                 kMapFilterEms * font));
+    if (std::exchange(map_query_focus_, false))
+        ImGui::SetKeyboardFocusHere();
+    ImGui::PushID(static_cast<int>(state_.map_query_generation()));  // boşalan metin kutuya yeniden okunur
+    const bool entered = ImGui::InputTextWithHint(
+        "##map_query", core::tr("gui.map_query_hint").c_str(), &state_.map_query_buffer(),
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory, map_query_callback, &state_);
+    ImGui::PopID();
+    remember_item_center("map_query");
+    ImGui::SameLine();
+    if (button("map_query_run", run, ButtonKind::Primary) || entered) {
+        map_query_focus_ = true;  // sonuç ya da hata: yazmaya devam edilir
+        queue([this] { state_.run_map_query(); });
+    }
+    ImGui::SameLine();
+    const bool has_result = state_.map_query().outcome().has_value();
+    ImGui::BeginDisabled(!has_result);
+    const theme::Theme& colors = theme::current();
+    const bool shown = state_.map_query().table_shown();
+    ImGui::PushStyleColor(ImGuiCol_Button, shown ? colors.selected : 0);
+    if (button("map_query_table", table, ButtonKind::Ghost))
+        queue([this] { state_.toggle_map_query_table(); });
+    ImGui::PopStyleColor();
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("%s", core::tr("gui.map_query_table_tip").c_str());
+    if (const std::string& error = state_.map_query().error(); !error.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, colors.danger);
+        ImGui::PushTextWrapPos(0.0F);
+        ImGui::TextUnformatted(tui::terminal_safe(error).c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        remember_item_center("map_query_error");
+    }
+}
+
+// Sonucun tablosu (F3): yalnız görünen satırlar çizilir (ImGuiListClipper). Hücreler güvenilmez kaynaktandır ama
+// query_outcome'da bir kez temizlenmiş ve kısaltılmıştır: TextUnformatted ile çizilir, etiket olmaz (başlık
+// etikettir: label_safe). Not hücresi tıklanınca not açılır.
+void View::draw_map_query_table() {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- çağıran table_shown'a baktı: sonuç dolu
+    const app::QueryOutcome& outcome = *state_.map_query().outcome();
+    ImGui::TextUnformatted(tui::terminal_safe(outcome.summary).c_str());
+    const app::QueryTable& table = outcome.table;
+    if (table.columns.empty()) {
+        ImGui::TextDisabled("%s", core::tr("gui.map_query_no_columns").c_str());
+        return;
+    }
+    constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
+                                       ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable;
+    // BeginTable `columns < IMGUI_TABLE_MAX_COLUMNS` ister (assert): fazlası çizilmez, kaçı gizlendiği söylenir.
+    constexpr std::size_t kMaxColumns = IMGUI_TABLE_MAX_COLUMNS - 1;
+    const int columns = static_cast<int>(std::min(table.columns.size(), kMaxColumns));
+    if (table.columns.size() > kMaxColumns) {
+        ImGui::PushTextWrapPos(0.0F);
+        ImGui::TextUnformatted(core::tr("gui.map_query_columns_hidden",
+                                        {{"count", std::to_string(table.columns.size() - kMaxColumns)},
+                                         {"shown", std::to_string(kMaxColumns)}})
+                                   .c_str());
+        ImGui::PopTextWrapPos();
+        remember_item_center("map_query_hidden_columns");
+    }
+    if (!ImGui::BeginTable("##map_query_rows", columns, kFlags, ImVec2(0.0F, 0.0F)))
+        return;
+    remember_rect("map_query_rows", ImGui::GetWindowPos(),
+                  ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowSize().x,
+                         ImGui::GetWindowPos().y + ImGui::GetWindowSize().y));
+    ImGui::TableSetupScrollFreeze(0, 1);
+    for (int column = 0; column < columns; ++column)  // başlık bir etikettir: `#` kimliği kesemez
+        ImGui::TableSetupColumn(
+            (label_safe(table.columns[static_cast<std::size_t>(column)]) + "###column" +
+             std::to_string(column))
+                .c_str());
+    ImGui::TableHeadersRow();
+    const ImU32 link = theme::current().accent;
+    ImGuiListClipper clipper;
+    clipper.Begin(static_cast<int>(table.rows.size()));
+    while (clipper.Step()) {
+        for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+            const auto& cells = table.rows[static_cast<std::size_t>(row)];
+            ImGui::TableNextRow();
+            for (int column = 0; column < columns && static_cast<std::size_t>(column) < cells.size(); ++column) {
+                ImGui::TableSetColumnIndex(column);
+                const app::QueryCell& cell = cells[static_cast<std::size_t>(column)];
+                const bool note = cell.kind == app::QueryCell::Kind::Note;
+                if (note)
+                    ImGui::PushStyleColor(ImGuiCol_Text, link);
+                ImGui::TextUnformatted(cell.text.c_str());  // query_outcome temizledi
+                if (note) {
+                    ImGui::PopStyleColor();
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                    if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+                        if (auto path = core::NotePath::parse(cell.note))
+                            queue([this, path = std::move(*path)] { state_.open_map_note(path); });
+                }
+                remember_rect("map_query_cell:" + std::to_string(row) + ":" + std::to_string(column),
+                              ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+            }
+        }
+    }
+    ImGui::EndTable();
 }
 
 // Düğüm tuvalin ortasına gelir, yakınlık kalır; kendiliğinden sığdırma kapanır (yoksa sonraki kare geri sığardı).
@@ -877,12 +1053,18 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
             if (node < found.size())
                 found[node] = 1;
     }
+    // Sorgu vurgusu (F3): yalnız sonuçtaki düğümler ve kenarlar yanar (app::MapModel::highlighted_*).
+    const std::vector<char>& query_nodes = state_.map_highlighted_nodes();
+    const std::vector<char>& query_edges = state_.map_highlighted_edges();
+    const bool querying = query_nodes.size() == map.nodes.size() && query_edges.size() == map.edges.size() &&
+                          state_.map_query().outcome().has_value();
     const auto lit = [&](std::size_t node) {
         return (!filtering || matches[node] != 0) && (near_hovered.empty() || near_hovered[node] != 0) &&
-               (found.empty() || found[node] != 0);
+               (found.empty() || found[node] != 0) && (!querying || query_nodes[node] != 0);
     };
     const auto edge_lit = [&](const MapEdge& edge) {
-        return lit(edge.from) && lit(edge.to) &&
+        const auto index = static_cast<std::size_t>(&edge - map.edges.data());
+        return lit(edge.from) && lit(edge.to) && (!querying || query_edges[index] != 0) &&
                (hovered < 0 || static_cast<int>(edge.from) == hovered ||
                 static_cast<int>(edge.to) == hovered);
     };
@@ -929,6 +1111,14 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
     const std::size_t path_edges = map.path.empty() ? 0 : std::min(map.edges.size(), map.path_edges.size());
     for (std::size_t e = 0; e < path_edges; ++e) {  // yol yokken kare başına kenar taraması yok
         if (map.path_edges[e] == 0)
+            continue;
+        const ImVec2 a = screen(map.edges[e].from);
+        const ImVec2 b = screen(map.edges[e].to);
+        if (visible(a, b))
+            draw->AddLine(a, b, accent, thick);
+    }
+    for (std::size_t e = 0; querying && e < map.edges.size(); ++e) {  // F3: sorgunun döndürdüğü kenar (2)
+        if (query_edges[e] != 2)
             continue;
         const ImVec2 a = screen(map.edges[e].from);
         const ImVec2 b = screen(map.edges[e].to);

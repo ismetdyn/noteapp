@@ -14,11 +14,13 @@ noteapp_add_test(gui
     icon_font_test.cpp
     import_test.cpp
     info_test.cpp
+    inspector_test.cpp
     layout_test.cpp
     links_test.cpp
     list_commands_test.cpp
     list_prefs_test.cpp
     main_window_test.cpp
+    map_query_test.cpp
     map_test.cpp
     marks_test.cpp
     note_editor_test.cpp

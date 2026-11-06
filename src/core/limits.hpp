@@ -46,6 +46,7 @@ struct AppLimits {
     Limit tabs;              // aynı anda açık editör sekmesi (TUI ve GUI)
     Limit map_nodes;         // haritada çizilen en çok düğüm (TUI ve GUI); aşan kısım uyarıyla düşer
     Limit map_depth;         // harita çevre kapsamının en çok adımı (TUI tuşları, GUI adımlayıcısı)
+    Limit query_cell_bytes;  // harita sorgu tablosunun hücresi (TUI, GUI); uzunu `…` ile kısalır
 
     bool operator==(const AppLimits&) const = default;
 };
@@ -66,6 +67,7 @@ struct SearchLimits {
     Limit content_hits;           // içerik sonucunda not başına kesiti üretilen eşleşen satır
     Limit fuzzy_candidate_chars;  // fuzzy eşleşmenin konum ürettiği en uzun aday (kod noktası)
     Limit relation_depth;         // aramada adı eşleşen komşunun en çok adımı (ilişki araması)
+    Limit property_keys;  // `prop:` için görüntü başına önbellekte tutulan anahtar (en son kullanılanlar)
 
     bool operator==(const SearchLimits&) const = default;
 };

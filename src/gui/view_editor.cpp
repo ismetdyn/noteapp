@@ -8,11 +8,13 @@
 #include "pdf/markdown_blocks.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <climits>
 #include <cmath>
 #include <imgui.h>
 #include <imgui_internal.h>  // IMGUI_TABLE_MAX_COLUMNS
+#include <imgui_stdlib.h>
 #include <optional>
 #include <string_view>
 
@@ -26,6 +28,8 @@ constexpr std::size_t kPanelMaxRows = 8;
 constexpr float kPanelMaxShare = 0.4F;
 constexpr float kInfoPairGapEms = 1.5F;  // bilgi panelinde yan yana iki alan çifti arası
 constexpr float kPreviewMeasureEms = 46.0F;
+constexpr float kInspectorFieldEms = 8.0F;  // denetçinin anahtar ve değer kutusu
+constexpr float kInspectorTypeEms = 6.0F;   // tür seçicisi
 
 // Ham önizlemede bir görüntü satırının en çok baytı. Uzun satır (base64, küçültülmüş JSON) bu boyda parçalara
 // bölünür, hiçbir bayt düşmez; ImGui görünen satırı her karede baştan ölçtüğü için kare işi satır boyuyla
@@ -114,17 +118,26 @@ void View::draw_right_pane(float canvas_left) {
     const InfoColumns info = info_columns();
     const std::size_t info_rows = (state_.note_info().size() + info.pairs - 1) / info.pairs;
     const float info_height = panel_height(info_rows, state_.info_open(), available - links_height);
+    // Denetçi (F4): başlık, tablo başlığı ve ekleme satırı da satırdır.
+    constexpr std::size_t kInspectorChromeRows = 3;
+    const std::size_t inspector_rows =
+        state_.inspector().target() ? state_.inspector().rows().size() + kInspectorChromeRows : 0;
+    const float inspector_height =
+        panel_height(inspector_rows, state_.inspector_open(), available - links_height - info_height);
     if (state_.showing_preview())
-        draw_preview(links_height + info_height);
+        draw_preview(links_height + info_height + inspector_height);
     else
-        draw_editor(links_height + info_height);
-    if (info_height > 0.0F) {
-        // Son panel kalan alanı alır; bağlantılar altta duruyorsa bilgi listesi kendi payıyla sınırlanır
-        // (başlık ve iki öğe aralığı payın içinde).
-        const float spacing = ImGui::GetStyle().ItemSpacing.y;
-        draw_info_panel(info,
-                        links_height > 0.0F ? info_height - ImGui::GetFrameHeightWithSpacing() - spacing : 0.0F);
-    }
+        draw_editor(links_height + info_height + inspector_height);
+    // Son panel kalan alanı alır; altında panel duran liste kendi payıyla sınırlanır (başlık ve iki öğe
+    // aralığı payın içinde).
+    const float spacing = ImGui::GetStyle().ItemSpacing.y;
+    const auto list_height = [&](float height, bool last) {
+        return last ? 0.0F : height - ImGui::GetFrameHeightWithSpacing() - spacing;
+    };
+    if (info_height > 0.0F)
+        draw_info_panel(info, list_height(info_height, links_height <= 0.0F && inspector_height <= 0.0F));
+    if (inspector_height > 0.0F)
+        draw_inspector_panel(list_height(inspector_height, links_height <= 0.0F));
     if (links_height > 0.0F)
         draw_links_panel();
     ImGui::EndGroup();
@@ -251,6 +264,195 @@ void View::draw_links_panel() {
     remember_item_center("links_list");
 }
 
+namespace {
+
+// Tür seçicisi: "otomatik" (önek ya da değerden), metin, sayı, mantıksal.
+constexpr std::array<const char*, 4> kInspectorTypes = {"inspector.type_auto", "inspector.type_text",
+                                                        "inspector.type_number", "inspector.type_bool"};
+
+std::optional<core::PropertyType> inspector_type(int choice) {
+    switch (choice) {
+    case 1:
+        return core::PropertyType::Text;
+    case 2:
+        return core::PropertyType::Number;
+    case 3:
+        return core::PropertyType::Bool;
+    default:
+        return std::nullopt;
+    }
+}
+
+bool inspector_type_combo(const char* id, int& choice) {
+    bool changed = false;
+    if (ImGui::BeginCombo(id, core::tr(kInspectorTypes[static_cast<std::size_t>(choice)]).c_str())) {
+        for (int i = 0; i < static_cast<int>(kInspectorTypes.size()); ++i)
+            if (ImGui::Selectable(core::tr(kInspectorTypes[static_cast<std::size_t>(i)]).c_str(),
+                                  i == choice)) {
+                choice = i;
+                changed = true;
+            }
+        ImGui::EndCombo();
+    }
+    return changed;
+}
+
+}  // namespace
+
+// Özellik denetçisi (F4; SPEC-gui "Özellik denetçisi"): gösterilen notun ya da seçilen ilişkinin özellikleri.
+// Anahtar ve değer güvenilmezdir (senkron): app::Inspector onları terminal_safe'ten geçirip keser, burada
+// TextUnformatted ile çizilir; widget kimliği satır sırasıdır, metin etikete girmez.
+void View::draw_inspector_panel(float list_height) {
+    const app::Inspector& inspector = state_.inspector();
+    const std::string label =
+        core::tr("inspector.title", {{"count", std::to_string(inspector.rows().size())}}) + "###inspector";
+    ImGui::SetNextItemOpen(state_.inspector_open());
+    const bool open = quiet_header(label);
+    ImGui::SetItemTooltip("%s", core::tr("inspector.hint").c_str());
+    remember_item_center("inspector_header");
+    if (open != state_.inspector_open())
+        queue([this, open] { state_.set_inspector_open(open); });
+    if (!open)
+        return;
+    ImGui::BeginChild("##inspector_list",
+                      ImVec2(0.0F, list_height > 0.0F ? list_height : ImGui::GetContentRegionAvail().y));
+    const std::string title = tui::terminal_safe(inspector.title());
+    ImGui::TextUnformatted(title.c_str());
+    remember_item_center("inspector_title");
+    if (inspector.target() && inspector.target()->kind == app::InspectTarget::Kind::Relation) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton((core::tr("inspector.show_note") + "###inspector_show_note").c_str()))
+            queue([this] { state_.inspect_shown_note(); });
+        remember_item_center("inspector_show_note");
+    }
+    if (!inspector.error().empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::current().danger);
+        ImGui::PushTextWrapPos(0.0F);
+        ImGui::TextUnformatted(tui::terminal_safe(inspector.error()).c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        remember_item_center("inspector_error");
+    }
+    if (inspector.target())
+        draw_inspector_add_row();  // üstte: satırlar çoğalıp kaysa da görünür kalır
+    constexpr ImGuiTableFlags kFlags =
+        ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp;
+    if (ImGui::BeginTable("##inspector_table", 4, kFlags)) {
+        ImGui::TableSetupColumn(core::tr("inspector.key").c_str());
+        ImGui::TableSetupColumn(core::tr("inspector.value").c_str());
+        ImGui::TableSetupColumn(core::tr("inspector.type").c_str(), ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableHeadersRow();
+        ImGuiListClipper clipper;  // binlerce özellikte (senkron) yalnız görünen satırlar çizilir
+        clipper.Begin(static_cast<int>(std::min<std::size_t>(inspector.rows().size(), INT_MAX)));
+        while (clipper.Step()) {
+            for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+                ImGui::PushID(row);
+                draw_inspector_row(inspector.rows()[static_cast<std::size_t>(row)]);
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::EndChild();
+}
+
+void View::draw_inspector_row(const app::InspectorRow& row) {
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    if (row.read_only)
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled));
+    ImGui::TextUnformatted(row.key_text.c_str());
+    remember_item_center("inspector_key:" + row.key);
+    ImGui::TableNextColumn();
+    const bool editing = inspector_editing_ == row.key && row.kind == app::InspectorRow::Kind::Property;
+    if (editing) {
+        if (inspector_edit_focus_) {
+            ImGui::SetKeyboardFocusHere();
+            inspector_edit_focus_ = false;
+        }
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        const bool entered = ImGui::InputText("##inspector_edit_value", &inspector_edit_text_,
+                                              ImGuiInputTextFlags_EnterReturnsTrue);
+        remember_item_center("inspector_edit_value");
+        if (entered) {
+            queue([this, key = row.key, text = inspector_edit_text_,
+                   type = inspector_type(inspector_edit_type_)] {
+                if (state_.set_property(key, text, type))
+                    inspector_editing_.reset();
+            });
+        } else if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            inspector_editing_.reset();
+        }
+    } else {
+        ImGui::TextUnformatted(row.value_text.c_str());
+        if (row.read_only)
+            ImGui::SetItemTooltip("%s", core::tr("inspector.read_only").c_str());
+    }
+    ImGui::TableNextColumn();
+    if (editing) {
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * kInspectorTypeEms);
+        inspector_type_combo("##inspector_edit_type", inspector_edit_type_);
+        remember_item_center("inspector_edit_type");
+    } else {
+        ImGui::TextUnformatted(core::tr("inspector.type_" + row.type).c_str());
+    }
+    if (row.read_only)
+        ImGui::PopStyleColor();
+    ImGui::TableNextColumn();
+    if (row.read_only)
+        return;
+    if (row.kind == app::InspectorRow::Kind::Property && !editing) {
+        if (ImGui::SmallButton((core::tr("inspector.edit") + "###inspector_edit").c_str())) {
+            inspector_editing_ = row.key;
+            inspector_edit_text_ = row.input;
+            inspector_edit_type_ = 0;  // önek türü taşır (core::property_input)
+            inspector_edit_focus_ = true;
+        }
+        remember_item_center("inspector_edit:" + row.key);
+        ImGui::SameLine();
+    }
+    if (ImGui::SmallButton((core::tr("inspector.delete") + "###inspector_delete").c_str()))
+        queue([this, row] { state_.remove_inspector_row(row); });
+    remember_item_center("inspector_delete:" + row.key);
+}
+
+// Ekleme satırı: `#` ile başlayan anahtar notun etiketidir (değer yok sayılır). Enter değerde ya da Ekle
+// yazar.
+void View::draw_inspector_add_row() {
+    const auto add = [this] {
+        queue([this, key = inspector_new_key_, value = inspector_new_value_,
+               type = inspector_type(inspector_new_type_)] {
+            if (state_.set_property(key, value, type)) {
+                inspector_new_key_.clear();
+                inspector_new_value_.clear();
+            }
+        });
+    };
+    const float field = ImGui::GetFontSize() * kInspectorFieldEms;
+    ImGui::SetNextItemWidth(field);
+    ImGui::InputTextWithHint("##inspector_new_key", core::tr("inspector.key_hint").c_str(),
+                             &inspector_new_key_);
+    remember_item_center("inspector_new_key");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(field);
+    const bool entered =
+        ImGui::InputTextWithHint("##inspector_new_value", core::tr("inspector.value_hint").c_str(),
+                                 &inspector_new_value_, ImGuiInputTextFlags_EnterReturnsTrue);
+    remember_item_center("inspector_new_value");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * kInspectorTypeEms);
+    inspector_type_combo("##inspector_new_type", inspector_new_type_);
+    remember_item_center("inspector_new_type");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(inspector_new_key_.empty());
+    const bool clicked = ImGui::SmallButton((core::tr("inspector.add") + "###inspector_add").c_str());
+    remember_item_center("inspector_add");
+    ImGui::EndDisabled();
+    if ((clicked || entered) && !inspector_new_key_.empty())
+        add();
+}
+
 // Gösterilen notun gözünden: "Yönü çevir" çıkanı gelen, geleni ve yönsüzü çıkan yapar (app::flipped_source).
 void View::draw_relation_row_menu(const core::RelatedNote& selected) {
     const auto shown = state_.current_path();
@@ -261,6 +463,14 @@ void View::draw_relation_row_menu(const core::RelatedNote& selected) {
     if (ImGui::MenuItem((core::tr("map.rename_relation") + "###link_rename").c_str()))
         queue([this, from, relation] { state_.rename_relation(from, relation.path, relation.id, relation.name); });
     remember_item_center("link_rename");
+    if (ImGui::MenuItem((core::tr("inspector.inspect_relation") + "###link_inspect").c_str()))
+        queue([this, from, relation] {
+            const bool incoming = relation.direction == core::RelationDirection::Incoming;
+            state_.inspect_relation(incoming ? relation.path : from, incoming ? from : relation.path,
+                                    relation.id, relation.name,
+                                    relation.direction != core::RelationDirection::Undirected);
+        });
+    remember_item_center("link_inspect");
     const bool undirected = relation.direction == core::RelationDirection::Undirected;
     const std::string flip =
         undirected ? core::tr("map.make_directed", {{"from", label_safe(printable(from.string()))}, {"to", label_safe(printable(relation.path.string()))}})
@@ -582,7 +792,10 @@ void View::draw_data_preview() {
 void View::draw_csv_table(const app::CsvIndex& index) {
     const core::TuiLimits& limits = state_.view_limits();
     const std::size_t stored = std::min(index.column_count, limits.table_columns.cap());
-    const int columns = static_cast<int>(std::min<std::size_t>(stored, IMGUI_TABLE_MAX_COLUMNS));
+    // BeginTable `columns < IMGUI_TABLE_MAX_COLUMNS` ister (assert; harita sorgu tablosuyla aynı): tam 512
+    // sütun da bir eksik çizilir, fazlası "gösterilmedi" satırında sayılır.
+    constexpr std::size_t kMaxColumns = IMGUI_TABLE_MAX_COLUMNS - 1;
+    const int columns = static_cast<int>(std::min(stored, kMaxColumns));
     const std::size_t rows = std::min(index.row_count, limits.table_rows.cap());
     constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                        ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX;

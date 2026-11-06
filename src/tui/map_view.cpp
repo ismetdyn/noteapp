@@ -108,6 +108,10 @@ ftxui::Element input_status(const TuiState& state, int columns) {
     using Kind = TuiState::MapInputKind;
     const Kind kind = state.map_input_kind().value_or(Kind::Find);
     const InputLine& line = state.map_input();
+    if (kind == Kind::Query)  // F3: hata (konumlu, güvenilmez metin taşıyabilir) satırın sonunda
+        return input_line_bar(core::tr("tui.map_query_label"), line, {}, line.ghost(),
+                              core::tr("tui.map_query_hints"), columns, {},
+                              terminal_safe(state.map_query().error()));
     const bool find = kind == Kind::Find;
     std::string counter;
     if (find && !line.text().empty())
@@ -165,6 +169,61 @@ struct Labels {
     }
 };
 
+// Hücre tam `cells` hücre: metin query_outcome'da bir kez temizlenmiştir (satır sonu, bidi, denetim U+FFFD), kare
+// başına yeniden temizlenmez; uzunu `…` ile kısalır, kısası boşlukla dolar.
+std::string table_cell(std::string_view shown, int cells) {
+    std::string text(shown);
+    if (ftxui::string_width(text) > cells)
+        text = head_cells(text, std::max(cells - 1, 0)) + "…";
+    const int pad = cells - ftxui::string_width(text);
+    if (pad > 0)
+        text.append(static_cast<std::size_t>(pad), ' ');
+    return text;
+}
+
+// Sorgu sonucunun tablosu (F3, `O`): haritanın yerinde, liste panelinde. Yalnız görünen satırlar kurulur; seçili
+// satır ters renkte ve görünür kalır. Sütunlar eşit paylaşılır.
+ftxui::Element query_table(const TuiState& state, int columns, int rows) {
+    using namespace ftxui;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- map_query_table() sonucu gerektirir
+    const app::QueryOutcome& outcome = *state.map_query().outcome();
+    Element status =
+        state.map_input_kind()
+            ? input_status(state, columns)
+            : text(fit_hints(core::tr("tui.map_query_table_hints") + std::string(kHintSeparator) +
+                                 terminal_safe(outcome.summary),
+                             columns));
+    const app::QueryTable& table = outcome.table;
+    if (table.columns.empty())
+        return vbox({std::move(status), paragraph(core::tr("tui.map_query_no_columns")) | dim, filler()});
+    constexpr std::string_view kColumnGap = " │ ";
+    const int count = static_cast<int>(table.columns.size());
+    const int gaps = (count - 1) * ftxui::string_width(std::string(kColumnGap));
+    const int width = std::max((columns - gaps) / count, 1);
+    const auto line = [&](const auto& cells, auto&& text_of) {
+        std::string out;
+        for (int column = 0; column < count && static_cast<std::size_t>(column) < cells.size(); ++column) {
+            if (column > 0)
+                out += kColumnGap;
+            out += table_cell(text_of(cells[static_cast<std::size_t>(column)]), width);
+        }
+        return out;
+    };
+    Elements lines{std::move(status),
+                   text(line(table.columns, [](const std::string& name) -> std::string_view { return name; })) |
+                       bold};
+    const auto visible = static_cast<std::size_t>(std::max(rows - 2, 1));
+    const std::size_t selected = state.map_query_row();
+    const std::size_t first = selected >= visible ? selected - visible + 1 : 0;
+    for (std::size_t row = first; row < table.rows.size() && row < first + visible; ++row) {
+        Element cells =
+            text(line(table.rows[row], [](const app::QueryCell& cell) -> std::string_view { return cell.text; }));
+        lines.push_back(row == selected ? std::move(cells) | inverted : std::move(cells));
+    }
+    lines.push_back(filler());
+    return vbox(std::move(lines));
+}
+
 }  // namespace
 
 MapCamera fit_map_camera(std::span<const app::LayoutPoint> positions, int dots_x, int dots_y) {
@@ -197,8 +256,14 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
     const std::optional<TuiState::MapLink>& link = state.map_link();
     Element status = link ? text(link_text(state, *link, columns)) | color(Color::Cyan)
                           : text(status_text(model, columns)) | dim;
+    if (!link && state.map_query().outcome())  // F3: sorgunun özeti ve tuşları kapsam satırının yerinde
+        status = text(fit_hints(core::tr("tui.map_query_status",
+                                         {{"summary", terminal_safe(state.map_query().outcome()->summary)}}),
+                                columns));
     if (state.map_input_kind())
         status = input_status(state, columns);
+    if (state.map_query_table())
+        return query_table(state, columns, rows);
     if (map.nodes.empty())
         return vbox({std::move(status), paragraph(core::tr("tui.map_empty")) | dim, filler()});
     const int canvas_rows = std::max(rows - 1, 1);
@@ -214,8 +279,14 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
             if (node < found.size())
                 found[node] = 1;
     }
+    // Sorgu vurgusu (F3): yalnız sonuçtakiler yanar; döndürülen kenar sarı (app::MapModel::highlighted_*).
+    const std::vector<char>& query_nodes = model.highlighted_nodes();
+    const std::vector<char>& query_edges = model.highlighted_edges();
+    const bool querying = query_nodes.size() == map.nodes.size() && query_edges.size() == map.edges.size() &&
+                          state.map_query().outcome().has_value();
     const auto lit = [&](std::size_t node) {
-        return (node >= matches.size() || matches[node] != 0) && (found.empty() || found[node] != 0);
+        return (node >= matches.size() || matches[node] != 0) && (found.empty() || found[node] != 0) &&
+               (!querying || query_nodes[node] != 0);
     };
     std::vector<char> on_path(map.nodes.size(), 0);
     for (const std::size_t node : map.path)
@@ -239,11 +310,15 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
     for (std::size_t e = 0; e < map.edges.size(); ++e) {
         const app::MapEdge& edge = map.edges[e];
         Color color = edge.kind == app::MapEdgeKind::Related ? Color::Magenta : Color::GrayLight;
-        if (edge.kind == app::MapEdgeKind::Tag || !lit(edge.from) || !lit(edge.to))
+        if (edge.kind == app::MapEdgeKind::Tag || !lit(edge.from) || !lit(edge.to) ||
+            (querying && query_edges[e] == 0))
             color = Color::GrayDark;
-        if (!on_path_edge(e))
+        if (!on_path_edge(e) && !(querying && query_edges[e] == 2))
             line(dot(edge.from), dot(edge.to), color);
     }
+    for (std::size_t e = 0; querying && e < map.edges.size(); ++e)  // sorgunun döndürdüğü kenar, yolun altında
+        if (query_edges[e] == 2 && !on_path_edge(e))
+            line(dot(map.edges[e].from), dot(map.edges[e].to), Color::Yellow);
     // En kısa yol (F2) en üstte, yeşil: başka kenar onu örtmesin.
     for (std::size_t e = 0; e < map.edges.size(); ++e)
         if (on_path_edge(e))

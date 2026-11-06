@@ -132,6 +132,12 @@ constexpr const CommandSpec* find_command(std::string_view id) {
     return found == std::end(kCommandRegistry) ? nullptr : &*found;
 }
 
+// Kimlik kayıtta mı. Derleme anı denetimleri bunu kullanır: UBSan'ın -fno-delete-null-pointer-checks'i statik
+// nesnenin adresini nullptr ile karşılaştırmayı sabit ifade olmaktan çıkarır; yineleyici karşılaştırması etkilenmez.
+constexpr bool has_command(std::string_view id) {
+    return std::ranges::find(kCommandRegistry, id, &CommandSpec::id) != std::end(kCommandRegistry);
+}
+
 // Paletin aday satırı: kimlik, etiket ve şu an çalışıp çalışamadığı (arayüz kararı).
 struct PaletteCandidate {
     std::string_view id;

@@ -11,7 +11,7 @@
 namespace noteapp::graph::detail::cypher {
 
 Result<QueryResult> run_query(Graph& graph, Store& store, std::string_view cypher, const Params& params,
-                              QueryMode mode, const QueryLimits& limits);
+                              QueryMode mode, const QueryLimits& limits, const QueryHooks& hooks = {});
 Result<void> check_query(std::string_view cypher, const Params& params, QueryMode mode,
                          const QueryLimits& limits);
 

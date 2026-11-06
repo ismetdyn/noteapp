@@ -103,22 +103,23 @@ void GuiState::direct_relation(const core::NotePath& first, const core::NotePath
 
 // Yazılacak not editördeyse önce kaydedilir: yoksa işlem tampondaki düzenlemeyi diskteki eski metne ekler ve
 // sonraki kayıt çakışırdı. Başka not ya da taslak kaydedilmez (işlem onlara dokunmaz).
-void GuiState::edit_map(const MapNode& from, const MapNode& to, MapEdgeKind kind, bool connect,
+bool GuiState::edit_map(const MapNode& from, const MapNode& to, MapEdgeKind kind, bool connect,
                         const core::RelationId& relation) {
     const auto note = app::map_edit_note(from, to, kind);
     if (note && shown_ && !new_note_ && shown_->path == *note && !flush_for(*note))
-        return;
+        return false;
     const auto done = connect ? app::connect_map_nodes(store_, from, to, kind)
                               : app::disconnect_map_nodes(store_, from, to, kind, relation);
     if (!done) {
         fail(done.error());
-        return;
+        return false;
     }
     changed();
     map_.edges_changed();  // ilişki listeyi değiştirmez
     rescan();              // gövde yazıldıysa: liste etiketleri ve temiz editör yeni metni alır
     status_ = *done;
     notify(app::NoticeKind::Success, status_);
+    return true;
 }
 
 // ---- Keşif (F2) ----
@@ -194,6 +195,71 @@ void GuiState::trash_map_note(const core::NotePath& path) {
     undo_status_ = core::tr("gui.trashed", {{"path", path.string()}});
     status_ = undo_status_;
     notify(app::NoticeKind::Success, status_);
+}
+
+// ---- Sorgu çubuğu (F3) ----
+
+void GuiState::toggle_map_query() {
+    map_query_open_ = !map_query_open_;
+    if (map_query_open_)
+        return;
+    map_query_.clear();
+    map_.set_highlight(std::nullopt);
+}
+
+void GuiState::run_map_query() {
+    const std::string text = map_query_text_;
+    if (text.find_first_not_of(" \t") == std::string::npos)
+        return;
+    // Geçmiş arama geçmişinin yardımcısıyla (sır benzeri değer yazılmaz); oturumluktur, dosyaya girmez.
+    tui::remember_search(map_query_history_, text, nullptr, search_history_limits());
+    map_query_line_.set_text({});
+    finish_map_query(map_query_.run(store_, text));
+}
+
+void GuiState::run_map_view(const std::string& name) {
+    finish_map_query(map_query_.run_view(store_, name));
+}
+
+std::optional<std::string> GuiState::map_query_history_step(std::string_view current, bool older) {
+    if (map_query_line_.text() != current)
+        map_query_line_.set_text(std::string(current));  // yazıldı: yürüyüş yazılandan başlar
+    const auto result = map_query_line_.handle(older ? tui::Key::CtrlP : tui::Key::CtrlN, {}, map_query_history_);
+    if (result != tui::InputLine::Result::Edited)
+        return std::nullopt;
+    return map_query_line_.text();
+}
+
+std::vector<std::string> GuiState::map_view_names() {
+    return app::view_names(store_);
+}
+
+// Yazma onaysız uygulanmaz; vazgeçilen yazmanın metni çubukta kalır. Hata çubuğun altındadır, önceki sonuç ve
+// vurgusu kalır.
+void GuiState::finish_map_query(app::MapQuery::Step step) {
+    using Step = app::MapQuery::Step;
+    if (step == Step::Confirm) {
+        if (!deciders.confirm_query(map_query_.confirm_text())) {
+            map_query_.cancel();
+            return;
+        }
+        step = map_query_.apply(store_);
+    }
+    if (step != Step::Ran)
+        return;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- Ran sonucu doldurur (MapQuery::finish)
+    const app::QueryOutcome& outcome = *map_query_.outcome();
+    if (outcome.wrote) {
+        changed();
+        map_.edges_changed();
+        rescan();
+        reload_links();
+    }
+    map_.set_highlight(outcome.highlight);
+    map_query_text_.clear();
+    ++map_query_generation_;
+    status_ = tui::terminal_safe(outcome.summary);
+    notify(outcome.wrote ? app::NoticeKind::Success : app::NoticeKind::Info, status_);
 }
 
 std::vector<core::RelationName> GuiState::map_relation_names() {

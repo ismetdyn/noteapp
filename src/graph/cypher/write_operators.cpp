@@ -27,6 +27,43 @@ Error merge_null(Position pos, const std::string& key) {
     return located_error(Error::Code::InvalidArgument, "graph.cypher_merge_null", pos, {{"key", key}});
 }
 
+// Uygulamanın denetimi (QueryHooks): her değişiklikten önce. Ret, değişikliğin sorgudaki konumunu taşır.
+Result<void> check_change(ExecContext& context, const QueryChange& change, Position pos) {
+    if (context.hooks == nullptr || !context.hooks->before_change)
+        return {};
+    Result<void> allowed = context.hooks->before_change(context.read, change);
+    if (allowed)
+        return {};
+    Error error = std::move(allowed).error();
+    error.args.emplace_back("line", std::to_string(pos.line));
+    error.args.emplace_back("col", std::to_string(pos.col));
+    return std::unexpected(std::move(error));
+}
+
+Result<void> put_node(ExecContext& context, const NodeId& id, Position pos) {
+    CYPHER_TRY(check_change(context, {QueryChange::Kind::CreateNode, id}, pos));
+    return context.write->put_node(id);
+}
+
+Result<void> put_edge(ExecContext& context, const EdgeId& id, const NodeId& src, const std::string& type,
+                      const NodeId& dst, Position pos) {
+    CYPHER_TRY(check_change(context, {QueryChange::Kind::CreateEdge, id, type}, pos));
+    return context.write->put_edge(id, src, type, dst);
+}
+
+Result<void> set_property(ExecContext& context, const OwnerId& owner, const std::string& key, Value value,
+                          Position pos) {
+    CYPHER_TRY(check_change(context, {QueryChange::Kind::SetProperty, owner, key, &value}, pos));
+    return context.write->set_property(owner, key, std::move(value));
+}
+
+Result<void> change_label(ExecContext& context, const NodeId& id, const std::string& label, bool remove,
+                          Position pos) {
+    using Kind = QueryChange::Kind;
+    CYPHER_TRY(check_change(context, {remove ? Kind::RemoveLabel : Kind::AddLabel, id, label}, pos));
+    return remove ? context.write->remove_label(id, label) : context.write->add_label(id, label);
+}
+
 // Sıra anahtarlıdır: desen hangi sırayla yazılırsa yazılsın kimlik aynı kalır.
 struct EvaluatedProperty {
     std::string key;
@@ -63,13 +100,13 @@ std::span<const std::byte> bytes_of(std::string_view text) {
     return std::as_bytes(std::span(text.data(), text.size()));
 }
 
-Result<void> set_properties(WriteTxn& txn, const OwnerId& owner, const std::vector<EvaluatedProperty>& props,
-                            Position pos) {
+Result<void> set_properties(ExecContext& context, const OwnerId& owner,
+                            const std::vector<EvaluatedProperty>& props, Position pos) {
     for (const EvaluatedProperty& prop : props) {
         Result<Value> stored = to_stored(prop.value, pos);
         if (!stored)
             return std::unexpected(std::move(stored).error());
-        CYPHER_TRY(txn.set_property(owner, prop.key, std::move(*stored)));
+        CYPHER_TRY(set_property(context, owner, prop.key, std::move(*stored), pos));
     }
     return {};
 }
@@ -99,9 +136,10 @@ Result<void> require_labels(ReadTxn& txn, const NodeId& id, const std::vector<st
     return {};
 }
 
-Result<void> add_labels(WriteTxn& txn, const NodeId& id, const std::vector<std::string>& labels) {
+Result<void> add_labels(ExecContext& context, const NodeId& id, const std::vector<std::string>& labels,
+                        Position pos) {
     for (const std::string& label : labels)
-        CYPHER_TRY(txn.add_label(id, label));
+        CYPHER_TRY(change_label(context, id, label, false, pos));
     return {};
 }
 
@@ -129,9 +167,9 @@ Result<void> merge_node(const WriteNode& step, Row& row, ExecContext& context) {
         CYPHER_TRY(require_labels(context.read, id, labels, step.pos));
         CYPHER_TRY(require_same_properties(context.read, id, *props, step.pos));
     } else {
-        CYPHER_TRY(context.write->put_node(id));
-        CYPHER_TRY(add_labels(*context.write, id, labels));
-        CYPHER_TRY(set_properties(*context.write, id, *props, step.pos));
+        CYPHER_TRY(put_node(context, id, step.pos));
+        CYPHER_TRY(add_labels(context, id, labels, step.pos));
+        CYPHER_TRY(set_properties(context, id, *props, step.pos));
     }
     row[static_cast<std::size_t>(step.slot)] = id;
     return {};
@@ -139,8 +177,8 @@ Result<void> merge_node(const WriteNode& step, Row& row, ExecContext& context) {
 
 Result<void> create_node(const WriteNode& step, Row& row, ExecContext& context) {
     const NodeId id = new_node_id();
-    CYPHER_TRY(context.write->put_node(id));
-    CYPHER_TRY(add_labels(*context.write, id, step.labels));
+    CYPHER_TRY(put_node(context, id, step.pos));
+    CYPHER_TRY(add_labels(context, id, step.labels, step.pos));
     row[static_cast<std::size_t>(step.slot)] = id;
     for (const WriteProperty& prop : step.props) {
         const Result<QueryValue> value = eval(*prop.value, row, context);
@@ -152,7 +190,7 @@ Result<void> create_node(const WriteNode& step, Row& row, ExecContext& context) 
         Result<Value> stored = to_stored(*value, step.pos);
         if (!stored)
             return std::unexpected(std::move(stored).error());
-        CYPHER_TRY(context.write->set_property(id, prop.key, std::move(*stored)));
+        CYPHER_TRY(set_property(context, id, prop.key, std::move(*stored), step.pos));
     }
     return {};
 }
@@ -182,8 +220,8 @@ Result<void> merge_edge(const WriteEdge& step, Row& row, const NodeId& src, cons
     if (*existing) {
         CYPHER_TRY(require_same_properties(context.read, id, *props, step.pos));
     } else {
-        CYPHER_TRY(context.write->put_edge(id, src, step.type, dst));
-        CYPHER_TRY(set_properties(*context.write, id, *props, step.pos));
+        CYPHER_TRY(put_edge(context, id, src, step.type, dst, step.pos));
+        CYPHER_TRY(set_properties(context, id, *props, step.pos));
     }
     row[static_cast<std::size_t>(step.slot)] = id;
     return {};
@@ -192,7 +230,7 @@ Result<void> merge_edge(const WriteEdge& step, Row& row, const NodeId& src, cons
 Result<void> create_edge(const WriteEdge& step, Row& row, const NodeId& src, const NodeId& dst,
                          ExecContext& context) {
     const EdgeId id = new_edge_id();
-    CYPHER_TRY(context.write->put_edge(id, src, step.type, dst));
+    CYPHER_TRY(put_edge(context, id, src, step.type, dst, step.pos));
     row[static_cast<std::size_t>(step.slot)] = id;
     for (const WriteProperty& prop : step.props) {
         const Result<QueryValue> value = eval(*prop.value, row, context);
@@ -203,7 +241,7 @@ Result<void> create_edge(const WriteEdge& step, Row& row, const NodeId& src, con
         Result<Value> stored = to_stored(*value, step.pos);
         if (!stored)
             return std::unexpected(std::move(stored).error());
-        CYPHER_TRY(context.write->set_property(id, prop.key, std::move(*stored)));
+        CYPHER_TRY(set_property(context, id, prop.key, std::move(*stored), step.pos));
     }
     return {};
 }
@@ -372,12 +410,8 @@ private:
         const auto* node = std::get_if<NodeId>(&target->v);
         if (node == nullptr)
             return std::unexpected(bad_target(operation.pos));
-        for (const std::string& label : operation.labels) {
-            if (remove_)
-                CYPHER_TRY(context.write->remove_label(*node, label));
-            else
-                CYPHER_TRY(context.write->add_label(*node, label));
-        }
+        for (const std::string& label : operation.labels)
+            CYPHER_TRY(change_label(context, *node, label, remove_, operation.pos));
         return {};
     }
 
@@ -390,15 +424,15 @@ private:
             owner = OwnerId(*edge);
         if (!owner)
             return std::unexpected(bad_target(operation.pos));
-        if (operation.value == nullptr)
-            return context.write->set_property(*owner, operation.key, Value{});  // null yazmak kaldırır
+        if (operation.value == nullptr)  // null yazmak kaldırır
+            return set_property(context, *owner, operation.key, Value{}, operation.pos);
         const Result<QueryValue> value = eval(*operation.value, row, context);
         if (!value)
             return std::unexpected(value.error());
         Result<Value> stored = to_stored(*value, operation.pos);
         if (!stored)
             return std::unexpected(std::move(stored).error());
-        return context.write->set_property(*owner, operation.key, std::move(*stored));
+        return set_property(context, *owner, operation.key, std::move(*stored), operation.pos);
     }
 
     bool remove_;
@@ -411,32 +445,39 @@ public:
         : EagerWriteOp("Delete", std::move(child)), detach_(detach), targets_(std::move(targets)) {}
 
 private:
+    // Silinecek öğe ve onu veren ifadenin konumu (denetimin reddi orayı gösterir).
+    template <class Id> struct Target {
+        Id id;
+        Position pos;
+    };
+    template <class Id> static void sort_unique(std::vector<Target<Id>>& targets) {
+        std::ranges::sort(targets, {}, &Target<Id>::id);
+        const auto duplicates = std::ranges::unique(targets, {}, &Target<Id>::id);
+        targets.erase(duplicates.begin(), duplicates.end());
+    }
+
     Result<void> write_all(ExecContext& context) override {
-        std::vector<NodeId> nodes;
-        std::vector<EdgeId> edges;
+        std::vector<Target<NodeId>> nodes;
+        std::vector<Target<EdgeId>> edges;
         for (const Row& row : rows_)
             for (const Expr* target : targets_)
                 CYPHER_TRY(collect(*target, row, nodes, edges, context));
         // Cümle sonunda birlikte silinir: DELETE a, r yazım sırasına bağlı olmasın, aynı hedef iki kez
         // gelebilir.
-        std::ranges::sort(edges);
-        const auto duplicate_edges = std::ranges::unique(edges);
-        edges.erase(duplicate_edges.begin(), duplicate_edges.end());
-        std::ranges::sort(nodes);
-        const auto duplicate_nodes = std::ranges::unique(nodes);
-        nodes.erase(duplicate_nodes.begin(), duplicate_nodes.end());
+        sort_unique(edges);
+        sort_unique(nodes);
         CYPHER_TRY(delete_edges(edges, context));
         return delete_nodes(nodes, context);
     }
 
-    static Result<void> collect_value(const QueryValue& value, Position pos, std::vector<NodeId>& nodes,
-                                      std::vector<EdgeId>& edges) {
+    static Result<void> collect_value(const QueryValue& value, Position pos, std::vector<Target<NodeId>>& nodes,
+                                      std::vector<Target<EdgeId>>& edges) {
         if (value.is_null())
             return {};
         if (const auto* node = std::get_if<NodeId>(&value.v)) {
-            nodes.push_back(*node);
+            nodes.push_back({*node, pos});
         } else if (const auto* edge = std::get_if<EdgeId>(&value.v)) {
-            edges.push_back(*edge);
+            edges.push_back({*edge, pos});
         } else if (const auto* list = std::get_if<QueryList>(&value.v)) {
             for (const QueryValue& item : list->items)
                 CYPHER_TRY(collect_value(item, pos, nodes, edges));
@@ -446,35 +487,65 @@ private:
         return {};
     }
 
-    static Result<void> collect(const Expr& target, const Row& row, std::vector<NodeId>& nodes,
-                                std::vector<EdgeId>& edges, ExecContext& context) {
+    static Result<void> collect(const Expr& target, const Row& row, std::vector<Target<NodeId>>& nodes,
+                                std::vector<Target<EdgeId>>& edges, ExecContext& context) {
         const Result<QueryValue> value = eval(target, row, context);
         if (!value)
             return std::unexpected(value.error());
         return collect_value(*value, target.pos, nodes, edges);
     }
 
-    static Result<void> delete_edges(const std::vector<EdgeId>& edges, ExecContext& context) {
-        for (const EdgeId& edge : edges) {
+    static Result<void> delete_edges(const std::vector<Target<EdgeId>>& edges, ExecContext& context) {
+        for (const auto& [edge, pos] : edges) {
             CYPHER_TRY(context.budget.tick());
-            const Result<std::optional<std::string>> exists = read_edge_type(context, edge);
-            if (!exists)
-                return std::unexpected(exists.error());
-            if (*exists)
-                CYPHER_TRY(context.write->delete_edge(edge));
+            const Result<std::optional<std::string>> type = read_edge_type(context, edge);
+            if (!type)
+                return std::unexpected(type.error());
+            if (!*type)
+                continue;
+            CYPHER_TRY(check_change(context, {QueryChange::Kind::DeleteEdge, edge, **type}, pos));
+            CYPHER_TRY(context.write->delete_edge(edge));
         }
         return {};
     }
 
-    Result<void> delete_nodes(const std::vector<NodeId>& nodes, ExecContext& context) const {
-        for (const NodeId& node : nodes) {
+    // DETACH'ın sileceği kenarlar da denetlenir: uygulama silinen kenarın tipini bilmeli. Yalnız denetim
+    // varken okunur.
+    Result<void> check_detached_edges(const NodeId& node, Position pos, ExecContext& context) const {
+        if (!detach_ || context.hooks == nullptr || !context.hooks->before_change)
+            return {};
+        std::vector<std::pair<EdgeId, std::string>> attached;
+        {
+            Result<NeighborCursor> cursor = context.read.neighbors(node, Direction::Both);
+            if (!cursor)
+                return std::unexpected(std::move(cursor).error());
+            while (true) {
+                const Result<std::optional<Neighbor>> next = cursor->next();
+                if (!next)
+                    return std::unexpected(next.error());
+                if (!*next)
+                    break;
+                CYPHER_TRY(context.budget.expansion());
+                attached.emplace_back((*next)->edge, std::string((*next)->type));
+            }
+        }
+        for (const auto& [edge, type] : attached)
+            CYPHER_TRY(check_change(context, {QueryChange::Kind::DeleteEdge, edge, type}, pos));
+        return {};
+    }
+
+    Result<void> delete_nodes(const std::vector<Target<NodeId>>& nodes, ExecContext& context) const {
+        for (const auto& [node, pos] : nodes) {
             // DETACH düğüm başına kenarları da siler: saat burada daha sık bakar.
             CYPHER_TRY(context.budget.expansion());
             const Result<bool> exists = context.read.has_node(node);
             if (!exists)
                 return std::unexpected(exists.error());
-            if (*exists)
-                CYPHER_TRY(context.write->delete_node(node, detach_));
+            if (!*exists)
+                continue;
+            CYPHER_TRY(check_change(context, {QueryChange::Kind::DeleteNode, node}, pos));
+            CYPHER_TRY(check_detached_edges(node, pos, context));
+            CYPHER_TRY(context.write->delete_node(node, detach_));
         }
         return {};
     }

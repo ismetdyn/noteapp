@@ -426,6 +426,26 @@ Error relation_not_found() {
     return Error{Error::Code::NotFound, "error.relation_not_found", {}};
 }
 
+// İlişkinin ad ve yön dışındaki özellikleri (kazanan değerleriyle): yön değişip kenar yeniden kurulunca
+// taşınır.
+graph::Result<std::vector<std::pair<std::string, graph::Value>>> user_properties(graph::ReadTxn& txn,
+                                                                                 const graph::EdgeId& id) {
+    const auto heads = txn.properties(id);
+    if (!heads)
+        return std::unexpected(heads.error());
+    std::vector<std::pair<std::string, graph::Value>> out;
+    for (const graph::PropertyHead& head : *heads) {
+        if (head.key == kName || head.key == kDirected || (!out.empty() && out.back().first == head.key))
+            continue;
+        auto value = txn.property(id, head.key);
+        if (!value)
+            return std::unexpected(value.error());
+        if (!std::holds_alternative<std::monostate>(*value))
+            out.emplace_back(head.key, std::move(*value));
+    }
+    return out;
+}
+
 // Kimliği verilen ilişki üzerinde tek işlemlik yazma. Kenar yoksa, RELATED_TO değilse ya da bir ucu canlı not
 // değilse (silindi, çöpte, başka cihazda değişti) NotFound. `body(context, target, pair, path)`: pair çiftin
 // iki yöndeki tüm ilişkileri (target dahil), path hedef ucun yolu (hata metni).
@@ -706,6 +726,15 @@ std::expected<void, Error> NoteStore::set_relation_direction(const RelationId& r
             const auto kept = std::ranges::find_if(matches, [&](const Relation& candidate) {
                 return candidate.src == src && candidate.dst == dst;
             });
+            // Kenar yeniden kurulacaksa kullanıcının özellikleri (F4) yeni kenara taşınır: silmeden önce
+            // okunur.
+            std::vector<std::pair<std::string, graph::Value>> carried;
+            if (kept == matches.end()) {
+                auto carried_props = user_properties(txn, target.id);
+                if (!carried_props)
+                    return std::unexpected(from_graph(carried_props.error(), path));
+                carried = std::move(*carried_props);
+            }
             for (auto candidate = matches.begin(); candidate != matches.end(); ++candidate)
                 if (candidate != kept)
                     NOTEAPP_TRY_GRAPH(txn.delete_edge(candidate->id), path);
@@ -713,6 +742,8 @@ std::expected<void, Error> NoteStore::set_relation_direction(const RelationId& r
                 const auto put = put_relation(txn, from, to, target.name, directed, pair, path);
                 if (!put)
                     return std::unexpected(put.error());
+                for (const auto& [key, value] : carried)
+                    NOTEAPP_TRY_GRAPH(txn.set_property(*put, key, value), path);
                 return {};
             }
             if (kept->directed != directed)

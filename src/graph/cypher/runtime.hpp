@@ -138,6 +138,7 @@ struct ExecContext {
     Store& store;
     Budget budget;
     QueryMemo memo;
+    const QueryHooks* hooks = nullptr;  // yalnız yazan planda; değişiklikten önce sorulur
 };
 
 }  // namespace noteapp::graph::detail::cypher

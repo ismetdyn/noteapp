@@ -1,8 +1,11 @@
 // SPEC-search genel arama ve sorgu argümanı bütçeleri, SPEC-sync not durumu ölçümü (T55a). Yalnız Release.
 #include "app/listing.hpp"
+#include "app/map_query.hpp"
 #include "core/config.hpp"
+#include "core/note_query.hpp"
 #include "core/note_store.hpp"
 #include "core/note_sync.hpp"
+#include "graph/graph.hpp"
 #include "search/content_index.hpp"
 #include "search/global_search.hpp"
 #include "search/query.hpp"
@@ -94,6 +97,71 @@ TEST_CASE("query apply: 5000 notes filtered and sorted within 20 ms") {
     MESSAGE("query apply(5000 notes): median " << median(samples) << " ms, " << kept << " kept");
     CHECK(kept > 0);
     CHECK(median(samples) <= 20.0);
+}
+
+// F3: harita sorgu çubuğunun okuması (app::MapQuery: sınıflandırma, Cypher, düğümlerin not yoluyla adlanması,
+// tablo ve vurgu) 5.000 notu döndürürken liste süzgecinin bütçesinde (yukarıdaki query apply, 20 ms).
+TEST_CASE("map query: a read returning 5000 notes, with its table and highlight, within 20 ms") {
+    const test::TempDir dir;
+    std::vector<core::ImportedNote> notes;
+    notes.reserve(kNotes);
+    for (int n = 0; n < kNotes; ++n)
+        notes.push_back(core::ImportedNote{
+            core::NotePath::parse("d" + std::to_string(n % 50) + "/n" + std::to_string(n) + ".md").value(),
+            "not " + std::to_string(n) + "\n"});
+    test::bulk_seed(dir.path(), notes);
+    core::NoteStore store{dir.path()};
+    app::MapQuery query;
+    constexpr std::string_view kText = "MATCH (n:Note) RETURN n";
+    REQUIRE(query.run(store, kText) == app::MapQuery::Step::Ran);  // ısınma: görüntü kurulur
+    std::vector<double> samples;
+    std::size_t rows = 0;
+    std::size_t lit = 0;
+    for (int run = 0; run < kRuns; ++run)
+        samples.push_back(time_ms([&] {
+            REQUIRE(query.run(store, kText) == app::MapQuery::Step::Ran);
+            rows = query.outcome()->table.rows.size();
+            lit = query.outcome()->highlight.notes.size();
+        }));
+    MESSAGE("map query(5000 notes): median " << median(samples) << " ms, " << rows << " rows, " << lit << " lit");
+    CHECK(rows == kNotes);
+    CHECK(lit == kNotes);
+    CHECK(median(samples) <= 20.0);
+}
+
+// İnceleme (F3): 100.000 satırlık, dört sütunlu sonucun (iki not düğümü, iki değer) adlandırılması ve tablosu
+// ölçülür. Adlandırma sorgunun süre bütçesine (limits.query.max_duration, varsayılan 5 sn) sayılır; toplam o
+// bütçenin içinde kalmalı.
+TEST_CASE("map query: naming and tabling a 100000-row result stays inside the default 5 s duration budget") {
+    const test::TempDir dir;
+    std::vector<core::ImportedNote> notes;
+    notes.reserve(kNotes);
+    for (int n = 0; n < kNotes; ++n)
+        notes.push_back(core::ImportedNote{
+            core::NotePath::parse("d" + std::to_string(n % 50) + "/n" + std::to_string(n) + ".md").value(),
+            "not " + std::to_string(n) + "\n"});
+    test::bulk_seed(dir.path(), notes);
+    constexpr std::string_view kText = "MATCH (a:Note), (b:Note) RETURN a, b, a.name, b.name LIMIT 100000";
+    double engine_ms = 0;
+    {
+        auto raw = graph::Graph::open(dir.path() / "graph.db");
+        REQUIRE(raw.has_value());
+        engine_ms = time_ms([&] { REQUIRE(raw->query(kText).has_value()); });
+    }
+    core::NoteStore store{dir.path()};
+    REQUIRE(core::run_user_query(store, "MATCH (n:Note) RETURN n LIMIT 1", core::QueryAction::Read, {}));  // ısınma
+    std::size_t rows = 0;
+    const double core_ms = time_ms([&] {
+        const auto done = core::run_user_query(store, kText, core::QueryAction::Read, {});
+        REQUIRE(done.has_value());
+        rows = done->result.rows.size();
+    });
+    app::MapQuery query;
+    const double app_ms = time_ms([&] { REQUIRE(query.run(store, kText) == app::MapQuery::Step::Ran); });
+    MESSAGE("100000 rows x 4 columns: engine " << engine_ms << " ms, + naming " << core_ms << " ms, + table "
+                                               << app_ms << " ms");
+    CHECK(rows == 100000);
+    CHECK(app_ms <= 5000.0);
 }
 
 // SPEC-search kabul 5: refresh ve arama ayrı ayrı ≤ 100 ms (sıcak).
@@ -212,6 +280,54 @@ TEST_CASE("relation search: per-keystroke listing over a million edges, 5000 not
                     CHECK(median(samples) <= 50.0);
             }
         }
+    }
+}
+
+// F4 `prop:`: anahtar görüntü başına bir kez okunur (not başına bir head okuması, büyük değer yüklenmez),
+// sonraki tuşlar önbellekten süzer. 10.000 notta da ölçülür (inceleme); notların %1'inin değeri 100 KB'tır.
+TEST_CASE(
+    "prop search: the first prop: read within 200 ms and each keystroke within 20 ms, 5000 and 10000 notes") {
+    for (const int note_count : {kNotes, 2 * kNotes}) {
+        CAPTURE(note_count);
+        const test::TempDir dir;
+        std::vector<core::ImportedNote> notes;
+        for (int n = 0; n < note_count; ++n)
+            notes.push_back(core::ImportedNote{
+                core::NotePath::parse("d" + std::to_string(n % 50) + "/n" + std::to_string(n) + ".md")
+                    .value(),
+                "not " + std::to_string(n) + "\n"});
+        test::bulk_seed(dir.path(), notes);
+        core::NoteStore store(dir.path());
+        const graph::Params big{{"big", graph::QueryValue(std::string(100'000, 'x'))}};
+        REQUIRE(
+            core::run_user_query(store, "MATCH (n:Note) SET n.status = 'open'", core::QueryAction::Write, {})
+                .has_value());
+        REQUIRE(core::run_user_query(store, "MATCH (n:Note) WHERE n.name ENDS WITH '00' SET n.status = $big",
+                                     core::QueryAction::Write, {}, big)
+                    .has_value());
+        REQUIRE(core::run_user_query(store,
+                                     "MATCH (n:Note) WHERE n.name STARTS WITH 'n1' SET n.status = 'Done'",
+                                     core::QueryAction::Write, {})
+                    .has_value());
+        app::Listing listing;
+        listing.set_notes(store.list());
+        listing.set_property_source(
+            [&store](std::string_view key) { return app::search_properties(store, key); });
+        std::size_t rows = 0;
+        const double cold =
+            time_ms([&] { rows = listing.search("prop:status=d", app::SearchMode::Name).rows.size(); });
+        CHECK(rows == 0);
+        std::vector<double> warm;
+        for (int run = 0; run < kRuns; ++run)
+            for (const std::string_view query : {"prop:status=do", "prop:status=don", "prop:status=done"})
+                warm.push_back(
+                    time_ms([&] { rows = listing.search(query, app::SearchMode::Name).rows.size(); }));
+        MESSAGE("prop: " << note_count << " notes, first read " << cold << " ms, keystroke median "
+                         << median(warm) << " ms, " << rows << " rows");
+        // n1, n10–n19, n100–n199, n1000–n1999 (10.000'de n10000 yok); `n1…00` büyük değerini yitirdi.
+        CHECK(rows == 1111);
+        CHECK(cold <= 200.0);
+        CHECK(median(warm) <= 20.0);
     }
 }
 

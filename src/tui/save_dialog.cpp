@@ -357,6 +357,12 @@ RenameState::RenameState(ExportTarget, core::NotePath from, std::string file_nam
 
 RenameState::RenameState(ImportSource, std::string folder) : base_(std::move(folder)), is_import_(true) {}
 
+// Tamamlama yok: anahtar ve değer serbest metindir (geçmişe de girmez).
+RenameState::RenameState(PropertyLine, std::string key, std::string initial)
+    : is_property_(true), property_key_(std::move(key)), line_(InputKind::Find) {
+    line_.set_text(std::move(initial));
+}
+
 // Adın tamamı tek metindir (Find: sözcüklere bölünmez); adaylar adların gösterimidir.
 RenameState::RenameState(RelationName, core::NotePath from, core::NotePath to, SharedRelationNames names,
                          std::optional<core::RelationId> renaming, std::string current)

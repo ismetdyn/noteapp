@@ -42,10 +42,10 @@ TEST_CASE("query_without_database_is_a_clear_user_error_and_creates_nothing") {
 
 TEST_CASE("query_write_creates_the_database_and_reads_back_as_a_table") {
     const Sandbox box;
-    write_ok(box, {"CREATE (:Note {name: 'plan', size: 3}), (:Note {name: 'ödev', size: 12})"});
+    write_ok(box, {"CREATE (:Doc {name: 'plan', size: 3}), (:Doc {name: 'ödev', size: 12})"});
     CHECK(fs::exists(graph_db(box)));
 
-    const auto result = box.run({"query", "MATCH (n:Note) RETURN n.name AS name, n.size ORDER BY n.size"});
+    const auto result = box.run({"query", "MATCH (n:Doc) RETURN n.name AS name, n.size ORDER BY n.size"});
     INFO(result.err);
     CHECK(result.exit_code == 0);
     CHECK(result.out == "name | n.size\n"
@@ -63,20 +63,20 @@ TEST_CASE("query_write_creates_the_database_and_reads_back_as_a_table") {
 // Tablo insan içindir ve her zaman temizlenir (denetim baytı gibi); betik ham değeri --json ile alır.
 TEST_CASE("query_table_shows_bidi_characters_as_a_marker_and_json_keeps_them") {
     const Sandbox box;
-    write_ok(box, {"CREATE (:Note {name: 'gpj\xE2\x80\xAE"
+    write_ok(box, {"CREATE (:Doc {name: 'gpj\xE2\x80\xAE"
                    "exe'})"});
-    const auto table = box.run({"query", "MATCH (n:Note) RETURN n.name"});
+    const auto table = box.run({"query", "MATCH (n:Doc) RETURN n.name"});
     CHECK(table.exit_code == 0);
     CHECK(table.out == "n.name\ngpj\xEF\xBF\xBD"
                        "exe\n");
-    const auto json = box.run({"query", "--json", "MATCH (n:Note) RETURN n.name"});
+    const auto json = box.run({"query", "--json", "MATCH (n:Doc) RETURN n.name"});
     CHECK(json.exit_code == 0);
     CHECK_FALSE(contains(json.out, "\xEF\xBF\xBD"));
 }
 
 TEST_CASE("query_is_read_only_without_write_flag") {
     const Sandbox box;
-    write_ok(box, {"CREATE (:Note {name: 'a'})"});
+    write_ok(box, {"CREATE (:Doc {name: 'a'})"});
     for (const char* text : {"CREATE (:Note)", "MATCH (n) DELETE n", "MATCH (n) SET n.x = 1", "MERGE (:M)"}) {
         const auto result = box.run({"query", text});
         INFO(text);
@@ -90,7 +90,7 @@ TEST_CASE("query_is_read_only_without_write_flag") {
 
 TEST_CASE("query_exit_codes_follow_spec_cli") {
     const Sandbox box;
-    write_ok(box, {"CREATE (:Note)"});
+    write_ok(box, {"CREATE (:Doc)"});
     // Kullanım hatası: 2.
     CHECK(box.run({"query"}).exit_code == 2);
     CHECK(box.run({"query", "RETURN 1", "RETURN 2"}).exit_code == 2);
@@ -118,6 +118,35 @@ TEST_CASE("query_exit_codes_follow_spec_cli") {
     // Başarı.
     CHECK(box.run({"query", "RETURN 1"}).exit_code == 0);
     CHECK(box.run({"query", "--", "RETURN 1"}).exit_code == 0);
+}
+
+// Lead kararı (F3 incelemesi): `--write` haritanın sorgu çubuğuyla aynı korumadan geçer (core::run_user_query):
+// türetilmiş not verisi reddedilir (çıkış 1, konumlu ileti), kullanıcı verisi ve parametre çalışır, sorgunun kendi
+// hatası çıkış 2 kalır. Okuma değişmedi.
+TEST_CASE("query_write_goes_through_the_note_store_guard") {
+    const Sandbox box("en");
+    box.put("a.md", "see [[b]]\n");
+    box.put("b.md", "b\n");
+    for (const char* text : {"MATCH (n:Note) SET n.body = 'x'", "CREATE (:Note {name: 'fake'})",
+                             "MATCH (n:Note) DETACH DELETE n", "MATCH ()-[r:LINKS_TO]->() DELETE r",
+                             "MATCH (a:Note)-[:LINKS_TO]->(b) CREATE (a)-[:RELATED_TO]->(b)"}) {
+        INFO(text);
+        const auto refused = box.run({"query", "--write", text});
+        CHECK(refused.exit_code == 1);
+        CHECK(contains(refused.err, "line 1"));
+    }
+    CHECK(contains(box.run({"query", "--write", "MATCH (n:Note) SET n.body = 'x'"}).err, "body"));
+    CHECK(contains(box.run({"query", "--write", "MATCH (a:Note)-[:LINKS_TO]->(b) CREATE (a)-[:RELATED_TO]->(b)"}).err,
+                   "note relation add"));
+    CHECK(box.body("b.md") == "b\n");
+    CHECK(box.run({"query", "MATCH (n:Note) RETURN count(n)"}).out == "count(n)\n2\n");
+
+    const auto status = box.run({"query", "--write", "--param", "s=done", "MATCH (n:Note) SET n.status = $s"});
+    INFO(status.err);
+    CHECK(status.exit_code == 0);
+    CHECK(box.run({"query", "MATCH (n:Note) WHERE n.status = 'done' RETURN count(n)"}).out == "count(n)\n2\n");
+    CHECK(box.run({"query", "--write", "MATCH (n RETURN n"}).exit_code == 2);
+    CHECK(box.run({"query", "--write", "CREATE (n:X {v: $missing})"}).exit_code == 2);
 }
 
 // L4: kullanıcının kendi sorgusu limits.query.*'tan sınırlanır; 0 = sınırsız. Görünüm profili (limits.view.*)

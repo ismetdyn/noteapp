@@ -4,6 +4,7 @@ add_library(noteapp_gui
     gui_state_commands.cpp
     gui_state_browser.cpp
     gui_state_folders.cpp
+    gui_state_inspector.cpp
     gui_state_map.cpp
     gui_state_marks.cpp
     gui_state_save.cpp

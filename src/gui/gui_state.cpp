@@ -153,6 +153,8 @@ GuiState::GuiState(core::Config config)
         return content_index().search(text, config_.limits.search.content_results.cap());
     });
     model_.listing().set_edge_source([this] { return app::search_edges(store_); });
+    model_.listing().set_property_source(
+        [this](std::string_view key) { return app::search_properties(store_, key); });
     model_.listing().set_relation_depth(app::relation_depth(config_));
     model_.listing().set_global_searcher([this, views](std::string_view query,
                                                        std::span<const core::NoteMeta> notes,
@@ -801,6 +803,7 @@ void GuiState::reload_links() {
     }
     link_lines_ = core::link_lines(links_);
     reload_info();  // etiketler bağlantı okumasından gelir
+    reload_inspector();
 }
 
 // TUI'nin ayrıntısıyla aynı alanlar ve aynı "bilinmiyor": eski depodan gelen notta created ya da origin

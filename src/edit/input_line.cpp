@@ -437,7 +437,8 @@ InputLine::Result InputLine::handle(Key key, std::string_view typed, std::span<c
         return open_popup();
     case Key::CtrlP:
     case Key::CtrlN:
-        return kind_ == InputKind::Search ? step_history(recent, key == Key::CtrlP) : Result::Ignored;
+        return kind_ == InputKind::Search || kind_ == InputKind::Query ? step_history(recent, key == Key::CtrlP)
+                                                                       : Result::Ignored;
     default:
         return Result::Ignored;
     }
@@ -474,7 +475,7 @@ InputLine::Result InputLine::accept_ghost(std::span<const std::string> recent) {
 std::string InputLine::ghost(std::span<const std::string> recent) const {
     if (popup_ || text_.empty() || cursor_ != text_.size())
         return {};
-    if (kind_ == InputKind::Search) {
+    if (kind_ == InputKind::Search || kind_ == InputKind::Query) {
         for (const std::string& entry : recent)
             if (entry.size() > text_.size() && entry.starts_with(text_))
                 return entry.substr(text_.size());

@@ -71,6 +71,9 @@ using EdgeSource = std::function<std::shared_ptr<const std::vector<core::NoteEdg
 // Deponun paylaşılan kenarları (NoteStore::shared_edges). Okunamazsa uyarı loglanır ve nullptr döner: arama
 // kenarsız sürer (etiket yine eşleşir), depo hatasını açılış zaten gösterir.
 std::shared_ptr<const std::vector<core::NoteEdge>> search_edges(const core::NoteStore& store);
+// `prop:`un notları (core::notes_with_property); okunamazsa uyarı loglanır, nullptr: süzgeç not geçirmez.
+std::shared_ptr<const core::PropertyNotes> search_properties(const core::NoteStore& store,
+                                                             std::string_view key);
 // İlişki aramasının komşu adımı: tuning.search_relations kapalıysa nullopt, değilse
 // limits.search.relation_depth (0 sınırsız: SIZE_MAX).
 std::optional<std::size_t> relation_depth(const core::Config& config);
@@ -123,6 +126,8 @@ public:
     // Kenarlar yalnız gerektiğinde (metinli arama ilişki açıkken, `rel:`/`linked:`) arama başına bir kez
     // istenir.
     void set_edge_source(EdgeSource source) { edge_source_ = std::move(source); }
+    // `prop:` süzgecinin kaynağı (app::search_properties); bağlanmazsa `prop:` hiçbir notu geçirmez.
+    void set_property_source(search::PropertyLookup source) { property_source_ = std::move(source); }
     // relation_depth(config); verilmezse defaults.toml'daki değer (1).
     void set_relation_depth(std::optional<std::size_t> depth) { relation_depth_ = depth; }
     // Kullanıcının tercih ettiği sıra: ağaç, Ayrıntılar ve metinsiz arama bu sırayla; `sort:` onu ezer.
@@ -202,6 +207,7 @@ private:
     ContentSearcher content_searcher_;
     GlobalSearcher global_searcher_;
     EdgeSource edge_source_;
+    search::PropertyLookup property_source_;
     std::optional<std::size_t> relation_depth_ = 1;
     // Son kenar listesinin arama dizini (index_of): liste aynı kaldıkça tuş başına yeniden kurulmaz. Liste
     // tutulur: kimliği yeniden kullanılmış başka liste dizini eskitmesin.

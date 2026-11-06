@@ -8,6 +8,7 @@
 
 #include <expected>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -51,6 +52,13 @@ int run_view(const ParsedArgs& args, const core::Config& config);
 // args.rest: add A B [--name AD] [--directed] | rm A B [--name AD | --id KİMLİK] | rename A B ESKİ YENİ |
 // ls [NOT] [--json] (commands_graph.cpp)
 int run_relation(const ParsedArgs& args, const core::Config& config);
+// args.rest: get NOT [ANAHTAR] [--json] | set NOT ANAHTAR DEĞER [--type text|number|bool] | rm NOT ANAHTAR
+// (commands_props.cpp; SPEC-cli "Özellikler").
+int run_prop(const ParsedArgs& args, const core::Config& config);
+// `note relation prop …`: rest[0] fiildir (get|set|rm), hedef ilişkinin kimliği (32 hex, `relation ls NOT`).
+int run_relation_prop(std::span<const std::string> rest, const core::Config& config);
+// `note relation ls NOT`un kimliği (32 küçük ya da büyük hex); başka metin nullopt.
+std::optional<core::RelationId> relation_id_from_hex(std::string_view text);
 // args.rest: zsh | bash | fish. Tamamlama betiğini stdout'a yazar (commands_complete.cpp).
 int run_completion(const ParsedArgs& args);
 // args.rest: TÜR [ÖNEK]. Kabuk betiklerinin gizli yardımcısı: adayları satır satır yazar, salt okur.

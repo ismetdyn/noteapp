@@ -6,6 +6,7 @@ add_library(noteapp_tui
     styled_view.cpp
     data_view.cpp
     commands.cpp
+    inspector_keys.cpp
     link_panel.cpp
     map_view.cpp
     list_actions.cpp

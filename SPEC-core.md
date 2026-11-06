@@ -235,6 +235,8 @@ config'tedir.
   (1024 kod noktası; vurgulu fuzzy eşleşmenin en uzun adayı, bellek sorgu × aday × 16 bayt),
   `limits.search.relation_depth` (1; aramada adı eşleşen notun kaç adım uzağındaki bağlı notlar da bulunur, `0` bağlı bileşenin
   tamamı; iş not + kenar sayısıyla doğrusal; kapatmak `[tuning] search_relations = false`),
+  `limits.search.property_keys` (32; `prop:` süzgecinin depo görüntüsü başına önbellekte tuttuğu anahtar, en son
+  kullanılanlar; `0` sınırsız, SPEC-search),
   `limits.sync.merge_input_bytes` (4 MiB; üç yönlü birleştirmenin en büyük girdisi, aşan çakışma kopya not olur).
   Yapılandırmasız depo (`NoteStore(dizin)`, geçiş) `kDefaultFolderPathBytes` kullanır; bir test defaults.toml ile
   aynı olduğunu denetler. OS dosya adı sınırının tek sahibi `core::kMaxFileNameBytes` (255, `note_path.hpp`).
@@ -259,7 +261,10 @@ config'tedir.
   json biçimli görünümü parça parça üretilir (SPEC-tui "REVIEW biçimli görünüm", SPEC-gui "Önizleme").
 - **Uygulama (L1):** `[limits.app]` `recent_commands` (20), `trash_undo_steps` (0), `tabs` (0), `map_nodes` (2.000) ve
   `map_depth` (6; harita çevre kapsamının en çok adımı, `MapOptions::kMaxDepth` sabiti yerine; TUI `1`–`9` tuşları ve GUI
-  adımlayıcısı `app::MapModel::max_depth`'ten okur, sınır küçülürse geçerli derinlik ona iner). İki arayüz aynı değeri
+  adımlayıcısı `app::MapModel::max_depth`'ten okur, sınır küçülürse geçerli derinlik ona iner) ve `query_cell_bytes`
+  (4 KiB; harita sorgu tablosunun hücresi, F3: `app::query_outcome` hücreyi bir kez temizler ve bu baytta kod noktası
+  sınırında `…` ile keser; 0 sınırsız, gövde döndüren büyük sonuçta bellek ve tablo kurulumu büyür; değer açılışta
+  okunur). İki arayüz aynı değeri
   kullanır (SPEC-gui/SPEC-tui "Harita", "Sekmeler"). İki arayüzde Ayarlar'da Kaydet `map_nodes` ve `map_depth`'i dosyadan
   okuyup çalışan haritaya hemen uygular (`app::adopt_live_limits`; uygulama açıkken `note config set` ile değişmiş olabilir);
   öteki sınırlar açılışta kurulan modüllere verilir, yeniden başlatınca geçerli olur.

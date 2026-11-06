@@ -427,6 +427,20 @@ void ListActions::run_intent(Intent intent, std::optional<ConfirmState>& confirm
     case Intent::TrashMapNode:  // işaretler değil: haritanın hedefi seçili satır oldu
         trash_selected();
         break;
+    case Intent::InspectorLoad:
+        load_inspector();
+        break;
+    case Intent::InspectorAdd:
+    case Intent::InspectorEdit:
+        if (rename != nullptr)
+            begin_inspector_edit(*rename, intent == Intent::InspectorAdd);
+        break;
+    case Intent::InspectorDelete:
+        begin_inspector_delete(confirm);
+        break;
+    case Intent::RunMapQuery:
+        run_map_query(confirm);
+        break;
     case Intent::FlipRelation:
     case Intent::UndirectRelation:
         direct_selected_relation(intent == Intent::FlipRelation);
@@ -774,8 +788,8 @@ bool ListActions::cancel_import_on(Key key, Focus focus) {
         return false;
     // Ctrl+C editör dışında uygulamayı kapatırdı: önce içe almayı durdurur. Esc yalnız liste ve önizleme
     // odağında; girdide (arama, bul) kendi işi sürer.
-    const bool esc =
-        key == Key::Escape && (focus == Focus::List || focus == Focus::Preview || focus == Focus::Links);
+    const bool esc = key == Key::Escape && (focus == Focus::List || focus == Focus::Preview ||
+                                            focus == Focus::Links || focus == Focus::Inspector);
     const bool ctrl_c = key == Key::CtrlC && focus != Focus::Editor;
     if (!esc && !ctrl_c)
         return false;
@@ -1044,6 +1058,51 @@ void ListActions::apply_map_edit(std::optional<RenameState>* rename) {
     });
 }
 
+// Harita sorgusu (F3; akış app::MapQuery, GUI ile ortak): okuma hemen; yazma önizlenir ve onaya sorulur
+// (varsayılan Hayır), Evet'te finish_delete `pending_`ı koşar. Depo işi kilit altında.
+void ListActions::run_map_query(std::optional<ConfirmState>& confirm) {
+    app::MapQuery& query = host_.state.map_query();
+    const app::MapQuery::Step step = [&] {
+        const std::scoped_lock lock(host_.store_mutex);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+        return query.run(*host_.store, host_.state.map_query_text());
+    }();
+    if (step != app::MapQuery::Step::Confirm) {
+        show_map_query(step);
+        return;
+    }
+    confirm.emplace(query.confirm_text(), core::tr("tui.query_confirm_title"), core::tr("tui.query_apply"));
+    pending_ = [this] {
+        const app::MapQuery::Step applied = [&] {
+            const std::scoped_lock lock(host_.store_mutex);
+            // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+            return host_.state.map_query().apply(*host_.store);
+        }();
+        show_map_query(applied);
+    };
+}
+
+// Sonuç: yazmadan sonra liste ve kenarlar yeniden okunur, vurgu haritaya, özet alt satıra. Hata sorgu satırını
+// metin ve konumlu iletiyle yeniden açar; dar liste panelinde ileti kesilebilir, tamamı alt satırdadır.
+void ListActions::show_map_query(app::MapQuery::Step step) {
+    if (step == app::MapQuery::Step::Failed) {
+        host_.state.map_query_failed();
+        host_.status.notify(app::NoticeKind::Error, terminal_safe(host_.state.map_query().error()));
+        return;
+    }
+    const auto& outcome = host_.state.map_query().outcome();
+    if (step != app::MapQuery::Step::Ran || !outcome)
+        return;
+    if (outcome->wrote) {
+        host_.refresh_notes();
+        host_.state.map_edges_changed();  // ilişki listeyi değiştirmez
+        host_.notify_changed();
+    }
+    host_.state.map_query_finished();
+    host_.status.notify(outcome->wrote ? app::NoticeKind::Success : app::NoticeKind::Info,
+                        terminal_safe(outcome->summary));
+}
+
 void ListActions::finish_delete(std::optional<ConfirmState>& confirm) {
     confirm.reset();
     if (relation_target_) {
@@ -1052,6 +1111,110 @@ void ListActions::finish_delete(std::optional<ConfirmState>& confirm) {
     }
     if (const std::function<void()> retry = std::exchange(pending_, nullptr))
         retry();
+}
+
+// --- Özellik denetçisi (F4; model app::Inspector, GUI ile ortak) ---
+
+void ListActions::load_inspector() {
+    const std::scoped_lock lock(host_.store_mutex);
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+    host_.state.inspector().reload(*host_.store);
+}
+
+void ListActions::refresh_inspector() {
+    if (host_.state.focus() == Focus::Inspector && host_.state.inspector().target())
+        load_inspector();
+}
+
+// Ekleme anahtar satırıyla başlar; düzenleme seçili özelliğin değer satırıdır. Salt okunur satır ve etiket
+// düzenlenmez: neden alt satırda.
+void ListActions::begin_inspector_edit(std::optional<RenameState>& rename, bool add) {
+    const app::Inspector& inspector = host_.state.inspector();
+    if (!inspector.target())
+        return;
+    if (add) {
+        rename.emplace(RenameState::PropertyLine{}, std::string(), std::string());
+        return;
+    }
+    const app::InspectorRow* row = inspector.selected_row();
+    if (row == nullptr)
+        return;
+    if (row->read_only || row->kind != app::InspectorRow::Kind::Property) {
+        host_.status.message = core::tr("inspector.read_only");
+        return;
+    }
+    rename.emplace(RenameState::PropertyLine{}, row->key, row->input);
+}
+
+void ListActions::begin_inspector_delete(std::optional<ConfirmState>& confirm) {
+    const app::InspectorRow* selected = host_.state.inspector().selected_row();
+    if (selected == nullptr)
+        return;
+    if (selected->read_only) {
+        host_.status.message = core::tr("inspector.read_only");
+        return;
+    }
+    const app::InspectorRow row = *selected;  // onaya dek satırlar yeniden okunabilir: kopya
+    confirm.emplace(terminal_safe(host_.state.inspector().confirm_remove_text(row)),
+                    core::tr("inspector.remove_title"), core::tr("inspector.delete"));
+    pending_ = [this, row] {
+        finish_inspector_write([&](core::NoteStore& store) {
+            app::Inspector& inspector = host_.state.inspector();
+            return row.kind == app::InspectorRow::Kind::Label ? inspector.remove_label(store, row.key)
+                                                              : inspector.remove(store, row.key);
+        });
+    };
+}
+
+// Anahtar satırı: `#` etiket ekler (notun metnine), başka metin değer satırını açar. Değer satırı yazar; hata
+// satırda kalır, yazılmaz.
+void ListActions::submit_property(std::optional<RenameState>& rename) {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
+    RenameState& input = *rename;
+    if (input.property_key().empty()) {
+        const std::string key = input.text();
+        if (key.empty())
+            return;
+        if (!key.starts_with('#')) {
+            rename.emplace(RenameState::PropertyLine{}, key, std::string());
+            return;
+        }
+        if (finish_inspector_write(
+                [&](core::NoteStore& store) { return host_.state.inspector().add_label(store, key); },
+                &input))
+            rename.reset();
+        return;
+    }
+    const std::string key = input.property_key();
+    const std::string text = input.text();
+    if (finish_inspector_write(
+            [&](core::NoteStore& store) { return host_.state.inspector().set(store, key, text); }, &input))
+        rename.reset();
+}
+
+// Yazmanın ortak sonu: ileti bildirime (anahtar ve değer güvenilmez: terminal_safe), liste ve senkron haber
+// alır. Etiket notun metnini değiştirir: tarama sekmeleri tazeler (temiz sekme yeni metni alır, kirli sekme
+// ezilmez).
+bool ListActions::finish_inspector_write(
+    const std::function<std::expected<std::string, core::Error>(core::NoteStore&)>& write,
+    RenameState* input) {
+    const auto done = [&] {
+        const std::scoped_lock lock(host_.store_mutex);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+        return write(*host_.store);
+    }();
+    if (!done) {
+        if (input != nullptr)
+            input->set_error(terminal_safe(core::format_error(done.error())));
+        else
+            host_.status.notify(app::NoticeKind::Error, terminal_safe(core::format_error(done.error())));
+        return false;
+    }
+    host_.status.notify(app::NoticeKind::Success, terminal_safe(*done));
+    host_.state.map_edges_changed();  // etiket haritada kenardır
+    host_.refresh_notes();
+    host_.notify_changed();
+    return true;
 }
 
 void ListActions::delete_folder(const std::string& folder, const app::Prompts& prompts) {
@@ -1240,6 +1403,11 @@ void ListActions::handle_rename_key(std::optional<RenameState>& rename, Key key,
 }
 
 void ListActions::submit_rename(std::optional<RenameState>& rename) {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
+    if (rename->is_property()) {
+        submit_property(rename);
+        return;
+    }
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
     if (rename->is_relation()) {
         submit_relation(rename);

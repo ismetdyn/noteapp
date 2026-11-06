@@ -34,6 +34,10 @@ std::span<const HiddenControl> hidden_controls();
 const HiddenControl* find_hidden_control(char32_t cp);  // değilse nullptr
 // Geçerli dizilerdeki görünmez biçim karakteri sayısı; bozuk bayt atlanır. Doğrusal, ayırma yapmaz.
 std::size_t count_hidden_controls(std::string_view utf8);
+// Dışarıdan gelen metni (dosya adı, kesit, senkrondan gelen yol, sorgu hücresi) ekrana güvenli hale getirir: C0,
+// DEL, C1, görünmez bidi/sıfır genişlikli karakterler (find_hidden_control) ve geçersiz UTF-8 U+FFFD olur.
+// Çizimden önce çağrılır; model ham baytı tutar. TUI ve GUI tui::terminal_safe adıyla da kullanır.
+std::string terminal_safe(std::string_view raw);
 
 // HTML varlığı ("&amp;", "&copy;", "&#351;") -> metin. Adlı varlık HTML5 tablosundan (md4c'nin entity.c'si,
 // CommonMark'ın istediği küme); bilinmeyen ad yazıldığı gibi kalır. Sayısal varlıkta sekme sekme, satır sonu boşluk

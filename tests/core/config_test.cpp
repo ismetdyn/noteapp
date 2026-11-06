@@ -1039,6 +1039,19 @@ TEST_CASE("limits.app.map_depth defaults to 6, takes a count, accepts 0 as unlim
     CHECK(reloaded.config.limits.app.map_depth == Limit{12, "12"});
 }
 
+TEST_CASE("limits.app.query_cell_bytes defaults to 4KiB, takes a size and accepts 0 as unlimited") {
+    const Config defaults = parse_config("").config;
+    CHECK(defaults.limits.app.query_cell_bytes == Limit{4096, "4KiB"});
+    const LoadedConfig zero = parse_config("[limits.app]\nquery_cell_bytes = 0\n");
+    CHECK(zero.warnings.empty());
+    CHECK(zero.config.limits.app.query_cell_bytes.unlimited());
+    const LoadedConfig sized = parse_config("[limits.app]\nquery_cell_bytes = \"64KiB\"\n");
+    CHECK(sized.config.limits.app.query_cell_bytes.cap() == 64U * 1024U);
+    const LoadedConfig bad = parse_config("[limits.app]\nquery_cell_bytes = \"2s\"\n");
+    CHECK(bad.config.limits.app.query_cell_bytes == Limit{4096, "4KiB"});
+    CHECK(has_warning_about(bad, "limits.app.query_cell_bytes", "config.invalid_value"));
+}
+
 TEST_CASE("an invalid [limits] value warns through the config path and keeps the default") {
     for (const std::string value : {"-1", "\"lots\"", "\"5MiB\"", "true", "1.5"}) {
         CAPTURE(value);

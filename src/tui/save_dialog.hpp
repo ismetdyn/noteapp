@@ -188,9 +188,16 @@ public:
     RenameState(RelationName, core::NotePath from, core::NotePath to, SharedRelationNames names,
                 std::optional<core::RelationId> renaming = std::nullopt, std::string current = {});
 
+    // F4 denetçi: `key` boşsa anahtar satırı (ya da `#etiket`), doluysa o anahtarın değer satırı; `initial`
+    // ile dolar (core::property_input: tür öneki gerekirse taşır). `from()` yoktur.
+    struct PropertyLine {};
+    RenameState(PropertyLine, std::string key, std::string initial);
+
     Outcome handle(Key key, std::string_view text = {});
 
-    const core::NotePath& from() const { return from_.value(); }  // içe almada yok: çağrılmaz
+    const core::NotePath& from() const { return from_.value(); }  // içe almada ve denetçide yok: çağrılmaz
+    bool is_property() const { return is_property_; }
+    const std::string& property_key() const { return property_key_; }
     const std::string& text() const { return line_.text(); }
     // Girdinin tam yolu: `base` + yazılan; klasörde sondaki `/` düşer.
     std::string target() const;
@@ -219,6 +226,8 @@ private:
     bool is_link_ = false;
     bool is_export_ = false;
     bool is_import_ = false;
+    bool is_property_ = false;
+    std::string property_key_;
     std::optional<core::NotePath> relation_to_;
     std::optional<core::RelationId> renaming_;
     SharedRelationNames relation_names_;

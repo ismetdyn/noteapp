@@ -122,6 +122,16 @@ NoteMap build_note_map(std::span<const core::NoteMeta> notes, std::span<const co
 std::optional<std::vector<std::size_t>> shortest_path(std::size_t count, std::span<const MapEdge> edges,
                                                       std::size_t from, std::size_t to, bool directed);
 
+// Sorgu vurgusu (F3, app::MapQuery): sonuçtaki notlar, etiketler ve kenarlar.
+struct MapHighlight {
+    std::set<std::string> notes;  // canlı not yolları
+    std::set<std::string> tags;   // etiket anahtarları (tag_key)
+    std::set<core::RelationId> relations;
+    std::set<std::pair<std::string, std::string>> links;   // LINKS_TO: (kaynak, hedef) yolları
+    std::set<std::pair<std::string, std::string>> tagged;  // TAGGED: (not yolu, etiket anahtarı)
+    bool operator==(const MapHighlight&) const = default;
+};
+
 // Haritada bul (F2): katlanmış (search::fold_to_utf8) ve kırpılmış `typed`i yolunda ya da `#etiket`inde
 // geçiren düğümler, harita sırasıyla. Boş metin hiçbir şey bulmaz.
 std::vector<std::size_t> find_map_nodes(const NoteMap& map, std::string_view typed);
@@ -191,8 +201,19 @@ public:
                             bool directed);
     void clear_path();
 
+    // --- Sorgu vurgusu (F3) ---
+    // Doluyken sonuçtaki notlar kapsama girer (tutulan notlar gibi, sınırın içinde: çevre kapsamında da
+    // görünsünler) ve yalnız sonuçtakiler yanar; nullopt kaldırır. Harita sonraki update'te yeniden kurulur.
+    void set_highlight(std::optional<MapHighlight> highlight);
+    const std::optional<MapHighlight>& highlight() const { return highlight_; }
+    // Düğüm başına 1: sonuçta. Kenar başına 2: kenarın kendisi sonuçta (vurgulanır), 1: iki ucu sonuçta
+    // (yanar), 0: söner. Vurgu yokken boş. update'te kurulur (kare başına değil); boyutu haritanınkidir.
+    const std::vector<char>& highlighted_nodes() const { return highlighted_nodes_; }
+    const std::vector<char>& highlighted_edges() const { return highlighted_edges_; }
+
 private:
     void forget_missing(std::span<const core::NoteMeta> notes);  // kaybolan notun kapsam anahtarları düşer
+    void mark_highlight();
 
     MapOptions options_;
     core::Limit node_limit_;
@@ -205,6 +226,9 @@ private:
     MapScope scope_;
     std::map<std::string, LayoutPoint> pending_pins_;  // keep(pin_at): düğüm haritaya girince sabitlenir
     std::optional<std::pair<bool, std::size_t>> matched_;  // eşleşmelerin kurulduğu (filtering, version)
+    std::optional<MapHighlight> highlight_;
+    std::vector<char> highlighted_nodes_;
+    std::vector<char> highlighted_edges_;
     bool edges_stale_ = true;
     bool stale_ = true;
     std::size_t reads_ = 0;
