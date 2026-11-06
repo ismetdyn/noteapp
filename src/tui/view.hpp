@@ -80,6 +80,9 @@ public:
     // Sürükleyerek boyutlandırmada biçimli görünüm her genişlikte yeniden sarılmaz: art arda değişimlerde
     // önceki yerleşim kalır, değişim bu süre durunca üretilir. Sakin kullanıcının tek değişimi beklemez.
     static constexpr int kResizeSettleMs = 120;
+    // Büyük csv/json biçimli görünümünün parçası: bu kadar tablo satırı ya da girintili JSON satırı. Kapasite
+    // değil iş birimi (ilk kare ve kaydırma karesi bütçesi).
+    static constexpr std::size_t kDataChunkLines = 2000;
     // Dönen önizleme kullanıcının seçtiği görünümdür (`R`); biçimli görünüm not sürümü ve genişlik başına bir
     // kez üretilir, görüntü satırı -> kaynak satırı eşlemesi modele buradan bildirilir.
     const Preview& throttled(TuiState& state, const core::NoteStore& store,
@@ -104,10 +107,12 @@ private:
     // Görünümü gerekirse üretir; false: boyutlandırma sürüyor, önceki yerleşim kalır.
     bool update_rendered(bool wanted, int width, std::chrono::steady_clock::time_point now);
     void build_rendered(int width);
-    // Büyük md (app::markdown_chunks) parça parça: görünen pencere, bekleyen kaynak satırı ya da (arama) tümü
-    // üretilene dek sıradaki parçalar eklenir.
+    // Büyük md (app::markdown_chunks), csv ve json (dizinden satır öbekleri) parça parça: görünen pencere, bekleyen
+    // kaynak satırı ya da (arama) tümü üretilene dek sıradaki parçalar eklenir.
     void extend_rendered(const TuiState& state);
     void append_chunk();
+    RenderedView data_chunk(std::size_t chunk, const ViewLimits& limits);
+    std::size_t chunk_first_line(std::size_t chunk) const;  // parçanın notta başladığı satır
 
     ViewLimits view_limits_;
     SyntaxLimits syntax_limits_;
@@ -130,6 +135,12 @@ private:
     bool rendered_active_ = false;
     std::vector<app::MarkdownChunk> rendered_chunks_;
     app::MarkdownDefinitions rendered_definitions_;  // birden çok parçada notun başvuru tanımları
+    // csv/json: dizin, kaynak satır eşlemesi ve (csv) ilk parçadan sütun genişlikleri; parça satır öbeğidir.
+    std::optional<app::CsvIndex> csv_index_;
+    std::optional<app::JsonIndex> json_index_;
+    std::optional<SourceLines> source_lines_;
+    TableColumns csv_columns_;
+    std::size_t rendered_chunk_count_ = 0;
     std::size_t rendered_next_ = 0;  // sıradaki üretilecek parça
     std::string rendered_note_;
     std::optional<int> settling_width_;

@@ -13,6 +13,7 @@
 #include "tui/view.hpp"
 
 #include <expected>
+#include <utility>
 #include <filesystem>
 #include <functional>
 #include <mutex>
@@ -79,7 +80,9 @@ public:
     void begin_rename(std::optional<RenameState>& rename);
     // `m`: seçim ya da satır için hedef klasör girdisi, geçerli klasörle dolu; Tab klasörleri önerir.
     void begin_move_to(std::optional<RenameState>& rename);
-    // `L`: boş girdi, Tab not yollarını önerir; Enter NoteStore::add_relation, hata girdide kalır.
+    // `L`: boş girdi, Tab not yollarını önerir; Enter hedefi doğrular ve ad satırını açar (F1, RenameState
+    // RelationName): Tab var olan adları tamamlar, Ctrl+D yönlü yapar, Enter app::relate_map_notes; hata
+    // girdide kalır.
     void begin_link(std::optional<RenameState>& rename);
     // Palet `import`: boş yol girdisi; Enter app::import_paths'le `folder`a alır (GUI ile aynı kural). İçe
     // alma işçide (app::ImportJob, host_.post): girdi kapanır, ilerleme durum satırında. Hiçbir şey
@@ -131,8 +134,23 @@ private:
                                                  const std::filesystem::path& output) const;
     void begin_unlink(std::optional<ConfirmState>& confirm);
     void finish_unlink();
-    // Haritada kenar kur ya da kaldır (TuiState::take_map_edit, app::map_relations); sonuç durum satırında.
-    void apply_map_edit();
+    // Haritada kenar kur, kaldır, ilişkinin adını ya da yönünü değiştir (TuiState::take_map_edit,
+    // app::map_relations); sonuç durum satırında. İlişki kurma ve ad değişimi `rename` doluysa ad satırı açar.
+    void apply_map_edit(std::optional<RenameState>* rename);
+    void run_intent(Intent intent, std::optional<ConfirmState>& confirm, std::optional<RenameState>* rename);
+    // Ad satırı (RenameState::RelationName); adlar depodan bir kez okunur.
+    void open_relation_line(std::optional<RenameState>& rename, const core::NotePath& from,
+                            const core::NotePath& to, std::optional<core::RelationId> renaming = std::nullopt,
+                            std::string current = {});
+    void submit_relation(std::optional<RenameState>& rename);
+    // Bağlantı bölümünde seçili ilişki (gösterilen not, satır); ilişki satırı değilse nullopt.
+    std::optional<std::pair<core::NotePath, core::RelatedNote>> selected_relation() const;
+    void begin_relation_rename(std::optional<RenameState>& rename);   // `n`
+    void direct_selected_relation(bool flip);                         // `f` çevir, `u` yönsüz
+    // Depo işi kilit altında; başarıda bildirim ve tazeleme, hatada `input` doluysa hata satırda.
+    bool finish_relation_edit(
+        const std::function<std::expected<std::string, core::Error>(core::NoteStore&)>& edit,
+        RenameState* input = nullptr);
     void create_folder_from_row(std::optional<NewRowState>& row);
     void submit_folder_rename(std::optional<RenameState>& rename, const std::string& target);
     void trash_folder(const std::string& folder, const app::Prompts& prompts);
@@ -158,7 +176,8 @@ private:
     app::TrashOps trash_;
     std::function<void()> pending_;  // açık onayın Evet'i; Vazgeç main'de kalır, bir sonraki run() düşürür
     // Açık onay ilişki için (seçili not, satırdaki not). Vazgeçilirse sonraki run() düşürür.
-    std::optional<std::pair<core::NotePath, core::NotePath>> relation_target_;
+    // Onaydaki ilişki: gösterilen not ve panelin seçili ilişki satırı (yalnız o ilişki silinir).
+    std::optional<std::pair<core::NotePath, core::RelatedNote>> relation_target_;
     std::filesystem::path export_replace_;  // uyarısı gösterilmiş var olan çıktı; sıradaki Enter onu ezer
     // Sürmekte olan içe almanın girdisi: hiçbir şey alınamazsa yazılanla geri açılır.
     std::optional<RenameState> import_prompt_;

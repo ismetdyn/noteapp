@@ -226,8 +226,67 @@ TEST_CASE("preview perf: a 20 MiB single-line note opens as raw text within the 
             raw.steady_ms, " ms/frame, rss +", raw.rss_mib.value_or(-1.0), " MiB");
     CHECK(raw.first_ms <= budget(kFrameBudgetMs));
     CHECK(raw.steady_ms <= budget(kFrameBudgetMs));
-    // NX-D bilgi: tek blok parçalara bölünmez; biçimli yerleşim tüm satırı sarar (varsayılan sınır bu yüzden kalır).
-    const Sample formatted = measure(fixture, {0, "0"}, "tek.md");
-    MESSAGE("20 MiB single-line preview, formatted (view_bytes = 0): first ", formatted.first_ms, " ms, steady ",
-            formatted.steady_ms, " ms/frame, rss +", formatted.rss_mib.value_or(-1.0), " MiB");
+}
+
+namespace {
+
+// NY-P: biçimli önizlemenin bütçesi: ilk kare ve sona atlama 50 ms, kaydırmanın kareye eklediği iş (aynı ekranın
+// işsiz karesine göre) 16 ms, bellek notun iki katı. Mutlak kare süresi bilgi içindir: başsız testin yazılım
+// çizicisi dolu ekranı (ör. tek satırlık notun her hücresi glif) kare başına ~29 ms'de çizer, iş olmadan da.
+void check_formatted(const char* label, const std::string& name, const std::string& note) {
+    constexpr double kFirstBudgetMs = 50.0;
+    constexpr double kScrollWorkBudgetMs = 16.0;
+    const double note_mib = static_cast<double>(note.size()) / (1024.0 * 1024.0);
+    WindowFixture fixture;
+    fixture.config.tuning.max_note_bytes = {0, "0"};
+    // En kötü durum: satır ve tablo satırı sınırı da kapalı (görünüm notun tamamıdır).
+    fixture.config.limits.tui.view_lines = {0, "0"};
+    fixture.config.limits.tui.table_rows = {0, "0"};
+    fixture.add_note(name, note, 10);
+    const Sample formatted = median_of([&] { return measure(fixture, {0, "0"}, name, true); });
+    MESSAGE(std::string(label), " (view_bytes = 0, median of ", kSamples, "): first ", formatted.first_ms, " ms, scroll avg ",
+            formatted.steady_ms, " / worst ", formatted.worst_ms, " ms/frame, End ", formatted.end_ms, " ms, idle ",
+            formatted.idle_ms, " ms/frame, rss +", formatted.rss_mib.value_or(-1.0), " MiB");
+    CHECK(formatted.first_ms <= budget(kFirstBudgetMs));
+    CHECK(formatted.worst_ms - formatted.idle_ms <= budget(kScrollWorkBudgetMs));
+    CHECK(formatted.end_ms <= budget(kFirstBudgetMs));
+    if (formatted.rss_mib)
+        CHECK(*formatted.rss_mib <= 2.0 * note_mib);
+    else
+        MESSAGE("resident memory is not measured on this platform: memory budget skipped");
+}
+
+// Küçültülmüş (tek satır) JSON: dizi içinde nesneler; girintili görünüm milyonlarca satırdır.
+std::string large_json() {
+    std::string text = "[";
+    text.reserve(kNoteBytes + 256);
+    for (int i = 0; text.size() < kNoteBytes; ++i)
+        text += (i > 0 ? "," : "") + std::string("{\"id\":") + std::to_string(i) +
+                ",\"ad\":\"Çağrı \\\"x\\\"\",\"etiketler\":[\"a\",\"b\",[]],\"iç\":{\"x\":1.5,\"y\":null,\"z\":{}}}";
+    return text + "]";
+}
+
+// Başlıklı, tırnaklı alanlı, 8 sütunlu CSV.
+std::string large_csv() {
+    std::string text = "id,ad,şehir,not,a,b,c,d\n";
+    text.reserve(kNoteBytes + 256);
+    for (int i = 0; text.size() < kNoteBytes; ++i)
+        text += std::to_string(i) + ",Çağrı,\"İstanbul, merkez\",\"uzun \"\"alıntılı\"\" not\",1,2.5,x,y\n";
+    return text;
+}
+
+}  // namespace
+
+// NY-P: kesim yeri olmayan tek dev blok parçalara zorla bölünür (kMarkdownMaxChunkBytes).
+TEST_CASE("preview perf: a 20 MiB single-line note previews formatted within the frame budget") {
+    check_formatted("20 MiB single-line md", "tek.md", std::string(kNoteBytes, 'x'));
+}
+
+// NY-P: JSON ve CSV dizinlenir (tek geçiş, metin kurulmaz); yalnız görünen satırlar kurulup çizilir.
+TEST_CASE("preview perf: a 20 MiB JSON note previews formatted within the frame budget") {
+    check_formatted("20 MiB minified JSON", "büyük.json", large_json());
+}
+
+TEST_CASE("preview perf: a 20 MiB CSV note previews as a table within the frame budget") {
+    check_formatted("20 MiB CSV", "büyük.csv", large_csv());
 }

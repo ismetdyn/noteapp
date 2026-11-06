@@ -4,8 +4,17 @@
 // §3.1, §3.3). Çizim kodu sabit renk tutmaz, rengi buradan alır; kontrast oranları
 // tests/gui/theme_test.cpp'de.
 
+#include "edit/syntax.hpp"
+
 #include <cstdint>
 #include <imgui.h>
+
+namespace noteapp::gui {
+
+// Sözdizimi türünün geçerli temadaki rengi; aile tablosu TUI ile ortak (tui::syntax_family). Tanım view_widgets.cpp.
+ImU32 token_color(tui::TokenKind kind);
+
+}  // namespace noteapp::gui
 
 namespace noteapp::gui::theme {
 

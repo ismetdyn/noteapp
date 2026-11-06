@@ -1,5 +1,6 @@
 #include "tui/save_dialog.hpp"
 
+#include "app/map_relations.hpp"
 #include "core/i18n.hpp"
 #include "core/text.hpp"
 #include "edit/editor_session.hpp"
@@ -356,6 +357,26 @@ RenameState::RenameState(ExportTarget, core::NotePath from, std::string file_nam
 
 RenameState::RenameState(ImportSource, std::string folder) : base_(std::move(folder)), is_import_(true) {}
 
+// Adın tamamı tek metindir (Find: sözcüklere bölünmez); adaylar adların gösterimidir.
+RenameState::RenameState(RelationName, core::NotePath from, core::NotePath to, SharedRelationNames names,
+                         std::optional<core::RelationId> renaming, std::string current)
+    : from_(std::move(from)), relation_to_(std::move(to)), renaming_(renaming),
+      relation_names_(names ? std::move(names) : std::make_shared<const std::vector<core::RelationName>>()),
+      line_(InputKind::Find) {
+    std::vector<std::string> displays;
+    displays.reserve(relation_names_->size());
+    for (const core::RelationName& name : *relation_names_)
+        displays.push_back(name.display);
+    line_.set_sources(word_input_sources(std::move(displays)));
+    line_.set_text(std::move(current));
+}
+
+bool RenameState::directed() const {
+    if (directed_choice_)
+        return *directed_choice_;
+    return relation_names_ && app::default_directed(*relation_names_, line_.text());
+}
+
 std::string RenameState::target() const {
     std::string_view typed = line_.text();
     if (is_folder_ && typed.ends_with('/'))
@@ -364,6 +385,10 @@ std::string RenameState::target() const {
 }
 
 RenameState::Outcome RenameState::handle(Key key, std::string_view text) {
+    if (key == Key::CtrlD && is_relation() && !renaming_ && !line_.popup()) {
+        directed_choice_ = !directed();
+        return Outcome::Editing;
+    }
     const InputLine::Result result = line_.handle(key, text);
     if (clears_input_error(key, result))
         error_.clear();

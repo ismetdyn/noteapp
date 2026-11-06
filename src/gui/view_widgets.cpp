@@ -167,6 +167,18 @@ std::string printable(std::string_view raw) {
     return out;
 }
 
+std::string label_safe(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (const char c : text) {
+        if (c == '#')
+            out += "\xEF\xBC\x83";  // U+FF03 FULLWIDTH NUMBER SIGN
+        else
+            out += c;
+    }
+    return out;
+}
+
 // Aile tablosu TUI ile ortak (tui::syntax_family); tonlar temanın, tuvalde ≥ 4,5. Vurgu tek fontta metin
 // rengi.
 ImU32 token_color(tui::TokenKind kind) {
@@ -282,7 +294,8 @@ bool draw_fitted_row_text(ImVec2 position, const std::string& text, float width,
 // `best_line` verilirse satır iki satır boyundadır, ikincisi notun en iyi eşleşen satırı (genel arama, TUI
 // gibi); yalnız adı eşleşen satır tek satırdır.
 bool plain_selectable(const std::string& text, bool selected, const std::vector<std::size_t>& highlights,
-                      core::IconStyle icon_style, const search::Hit* best_line, bool marked) {
+                      core::IconStyle icon_style, const search::Hit* best_line, bool marked,
+                      std::string_view icon_path) {
     ImVec2 position = ImGui::GetCursorScreenPos();
     float width = ImGui::GetContentRegionAvail().x;
     const float line_height = ImGui::GetTextLineHeightWithSpacing();
@@ -291,7 +304,8 @@ bool plain_selectable(const std::string& text, bool selected, const std::vector<
         ImVec2(0.0F, best_line != nullptr ? line_height + ImGui::GetTextLineHeight() : 0.0F));
     if (marked)
         draw_mark_background();
-    const float icon_width = draw_icon(position, core::file_icon(text), icon_style, selected);
+    const float icon_width =
+        draw_icon(position, core::file_icon(icon_path.empty() ? std::string_view(text) : icon_path), icon_style, selected);
     position.x += icon_width;
     width -= icon_width;
     if (draw_fitted_row_text(position, text, width, highlights))

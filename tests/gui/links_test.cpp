@@ -5,6 +5,7 @@
 #include "window_fixture.hpp"
 
 #include <doctest/doctest.h>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -184,4 +185,101 @@ TEST_CASE("gui links: hostile names draw as text, thousands of rows draw only th
         drawn += name.starts_with("link_missing:") ? 1 : 0;
     CHECK(drawn > 0);
     CHECK(drawn < 40);
+}
+
+// F1: ilişkili satır yön oku ve adla; sağ tık menüsü kimlikle yeniden adlandırır, yönü çevirir, yönsüz yapar.
+TEST_CASE("gui links: a related row shows its arrow and name; its menu flips, undirects and renames it") {
+    LinksScene scene;
+    {
+        core::NoteStore store(scene.fixture.store_dir());
+        REQUIRE(store.add_relation(np("a.md"), np("hiç.md"), {"uses", true}).has_value());
+    }
+    scene.open();
+    REQUIRE(scene.shows("link:hiç.md"));
+    {
+        const gui_test::RenderedText rendered;
+        settle(*scene.view);
+        CHECK(rendered.contains("↗ hiç.md — uses"));
+    }
+    const auto menu = [&] {
+        // Önceki işlemin bildirimi panelin üstünde durur: sağ tık satıra değil ona giderdi.
+        std::vector<std::uint64_t> shown;
+        for (const auto& notice : scene.state->notices().items())
+            shown.push_back(notice.id);
+        for (const std::uint64_t id : shown)
+            scene.state->dismiss_notice(id);
+        settle(*scene.view);
+        const auto [x, y] = scene.view->button_center("link:hiç.md");
+        ImGui::GetIO().AddMousePosEvent(x, y);
+        scene.view->draw_frame();
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+        scene.view->draw_frame();
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+        settle(*scene.view);
+    };
+    const auto relation = [&] { return scene.state->links().related.at(0); };
+    menu();
+    REQUIRE(scene.shows("link_flip"));
+    click_button(*scene.view, "link_flip");
+    CHECK(relation().direction == core::RelationDirection::Incoming);
+    CHECK(scene.state->status() == "Relation directed: hiç.md → a.md");
+    menu();
+    click_button(*scene.view, "link_undirect");
+    CHECK(relation().direction == core::RelationDirection::Undirected);
+    CHECK(scene.state->status() == "Relation made undirected: a.md and hiç.md");
+
+    scene.view->install_deciders();
+    std::size_t frame = 0;
+    scene.view->on_modal_frame = [&] {
+        ++frame;
+        if (frame == 1)
+            ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        if (frame == 5)
+            gui_test::tap_key(ImGuiKey_Backspace);  // klavye odağıyla tüm metin seçilir ya da son harf
+        if (frame >= 6 && frame <= 9)
+            gui_test::tap_key(ImGuiKey_Backspace);
+        if (frame == 12)
+            ImGui::GetIO().AddInputCharactersUTF8("cites");
+        if (frame == 15)
+            gui_test::tap_key(ImGuiKey_Enter);
+        if (frame == 300)
+            gui_test::tap_key(ImGuiKey_Escape);
+    };
+    menu();
+    click_button(*scene.view, "link_rename");
+    CHECK(relation().name == "cites");
+    CHECK(scene.state->status() == "Relation renamed to 'cites': a.md and hiç.md");
+    REQUIRE_FALSE(scene.state->notices().items().empty());
+    CHECK(scene.state->notices().items().back().text == "Relation renamed to 'cites': a.md and hiç.md");
+}
+
+// İnceleme: açık menü satır sırasına bağlıydı; panel yeniden okunup satırlar kayarsa başka ilişkiyi hedeflerdi.
+TEST_CASE("gui links: a related row's menu stays with its relation when the rows move") {
+    LinksScene scene;
+    {
+        core::NoteStore store(scene.fixture.store_dir());
+        REQUIRE(store.add_relation(np("a.md"), np("hiç.md"), {"uses", true}).has_value());
+    }
+    scene.open();
+    const auto [x, y] = scene.view->button_center("link:hiç.md");
+    ImGui::GetIO().AddMousePosEvent(x, y);
+    scene.view->draw_frame();
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+    scene.view->draw_frame();
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+    settle(*scene.view);
+    REQUIRE(scene.shows("link_flip"));
+    {  // başka cihaz (senkron): hiç.md'nin önüne yeni ilişki satırı girer
+        core::NoteStore store(scene.fixture.store_dir());
+        REQUIRE(store.add_relation(np("a.md"), np("b.md"), {"cites", false}).has_value());
+    }
+    scene.state->rescan();
+    settle(*scene.view);
+    REQUIRE(scene.state->links().related.size() == 2);
+    if (scene.shows("link_flip"))
+        click_button(*scene.view, "link_flip");
+    const auto rows = core::NoteStore(scene.fixture.store_dir()).links(np("a.md")).value().related;
+    REQUIRE(rows.size() == 2);
+    CHECK(rows[0].path == np("b.md"));
+    CHECK(rows[0].direction == core::RelationDirection::Undirected);  // menü ona geçmedi
 }

@@ -848,6 +848,8 @@ int run_reserved(const ParsedArgs& args, const core::Config& config) {
         return run_tags(args, config);
     if (args.command == "view")
         return run_view(args, config);
+    if (args.command == "relation")
+        return run_relation(args, config);
     if (args.command == "import")
         return run_import(args, config);
     if (args.command == "completion")

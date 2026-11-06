@@ -3,6 +3,7 @@
 #include "core/i18n.hpp"
 #include "core/text.hpp"
 
+#include <algorithm>
 #include <md4c.h>
 #include <utility>
 
@@ -12,10 +13,21 @@ namespace {
 
 constexpr char kReplacementCharacter[] = "\xEF\xBF\xBD";
 
-// Öznitelik ham metni: varlıklar çözülmez. Hedef yalnız gösterilir (URL ipucu) ya da wiki hedefi olarak
-// çözülür; md4c wiki hedefini zaten varlıksız kurar.
+// Öznitelik metni; varlık parçaları çözülür (HTML'deki href gibi). md4c wiki hedefini zaten varlıksız kurar.
 std::string attribute_text(const MD_ATTRIBUTE& attribute) {
-    return {attribute.text, attribute.size};
+    const std::string_view raw(attribute.text, attribute.size);
+    std::string out;
+    for (std::size_t i = 0; attribute.substr_offsets[i] < attribute.size; ++i) {
+        const MD_OFFSET begin = attribute.substr_offsets[i];
+        const std::string_view part = raw.substr(begin, attribute.substr_offsets[i + 1] - begin);
+        if (attribute.substr_types[i] == MD_TEXT_ENTITY)
+            out += core::decode_html_entity(part);
+        else if (attribute.substr_types[i] == MD_TEXT_NULLCHAR)
+            out += kReplacementCharacter;
+        else
+            out += part;
+    }
+    return out;
 }
 
 class BlockBuilder {
@@ -32,16 +44,21 @@ public:
         case MD_BLOCK_DOC:
             break;
         case MD_BLOCK_QUOTE:
-            flush();
+            open_container();
             ++quote_depth_;
+            nesting_ += 'Q';
             break;
         case MD_BLOCK_UL:
-            flush();
-            lists_.push_back(0);
+            open_container();
+            lists_.push_back({false, 0});
+            nesting_ += 'L';
+            list_opened_ = true;
             break;
         case MD_BLOCK_OL:
-            flush();
-            lists_.push_back(static_cast<const MD_BLOCK_OL_DETAIL*>(detail)->start);
+            open_container();
+            lists_.push_back({true, static_cast<const MD_BLOCK_OL_DETAIL*>(detail)->start});
+            nesting_ += 'L';
+            list_opened_ = true;
             break;
         case MD_BLOCK_LI:
             flush();
@@ -57,10 +74,13 @@ public:
             open(Block::Kind::Heading);
             current_.heading_level = static_cast<int>(static_cast<const MD_BLOCK_H_DETAIL*>(detail)->level);
             break;
-        case MD_BLOCK_CODE:
+        case MD_BLOCK_CODE: {
             flush();
             open(Block::Kind::Code);
+            const MD_ATTRIBUTE& lang = static_cast<const MD_BLOCK_CODE_DETAIL*>(detail)->lang;
+            current_.language.assign(lang.text == nullptr ? "" : lang.text, lang.size);
             break;
+        }
         case MD_BLOCK_TABLE:
             flush();
             open(Block::Kind::Table);
@@ -77,6 +97,8 @@ public:
         case MD_BLOCK_TH:
         case MD_BLOCK_TD:
             current_.rows.back().cells.emplace_back();
+            if (in_table_head_)
+                current_.aligns.push_back(align_of(static_cast<const MD_BLOCK_TD_DETAIL*>(detail)->align));
             in_table_cell_ = true;
             break;
         default:  // P ve kapalı bayraklara ait türler: metin yeni paragrafta toplanır
@@ -91,11 +113,17 @@ public:
         case MD_BLOCK_QUOTE:
             flush();
             --quote_depth_;
+            nesting_.pop_back();
             break;
         case MD_BLOCK_UL:
         case MD_BLOCK_OL:
             flush();
             lists_.pop_back();
+            nesting_.pop_back();
+            break;
+        case MD_BLOCK_LI:
+            flush();
+            flush_marker();  // boş öğe
             break;
         case MD_BLOCK_TH:
         case MD_BLOCK_TD:
@@ -131,11 +159,18 @@ public:
             ++mono_depth_;
             break;
         case MD_SPAN_IMG:
-            // İç içe görselde yalnız dıştaki yer tutucuyu belirler.
-            if (image_depth_++ == 0)
+            // İç içe görselde yalnız dıştaki yer tutucuyu belirler. Alt metin görselin dışındaki biçimle, içindeki
+            // vurgu ve bağlantı olmadan yazılır (HTML alt="..." düz metindir).
+            if (image_depth_++ == 0) {
                 has_image_text_ = false;
+                image_style_ = current_style();
+                image_link_ = links_.empty() ? Link{} : links_.back();
+            }
             break;
-        default:  // üstü çizili (ve PDF'te bağlantı): süs/hedef atılır, metin kalır
+        case MD_SPAN_DEL:
+            ++strike_depth_;
+            break;
+        default:  // PDF'te bağlantı: hedef atılır, metin kalır
             break;
         }
     }
@@ -159,8 +194,12 @@ public:
             --mono_depth_;
             break;
         case MD_SPAN_IMG:
-            if (--image_depth_ == 0 && !has_image_text_)
+            if (image_depth_ == 1 && !has_image_text_)
                 append(core::tr("pdf.image_placeholder"));
+            --image_depth_;
+            break;
+        case MD_SPAN_DEL:
+            --strike_depth_;
             break;
         default:
             break;
@@ -173,7 +212,7 @@ public:
             append(kReplacementCharacter);
             break;
         case MD_TEXT_BR:
-            append("\n");
+            append(image_depth_ > 0 ? " " : "\n");  // alt metin tek satırdır (HTML alt="...")
             break;
         case MD_TEXT_SOFTBR:
             append(" ");
@@ -193,8 +232,37 @@ private:
         current_.kind = kind;
         current_.list_depth = static_cast<int>(lists_.size());
         current_.quote_depth = quote_depth_;
+        current_.nesting = nesting_;
+        current_.list_start = std::exchange(list_opened_, false);
         current_.marker = std::exchange(pending_marker_, {});
         is_open_ = true;
+    }
+
+    // Öğe içinde blok açılmadan kap açılıyor ya da öğe boş bitti: im kendi boş paragrafında (TUI gibi); yoksa iç
+    // listenin imi onu ezerdi.
+    void flush_marker() {
+        if (pending_marker_.empty())
+            return;
+        open(Block::Kind::Paragraph);
+        flush();
+    }
+
+    void open_container() {
+        flush();
+        flush_marker();
+    }
+
+    static Align align_of(MD_ALIGN align) {
+        switch (align) {
+        case MD_ALIGN_LEFT:
+            return Align::Left;
+        case MD_ALIGN_CENTER:
+            return Align::Center;
+        case MD_ALIGN_RIGHT:
+            return Align::Right;
+        default:
+            return Align::Default;
+        }
     }
 
     void flush() {
@@ -206,10 +274,10 @@ private:
 
     std::string list_marker(const MD_BLOCK_LI_DETAIL& item) {
         std::string marker;
-        if (!lists_.empty() && lists_.back() > 0)
-            marker = std::to_string(lists_.back()++) + ". ";
+        if (!lists_.empty() && lists_.back().ordered)
+            marker = std::to_string(lists_.back().next++) + ". ";
         else
-            marker = "• ";
+            marker = kListBullets[(std::max<std::size_t>(lists_.size(), 1) - 1) % std::size(kListBullets)];
         if (item.is_task)
             marker += item.task_mark == ' ' ? "[ ] " : "[x] ";
         return marker;
@@ -221,9 +289,8 @@ private:
             open(Block::Kind::Paragraph);
         if (image_depth_ > 0)
             has_image_text_ = true;
-        const TextStyle style{bold_depth_ > 0, italic_depth_ > 0,
-                              mono_depth_ > 0 || current_.kind == Block::Kind::Code};
-        const Link link = links_.empty() ? Link{} : links_.back();
+        const TextStyle style = image_depth_ > 0 ? image_style_ : current_style();
+        const Link link = image_depth_ > 0 ? image_link_ : links_.empty() ? Link{} : links_.back();
         std::vector<Span>& spans =
             in_table_cell_ && !current_.rows.empty() ? current_.rows.back().cells.back() : current_.spans;
         if (!spans.empty() && spans.back().style == style && spans.back().link == link.target &&
@@ -233,9 +300,18 @@ private:
             spans.push_back({std::string(value), style, link.target, link.wiki});
     }
 
+    TextStyle current_style() const {
+        return {bold_depth_ > 0, italic_depth_ > 0, mono_depth_ > 0 || current_.kind == Block::Kind::Code,
+                strike_depth_ > 0};
+    }
+
     struct Link {
         std::string target;
         bool wiki = false;
+    };
+    struct List {
+        bool ordered = false;
+        unsigned next = 0;  // sıradaki numara (sıralı listede; 0'dan başlayabilir)
     };
 
     MarkdownOptions options_;
@@ -243,13 +319,18 @@ private:
     std::vector<Block> blocks_;
     Block current_;
     bool is_open_ = false;
-    std::vector<unsigned> lists_;  // sıradaki numara; 0 = işaretli liste
+    std::vector<List> lists_;
+    std::string nesting_;  // açık kaplar dıştan içe (Block::nesting)
+    bool list_opened_ = false;  // liste açıldı, ilk bloğu henüz yok
     std::string pending_marker_;
     int quote_depth_ = 0;
     int bold_depth_ = 0;
     int italic_depth_ = 0;
     int mono_depth_ = 0;
+    int strike_depth_ = 0;
     int image_depth_ = 0;
+    TextStyle image_style_;  // görselin açıldığı yerdeki biçim ve bağlantı: alt metin bununla yazılır
+    Link image_link_;
     bool has_image_text_ = false;
     bool in_table_head_ = false;
     bool in_table_cell_ = false;

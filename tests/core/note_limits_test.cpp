@@ -414,6 +414,7 @@ TEST_CASE("limits.core.folder_path_bytes sets the folder path limit and 0 lifts 
 // Yapılandırmasız depo (geçiş, test) defaults.toml ile aynı sınırı kullanır: tek olgu.
 TEST_CASE("an unconfigured store uses the folder path limit from defaults.toml") {
     CHECK(parse_config("").config.limits.core.folder_path_bytes.value == kDefaultFolderPathBytes);
+    CHECK(parse_config("").config.limits.graph.relation_name_bytes.value == kDefaultRelationNameBytes);
 }
 
 // Bayt doğrulaması düğüme bakar, yola değil: düğüm güvenli yola çıkamıyorsa dosya geçmiş sayılmaz.

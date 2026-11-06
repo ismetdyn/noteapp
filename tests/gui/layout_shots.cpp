@@ -166,6 +166,35 @@ TEST_CASE("renders the info panel, row numbers and the markdown preview to PNG")
     }
 }
 
+// NY-P önizleme uygunluğu tek başına (`-tc="renders the markdown fidelity*"`): iç içe liste imleri, listedeki
+// alıntı ve kod, boş öğe, 0'dan sıralı liste, hizalı tablo, üstü çizili, HTML varlıkları, satır sonu. Dosya adı
+// `nyp-` önekiyle (önce/sonra karşılaştırması).
+TEST_CASE("renders the markdown fidelity sample to PNG") {
+    const char* directory = std::getenv("NOTEAPP_SHOT_DIR");
+    REQUIRE(directory != nullptr);
+    std::filesystem::create_directories(directory);
+    constexpr char kSample[] =
+        "# Uygunluk örneği\n\n"
+        "Metin ~~eski~~ **yeni**, *eğik* ve `kod`; varlık &copy; &ouml; &#x1F600;.  \n"
+        "Zorunlu satır sonundan sonra.\n\n"
+        "- bir\n  - iki\n    - üç\n      - dört\n- \n- son\n\n"
+        "0. sıfırdan\n1. bir\n\n"
+        "- madde\n\n  > öğedeki alıntı\n\n  ```\n  öğedeki kod\n  ```\n\n"
+        "| Sol | Orta | Sağ |\n|:----|:----:|----:|\n| a | b | 1 |\n| uzun hücre | ortadaki | 12345 |\n\n"
+        "## İkinci başlık\n\n[bağ](https://ornek.example/f&ouml;) ve ![*süslü* alt](x.png)\n";
+    for (const bool dark : {false, true}) {
+        LayoutScene scene(1000, 900, 1.0F);
+        if (dark)
+            apply_dark_theme();
+        scene.fixture.add_note("uygunluk.md", kSample, 1);
+        scene.state->rescan();
+        scene.state->open_note(*noteapp::core::NotePath::parse("uygunluk.md"));
+        gui_test::settle(*scene.view);
+        REQUIRE(scene.state->showing_preview());
+        save_png(std::filesystem::path(directory) / std::format("nyp-preview-{}.png", dark ? "dark" : "light"));
+    }
+}
+
 // T84 haritası tek başına (`-tc="renders the map*"`): çevre (derinlik 2), tüm çizge etiketlerle, aramada
 // vurgu.
 TEST_CASE("renders the map view to PNG") {

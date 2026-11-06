@@ -1,5 +1,7 @@
+#include "app/map_relations.hpp"
 #include "core/i18n.hpp"
 #include "core/text.hpp"
+#include "edit/display_text.hpp"
 #include "gui/commands.hpp"
 #include "gui/markdown_preview.hpp"
 #include "gui/view_internal.hpp"
@@ -249,6 +251,37 @@ void View::draw_links_panel() {
     remember_item_center("links_list");
 }
 
+// Gösterilen notun gözünden: "Yönü çevir" çıkanı gelen, geleni ve yönsüzü çıkan yapar (app::flipped_source).
+void View::draw_relation_row_menu(const core::RelatedNote& selected) {
+    const auto shown = state_.current_path();
+    if (!shown)
+        return;
+    const core::RelatedNote relation = selected;  // panel yeniden yüklenince satır yok olur: kopya
+    const core::NotePath from = *shown;
+    if (ImGui::MenuItem((core::tr("map.rename_relation") + "###link_rename").c_str()))
+        queue([this, from, relation] { state_.rename_relation(from, relation.path, relation.id, relation.name); });
+    remember_item_center("link_rename");
+    const bool undirected = relation.direction == core::RelationDirection::Undirected;
+    const std::string flip =
+        undirected ? core::tr("map.make_directed", {{"from", label_safe(printable(from.string()))}, {"to", label_safe(printable(relation.path.string()))}})
+                   : core::tr("map.flip_relation");
+    if (ImGui::MenuItem((flip + "###link_flip").c_str()))
+        queue([this, from, relation] {
+            state_.direct_relation(from, relation.path, relation.id,
+                                   app::flipped_source(from, relation.path, relation.direction));
+        });
+    remember_item_center("link_flip");
+    if (!undirected) {
+        if (ImGui::MenuItem((core::tr("map.make_undirected") + "###link_undirect").c_str()))
+            queue([this, from, relation] { state_.direct_relation(from, relation.path, relation.id, std::nullopt); });
+        remember_item_center("link_undirect");
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem((core::tr("gui.unlink") + "###link_unlink").c_str()))
+        queue([this, relation] { state_.unlink_note(relation); });
+    remember_item_center("link_unlink");
+}
+
 void View::draw_link_row(const core::LinkLine& line) {
     if (line.is_header) {
         const std::string title =
@@ -257,18 +290,28 @@ void View::draw_link_row(const core::LinkLine& line) {
         return;
     }
     const std::string raw = core::link_text(state_.links(), line);
-    const std::string text = printable(raw);
+    const bool related = line.group == core::LinkGroup::Related;
+    // İlişki satırı yön oku ve adla (F1, TUI ile aynı metin); ad güvenilmez: terminal_safe.
+    const std::string text =
+        related ? tui::terminal_safe(app::related_row_text(state_.links().related[line.index])) : printable(raw);
     if (const core::NotePath* path = core::link_path(state_.links(), line)) {
-        const bool clicked = plain_selectable(text, false, {}, state_.icon_style());
+        const bool clicked = plain_selectable(text, false, {}, state_.icon_style(), nullptr, false, raw);
         if (new_tab_click(clicked))
             queue_open(*path, true);
         else if (clicked)
             queue([this, target = *path] { state_.open_link(target); });
-        // İlişki (TUI `L` ilişkili satırda): sağ tık menüsünden onaylı kaldırma.
-        if (line.group == core::LinkGroup::Related && ImGui::BeginPopupContextItem("##link_menu")) {
-            if (ImGui::MenuItem(core::tr("gui.unlink").c_str()))
-                queue([this, target = *path] { state_.unlink_note(target); });
-            ImGui::EndPopup();
+        // İlişki (TUI ilişkili satırda `n` `f` `u` `L`): sağ tık menüsü, hepsi satırın ilişkisinin kimliğiyle.
+        if (related) {
+            // Menünün kimliği ilişkinin kimliğini de taşır: panel açıkken yeniden okunup satırlar kayarsa
+            // (senkron) menü başka ilişkiye geçmez, kapanır.
+            const core::RelatedNote& relation = state_.links().related[line.index];
+            const auto* id = reinterpret_cast<const char*>(relation.id.bytes.data());
+            ImGui::PushID(id, id + relation.id.bytes.size());
+            if (ImGui::BeginPopupContextItem("##link_menu")) {
+                draw_relation_row_menu(relation);
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
         }
         remember_item_center("link:" + raw);
         return;
@@ -386,14 +429,16 @@ void View::draw_preview(float reserved_height) {
 void View::draw_markdown_preview(float request, bool to_end) {
     ImGui::PushFont(nullptr, kPreviewFontPixels);  // okuma metni bir kademe büyük; ölçek PushFont'ta
     PreviewCache& cache = *preview_;
-    if (cache.source != state_.buffer()) {
+    const app::MarkdownChunkLimits chunk_limits = app::markdown_chunk_limits_of(state_.view_limits());
+    if (cache.source != state_.buffer() || cache.document.chunk_limits() != chunk_limits) {
         cache.source = state_.buffer();
-        cache.document.reset(cache.source);
+        cache.document.reset(cache.source, chunk_limits);
     }
     if (cache.missing != state_.links().missing) {
         cache.missing = state_.links().missing;
         cache.document.relayout();
     }
+    cache.document.set_highlight_line_bytes(state_.view_limits().highlight_line_bytes.cap());
     // Okuma ölçüsü (G10): satır en çok 46 em (UI boyu; 15 px'te ≈ 690 px, 65–75 karakter), geniş pencerede
     // ortalı; dar pencerede tam genişlik. Kod ve tablo bunu aşarsa yatay kaydırılır.
     const float available = ImGui::GetContentRegionAvail().x;
@@ -503,21 +548,16 @@ void View::draw_raw_preview() {
 
 void View::draw_data_preview() {
     PreviewCache& cache = *preview_;
-    const core::TuiLimits& limits = state_.view_limits();
     const app::PreviewKind kind = state_.preview_kind();
-    const app::TableLimits table_limits{.rows = limits.table_rows.cap(),
-                                        .columns = limits.table_columns.cap()};
-    if (cache.data_source != state_.buffer() || cache.data_kind != kind ||
-        cache.data_limits != table_limits) {
+    if (cache.data_source != state_.buffer() || cache.data_kind != kind) {
         cache.data_source = state_.buffer();
         cache.data_kind = kind;
-        cache.data_limits = table_limits;
         cache.csv.reset();
         cache.json.reset();
         if (kind == app::PreviewKind::Csv)
-            cache.csv = app::parse_csv(cache.data_source, table_limits);
+            cache.csv = app::index_csv(cache.data_source);
         else
-            cache.json = app::pretty_json(cache.data_source);
+            cache.json = app::index_json(cache.data_source);
     }
     if (cache.csv) {
         draw_csv_table(*cache.csv);
@@ -537,47 +577,53 @@ void View::draw_data_preview() {
 }
 
 // İlk satır başlıktır (başlık zemini). Hücre metni güvenilmezdir: `##` ve `%` yorumlanmaz, denetim baytı
-// U+FFFD olur. ImGui tablosunun sütun tavanını aşan sütunlar TUI'nin sığmayan sütunu gibi söylenir.
-void View::draw_csv_table(const app::CsvTable& table) {
-    std::size_t stored = 0;
-    for (const std::vector<std::string>& row : table.rows)
-        stored = std::max(stored, row.size());
+// U+FFFD olur. ImGui tablosunun sütun tavanını aşan sütunlar TUI'nin sığmayan sütunu gibi söylenir. Satırlar ve
+// sütunlar sanaldır: yalnız görünen satırlar ayrıştırılır (app::csv_rows), görünmeyen sütunun hücresi çizilmez.
+void View::draw_csv_table(const app::CsvIndex& index) {
+    const core::TuiLimits& limits = state_.view_limits();
+    const std::size_t stored = std::min(index.column_count, limits.table_columns.cap());
     const int columns = static_cast<int>(std::min<std::size_t>(stored, IMGUI_TABLE_MAX_COLUMNS));
+    const std::size_t rows = std::min(index.row_count, limits.table_rows.cap());
     constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                        ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX;
-    if (columns > 0 && ImGui::BeginTable("##csv", columns, kFlags)) {
-        const auto draw_row = [&](std::size_t index) {
-            const std::vector<std::string>& cells = table.rows[index];
-            ImGui::TableNextRow(index == 0 ? ImGuiTableRowFlags_Headers : ImGuiTableRowFlags_None);
-            for (int column = 0; column < columns && static_cast<std::size_t>(column) < cells.size();
-                 ++column) {
-                ImGui::TableSetColumnIndex(column);
-                const std::string text = printable(cells[static_cast<std::size_t>(column)]);
-                ImGui::TextUnformatted(text.data(), text.data() + text.size());
+    if (columns > 0 && rows > 0 && ImGui::BeginTable("##csv", columns, kFlags)) {
+        // Görünen satırlar tek seferde ayrıştırılır (en yakın dizin bloğundan bir tarama).
+        const auto draw_rows = [&](std::size_t first, std::size_t count) {
+            std::size_t row = first;
+            for (const app::CsvRow& csv :
+                 app::csv_rows(preview_->data_source, index, first, count, static_cast<std::size_t>(columns))) {
+                ImGui::TableNextRow(row++ == 0 ? ImGuiTableRowFlags_Headers : ImGuiTableRowFlags_None);
+                for (int column = 0; column < columns && static_cast<std::size_t>(column) < csv.cells.size();
+                     ++column) {
+                    if (!ImGui::TableSetColumnIndex(column))
+                        continue;  // yatayda görünmeyen sütun
+                    const std::string text = printable(csv.cells[static_cast<std::size_t>(column)]);
+                    ImGui::TextUnformatted(text.data(), text.data() + text.size());
+                }
             }
         };
-        draw_row(0);
+        draw_rows(0, 1);
         ImGuiListClipper clipper;
-        clipper.Begin(static_cast<int>(std::min<std::size_t>(table.rows.size() - 1, INT_MAX)));
+        clipper.Begin(static_cast<int>(std::min<std::size_t>(rows - 1, INT_MAX)));
         while (clipper.Step())
-            for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
-                draw_row(static_cast<std::size_t>(row) + 1);
+            draw_rows(static_cast<std::size_t>(clipper.DisplayStart) + 1,
+                      static_cast<std::size_t>(clipper.DisplayEnd - clipper.DisplayStart));
         ImGui::EndTable();
         remember_item_center("preview_table");
     }
-    if (table.omitted_rows > 0)
-        ImGui::TextDisabled(
-            "%s", core::tr("gui.preview_rows_cut", {{"count", std::to_string(table.omitted_rows)}}).c_str());
-    if (const std::size_t hidden = table.column_count - static_cast<std::size_t>(columns); hidden > 0)
+    if (const std::size_t omitted = index.row_count - rows; omitted > 0)
+        ImGui::TextDisabled("%s", core::tr("gui.preview_rows_cut", {{"count", std::to_string(omitted)}}).c_str());
+    if (const std::size_t hidden = index.column_count - static_cast<std::size_t>(columns); hidden > 0)
         ImGui::TextDisabled("%s",
                             core::tr("gui.preview_columns_cut", {{"count", std::to_string(hidden)}}).c_str());
 }
 
 // Girinti iç içelik başına iki karakter, genişliğin yarısını geçmez (TUI ile aynı). Belirteçler editörün
-// sözdizimi kuralıyla renklenir; yalnız görünen satırlar çizilir, fazlası limits.tui.view_lines'ta kesilir.
-void View::draw_json_lines(const std::vector<app::JsonLine>& lines) {
+// sözdizimi kuralıyla renklenir; yalnız görünen satırlar kurulur (app::json_lines) ve çizilir, fazlası
+// limits.tui.view_lines'ta kesilir.
+void View::draw_json_lines(const app::JsonIndex& index) {
     const std::size_t shown =
-        std::min({lines.size(), state_.view_limits().view_lines.cap(), static_cast<std::size_t>(INT_MAX)});
+        std::min({index.line_count, state_.view_limits().view_lines.cap(), static_cast<std::size_t>(INT_MAX)});
     ImGui::PushFont(fonts().mono, 0.0F);
     const float indent_width = ImGui::CalcTextSize("  ").x;
     const float max_indent = ImGui::GetContentRegionAvail().x / 2.0F;
@@ -586,8 +632,12 @@ void View::draw_json_lines(const std::vector<app::JsonLine>& lines) {
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(shown));
     while (clipper.Step()) {
-        for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
-            const app::JsonLine& line = lines[static_cast<std::size_t>(index)];
+        const std::vector<app::JsonLine> lines =
+            app::json_lines(preview_->data_source, index, static_cast<std::size_t>(clipper.DisplayStart),
+                            static_cast<std::size_t>(clipper.DisplayEnd - clipper.DisplayStart));
+        for (std::size_t i = 0; i < lines.size(); ++i) {
+            const app::JsonLine& line = lines[i];
+            const int number = clipper.DisplayStart + static_cast<int>(i);
             const float indent = std::min(static_cast<float>(line.depth) * indent_width, max_indent);
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
             const ImVec2 start = ImGui::GetCursorScreenPos();
@@ -595,16 +645,16 @@ void View::draw_json_lines(const std::vector<app::JsonLine>& lines) {
             tui::highlight_line(tui::SyntaxLanguage::Json, line.text, tui::kInitialSyntaxState, &spans,
                                 line_bytes);
             draw_token_line(line.text, spans);
-            remember_rect("preview_json:" + std::to_string(index), start,
+            remember_rect("preview_json:" + std::to_string(number), start,
                           ImVec2(start.x + ImGui::CalcTextSize(line.text.c_str()).x,
                                  start.y + ImGui::GetTextLineHeight()));
         }
     }
     ImGui::PopFont();
-    if (lines.size() > shown)
+    if (index.line_count > shown)
         ImGui::TextDisabled(
             "%s",
-            core::tr("gui.preview_lines_cut", {{"count", std::to_string(lines.size() - shown)}}).c_str());
+            core::tr("gui.preview_lines_cut", {{"count", std::to_string(index.line_count - shown)}}).c_str());
 }
 
 }  // namespace noteapp::gui

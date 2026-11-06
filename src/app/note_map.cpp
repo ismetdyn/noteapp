@@ -33,7 +33,8 @@ std::vector<MapEdge> indexed_edges(std::span<const core::NoteMeta> notes,
         if (from == index.end() || to == index.end())
             continue;
         out.push_back({from->second, to->second,
-                       edge.kind == core::EdgeKind::RelatedTo ? MapEdgeKind::Related : MapEdgeKind::Link});
+                       edge.kind == core::EdgeKind::RelatedTo ? MapEdgeKind::Related : MapEdgeKind::Link,
+                       edge.name, edge.directed, edge.relation});
     }
     return out;
 }
@@ -63,9 +64,12 @@ std::vector<std::size_t> neighbourhood(std::size_t count, const std::vector<MapE
     return order;
 }
 
-// Sıradan bağımsız çizge imzası: (tür, anahtar) düğümler ve uçları anahtarla kenarlar, sıralı.
+// Sıradan bağımsız çizge imzası: (tür, anahtar) düğümler ve uçları anahtarla kenarlar, sıralı. Kenarın adı ve
+// yönü de imzadadır: yeniden adlandırılan ilişkinin etiketi eskimesin; kimliği de: kaldırma eski kimliği
+// hedeflemesin.
 using GraphSignature = std::pair<std::vector<std::pair<MapNodeKind, std::string_view>>,
-                                 std::vector<std::tuple<std::string_view, std::string_view, MapEdgeKind>>>;
+                                 std::vector<std::tuple<std::string_view, std::string_view, MapEdgeKind,
+                                                        std::string_view, bool, core::RelationId>>>;
 
 GraphSignature signature(const NoteMap& map) {
     GraphSignature out;
@@ -74,7 +78,8 @@ GraphSignature signature(const NoteMap& map) {
         out.first.emplace_back(node.kind, node.key);
     out.second.reserve(map.edges.size());
     for (const MapEdge& edge : map.edges)
-        out.second.emplace_back(map.nodes[edge.from].key, map.nodes[edge.to].key, edge.kind);
+        out.second.emplace_back(map.nodes[edge.from].key, map.nodes[edge.to].key, edge.kind, edge.name,
+                                edge.directed, edge.relation);
     std::ranges::sort(out.first);
     std::ranges::sort(out.second);
     return out;
@@ -106,7 +111,8 @@ NoteMap build_note_map(std::span<const core::NoteMeta> notes, std::span<const co
     }
     for (const MapEdge& edge : note_edges) {
         if (node_of[edge.from] != kNone && node_of[edge.to] != kNone)
-            map.edges.push_back({node_of[edge.from], node_of[edge.to], edge.kind});
+            map.edges.push_back(
+                {node_of[edge.from], node_of[edge.to], edge.kind, edge.name, edge.directed, edge.relation});
     }
     if (!options.show_tags)
         return map;
@@ -184,6 +190,7 @@ void MapModel::update(const EdgeReader& read, std::span<const core::NoteMeta> no
     if (built.total == map_.total && signature(built) == signature(map_))
         return;
     map_ = std::move(built);
+    ++version_;
     std::vector<std::string> keys;
     keys.reserve(map_.nodes.size());
     for (const MapNode& node : map_.nodes)  // önek: "#x.md" adlı not, x.md etiketiyle karışmasın

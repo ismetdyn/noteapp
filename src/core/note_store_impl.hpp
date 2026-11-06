@@ -50,6 +50,8 @@ inline constexpr std::string_view kTagged = "TAGGED";
 // Tag.name eşleştirme anahtarıdır (tag_key); gösterim etiketin ilk yazıldığı hali.
 inline constexpr std::string_view kTagDisplay = "display";
 inline constexpr std::string_view kName = "name";
+// RELATED_TO kenarında yalnız true yazılır; yoksa yönsüz (SPEC-graph "Adlı ilişkiler").
+inline constexpr std::string_view kDirected = "directed";
 inline constexpr std::string_view kType = "type";
 inline constexpr std::string_view kBody = "body";
 inline constexpr std::string_view kCreatedAt = "created_at";
@@ -131,6 +133,9 @@ struct Snapshot {
     // bozuk görünüm (süre sınırı, not döndürmeyen sonuç) her tuşta kilidi saniyelerce tutmasın. Impl::mutex
     // altında.
     mutable std::map<std::string, std::expected<std::vector<NotePath>, Error>> view_results;
+    // relation_names() sonucu; ilk istekte kurulur, görüntüyle düşer (seçici her tuşta sorar). Impl::mutex
+    // altında.
+    mutable std::shared_ptr<const std::vector<RelationName>> relation_names;
     std::size_t folder_path_bytes =
         kDefaultFolderPathBytes;  // görüntünün kurulduğu sınır; yazma da bunu dayatır
     bool path_taken(const std::string& path) const {
@@ -203,10 +208,6 @@ public:
                                            std::string_view body);
     // Notun canlı ya da çöpteki yolu; görüntüde yoksa boş (etiket tipi yoldan okunur).
     std::optional<std::string> path_of(const graph::NodeId& id) const;
-    std::expected<void, Error> add_relation(const graph::NodeId& from, const graph::NodeId& to,
-                                            std::string_view path);
-    std::expected<void, Error> remove_relation(const graph::NodeId& one, const graph::NodeId& other,
-                                               std::string_view path);
     // Gövdede farklı değerli head'ler varsa kaybedenleri kopya nota çıkarır, gövdeyi kazananda birleştirir.
     // Kopyanın kimliği ve adı (note, kaybeden dot)'tan türer: iki cihaz aynı düğüme varır. Dönüş: yeni
     // kopyalar.
@@ -253,8 +254,6 @@ private:
     std::expected<void, Error> import_one(const ImportedNote& note, ImportOutcome& outcome);
     std::expected<void, Error> import_existing(const ImportedNote& note, const graph::NodeId& id,
                                                ImportOutcome& outcome);
-    std::expected<std::vector<graph::EdgeId>, Error>
-    relation_edges(const graph::NodeId& one, const graph::NodeId& other, std::string_view path);
     std::expected<NotePath, Error> conflict_copy_path(const graph::NodeId& id, const graph::NodeId& copy,
                                                       std::int64_t at);
     // Farklı head'lerin temiz üç yönlü birleşimi; taban yok, ikili, geçersiz UTF-8 ya da çakışma: boş.
@@ -392,6 +391,8 @@ struct NoteStore::Impl {
     }
     // Ayar: [tuning] graph_batch_ops (for_config). Bir işlemin bütçesi; sınır değildir, iş bölünür.
     std::size_t batch_ops = kDefaultGraphBatchOps;
+    // Ayar: limits.graph.relation_name_bytes (for_config); sınırsız SIZE_MAX.
+    std::size_t relation_name_bytes = kDefaultRelationNameBytes;
     // Ayar: limits.core.folder_path_bytes (for_config); sınırsız SIZE_MAX.
     std::size_t folder_path_bytes = kDefaultFolderPathBytes;
     // Test dikişi: commit edilmiş bir kullanıcı işleminin ardından gelen işlemlerden önce sorulur; false

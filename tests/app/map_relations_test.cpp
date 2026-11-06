@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <doctest/doctest.h>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace app = noteapp::app;
 namespace core = noteapp::core;
@@ -42,9 +44,18 @@ struct Scene {
         return content ? content->text : "<missing>";
     }
     core::NoteLinks links(const std::string& name) const { return store.links(np(name)).value(); }
+    // Satırlar kimliksiz (karşılaştırma yol, ad, yönle).
+    std::vector<core::RelatedNote> related(const std::string& name) const {
+        std::vector<core::RelatedNote> rows = links(name).related;
+        for (core::RelatedNote& row : rows)
+            row.id = {};
+        return rows;
+    }
     bool has_edge(const std::string& from, const std::string& to, core::EdgeKind kind) const {
         const auto edges = store.edges().value();
-        return std::ranges::find(edges, core::NoteEdge{np(from), np(to), kind}) != edges.end();
+        return std::ranges::any_of(edges, [&](const core::NoteEdge& edge) {
+            return edge.from == np(from) && edge.to == np(to) && edge.kind == kind;
+        });
     }
 };
 
@@ -66,7 +77,7 @@ TEST_CASE("map relations: note to note as Related adds RELATED_TO and leaves bot
     const auto done = app::connect_map_nodes(s.store, note("a.md"), note("b.md"), MapEdgeKind::Related);
     REQUIRE(done.has_value());
     CHECK(*done == "Related: a.md and b.md");
-    CHECK(s.links("a.md").related == std::vector{np("b.md")});
+    CHECK(s.related("a.md") == std::vector{core::RelatedNote{np("b.md")}});
     CHECK(s.body("a.md") == "a\n");
     CHECK(s.body("b.md") == "b\n");
     CHECK_FALSE(app::map_edit_note(note("a.md"), note("b.md"), MapEdgeKind::Related));
@@ -138,19 +149,27 @@ TEST_CASE("map relations: tag to tag and a node onto itself change nothing") {
     CHECK(s.links("a.md").related.empty());
 }
 
-TEST_CASE("map relations: removing a relation drops RELATED_TO in both directions") {
+TEST_CASE("map relations: removing a relation drops only that RELATED_TO edge, from either end") {
     Scene s;
     s.put("a.md", "a\n");
     s.put("b.md", "b\n");
-    REQUIRE(s.store.add_relation(np("a.md"), np("b.md")).has_value());
+    const auto unnamed = s.store.add_relation(np("a.md"), np("b.md"));
+    REQUIRE(unnamed.has_value());
+    REQUIRE(s.store.add_relation(np("a.md"), np("b.md"), {"cites", false}).has_value());
     CHECK(app::map_edge_removable(MapEdgeKind::Related));
-    const auto done = app::disconnect_map_nodes(s.store, note("b.md"), note("a.md"), MapEdgeKind::Related);
+    const auto done =
+        app::disconnect_map_nodes(s.store, note("b.md"), note("a.md"), MapEdgeKind::Related, *unnamed);
     REQUIRE(done.has_value());
     CHECK(*done == "Relation removed: b.md and a.md");
-    CHECK(s.links("a.md").related.empty());
-    const auto again = app::disconnect_map_nodes(s.store, note("a.md"), note("b.md"), MapEdgeKind::Related);
+    CHECK(s.related("a.md") == std::vector{core::RelatedNote{np("b.md"), "cites"}});
+    const auto again =
+        app::disconnect_map_nodes(s.store, note("a.md"), note("b.md"), MapEdgeKind::Related, *unnamed);
     REQUIRE_FALSE(again.has_value());
     CHECK(again.error().code == core::Error::Code::NotFound);
+    // Kimliksiz ilişki kaldırma hiçbir şey silmez.
+    CHECK(app::disconnect_map_nodes(s.store, note("a.md"), note("b.md"), MapEdgeKind::Related).error().code ==
+          core::Error::Code::NotFound);
+    CHECK(s.related("a.md").size() == 1);
 }
 
 TEST_CASE("map relations: removing a tag drops every # in prose, a tag-only line and keeps code") {
@@ -269,11 +288,16 @@ TEST_CASE("map relations: the edge between two nodes prefers the removable kind,
     app::NoteMap map;
     map.nodes = {note("a.md"), note("b.md"), tag("proje"), note("c.md")};
     map.edges = {{0, 1, MapEdgeKind::Link}, {1, 0, MapEdgeKind::Related}, {0, 2, MapEdgeKind::Tag}};
-    CHECK(app::map_edge_between(map, note("b.md"), note("a.md")) == MapEdgeKind::Related);
-    CHECK(app::map_edge_between(map, tag("proje"), note("a.md")) == MapEdgeKind::Tag);
-    CHECK_FALSE(app::map_edge_between(map, note("a.md"), note("c.md")));
+    const auto kind = [&](const MapNode& first, const MapNode& second) {
+        const app::MapEdge* edge = app::map_edge_between(map, first, second);
+        return edge != nullptr ? std::optional(edge->kind) : std::nullopt;
+    };
+    CHECK(kind(note("b.md"), note("a.md")) == MapEdgeKind::Related);
+    CHECK(app::map_edge_between(map, note("b.md"), note("a.md")) == &map.edges[1]);  // kimliği bu kenarın
+    CHECK(kind(tag("proje"), note("a.md")) == MapEdgeKind::Tag);
+    CHECK_FALSE(kind(note("a.md"), note("c.md")));
     map.edges.erase(map.edges.begin() + 1);
-    CHECK(app::map_edge_between(map, note("a.md"), note("b.md")) == MapEdgeKind::Link);
+    CHECK(kind(note("a.md"), note("b.md")) == MapEdgeKind::Link);
 }
 
 // Okumayla yazma arasında başka bağlantı (senkron, CLI) notu değiştirirse harita onu ezmez: okunan revizyonla
@@ -301,6 +325,115 @@ TEST_CASE("map relations: a note changed between read and write is not overwritt
     CHECK(s.body("a.md") == "başka cihaz 1\n");
     refused(app::connect_map_nodes(s.store, note("a.md"), tag("iş"), MapEdgeKind::Tag, change("a.md")));
     CHECK(s.body("a.md") == "başka cihaz 2\n");
-    refused(app::disconnect_map_nodes(s.store, note("c.md"), tag("proje"), MapEdgeKind::Tag, change("c.md")));
+    refused(
+        app::disconnect_map_nodes(s.store, note("c.md"), tag("proje"), MapEdgeKind::Tag, {}, change("c.md")));
     CHECK(s.body("c.md") == "başka cihaz 3\n");
+}
+
+// F1: adlı ilişki. GUI "Bağla…" penceresi ve TUI ad satırı aynı çağrıyı ve aynı seçici süzgecini kullanır.
+TEST_CASE("map relations: a named directed relation is added, named in the message and removed by name") {
+    Scene s;
+    s.put("a.md", "a\n");
+    s.put("b.md", "b\n");
+    const auto done = app::relate_map_notes(s.store, note("a.md"), note("b.md"), {" uses ", true});
+    REQUIRE(done.has_value());
+    CHECK(*done == "Related as 'uses': a.md and b.md");
+    REQUIRE(app::relate_map_notes(s.store, note("b.md"), note("a.md"), {}).has_value());
+    CHECK(s.related("a.md") ==
+          std::vector{core::RelatedNote{np("b.md")},
+                      core::RelatedNote{np("b.md"), "uses", core::RelationDirection::Outgoing}});
+    const auto again = app::relate_map_notes(s.store, note("b.md"), note("a.md"), {"USES", false});
+    REQUIRE_FALSE(again.has_value());
+    CHECK(again.error().code == core::Error::Code::AlreadyExists);
+    CHECK(app::relate_map_notes(s.store, note("a.md"), tag("proje"), {"x", false}).error().code ==
+          core::Error::Code::InvalidPath);
+
+    const auto rows = s.links("b.md").related;
+    const auto uses = std::ranges::find(rows, std::string("uses"), &core::RelatedNote::name);
+    REQUIRE(uses != rows.end());
+    const auto removed = app::unrelate_map_notes(s.store, note("b.md"), note("a.md"), uses->id);
+    REQUIRE(removed.has_value());
+    CHECK(*removed == "Relation 'uses' removed: b.md and a.md");
+    CHECK(s.related("a.md") == std::vector{core::RelatedNote{np("b.md")}});
+    // Kimlik uçlara aittir: başka çiftin düğümleriyle verilen kimlik silinmez.
+    s.put("c.md", "c\n");
+    const auto other =
+        app::unrelate_map_notes(s.store, note("a.md"), note("c.md"), s.links("a.md").related[0].id);
+    REQUIRE_FALSE(other.has_value());
+    CHECK(other.error().code == core::Error::Code::NotFound);
+    CHECK(s.related("a.md").size() == 1);
+}
+
+TEST_CASE("map relations: the picker filters folded names, prefix matches first, and knows an exact name") {
+    const std::vector<core::RelationName> names{{"kullanır", "Kullanır", 5, 4},
+                                                {"ilgi", "İlgi", 3, 0},
+                                                {"alt ilgi", "alt ilgi", 2, 2},
+                                                {"cites", "cites", 1, 0}};
+    const auto keys = [](const app::RelationMatches& matches) {
+        std::vector<std::string> out;
+        for (const core::RelationName& name : matches.names)
+            out.push_back(name.key);
+        return out;
+    };
+    CHECK(keys(app::match_relation_names(names, "")) ==
+          std::vector<std::string>{"kullanır", "ilgi", "alt ilgi", "cites"});
+    const auto ilgi = app::match_relation_names(names, " İLGİ ");
+    CHECK(keys(ilgi) == std::vector<std::string>{"ilgi", "alt ilgi"});
+    CHECK(ilgi.exact);
+    const auto partial = app::match_relation_names(names, "IL");
+    CHECK(keys(partial) == std::vector<std::string>{"ilgi", "alt ilgi"});
+    CHECK_FALSE(partial.exact);
+    CHECK(app::match_relation_names(names, "yok").names.empty());
+    CHECK(app::match_relation_names(names, "a\nb").names.empty());
+
+    // "Yönlü" varsayılanı: adın ilişkilerinin çoğu yönlüyse; yeni ad yönsüz.
+    CHECK(app::default_directed(names, " KULLANıR "));  // I -> i, ı kalır (tag_key)
+    CHECK_FALSE(app::default_directed(names, "ilgi"));
+    CHECK_FALSE(app::default_directed(names, "yeni ad"));
+}
+
+TEST_CASE("map relations: rename and direction target one relation by id and say what changed") {
+    Scene s;
+    s.put("a.md", "a\n");
+    s.put("b.md", "b\n");
+    REQUIRE(app::relate_map_notes(s.store, note("a.md"), note("b.md"), {"uses", false}).has_value());
+    const core::RelationId id = s.links("a.md").related.front().id;
+
+    const auto renamed = app::rename_map_relation(s.store, np("a.md"), np("b.md"), id, "  cites ");
+    REQUIRE(renamed.has_value());
+    CHECK(*renamed == "Relation renamed to 'cites': a.md and b.md");
+    CHECK(s.related("a.md") == std::vector{core::RelatedNote{np("b.md"), "cites"}});
+    const auto unnamed = app::rename_map_relation(s.store, np("a.md"), np("b.md"), id, " ");
+    REQUIRE(unnamed.has_value());
+    CHECK(*unnamed == "Relation name removed: a.md and b.md");
+    CHECK(app::rename_map_relation(s.store, np("a.md"), np("b.md"), id, "a\nb").error().code ==
+          core::Error::Code::InvalidPath);
+
+    // Kaynak değişince kenar yeniden kurulur, kimliği değişir: satır yeniden okunur.
+    const auto directed = app::direct_map_relation(s.store, np("a.md"), np("b.md"), id, np("b.md"));
+    REQUIRE(directed.has_value());
+    CHECK(*directed == "Relation directed: b.md → a.md");
+    CHECK(s.related("a.md") == std::vector{core::RelatedNote{np("b.md"), "", core::RelationDirection::Incoming}});
+    const core::RelationId now = s.links("a.md").related.front().id;
+    const auto undirected = app::direct_map_relation(s.store, np("a.md"), np("b.md"), now, std::nullopt);
+    REQUIRE(undirected.has_value());
+    CHECK(*undirected == "Relation made undirected: a.md and b.md");
+    CHECK(s.related("a.md") == std::vector{core::RelatedNote{np("b.md")}});
+    CHECK(app::direct_map_relation(s.store, np("a.md"), np("b.md"), now, np("a.md")).error().code ==
+          core::Error::Code::NotFound);
+}
+
+TEST_CASE("map relations: a flip points the relation the other way from the shown note") {
+    using core::RelationDirection;
+    CHECK(app::flipped_source(np("a.md"), np("b.md"), RelationDirection::Outgoing) == np("b.md"));
+    CHECK(app::flipped_source(np("a.md"), np("b.md"), RelationDirection::Incoming) == np("a.md"));
+    CHECK(app::flipped_source(np("a.md"), np("b.md"), RelationDirection::Undirected) == np("a.md"));
+}
+
+TEST_CASE("map relations: a related row reads arrow, path and name") {
+    using core::RelationDirection;
+    CHECK(app::related_row_text({np("b.md")}) == "b.md");
+    CHECK(app::related_row_text({np("b.md"), "uses"}) == "b.md — uses");
+    CHECK(app::related_row_text({np("b.md"), "uses", RelationDirection::Outgoing}) == "↗ b.md — uses");
+    CHECK(app::related_row_text({np("b.md"), "", RelationDirection::Incoming}) == "↙ b.md");
 }

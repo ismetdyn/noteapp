@@ -123,12 +123,12 @@ struct View::PreviewCache {
     PreviewDocument document;
     // Yerleşimin kurulduğu andaki eksik hedefler: senkron ya da kayıt hedefi oluşturunca bağlantı canlanır.
     std::vector<std::string> missing;
-    // csv/json: metin, tür ya da tablo sınırı değişince yeniden ayrıştırılır; nullopt = geçersiz, ham metin.
+    // csv/json: metin ya da tür değişince yeniden dizinlenir; nullopt = geçersiz, ham metin. Dizin satır başına
+    // (csv) ya da kontrol noktası başına (json) küçüktür; hücre ve satır metni çizerken kurulur.
     std::string data_source;
     app::PreviewKind data_kind = app::PreviewKind::None;
-    app::TableLimits data_limits;
-    std::optional<app::CsvTable> csv;
-    std::optional<std::vector<app::JsonLine>> json;
+    std::optional<app::CsvIndex> csv;
+    std::optional<app::JsonIndex> json;
 };
 
 // İçe alma diyaloğunun sonucu (SDL geri çağrısı yazar, View kare dışında boşaltır).
@@ -153,18 +153,30 @@ bool flow_after_previous(float next_width, float row_start_x, float row_width);
 void align_right(float width, float room);
 void draw_hint(const std::string& text);
 std::string printable(std::string_view raw);
+// ImGui etiketteki `##` ve `###`'ı kimlik ayırıcısı sayar, ötesini çizmez: addan ya da yoldan gelen her `#`
+// görünür U+FF03 olur (senkronla gelen ad menüde gerçek yolu gizleyemesin). Yalnız etikete giren değerler
+// içindir; biçim dizgisine girmeyen metin (TextUnformatted, AddText) bunu gerektirmez.
+std::string label_safe(std::string_view text);
 ImU32 icon_color(core::IconColor color);
 // Sözdizimi türünün rengi (TUI'nin 16 renk eşlemesinin tonları); Plain metin rengidir.
-ImU32 token_color(tui::TokenKind kind);
 // Satır, aralıklarının renkleriyle tek satırda; aralık sınırı kod noktası başına çekilir, metin printable.
 void draw_token_line(std::string_view text, const std::vector<tui::SyntaxSpan>& spans);
 float draw_icon(ImVec2 position, const core::FileIcon& icon, core::IconStyle style, bool selected);
 bool draw_fitted_row_text(ImVec2 position, const std::string& text, float width,
                           const std::vector<std::size_t>& highlights,
                           ImU32 color = ImGui::GetColorU32(ImGuiCol_Text));
+// `icon_path` boş değilse ikon ondan seçilir (ilişki satırı: metin ok ve ad da taşır).
 bool plain_selectable(const std::string& text, bool selected, const std::vector<std::size_t>& highlights = {},
                       core::IconStyle icon_style = core::IconStyle::Off,
-                      const search::Hit* best_line = nullptr, bool marked = false);
+                      const search::Hit* best_line = nullptr, bool marked = false,
+                      std::string_view icon_path = {});
+// Yukarı/Aşağı tek satırlık alanın geçmiş olayıdır: seçim listede yürür (palet, ilişki adı penceresi).
+// `selected` SIZE_MAX ise (seçim yok) Aşağı ilk satırı seçer.
+struct PaletteKeys {
+    std::size_t* selected;
+    std::size_t count;
+};
+int palette_callback(ImGuiInputTextCallbackData* data);
 // Son öğenin zeminini çoklu seçim rengiyle boyar; metinden önce çağrılır.
 inline constexpr float kMarkBarEms = 0.25F;
 void draw_mark_background();

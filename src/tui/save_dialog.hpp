@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <expected>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -178,6 +179,14 @@ public:
     // başlar, `folder` hedeftir. `from()` yoktur.
     struct ImportSource {};
     RenameState(ImportSource, std::string folder);
+    // F1 adlı ilişki: `L`'nin ikinci adımı ve harita `C` `r`, `from` ile `to` arasındaki ilişkinin adı (boş =
+    // adsız). Tab var olan adları tamamlar; Ctrl+D (Directed) "yönlü"yü değiştirir, değiştirilmedikçe yazılan
+    // ad var olan bir adsa onun varsayılanıdır (app::default_directed), yeni ad yönsüz. `renaming` doluysa o
+    // ilişkinin adı değişir: metin `current` ile dolar, yön sorulmaz.
+    struct RelationName {};
+    using SharedRelationNames = std::shared_ptr<const std::vector<core::RelationName>>;
+    RenameState(RelationName, core::NotePath from, core::NotePath to, SharedRelationNames names,
+                std::optional<core::RelationId> renaming = std::nullopt, std::string current = {});
 
     Outcome handle(Key key, std::string_view text = {});
 
@@ -190,6 +199,10 @@ public:
     bool is_link() const { return is_link_; }
     bool is_export() const { return is_export_; }
     bool is_import() const { return is_import_; }
+    bool is_relation() const { return relation_to_.has_value(); }
+    const core::NotePath& relation_to() const { return relation_to_.value(); }  // yalnız ad satırında
+    const std::optional<core::RelationId>& renaming() const { return renaming_; }
+    bool directed() const;
     const std::string& import_folder() const { return base_; }
     const std::vector<ListItem>& items() const { return items_; }
     void set_items(std::vector<ListItem> items) { items_ = std::move(items); }
@@ -206,6 +219,10 @@ private:
     bool is_link_ = false;
     bool is_export_ = false;
     bool is_import_ = false;
+    std::optional<core::NotePath> relation_to_;
+    std::optional<core::RelationId> renaming_;
+    SharedRelationNames relation_names_;
+    std::optional<bool> directed_choice_;  // Ctrl+D ile seçildi; yoksa adın varsayılanı
     std::vector<ListItem> items_;
     InputLine line_;
     std::string error_;

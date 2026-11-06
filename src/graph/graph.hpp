@@ -80,6 +80,14 @@ struct PropertyHead : Version {
 
 using OwnerId = std::variant<NodeId, EdgeId>;
 
+// Kenarın kimliğine bağlı uçları ve tipi (WriteTxn::put_edge aynı kimlikle başkasını reddeder).
+struct EdgeEnds {
+    NodeId src;
+    std::string type;
+    NodeId dst;
+    bool operator==(const EdgeEnds&) const = default;
+};
+
 // Tek bir anlık görüntü üzerinde okur. Biten veya taşınmış işlemdeki her çağrı hata döner.
 class ReadTxn {
 public:
@@ -88,6 +96,8 @@ public:
     ~ReadTxn();
 
     Result<bool> has_node(NodeId id);
+    // Ayaktaki kenarın uçları ve tipi; kenar yoksa (hiç kurulmadı ya da silindi) nullopt.
+    Result<std::optional<EdgeEnds>> edge(EdgeId id);
     Result<std::vector<std::string>> labels(NodeId id);
     // Başlangıç kısıtı olmayan desen içindir; maliyeti tüm düğümlerdir.
     Result<NodeCursor> nodes();

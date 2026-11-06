@@ -60,7 +60,8 @@ bool has(const std::string& text, std::string_view part) {
 }
 
 core::NoteLinks sample_links() {
-    return core::NoteLinks{{np("o.md")}, {np("i1.md"), np("work/i2.md")}, {np("r.md")}, {"yok"}};
+    return core::NoteLinks{
+        {np("o.md")}, {np("i1.md"), np("work/i2.md")}, {core::RelatedNote{np("r.md")}}, {"yok"}};
 }
 
 // Seçili not a.md, panelde örnek bağlantılar, odak REVIEW.
@@ -399,11 +400,15 @@ TEST_CASE("link panel: L adds a relation through the input with Tab completion, 
 
     f.rename->handle(Key::Backspace);
     f.actions.handle_rename_key(f.rename, Key::Enter, {});
+    REQUIRE(f.rename.has_value());  // F1: ad satırı; boş Enter adsız ilişkidir
+    CHECK(f.rename->text().empty());
+    CHECK(f.changes == 0);
+    f.actions.handle_rename_key(f.rename, Key::Enter, {});
     CHECK_FALSE(f.rename.has_value());
     CHECK(f.changes == 1);
     f.load();
     CHECK(f.state.link_panel().links().related.size() == 1);
-    CHECK(f.state.link_panel().links().related[0].string() == "c.md");
+    CHECK(f.state.link_panel().links().related[0].path.string() == "c.md");
 }
 
 TEST_CASE("link panel: Esc in the L input writes nothing") {
@@ -464,6 +469,30 @@ TEST_CASE("link panel: a confirmed removal deletes the relation and notifies syn
     CHECK(f.state.link_panel().links().related.empty());
 }
 
+// İnceleme bulgusu (veri kaybı): çiftin birden çok ilişkisi varken yalnız seçili satırın ilişkisi silinir,
+// onay metni hangisi olduğunu söyler.
+TEST_CASE("link panel: removing one of several relations of a pair removes only the selected one") {
+    StoreFixture f;
+    REQUIRE(f.store->add_relation(np("a.md"), np("c.md")).has_value());
+    REQUIRE(f.store->add_relation(np("a.md"), np("c.md"), {"cites", false}).has_value());
+    f.refresh();
+    f.load();
+    f.state.handle(Key::Right);
+    f.state.handle(Key::Char, "b");
+    while (!f.state.link_panel().selected_path() ||
+           f.state.link_panel().selected_line()->group != core::LinkGroup::Related)
+        f.state.handle(Key::Down);
+    f.state.handle(Key::Down);  // ikinci satır: "cites"
+    REQUIRE(f.state.link_panel().selected_line()->group == core::LinkGroup::Related);
+    f.run(Intent::UnlinkSelected);
+    REQUIRE(f.confirm.has_value());
+    CHECK(has(f.confirm->message(), "cites"));
+    f.actions.finish_delete(f.confirm);
+    const auto related = f.store->links(np("a.md"))->related;
+    REQUIRE(related.size() == 1);
+    CHECK(related.front().name.empty());
+}
+
 TEST_CASE("link panel: the status line explains a missing target") {
     StoreFixture f;
     f.run(Intent::LinkMissing);
@@ -497,4 +526,151 @@ TEST_CASE("link panel: the rescan sees a sync that only changes relations") {
     const tui::StoreScan after = tui::scan_store(tui_store);
     CHECK_FALSE(tui::same_scan(before, after));
     CHECK(tui::same_scan(after, tui::scan_store(tui_store)));
+}
+
+namespace {
+
+// `L` hedefi: yol yazılır, Enter ad satırını açar.
+void choose_target(StoreFixture& f, std::string_view path) {
+    f.run(Intent::LinkNote);
+    REQUIRE(f.rename.has_value());
+    f.rename->handle(Key::Paste, path);
+    f.actions.handle_rename_key(f.rename, Key::Enter, {});
+    REQUIRE(f.rename.has_value());
+    REQUIRE(f.rename->error().empty());
+}
+
+std::string rename_screen(const StoreFixture& f) {
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth), ftxui::Dimension::Fixed(kHeight));
+    ftxui::Render(screen, tui::render(f.state, {}, f.status, {kWidth, kHeight}, nullptr, nullptr, nullptr,
+                                      nullptr, nullptr, nullptr, nullptr, f.rename ? &*f.rename : nullptr));
+    std::string out;
+    for (int y = 0; y < kHeight; ++y)
+        out += row_of(screen, y) + "\n";
+    return out;
+}
+
+// Bölümdeki `index`. ilişki satırına gelir (REVIEW'dan `b`).
+void select_related(StoreFixture& f, std::size_t index = 0) {
+    f.refresh();
+    f.load();
+    if (f.state.focus() != Focus::Links) {
+        if (f.state.focus() != Focus::Preview)
+            f.state.handle(Key::Right);
+        f.state.handle(Key::Char, "b");
+    }
+    REQUIRE(f.state.focus() == Focus::Links);
+    f.state.handle(Key::PageUp);  // seçim tazelemede yerinde kalır: baştan sayılır
+    for (int guard = 0; guard < 50 && (!f.state.link_panel().selected_line() ||
+                                       f.state.link_panel().selected_line()->group != core::LinkGroup::Related);
+         ++guard)
+        f.state.handle(Key::Down);
+    for (std::size_t i = 0; i < index; ++i)
+        f.state.handle(Key::Down);
+    REQUIRE(f.state.link_panel().selected_line()->group == core::LinkGroup::Related);
+}
+
+}  // namespace
+
+TEST_CASE("relation name: L asks a name after the target; Tab completes a known name and its direction") {
+    StoreFixture f;
+    REQUIRE(f.store->add_relation(np("b.md"), np("c.md"), {"uses", true}).has_value());
+    choose_target(f, "c.md");
+    CHECK(f.rename->text().empty());
+    const std::string shown = rename_screen(f);
+    CHECK(has(shown, "a.md — c.md"));  // yeni ad yönsüz başlar
+    CHECK(has(shown, "^D directed"));
+
+    f.rename->handle(Key::Char, "u");
+    f.rename->handle(Key::Tab);
+    CHECK(f.rename->text() == "uses");
+    CHECK(has(rename_screen(f), "a.md → c.md"));  // var olan adın varsayılanı: yönlü
+    f.actions.handle_rename_key(f.rename, Key::Enter, {});
+    CHECK_FALSE(f.rename.has_value());
+    CHECK(f.status.message == "Related as 'uses': a.md and c.md");
+    CHECK(f.changes == 1);
+    const auto related = f.store->links(np("a.md"))->related;
+    REQUIRE(related.size() == 1);
+    CHECK(related[0].name == "uses");
+    CHECK(related[0].direction == core::RelationDirection::Outgoing);
+}
+
+TEST_CASE("relation name: Ctrl+D toggles directed, an empty name is an unnamed relation") {
+    StoreFixture f;
+    choose_target(f, "b.md");
+    f.actions.handle_rename_key(f.rename, Key::CtrlD, {});
+    REQUIRE(f.rename.has_value());
+    CHECK(has(rename_screen(f), "a.md → b.md"));
+    f.actions.handle_rename_key(f.rename, Key::Enter, {});
+    CHECK_FALSE(f.rename.has_value());
+    CHECK(f.status.message == "Related: a.md and b.md");
+    const auto related = f.store->links(np("a.md"))->related;
+    REQUIRE(related.size() == 1);
+    CHECK(related[0].name.empty());
+    CHECK(related[0].direction == core::RelationDirection::Outgoing);
+}
+
+TEST_CASE("relation name: a refused name keeps the line open with the reason; Esc writes nothing") {
+    StoreFixture f;
+    REQUIRE(f.store->add_relation(np("a.md"), np("c.md"), {"uses", false}).has_value());
+    choose_target(f, "c.md");
+    f.rename->handle(Key::Paste, "USES");
+    f.actions.handle_rename_key(f.rename, Key::Enter, {});
+    REQUIRE(f.rename.has_value());
+    CHECK_FALSE(f.rename->error().empty());
+    CHECK(f.rename->text() == "USES");
+    f.actions.handle_rename_key(f.rename, Key::Escape, {});
+    CHECK_FALSE(f.rename.has_value());
+    CHECK(f.store->links(np("a.md"))->related.size() == 1);
+    CHECK(f.changes == 0);
+}
+
+TEST_CASE("relation row: the section shows the name and direction; n renames, f flips, u undirects by id") {
+    StoreFixture f;
+    REQUIRE(f.store->add_relation(np("a.md"), np("c.md"), {"cites", false}).has_value());
+    REQUIRE(f.store->add_relation(np("a.md"), np("c.md"), {"uses", true}).has_value());
+    select_related(f, 1);  // "uses"
+    CHECK(has(rename_screen(f), "↗ c.md — uses"));
+    CHECK(has(rename_screen(f), "c.md — cites"));
+
+    f.run(f.state.handle(Key::Char, "n"));
+    REQUIRE(f.rename.has_value());
+    CHECK(f.rename->text() == "uses");
+    for (int i = 0; i < 4; ++i)
+        f.rename->handle(Key::Backspace);
+    f.rename->handle(Key::Paste, "needs");
+    f.actions.handle_rename_key(f.rename, Key::Enter, {});
+    CHECK_FALSE(f.rename.has_value());
+    CHECK(f.status.message == "Relation renamed to 'needs': a.md and c.md");
+    auto related = f.store->links(np("a.md"))->related;
+    REQUIRE(related.size() == 2);
+    CHECK(related[0].name == "cites");  // öbür ilişki değişmez
+    CHECK(related[1].name == "needs");
+    CHECK(related[1].direction == core::RelationDirection::Outgoing);
+
+    select_related(f, 1);
+    f.run(f.state.handle(Key::Char, "f"));
+    CHECK(f.status.message == "Relation directed: c.md → a.md");
+    related = f.store->links(np("a.md"))->related;
+    CHECK(related[1].direction == core::RelationDirection::Incoming);
+    CHECK(related[0].direction == core::RelationDirection::Undirected);
+
+    select_related(f, 1);
+    CHECK(has(rename_screen(f), "↙ c.md — needs"));
+    f.run(f.state.handle(Key::Char, "u"));
+    CHECK(f.status.message == "Relation made undirected: a.md and c.md");
+    CHECK(f.store->links(np("a.md"))->related[1].direction == core::RelationDirection::Undirected);
+    CHECK(f.changes == 3);
+}
+
+TEST_CASE("relation row: a hostile name from sync is drawn without control or hidden characters") {
+    ModelFixture f;
+    core::NoteLinks links;
+    links.related.push_back(core::RelatedNote{np("r.md"), "uses\x1b]0;evil\x07\xe2\x80\xae" "x"});
+    f.state.set_links(links, 2, np("a.md"));
+    const std::string shown = screen_text(f.state);
+    CHECK(has(shown, "r.md — uses"));
+    CHECK_FALSE(has(shown, "\x1b"));
+    CHECK_FALSE(has(shown, "\x07"));
+    CHECK_FALSE(has(shown, "\xe2\x80\xae"));
 }

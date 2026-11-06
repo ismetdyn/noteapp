@@ -1,5 +1,6 @@
 #include "app/document.hpp"
 #include "app/map_relations.hpp"
+#include "edit/display_text.hpp"
 #include "gui/gui_state.hpp"
 
 #include <unordered_set>
@@ -50,18 +51,64 @@ void GuiState::connect_map_nodes(const MapNode& from, const MapNode& to, MapEdge
     edit_map(from, to, kind, true);
 }
 
-void GuiState::disconnect_map_nodes(const MapNode& from, const MapNode& to, MapEdgeKind kind) {
-    edit_map(from, to, kind, false);
+void GuiState::disconnect_map_nodes(const MapNode& from, const MapNode& to, MapEdgeKind kind,
+                                    const core::RelationId& relation) {
+    edit_map(from, to, kind, false, relation);
+}
+
+std::optional<core::RelationSpec> GuiState::ask_relation(const std::string& from, const std::string& to,
+                                                         std::string initial, bool rename) {
+    const auto names = store_.relation_names();
+    if (!names) {
+        fail(names.error());
+        return std::nullopt;
+    }
+    return deciders.relation(RelationRequest{from, to, *names, std::move(initial), rename,
+                                             config_.limits.graph.relation_name_bytes.cap()});
+}
+
+void GuiState::finish_relation(const std::expected<std::string, core::Error>& done) {
+    if (!done) {
+        fail(done.error());
+        return;
+    }
+    changed();
+    map_.edges_changed();  // ilişki listeyi değiştirmez
+    reload_links();
+    // Ad güvenilmezdir (senkron): bidi ve sıfır genişlikli karakter durum satırına ve bildirime çıplak gitmez.
+    status_ = tui::terminal_safe(*done);
+    notify(app::NoticeKind::Success, status_);
+}
+
+void GuiState::relate_map_notes(const MapNode& from, const MapNode& to) {
+    const auto spec = ask_relation(from.key, to.key, {}, false);
+    if (!spec)
+        return;
+    finish_relation(app::relate_map_notes(store_, from, to, *spec));
+}
+
+void GuiState::rename_relation(const core::NotePath& first, const core::NotePath& second,
+                               const core::RelationId& relation, const std::string& current) {
+    const auto spec = ask_relation(first.string(), second.string(), current, true);
+    if (!spec)
+        return;
+    finish_relation(app::rename_map_relation(store_, first, second, relation, spec->name));
+}
+
+void GuiState::direct_relation(const core::NotePath& first, const core::NotePath& second,
+                               const core::RelationId& relation, const std::optional<core::NotePath>& source) {
+    finish_relation(app::direct_map_relation(store_, first, second, relation, source));
 }
 
 // Yazılacak not editördeyse önce kaydedilir: yoksa işlem tampondaki düzenlemeyi diskteki eski metne ekler ve
 // sonraki kayıt çakışırdı. Başka not ya da taslak kaydedilmez (işlem onlara dokunmaz).
-void GuiState::edit_map(const MapNode& from, const MapNode& to, MapEdgeKind kind, bool connect) {
+void GuiState::edit_map(const MapNode& from, const MapNode& to, MapEdgeKind kind, bool connect,
+                        const core::RelationId& relation) {
     const auto note = app::map_edit_note(from, to, kind);
     if (note && shown_ && !new_note_ && shown_->path == *note && !flush_for(*note))
         return;
     const auto done = connect ? app::connect_map_nodes(store_, from, to, kind)
-                              : app::disconnect_map_nodes(store_, from, to, kind);
+                              : app::disconnect_map_nodes(store_, from, to, kind, relation);
     if (!done) {
         fail(done.error());
         return;

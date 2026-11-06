@@ -271,6 +271,7 @@ public:
 
     void draw_text(float x, float size, std::span<const Fragment> fragments) {
         const float baseline = cursor_ - size;
+        const float start = x;
         HPDF_Page_BeginText(page_);
         for (const Fragment& fragment : fragments) {
             HPDF_Font font = fonts_.get(fragment.style);
@@ -281,6 +282,18 @@ public:
             x += fragment.width;
         }
         HPDF_Page_EndText(page_);
+        // Üstü çizili (~~): metin nesnesinin dışında, x-yüksekliği ortasından çizgi (GUI önizlemesi gibi).
+        constexpr float kStrikeRise = 0.3F;
+        x = start;
+        for (const Fragment& fragment : fragments) {
+            if (fragment.style.strike) {
+                HPDF_Page_SetLineWidth(page_, kRuleWidth);
+                HPDF_Page_MoveTo(page_, x, baseline + (size * kStrikeRise));
+                HPDF_Page_LineTo(page_, x + fragment.width, baseline + (size * kStrikeRise));
+                HPDF_Page_Stroke(page_);
+            }
+            x += fragment.width;
+        }
     }
 
     void advance(float leading) { cursor_ -= leading; }
@@ -345,8 +358,11 @@ void draw_lines(PageWriter& writer, const std::vector<Line>& lines, const Block&
                 float marker_x, float size) {
     const float leading = size * kLineHeight;
     const Fragment marker{block.marker, TextStyle{}, 0};
+    // Yalnız imli boş paragraf (boş öğe, alıntıyla ya da iç listeyle başlayan öğe): im tek satırda çizilir.
+    static const std::vector<Line> kMarkerOnly{Line{}};
+    const std::vector<Line>& drawn = lines.empty() && !block.marker.empty() ? kMarkerOnly : lines;
     bool is_first = true;
-    for (const Line& line : lines) {
+    for (const Line& line : drawn) {
         writer.reserve_line(leading);
         for (int depth = 0; depth < block.quote_depth; ++depth) {
             const float bar_x = kMargin + static_cast<float>(depth + 1) * kQuoteIndent - kQuoteBarOffset;

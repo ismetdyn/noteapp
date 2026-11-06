@@ -183,6 +183,7 @@ private:
     void open_map_node_menu(const NoteMap& map, std::size_t node);
     void start_map_connect(const NoteMap& map, std::size_t from);
     void draw_map_menus();
+    void draw_relation_tooltip(const NoteMap& map, ImVec2 origin);  // F1: işaretçinin yakınındaki ilişki
     void zoom_map(ImVec2 origin, ImVec2 anchor, float factor);
     void draw_trash_header();
     void draw_trash_rows(bool focus_row);
@@ -211,9 +212,11 @@ private:
     void draw_markdown_preview(float request, bool to_end);
     void draw_preview_links(const PreviewLayout& layout, ImVec2 origin, float top, float bottom);
     void draw_raw_preview();  // limits.tui.view_bytes üstü: neden + ham metin (TUI REVIEW gibi)
-    void draw_data_preview();  // csv ve json: TUI REVIEW'un ayrıştırması (app::parse_csv, app::pretty_json)
-    void draw_csv_table(const app::CsvTable& table);
-    void draw_json_lines(const std::vector<app::JsonLine>& lines);
+    // csv ve json: TUI REVIEW'un ayrıştırması; not bir kez dizinlenir (app::index_csv, app::index_json), yalnız
+    // görünen satırlar ayrıştırılıp çizilir.
+    void draw_data_preview();
+    void draw_csv_table(const app::CsvIndex& index);
+    void draw_json_lines(const app::JsonIndex& index);
     float panel_height(std::size_t lines, bool open, float available_height) const;
     struct InfoColumns {
         float label = 0.0F;
@@ -224,6 +227,7 @@ private:
     void draw_info_panel(const InfoColumns& columns, float list_height);
     void draw_links_panel();
     void draw_link_row(const core::LinkLine& line);
+    void draw_relation_row_menu(const core::RelatedNote& selected);  // F1: ilişkili satırın sağ tık menüsü
     void draw_status_bar();
     void draw_fitted_text(const std::string& name, const std::string& text, float width,
                           std::string (*shorten)(std::string_view, float));
@@ -260,6 +264,8 @@ private:
     std::optional<std::string> ask_folder_name(const std::string& title, const std::string& initial,
                                                const std::string& field_label = {});
     std::optional<std::string> ask_palette();  // seçilen komut kimliği
+    // F1 ilişki adı ve "Yönlü" (deciders.relation); nullopt = vazgeçti.
+    std::optional<core::RelationSpec> ask_relation(const RelationRequest& request);
     bool draw_palette_row(const PaletteRow& row, bool selected, float row_height);  // tıklandıysa true
     void show_help_dialog();
     enum class PathKind { SaveFile, Folder };
@@ -289,6 +295,8 @@ private:
         std::vector<std::string> labels;  // not: dosya adı; etiket: "#ad" (denetim baytı U+FFFD)
         std::vector<core::IconColor> colors;
         std::vector<float> sizes;  // taban yarıçapın katı: bağlantı sayısından, çizge değişince bir kez
+        std::size_t edges_version = SIZE_MAX;  // edge_names'in kurulduğu harita sürümü (MapModel::version)
+        std::vector<std::string> edge_names;   // kenar başına ilişkinin adı, terminal_safe (F1); adsızda boş
     };
     MapCamera map_camera_;
     MapCache map_cache_;
@@ -302,9 +310,13 @@ private:
         MapNode from;
         MapNode to;
         MapEdgeKind kind = MapEdgeKind::Related;
+        core::RelationId relation = {};  // kaldırılacak ilişki (Related)
+        std::string name = {};           // ilişkinin adı; güvenilmez, terminal_safe ile çizilir
+        bool directed = false;           // ilişki yönlü: from kaynaktır
     };
     std::optional<MapPair> map_choice_;     // not → not bırakıldı: ilişki mi bağlantı mı
     std::optional<MapPair> map_edge_menu_;  // sağ tıklanan kenar
+    void draw_relation_items(const MapPair& edge);  // kenar menüsünün ilişki öğeleri (F1)
     // Sağ tıklanan düğüm ve onun kaldırılabilir kenarları (ilişki, etiket): menü açılırken kopyalanır.
     struct MapNodeMenu {
         std::size_t generation{};  // açıldığı çizge: değiştiyse `node` başka düğümü gösterir

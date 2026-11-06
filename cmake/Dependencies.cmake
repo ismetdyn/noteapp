@@ -121,7 +121,9 @@ unset(CMAKE_DISABLE_FIND_PACKAGE_PNG)
 target_include_directories(hpdf SYSTEM INTERFACE
     $<BUILD_INTERFACE:${libharu_SOURCE_DIR}/include> $<BUILD_INTERFACE:${libharu_BINARY_DIR}/include>)
 
-set(BUILD_HTML_LIBRARY OFF)
+# md4c-html yalnız testte: markdown önizleme uygunluk koşumunun başvuru çıktısıdır (tests/tui/markdown_conformance_test).
+# EXCLUDE_FROM_ALL: bağlanmayan yapıda derlenmez.
+set(BUILD_HTML_LIBRARY ${NOTEAPP_BUILD_TESTS})
 set(BUILD_MD2HTML_EXECUTABLE OFF)
 FetchContent_Declare(md4c
     URL https://github.com/mity/md4c/archive/refs/tags/v0.6.0.tar.gz
@@ -129,6 +131,11 @@ FetchContent_Declare(md4c
     EXCLUDE_FROM_ALL
     SYSTEM)
 FetchContent_MakeAvailable(md4c)
+# HTML5 adlı varlık tablosu (md4c'nin entity.c'si, ~2100 ad): core::decode_html_entity bunu arar. Yeni bağımlılık
+# değil, aynı sabit arşivin dosyası; md4c-html'in tamamı gerekmez.
+add_library(md4c_entity STATIC ${md4c_SOURCE_DIR}/src/entity.c)
+target_include_directories(md4c_entity SYSTEM PUBLIC ${md4c_SOURCE_DIR}/src)
+target_compile_options(md4c_entity PRIVATE $<IF:$<C_COMPILER_ID:MSVC>,/w,-w>)
 
 # Graph deposu (`noteapp_graph`). Amalgamation'ın CMake'i yoktur; sqlite.org yalnız SHA3-256 yayımlar (92281c86…28e30),
 # arşiv buna karşı doğrulanıp SHA256'sı alındı. Bayrakların gerekçesi: tasks/graph-design.md "Bağlantı".

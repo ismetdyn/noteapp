@@ -9,10 +9,13 @@
 #include "tui/list_actions.hpp"
 #include "tui/mouse.hpp"
 #include "tui/tui_state.hpp"
+#include "tui/view.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <doctest/doctest.h>
+#include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/screen.hpp>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -128,6 +131,26 @@ struct Scene {
         const auto [x, y] = dot_of(node_key);
         return screen_cell(x, y);
     }
+    // Ad satırı (F1): metin yapıştırılır, Enter kurar.
+    void name_relation(std::string_view name) {
+        REQUIRE(rename.has_value());
+        if (!name.empty())
+            rename->handle(Key::Paste, name);
+        actions.handle_rename_key(rename, Key::Enter, {});
+        update();
+    }
+    std::string screen() const {
+        auto shot = ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth), ftxui::Dimension::Fixed(kHeight));
+        ftxui::Render(shot, tui::render(state, {}, status, {kWidth, kHeight}, nullptr, nullptr, nullptr, nullptr,
+                                        nullptr, nullptr, nullptr, rename ? &*rename : nullptr));
+        std::string out;
+        for (int y = 0; y < kHeight; ++y) {
+            for (int x = 0; x < kWidth; ++x)
+                out += shot.PixelAt(x, y).character;
+            out += "\n";
+        }
+        return out;
+    }
     void right_drag(const std::string& from, const std::string& to) {
         const auto [x, y] = screen_of(from);
         const auto [tx, ty] = screen_of(to);
@@ -151,8 +174,13 @@ TEST_CASE("map connect: C, Tab to a note, Enter and r relate the shown note to i
     CHECK(s.state.map_link()->choosing);
     s.key(Key::Char, "r");
     CHECK_FALSE(s.state.map_link());
+    REQUIRE(s.rename.has_value());  // F1: ad satırı; boş Enter adsız
+    s.actions.handle_rename_key(s.rename, Key::Enter, {});
+    CHECK_FALSE(s.rename.has_value());
+    s.update();
     CHECK(s.status.message == "Related: a.md and b.md");
-    CHECK(s.store->links(np("a.md")).value().related == std::vector{np("b.md")});
+    REQUIRE(s.store->links(np("a.md")).value().related.size() == 1);
+    CHECK(s.store->links(np("a.md")).value().related.front().path == np("b.md"));
     CHECK(std::ranges::any_of(s.state.map_model().map().edges, [](const app::MapEdge& edge) {
         return edge.kind == app::MapEdgeKind::Related;
     }));
@@ -223,7 +251,9 @@ TEST_CASE("map connect: a right-drag from note to note asks r or l; onto a tag i
     CHECK(s.state.map_link()->source.key == "b.md");
     CHECK(s.state.map_link()->choosing);
     s.key(Key::Char, "r");
-    CHECK(s.store->links(np("b.md")).value().related == std::vector{np("c.md")});
+    s.name_relation("");
+    REQUIRE(s.store->links(np("b.md")).value().related.size() == 1);
+    CHECK(s.store->links(np("b.md")).value().related.front().path == np("c.md"));
 
     s.right_drag("b.md", "proje");
     CHECK_FALSE(s.state.map_link());
@@ -242,7 +272,90 @@ TEST_CASE("map connect: a right click on an edge selects it and d removes it") {
     s.mouse(x, y, MouseButton::Right, MouseMotion::Press);
     s.mouse(x, y, MouseButton::Right, MouseMotion::Release);
     REQUIRE(s.state.map_link());
-    CHECK(s.state.map_link()->edge == app::MapEdgeKind::Related);
+    REQUIRE(s.state.map_link()->edge.has_value());
+    CHECK(s.state.map_link()->edge->kind == app::MapEdgeKind::Related);
     s.key(Key::Char, "d");
     CHECK(s.store->links(np("a.md")).value().related.empty());
+}
+
+TEST_CASE("map connect: r asks the relation's name; Tab completes a known one, Enter relates with it") {
+    Scene s;
+    REQUIRE(s.store->add_relation(np("b.md"), np("c.md"), {"uses", false}).has_value());
+    s.state.map_edges_changed();
+    s.settle();
+    s.key(Key::Char, "C");
+    s.tab_to("b.md");
+    s.key(Key::Enter);
+    s.key(Key::Char, "r");
+    REQUIRE(s.rename.has_value());
+    s.rename->handle(Key::Char, "u");
+    s.rename->handle(Key::Tab);
+    CHECK(s.rename->text() == "uses");
+    s.name_relation("");
+    CHECK(s.status.message == "Related as 'uses': a.md and b.md");
+    const auto related = s.store->links(np("a.md")).value().related;
+    REQUIRE(related.size() == 1);
+    CHECK(related[0].name == "uses");
+    CHECK(related[0].direction == core::RelationDirection::Undirected);
+}
+
+TEST_CASE("map connect: on a relation the hint names it; n renames, f directs and flips, u undirects") {
+    Scene s;
+    REQUIRE(s.store->add_relation(np("a.md"), np("b.md"), {"uses", false}).has_value());
+    s.state.map_edges_changed();
+    s.settle();
+    const auto relation = [&] { return s.store->links(np("a.md")).value().related.at(0); };
+
+    s.key(Key::Char, "C");
+    s.tab_to("b.md");
+    CHECK(s.screen().find("'uses'") != std::string::npos);
+    CHECK(s.screen().find("n rename") != std::string::npos);
+    s.key(Key::Char, "f");
+    CHECK(s.status.message == "Relation directed: a.md → b.md");
+    CHECK(relation().direction == core::RelationDirection::Outgoing);
+
+    s.key(Key::Char, "C");
+    s.tab_to("b.md");
+    s.key(Key::Char, "f");
+    CHECK(s.status.message == "Relation directed: b.md → a.md");
+    CHECK(relation().direction == core::RelationDirection::Incoming);
+
+    s.key(Key::Char, "C");
+    s.tab_to("b.md");
+    s.key(Key::Char, "u");
+    CHECK(s.status.message == "Relation made undirected: a.md and b.md");
+    CHECK(relation().direction == core::RelationDirection::Undirected);
+
+    s.key(Key::Char, "C");
+    s.tab_to("b.md");
+    s.key(Key::Char, "n");
+    REQUIRE(s.rename.has_value());
+    CHECK(s.rename->text() == "uses");
+    for (int i = 0; i < 4; ++i)
+        s.rename->handle(Key::Backspace);
+    s.name_relation("cites");
+    CHECK(s.status.message == "Relation renamed to 'cites': a.md and b.md");
+    CHECK(relation().name == "cites");
+    CHECK(relation().direction == core::RelationDirection::Undirected);
+    CHECK(std::ranges::any_of(s.state.map_model().map().edges,
+                              [](const app::MapEdge& edge) { return edge.name == "cites"; }));
+}
+
+TEST_CASE("map connect: a right-clicked relation edge shows its name and n renames that one") {
+    Scene s;
+    REQUIRE(s.store->add_relation(np("a.md"), np("b.md"), {"uses", false}).has_value());
+    s.state.map_edges_changed();
+    s.settle();
+    const auto [ax, ay] = s.dot_of("a.md");
+    const auto [bx, by] = s.dot_of("b.md");
+    const auto [x, y] = Scene::screen_cell((ax + bx) / 2.0F, (ay + by) / 2.0F);
+    s.mouse(x, y, MouseButton::Right, MouseMotion::Press);
+    s.mouse(x, y, MouseButton::Right, MouseMotion::Release);
+    REQUIRE(s.state.map_link());
+    CHECK(s.screen().find("'uses'") != std::string::npos);
+    s.key(Key::Char, "n");
+    REQUIRE(s.rename.has_value());
+    CHECK(s.rename->text() == "uses");
+    s.actions.handle_rename_key(s.rename, Key::Escape, {});
+    CHECK(s.store->links(np("a.md")).value().related.at(0).name == "uses");
 }

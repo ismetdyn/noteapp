@@ -350,6 +350,34 @@ TEST_CASE("graph layout: after a rebuild nodes settle without swinging back and 
     CHECK(worst < kVisibleSwing);
 }
 
+// F1: ilişkinin adı ve yönü haritaya taşınır; yeniden adlandırma ya da yön değişimi aynı uçlarda haritayı
+// yeniden kurar (etiket eskimez), yerleşim uyanmaz.
+TEST_CASE("note map: a relation carries its name and direction, and a rename rebuilds the map") {
+    const std::vector<core::NoteMeta> notes{meta("a.md"), meta("b.md")};
+    std::vector<core::NoteEdge> edges{{core::NotePath::parse("b.md").value(),
+                                       core::NotePath::parse("a.md").value(), core::EdgeKind::RelatedTo,
+                                       "uses", true}};
+    const auto read = [&]() -> std::expected<std::vector<core::NoteEdge>, core::Error> { return edges; };
+    noteapp::app::MapModel model;
+    model.update(read, notes, core::NotePath::parse("a.md").value());
+    const std::size_t generation = model.generation();
+    REQUIRE(model.map().edges.size() == 1);
+    const noteapp::app::MapEdge& edge = model.map().edges.front();
+    CHECK(model.map().nodes[edge.from].key == "b.md");
+    CHECK(model.map().nodes[edge.to].key == "a.md");
+    CHECK(edge.name == "uses");
+    CHECK(edge.directed);
+
+    edges.front().name = "needs";
+    edges.front().directed = false;
+    model.edges_changed();
+    model.update(read, notes, core::NotePath::parse("a.md").value());
+    REQUIRE(model.map().edges.size() == 1);
+    CHECK(model.map().edges.front().name == "needs");
+    CHECK_FALSE(model.map().edges.front().directed);
+    CHECK(model.generation() == generation);
+}
+
 // İnceleme bulgusu: imza kenar türünü de karşılaştırır; aynı uçlarda tür değişince (bağlantı -> ilişki) harita
 // yeniden kurulur, eski renk kalmaz. Yerleşim türü bilmez (uçlar aynı): konumlar ve kuşak yerinde kalır.
 TEST_CASE("note map: an edge whose kind changes between the same notes rebuilds the map") {

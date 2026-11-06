@@ -143,6 +143,16 @@ inline constexpr std::array kView{
     V{"run", "cli.desc_view_run", kJsonOnly, K::View},   V{"rm", "cli.desc_view_rm", {}, K::View},
     V{"show", "cli.desc_view_show", {}, K::View},
 };
+inline constexpr std::array kRelationAddOptions{O{"--name", "", K::Text, "cli.opt_relation_name"},
+                                                O{"--directed", "", K::None, "cli.opt_directed"}};
+inline constexpr std::array kRelationRmOptions{O{"--name", "", K::Text, "cli.opt_relation_name"},
+                                               O{"--id", "", K::Text, "cli.opt_relation_id"}};
+inline constexpr std::array kRelation{
+    V{"add", "cli.desc_relation_add", kRelationAddOptions, K::Note},
+    V{"rm", "cli.desc_relation_rm", kRelationRmOptions, K::Note},
+    V{"rename", "cli.desc_relation_rename", {}, K::Note},
+    V{"ls", "cli.desc_relation_ls", kJsonPaged, K::Note},
+};
 inline constexpr std::array kShells{
     V{"zsh", "cli.desc_completion_zsh", {}, K::None},
     V{"bash", "cli.desc_completion_bash", {}, K::None},
@@ -154,10 +164,10 @@ inline constexpr std::array kShells{
 // Hızlı eklemenin (alt komutsuz `note`) seçenekleri.
 inline constexpr std::span<const OptionSpec> kAddOptions = command_table_detail::kAdd;
 
-inline constexpr std::array<CommandSpec, 16> kCommands = [] {
+inline constexpr std::array<CommandSpec, 17> kCommands = [] {
     using namespace command_table_detail;
     using G = CommandGroup;
-    return std::array<CommandSpec, 16>{{
+    return std::array<CommandSpec, 17>{{
         {"ls", "cli.desc_ls", kLs, K::Query, {}, G::Notes, "-l"},
         {"find", "cli.desc_find", kFind, K::Query, {}, G::Notes, "-s"},
         {"show", "cli.desc_show", kNoPagerOnly, K::Note, {}, G::Notes, "-S", "cat"},
@@ -170,6 +180,7 @@ inline constexpr std::array<CommandSpec, 16> kCommands = [] {
         {"query", "cli.desc_query", kQuery, K::Text, {}, G::Advanced},
         {"graph", "cli.desc_graph", {}, K::None, kGraph, G::Advanced},
         {"tags", "cli.desc_tags", kJsonPaged, K::None, {}, G::Notes, "-T"},
+        {"relation", "cli.desc_relation", {}, K::None, kRelation, G::Notes},
         {"view", "cli.desc_view", {}, K::None, kView, G::Advanced},
         {"import", "cli.desc_import", kImport, K::File, {}, G::Notes, "-i"},
         {"completion", "cli.desc_completion", {}, K::None, kShells, G::Other},

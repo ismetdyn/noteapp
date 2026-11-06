@@ -351,11 +351,18 @@ void ListActions::run(Intent intent, std::optional<ConfirmState>& confirm,
         begin_link(rename);
     else if (intent == Intent::ExportPdf)
         begin_export(rename);
+    else if (intent == Intent::RenameRelation)
+        begin_relation_rename(rename);
     else
-        run(intent, confirm);
+        run_intent(intent, confirm, &rename);
 }
 
 void ListActions::run(Intent intent, std::optional<ConfirmState>& confirm) {
+    run_intent(intent, confirm, nullptr);
+}
+
+void ListActions::run_intent(Intent intent, std::optional<ConfirmState>& confirm,
+                             std::optional<RenameState>* rename) {
     pending_ = nullptr;
     relation_target_.reset();
     switch (intent) {
@@ -399,7 +406,11 @@ void ListActions::run(Intent intent, std::optional<ConfirmState>& confirm) {
         toggle_icons();
         break;
     case Intent::MapEdit:
-        apply_map_edit();
+        apply_map_edit(rename);
+        break;
+    case Intent::FlipRelation:
+    case Intent::UndirectRelation:
+        direct_selected_relation(intent == Intent::FlipRelation);
         break;
     default:
         break;
@@ -421,7 +432,7 @@ void ListActions::on_mouse(const MouseInput& input, EditorSession& editor) {
         follow_wiki_link();
         break;
     case MouseResult::MapEdit:
-        apply_map_edit();
+        apply_map_edit(nullptr);
         break;
     case MouseResult::None:
         break;
@@ -762,19 +773,104 @@ void ListActions::submit_link(std::optional<RenameState>& rename) {
         input.set_error(core::format_error(target.error()));
         return;
     }
-    const auto added = [&] {
+    // Hedef ad sorulmadan önce doğrulanır: yanlış yol ad yazıldıktan sonra değil, burada söylenir.
+    const auto names = [&]() -> std::expected<RenameState::SharedRelationNames, core::Error> {
         const std::scoped_lock lock(host_.store_mutex);
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
-        return host_.store->add_relation(input.from(), *target);
+        if (const auto links = host_.store->links(*target); !links)
+            return std::unexpected(links.error());
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+        return host_.store->relation_names();
     }();
-    if (!added) {
-        input.set_error(core::format_error(added.error()));
+    if (!names) {
+        input.set_error(core::format_error(names.error()));
         return;
     }
-    host_.status.notify(app::NoticeKind::Success, core::tr("tui.related", {{"path", terminal_safe(target->string())}}));
-    rename.reset();
+    const core::NotePath from = input.from();
+    rename.emplace(RenameState::RelationName{}, from, *target, *names);
+}
+
+void ListActions::open_relation_line(std::optional<RenameState>& rename, const core::NotePath& from,
+                                     const core::NotePath& to, std::optional<core::RelationId> renaming,
+                                     std::string current) {
+    const auto names = [&] {
+        const std::scoped_lock lock(host_.store_mutex);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+        return host_.store->relation_names();
+    }();
+    if (!names) {
+        host_.status.notify(app::NoticeKind::Error, terminal_safe(core::format_error(names.error())));
+        return;
+    }
+    rename.emplace(RenameState::RelationName{}, from, to, *names, renaming, std::move(current));
+}
+
+// Bağlantı bölümünün seçili ilişkisi: `shown` gösterilen not, satır o ilişkinin kimliğini taşır.
+std::optional<std::pair<core::NotePath, core::RelatedNote>> ListActions::selected_relation() const {
+    const Row* row = host_.state.selected_row();
+    const core::LinkLine* line = host_.state.link_panel().selected_line();
+    if (!row || !line || line->is_header || line->group != core::LinkGroup::Related)
+        return std::nullopt;
+    return std::pair(row->path, host_.state.link_panel().links().related[line->index]);
+}
+
+void ListActions::begin_relation_rename(std::optional<RenameState>& rename) {
+    if (const auto selected = selected_relation())
+        open_relation_line(rename, selected->first, selected->second.path, selected->second.id,
+                           selected->second.name);
+}
+
+void ListActions::direct_selected_relation(bool flip) {
+    const auto selected = selected_relation();
+    if (!selected)
+        return;
+    const auto& [shown, relation] = *selected;
+    const std::optional<core::NotePath> source =
+        flip ? std::optional(app::flipped_source(shown, relation.path, relation.direction)) : std::nullopt;
+    finish_relation_edit([&](core::NoteStore& store) {
+        return app::direct_map_relation(store, shown, relation.path, relation.id, source);
+    });
+}
+
+// İlişki işinin ortak sonu: ileti bildirime, harita kenarları ve liste tazelenir, senkron haber alır.
+bool ListActions::finish_relation_edit(
+    const std::function<std::expected<std::string, core::Error>(core::NoteStore&)>& edit,
+    RenameState* input) {
+    const auto done = [&] {
+        const std::scoped_lock lock(host_.store_mutex);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+        return edit(*host_.store);
+    }();
+    if (!done) {
+        if (input != nullptr)
+            input->set_error(core::format_error(done.error()));
+        else
+            host_.status.notify(app::NoticeKind::Error, terminal_safe(core::format_error(done.error())));
+        return false;
+    }
+    host_.status.notify(app::NoticeKind::Success, terminal_safe(*done));
+    host_.state.map_edges_changed();  // ilişki listeyi değiştirmez: kenarlar sonraki çizimde okunur
     host_.refresh_notes();
     host_.notify_changed();
+    return true;
+}
+
+// Ad satırının Enter'ı: yeni ilişki (ad, "yönlü" from → to) ya da var olanın adı. Hata satırda kalır.
+void ListActions::submit_relation(std::optional<RenameState>& rename) {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
+    RenameState& input = *rename;
+    const bool done = finish_relation_edit(
+        [&](core::NoteStore& store) {
+            if (const auto& renaming = input.renaming())
+                return app::rename_map_relation(store, input.from(), input.relation_to(), *renaming,
+                                                input.text());
+            return app::relate_map_notes(store, {app::MapNodeKind::Note, input.from().string()},
+                                         {app::MapNodeKind::Note, input.relation_to().string()},
+                                         {input.text(), input.directed()});
+        },
+        &input);
+    if (done)
+        rename.reset();
 }
 
 void ListActions::follow_wiki_link() {
@@ -846,28 +942,35 @@ std::expected<void, core::Error> ListActions::export_note(const core::NotePath& 
 
 void ListActions::begin_unlink(std::optional<ConfirmState>& confirm) {
     const Row* row = host_.state.selected_row();
-    const core::NotePath* other = host_.state.link_panel().selected_path();
-    if (!row || !other)
+    const LinkPanel& panel = host_.state.link_panel();
+    const core::LinkLine* line = panel.selected_line();
+    if (!row || !line || line->is_header || line->group != core::LinkGroup::Related)
         return;
-    relation_target_ = std::pair(row->path, *other);
-    confirm.emplace(core::tr("tui.confirm_unlink", {{"from", terminal_safe(row->path.string())},
-                                                    {"to", terminal_safe(other->string())}}),
+    const core::RelatedNote& relation = panel.links().related[line->index];
+    relation_target_ = std::pair(row->path, relation);
+    const std::string from = terminal_safe(row->path.string());
+    const std::string to = terminal_safe(relation.path.string());
+    confirm.emplace(relation.name.empty()
+                        ? core::tr("tui.confirm_unlink", {{"from", from}, {"to", to}})
+                        : core::tr("tui.confirm_unlink_named",
+                                   {{"from", from}, {"to", to}, {"name", terminal_safe(relation.name)}}),
                     core::tr("tui.unlink_title"));
 }
 
 void ListActions::finish_unlink() {
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- finish_delete denetledi
-    const auto [first, second] = *std::exchange(relation_target_, std::nullopt);
+    const auto [first, relation] = *std::exchange(relation_target_, std::nullopt);
     const auto removed = [&] {
         const std::scoped_lock lock(host_.store_mutex);
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
-        return host_.store->remove_relation(first, second);
+        return host_.store->remove_relation(relation.id);
     }();
     if (!removed) {
         host_.status.notify(app::NoticeKind::Error, terminal_safe(core::format_error(removed.error())));
         return;
     }
-    host_.status.notify(app::NoticeKind::Success, core::tr("tui.unlinked", {{"path", terminal_safe(second.string())}}));
+    host_.status.notify(app::NoticeKind::Success,
+                        core::tr("tui.unlinked", {{"path", terminal_safe(relation.path.string())}}));
     host_.refresh_notes();
     host_.notify_changed();
 }
@@ -876,7 +979,9 @@ void ListActions::finish_unlink() {
 // bekleyen düzenlemesi yoktur. refresh_notes'tan sonra main her olayda sekmeleri tazeler (settle_tabs →
 // EditorTabs::on_listing): temiz sekme yeni metni okur, yine de kirli kalmış sekme ezilmez, kaydı çakışma
 // sorar.
-void ListActions::apply_map_edit() {
+// İlişki kurma ve yeniden adlandırma ad satırı açar (F1); `rename` yoksa (fare yolu) ilişki adsız kurulur.
+void ListActions::apply_map_edit(std::optional<RenameState>* rename) {
+    using Action = TuiState::MapEditAction;
     const auto request = host_.state.take_map_edit();
     if (!request)
         return;
@@ -885,22 +990,39 @@ void ListActions::apply_map_edit() {
             core::tr("tui.map_no_edge", {{"from", request->from.key}, {"to", request->to.key}}));
         return;
     }
-    const auto done = [&] {
-        const std::scoped_lock lock(host_.store_mutex);
-        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
-        core::NoteStore& store = *host_.store;
-        return request->connect
-                   ? app::connect_map_nodes(store, request->from, request->to, *request->kind)
-                   : app::disconnect_map_nodes(store, request->from, request->to, *request->kind);
-    }();
-    if (!done) {
-        host_.status.notify(app::NoticeKind::Error, terminal_safe(core::format_error(done.error())));
+    const bool asks_name = request->action == Action::Rename ||
+                           (request->action == Action::Connect && *request->kind == app::MapEdgeKind::Related);
+    if (asks_name && rename != nullptr) {
+        const auto from = core::NotePath::parse(request->from.key);
+        const auto to = core::NotePath::parse(request->to.key);
+        if (from && to)
+            open_relation_line(*rename, *from, *to,
+                               request->action == Action::Rename ? std::optional(request->relation) : std::nullopt,
+                               request->name);
         return;
     }
-    host_.status.notify(app::NoticeKind::Success, terminal_safe(*done));
-    host_.state.map_edges_changed();  // ilişki listeyi değiştirmez: kenarlar sonraki çizimde okunur
-    host_.refresh_notes();
-    host_.notify_changed();
+    if (request->action == Action::Rename)
+        return;
+    finish_relation_edit([&](core::NoteStore& store) -> std::expected<std::string, core::Error> {
+        if (request->action == Action::Connect)
+            return app::connect_map_nodes(store, request->from, request->to, *request->kind);
+        if (request->action == Action::Remove)
+            return app::disconnect_map_nodes(store, request->from, request->to, *request->kind,
+                                             request->relation);
+        // Direct: uçlar not düğümüdür (yalnız ilişkide istenir).
+        const auto from = core::NotePath::parse(request->from.key);
+        const auto to = core::NotePath::parse(request->to.key);
+        if (!from || !to)
+            return std::unexpected(from ? to.error() : from.error());
+        std::optional<core::NotePath> source;
+        if (request->source) {
+            auto parsed = core::NotePath::parse(request->source->key);
+            if (!parsed)
+                return std::unexpected(parsed.error());
+            source = std::move(*parsed);
+        }
+        return app::direct_map_relation(store, *from, *to, request->relation, source);
+    });
 }
 
 void ListActions::finish_delete(std::optional<ConfirmState>& confirm) {
@@ -1098,6 +1220,11 @@ void ListActions::handle_rename_key(std::optional<RenameState>& rename, Key key,
 }
 
 void ListActions::submit_rename(std::optional<RenameState>& rename) {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
+    if (rename->is_relation()) {
+        submit_relation(rename);
+        return;
+    }
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
     if (rename->is_move_to()) {
         submit_move_to(rename);

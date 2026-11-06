@@ -1,9 +1,11 @@
 #pragma once
 
+#include "app/data_preview.hpp"
 #include "core/limits.hpp"
 #include "edit/syntax.hpp"
 
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,11 +18,13 @@ namespace noteapp::tui {
 // Üretim UI iş parçacığındadır, bütçe 50 ms: varsayılanlar ölçümle seçildi (SPEC-tui "REVIEW biçimli
 // görünüm"). Üye varsayılanları defaults.toml ile aynıdır, bir test denetler.
 struct ViewLimits {
-    std::size_t source_bytes = std::size_t{256} * 1024;  // biçimli görünüme giren en büyük not (PreviewCache)
+    // Biçimli görünüme giren en büyük not (PreviewCache); varsayılan sınırsız: büyük not parça parça üretilir.
+    std::size_t source_bytes = std::numeric_limits<std::size_t>::max();
     std::size_t lines = 100000;
-    std::size_t table_rows = 5000;
+    std::size_t table_rows = std::numeric_limits<std::size_t>::max();  // satırlar dizinli: varsayılan sınırsız
     std::size_t table_columns = 128;
     std::size_t highlight_line_bytes = kDefaultHighlightLineBytes;  // markdown kod bloğu
+    app::MarkdownChunkLimits markdown = {};  // büyük md parçalarının düşman girdi korumaları (limits.tui.preview_*)
 
     bool operator==(const ViewLimits&) const = default;
 };
@@ -116,17 +120,30 @@ private:
     bool truncated_ = false;
 };
 
+// Hücrenin sütunundaki hizası (markdown tablosunun `:-:` ve `--:` sütunları).
+enum class CellAlign { Left, Center, Right };
+
 // Tablo verisi: hücreler sarılmamış; kısa satırlar boş hücreyle tamamlanır.
 struct TableData {
     std::vector<std::vector<InlineText>> rows;
+    std::vector<CellAlign> aligns;  // sütun başına; eksik sütun sola yaslı
     std::vector<std::size_t> source_lines;
     std::size_t header_rows = 0;
     std::size_t omitted_rows = 0;  // ViewLimits::table_rows'u aşan, gösterilmeyen satırlar
     std::size_t column_count = 0;  // kaynaktaki sütun sayısı; ViewLimits::table_columns'tan fazlası saklanmaz
 };
 
+// Tablonun sütun genişlikleri ve sığmayan sütun sayısı. Parça parça çizilen büyük tabloda ilk parçadan alınır, sonraki
+// parçalar aynı sütunlarla çizilir (geniş hücre sütununda sarılır).
+struct TableColumns {
+    std::vector<int> widths;
+    std::size_t hidden = 0;
+};
+TableColumns table_columns(const ViewBuilder& view, const TableData& table, const InlineText& prefix);
+
 // Hücreler sütun genişliğinde sarılır, tablo `prefix` dahil genişliğe sığar; sığmayan sütunlar düşer ve
 // soluk satırla söylenir.
 void add_table(ViewBuilder& view, const TableData& table, const InlineText& prefix);
+void add_table(ViewBuilder& view, const TableData& table, const InlineText& prefix, const TableColumns& columns);
 
 }  // namespace noteapp::tui

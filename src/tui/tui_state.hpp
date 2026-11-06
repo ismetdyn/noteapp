@@ -73,7 +73,10 @@ enum class Intent {
     MoveTo,           // `m`: altta hedef klasör girdisi
     LinkNote,         // `L`: altta ilişkilendirilecek not girdisi
     UnlinkSelected,   // `L` ilişkili satırda: onaylı kaldırma
-    LinkMissing,      // bağlantı panelinde gidilecek notu olmayan satır: nedeni söylenir
+    RenameRelation,   // `n` ilişkili satırda: altta ad girdisi (o ilişkinin kimliğiyle)
+    FlipRelation,     // `f` ilişkili satırda: yön çevrilir (yönsüz: bu nottan çıkan olur)
+    UndirectRelation, // `u` ilişkili satırda: yönsüz yapılır
+    LinkMissing,     // bağlantı panelinde gidilecek notu olmayan satır: nedeni söylenir
     ToggleIcons,      // palet: `icons` ayarını çevirir, config.toml'a yazar
     ExportPdf,        // REVIEW `P`: altta çıktı yolu girdisi
     FollowLink,       // REVIEW'da seçili [[bağlantı]]: depo çözer, hedef not açılır
@@ -228,24 +231,38 @@ public:
     // --- Haritada ilişki kurma (MAP-R; kural app::map_relations, GUI'nin Shift+sürüklemesi ile aynı) ---
     // `C` (connect) seçili nottan (yoksa gösterilen nottan) başlar; fareyle sağ sürükleme (terminal geçirirse
     // Shift+sol da) düğümden düğüme. Tab/Shift+Tab hedefi seçer (not ya da etiket), Enter kurar: not → not
-    // `r` ilişki / `l` bağlantı sorar, not ↔ etiket etiketi ekler. `d` aradaki kenarı kaldırır (kenara sağ
-    // tık o kenarı seçer), Esc vazgeçer. Diğer harita tuşları sürer.
+    // `r` ilişki (ad satırı açılır) / `l` bağlantı sorar, not ↔ etiket etiketi ekler. `d` aradaki kenarı
+    // kaldırır (kenara sağ tık o kenarı seçer); ilişkide `n` adını değiştirir, `f` yönünü çevirir (yönsüzü
+    // kaynaktan hedefe yönlü yapar), `u` yönsüz yapar. Esc vazgeçer. Diğer harita tuşları sürer.
     struct MapLink {
         app::MapNode source;
         std::optional<app::MapNode> target;
-        std::optional<app::MapEdgeKind> edge;                    // kenara sağ tık: kaldırılacak kenarın türü
+        std::optional<app::MapEdge> edge;                        // kenara sağ tık: kaldırılacak kenar
         bool choosing = false;                                   // not → not: `r` / `l` bekleniyor
         std::optional<std::pair<int, int>> drag = std::nullopt;  // fare sürüklüyor: işaretçinin tuval noktası
     };
     const std::optional<MapLink>& map_link() const { return map_link_; }
-    // Intent::MapEdit'in işi; `kind` boşsa iki düğüm arasında kenar yok (ileti).
+    // Intent::MapEdit'in işi; `kind` boşsa iki düğüm arasında kenar yok (ileti). Connect Related'da ad satırı
+    // açılır (F1); Rename, Direct yalnız ilişkide (kimliğiyle).
+    enum class MapEditAction { Connect, Remove, Rename, Direct };
     struct MapEditRequest {
         app::MapNode from;
         app::MapNode to;
         std::optional<app::MapEdgeKind> kind;
-        bool connect = true;
+        MapEditAction action = MapEditAction::Connect;
+        core::RelationId relation = {};           // kaldırılacak, adı ya da yönü değişecek ilişki (Related)
+        std::string name = {};                    // Rename: şimdiki ad, girdinin ön değeri (güvenilmez)
+        std::optional<app::MapNode> source = {};  // Direct: yeni kaynak uç; boş = yönsüz
     };
     std::optional<MapEditRequest> take_map_edit() { return std::exchange(map_edit_, std::nullopt); }
+    // Kipte hedefle kaynak arasındaki kenar (kenara sağ tıkta o kenar) ve uçları: `d` `n` `f` `u` onu hedefler,
+    // harita ipucu ilişkinin adını söyler. Yoksa nullopt.
+    struct MapLinkEdge {
+        app::MapEdge edge;
+        app::MapNode from;  // yönlüde kaynak
+        app::MapNode to;
+    };
+    std::optional<MapLinkEdge> map_link_edge() const;
     // Fare: tuvalin hücresi (liste panelinin içi, kapsam satırının altı). Düğümün satırında iki yanındaki
     // ikişer hücre de sayılır: braille noktası tek hücreden küçüktür, en yakın düğüm kazanır.
     std::optional<std::size_t> map_node_at(int column, int row) const;
@@ -505,7 +522,9 @@ private:
     void begin_map_link();
     void step_map_target(int delta);
     Intent confirm_map_link();
-    Intent request_map_edit(std::optional<app::MapEdgeKind> kind, bool connect);
+    Intent request_map_edit(std::optional<app::MapEdgeKind> kind, MapEditAction action);
+    Intent request_map_edit(MapEditRequest request);
+    Intent handle_map_edge_key(std::string_view text);
     // Hücrenin ortası, yerleşim biriminde.
     std::optional<app::LayoutPoint> map_point(int column, int row) const;
     void pan_map(float dx, float dy);

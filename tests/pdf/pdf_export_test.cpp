@@ -356,6 +356,26 @@ TEST_CASE("markdown coverage: heading, list, code, quote, link text and GFM tabl
     check_inside_margins(got.bbox);
 }
 
+// NY-P inceleme: alıntıyla başlayan öğe imini kendi satırında taşır (önce alıntı paragrafına iliştiriliyordu); im
+// PDF'te kaybolmamalı.
+TEST_CASE("list items that start with a quote keep their marker in the PDF") {
+    const auto bullet = extract("- > alıntı öğe\n", pdf::NoteFormat::Markdown);
+    CHECK(contains(bullet.text, "•"));
+    CHECK(contains(bullet.text, "alıntı öğe"));
+    const auto ordered = extract("1. > sıralı alıntı\n", pdf::NoteFormat::Markdown);
+    CHECK(contains(ordered.text, "1."));
+    CHECK(contains(ordered.text, "sıralı alıntı"));
+}
+
+// Boş öğe de imini çizer (GUI ve TUI gibi): üç öğe, üç im.
+TEST_CASE("an empty list item draws its marker in the PDF") {
+    const auto got = extract("- bir\n- \n- üç\n", pdf::NoteFormat::Markdown);
+    std::size_t bullets = 0;
+    for (auto at = got.text.find("•"); at != std::string::npos; at = got.text.find("•", at + 1))
+        ++bullets;
+    CHECK(bullets == 3);
+}
+
 TEST_CASE("image alt text replaces every image, with a placeholder when empty") {
     core::init_i18n("en");
     const auto got =

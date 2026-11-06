@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <iterator>
+#include <limits>
 #include <utility>
 
 namespace noteapp::app {
@@ -34,86 +36,69 @@ std::vector<std::string_view> csv_sample(std::string_view text) {
     return lines;
 }
 
-// `base`: metnin kaynaktaki ofseti (BOM), satır ofsetleri kaynağa göre verilsin.
-class CsvParser {
-public:
-    CsvParser(std::string_view text, std::size_t base, char delimiter, const TableLimits& limits)
-        : text_(text), base_(base), delimiter_(delimiter), limits_(limits) {}
+// Bir satırın taraması: dizin ve hücre ayrıştırması aynı kural. Tırnak tırnaklı alanı açıp kapatır ("" tırnağın
+// kendisi), tırnak dışındaki ayırıcı alanı, satır sonu satırı bitirir. Tek alanlı ve alanı boş (sondaki \r düşer)
+// satır boştur, atlanır. `cells` doluysa hücreler kurulur (en çok `max_columns`); değilse yalnız sayılır.
+struct RowScan {
+    std::size_t next = 0;  // sonraki satırın başı
+    std::size_t fields = 1;
+    bool blank = false;
+};
 
-    CsvTable parse() && {
-        bool quoted = false;
-        for (std::size_t at = 0; at < text_.size(); ++at)
-            at = step(at, quoted);
-        end_row();
-        return std::move(table_);
-    }
-
-private:
-    // Son işlenen baytın ofseti.
-    std::size_t step(std::size_t at, bool& quoted) {
-        const char byte = text_[at];
+RowScan scan_row(std::string_view text, std::size_t at, char delimiter, std::vector<std::string>* cells,
+                 std::size_t max_columns) {
+    RowScan scan;
+    std::string field;
+    std::size_t content = 0;  // alan baytları (tırnaklar ve ayırıcılar hariç)
+    char last = '\0';
+    const auto end_field = [&] {
+        if (cells == nullptr)
+            return;
+        if (field.ends_with('\r'))
+            field.pop_back();
+        if (cells->size() < max_columns)
+            cells->push_back(std::move(field));
+        field.clear();
+    };
+    bool quoted = false;
+    for (; at < text.size(); ++at) {
+        const char byte = text[at];
         if (byte == '"') {
-            if (quoted && at + 1 < text_.size() && text_[at + 1] == '"') {
-                field_ += '"';
-                return at + 1;
+            if (quoted && at + 1 < text.size() && text[at + 1] == '"') {
+                ++content;
+                if (cells != nullptr)
+                    field += '"';
+                ++at;
+            } else {
+                quoted = !quoted;
             }
-            quoted = !quoted;
-        } else if (byte == delimiter_ && !quoted) {
+        } else if (byte == delimiter && !quoted) {
+            ++scan.fields;
             end_field();
         } else if (byte == '\n' && !quoted) {
-            end_row();
-            row_start_ = at + 1;
+            ++at;
+            break;
         } else {
-            field_ += byte;
+            ++content;
+            last = byte;
+            if (cells != nullptr)
+                field += byte;
         }
-        return at;
     }
-
-    void end_field() {
-        if (field_.ends_with('\r'))
-            field_.pop_back();
-        ++row_fields_;
-        if (table_.rows.size() < limits_.rows && row_.size() < limits_.columns)
-            row_.push_back(field_);
-        row_blank_ = row_blank_ && field_.empty();
-        field_.clear();
-    }
-
-    void end_row() {
-        end_field();
-        const bool blank = row_blank_ && row_fields_ == 1;
-        if (!blank) {
-            table_.column_count = std::max(table_.column_count, row_fields_);
-            if (table_.rows.size() < limits_.rows) {
-                table_.rows.push_back(std::move(row_));
-                table_.row_offsets.push_back(base_ + row_start_);
-            } else {
-                ++table_.omitted_rows;
-            }
-        }
-        row_.clear();
-        row_fields_ = 0;
-        row_blank_ = true;
-    }
-
-    std::string_view text_;
-    std::size_t base_;
-    char delimiter_;
-    TableLimits limits_;
-    CsvTable table_;
-    std::vector<std::string> row_;
-    std::string field_;
-    std::size_t row_start_ = 0;
-    std::size_t row_fields_ = 0;
-    bool row_blank_ = true;
-};
+    end_field();
+    scan.next = at;
+    scan.blank = scan.fields == 1 && (content == 0 || (content == 1 && last == '\r'));
+    return scan;
+}
 
 // Katı RFC 8259 denetleyicisi ve girintileyici. Özyinelemesiz: iç içelik `stack_`te (iç içe kap başına bir
 // bayt), derinlik sınırı yok, çok derin not yığını taşırmaz. Bağımlılık yok: projede JSON kütüphanesi yok,
 // yalnız bu görünüm için eklenmeye değmez.
 class JsonPrinter {
 public:
-    JsonPrinter(std::string_view text, std::size_t base) : text_(text), base_(base) {}
+    // `index` verilirse metin kurulmaz: yalnız doğrulanır, satırlar sayılır, kontrol noktaları yazılır.
+    JsonPrinter(std::string_view text, std::size_t base, JsonIndex* index = nullptr)
+        : text_(text), base_(base), index_(index) {}
 
     std::optional<std::vector<JsonLine>> print() && {
         if (!value())
@@ -123,10 +108,12 @@ public:
             if (!ok)
                 return std::nullopt;
         }
-        flush();
+        flush(pos_, 0);
         skip_space();
         if (pos_ != text_.size())
             return std::nullopt;
+        if (index_ != nullptr)
+            index_->line_count = count_;
         return std::move(lines_);
     }
 
@@ -140,16 +127,34 @@ private:
     }
 
     void take(std::string_view shown, std::size_t source_offset) {
-        if (line_.text.empty())
+        if (!has_line_)
             line_.offset = base_ + source_offset;
-        line_.text += shown;
+        has_line_ = true;
+        if (index_ == nullptr)
+            line_.text += shown;
     }
 
-    void flush() {
-        if (line_.text.empty())
+    // Satır biter; sıradaki satır `next_pos`ta (ya da sonrasındaki ilk belirteçte) `next_depth` iç içelikle başlar
+    // (json_lines oradan sürdürür).
+    void flush(std::size_t next_pos, std::size_t next_depth) {
+        if (!has_line_)
             return;
+        has_line_ = false;
         line_.depth = stack_.size();
-        lines_.push_back(std::exchange(line_, {}));
+        if (index_ == nullptr)
+            lines_.push_back(std::exchange(line_, {}));
+        ++count_;
+        if (index_ == nullptr)
+            return;
+        // Nokta sıradaki belirtecin üstünde: araya giren boşluk pencere okumasında bir daha taranmaz.
+        std::size_t next = next_pos;
+        while (next < text_.size() && (text_[next] == ' ' || text_[next] == '\t' || text_[next] == '\n' ||
+                                       text_[next] == '\r'))
+            ++next;
+        if (count_ % kJsonCheckpointLines == 0 || next - last_checkpoint_ >= kJsonCheckpointBytes) {
+            index_->checkpoints.push_back({count_, base_ + next, next_depth});
+            last_checkpoint_ = next;
+        }
     }
 
     bool after_value() {
@@ -158,14 +163,14 @@ private:
         const char closer = opener == '{' ? '}' : ']';
         if (peek() == ',') {
             take(",", pos_);
-            flush();
+            flush(pos_ + 1, stack_.size());
             ++pos_;
             need_value_ = true;
             return opener != '{' || key();
         }
         if (peek() != closer)
             return false;
-        flush();
+        flush(pos_, stack_.size());
         stack_.pop_back();
         take(std::string_view(&closer, 1), pos_);
         ++pos_;
@@ -202,7 +207,7 @@ private:
             ++pos_;
             return true;
         }
-        flush();
+        flush(pos_, stack_.size() + 1);
         stack_.push_back(opener);
         need_value_ = true;
         return opener != '{' || key();
@@ -294,11 +299,126 @@ private:
 
     std::string_view text_;
     std::size_t base_;
+    JsonIndex* index_;
     std::size_t pos_ = 0;
     std::vector<char> stack_;
     bool need_value_ = false;  // kap açıldı ya da virgül okundu: sıradaki değer okunacak
     JsonLine line_;
+    bool has_line_ = false;
+    std::size_t count_ = 0;  // biten satırlar
+    std::size_t last_checkpoint_ = 0;  // son kontrol noktasının yeri (text_ içinde)
     std::vector<JsonLine> lines_;
+};
+
+// Doğrulanmış JSON'un satırları: JsonPrinter'ın satır kuralı (kap açılınca ve virgülde satır biter, kapanış yeni
+// satırda başlar, boş kap tek belirteç) yığınsız, yalnız iç içelik sayısıyla. Metin yalnız istenen satırlar için
+// kurulur; öncekiler sayılıp geçilir.
+class JsonLineReader {
+public:
+    JsonLineReader(std::string_view source, const JsonIndex::Checkpoint& from)
+        : source_(source), pos_(from.pos), depth_(from.depth), line_(from.line) {}
+
+    std::vector<JsonLine> read(std::size_t first, std::size_t count) && {
+        first_ = first;
+        const std::size_t last = first + std::min(count, std::numeric_limits<std::size_t>::max() - first);
+        while (line_ < last) {
+            skip_space();
+            if (pos_ >= source_.size()) {
+                end_line();
+                break;
+            }
+            step();
+        }
+        return std::move(out_);
+    }
+
+private:
+    void skip_space() {
+        while (pos_ < source_.size() && (source_[pos_] == ' ' || source_[pos_] == '\t' || source_[pos_] == '\n' ||
+                                         source_[pos_] == '\r'))
+            ++pos_;
+    }
+
+    void put(std::string_view shown, std::size_t at) {
+        if (!has_line_) {
+            current_.offset = at;
+            current_.depth = depth_;
+            has_line_ = true;
+        }
+        if (line_ >= first_)
+            current_.text += shown;
+    }
+
+    void end_line() {
+        if (!has_line_)
+            return;
+        if (line_ >= first_)
+            out_.push_back(std::exchange(current_, {}));
+        else
+            current_ = {};
+        has_line_ = false;
+        ++line_;
+    }
+
+    void step() {
+        const char c = source_[pos_];
+        switch (c) {
+        case '{':
+        case '[': {
+            const char closer = c == '{' ? '}' : ']';
+            const std::size_t at = pos_++;
+            skip_space();
+            if (pos_ < source_.size() && source_[pos_] == closer) {
+                const char pair[] = {c, closer};
+                put(std::string_view(pair, 2), at);
+                ++pos_;
+                return;
+            }
+            put(std::string_view(&source_[at], 1), at);
+            end_line();
+            ++depth_;
+            return;
+        }
+        case '}':
+        case ']':
+            end_line();
+            --depth_;
+            put(std::string_view(&source_[pos_], 1), pos_);
+            ++pos_;
+            return;
+        case ',':
+            put(",", pos_++);
+            end_line();
+            return;
+        case ':':
+            put(": ", pos_++);
+            return;
+        case '"': {
+            const std::size_t begin = pos_++;
+            while (pos_ < source_.size() && source_[pos_] != '"')
+                pos_ += source_[pos_] == '\\' ? 2 : 1;
+            pos_ = std::min(pos_ + 1, source_.size());
+            put(source_.substr(begin, pos_ - begin), begin);
+            return;
+        }
+        default: {  // sayı ya da true/false/null
+            const std::size_t begin = pos_;
+            while (pos_ < source_.size() && std::string_view(" \t\n\r,:]}").find(source_[pos_]) == std::string_view::npos)
+                ++pos_;
+            put(source_.substr(begin, pos_ - begin), begin);
+            return;
+        }
+        }
+    }
+
+    std::string_view source_;
+    std::size_t pos_;
+    std::size_t depth_;
+    std::size_t line_;
+    std::size_t first_ = 0;
+    JsonLine current_;
+    bool has_line_ = false;
+    std::vector<JsonLine> out_;
 };
 
 }  // namespace
@@ -314,18 +434,83 @@ PreviewKind preview_kind_for(std::string_view extension) {
     return lowered == "csv" ? PreviewKind::Csv : PreviewKind::None;
 }
 
-std::optional<CsvTable> parse_csv(std::string_view source, const TableLimits& limits) {
+std::optional<CsvIndex> index_csv(std::string_view source) {
     const std::size_t base = bom_size(source);
-    const std::string_view text = source.substr(base);
-    const std::optional<char> delimiter = detect::table_delimiter(csv_sample(text));
+    const std::optional<char> delimiter = detect::table_delimiter(csv_sample(source.substr(base)));
     if (!delimiter)
         return std::nullopt;
-    return CsvParser(text, base, *delimiter, limits).parse();
+    CsvIndex index;
+    index.delimiter = *delimiter;
+    for (std::size_t at = base; at < source.size();) {
+        if (index.checkpoints.empty() || index.row_count - index.checkpoints.back().row >= kCsvBlockRows ||
+            at - index.checkpoints.back().offset >= kCsvCheckpointBytes)
+            index.checkpoints.push_back({index.row_count, at});
+        const RowScan row = scan_row(source, at, index.delimiter, nullptr, 0);
+        if (!row.blank) {
+            ++index.row_count;
+            index.column_count = std::max(index.column_count, row.fields);
+        }
+        at = row.next;
+    }
+    return index;
+}
+
+std::vector<CsvRow> csv_rows(std::string_view source, const CsvIndex& index, std::size_t first, std::size_t count,
+                             std::size_t max_columns) {
+    std::vector<CsvRow> rows;
+    if (first >= index.row_count)
+        return rows;
+    count = std::min(count, index.row_count - first);
+    rows.reserve(count);
+    const auto after = std::ranges::upper_bound(index.checkpoints, first, {}, &CsvCheckpoint::row);
+    std::size_t at = std::prev(after)->offset;
+    std::size_t row = std::prev(after)->row;
+    while (rows.size() < count && at < source.size()) {
+        CsvRow out{at, {}};
+        const RowScan scan = scan_row(source, at, index.delimiter, row >= first ? &out.cells : nullptr, max_columns);
+        at = scan.next;
+        if (scan.blank)
+            continue;
+        if (row++ >= first)
+            rows.push_back(std::move(out));
+    }
+    return rows;
+}
+
+std::optional<CsvTable> parse_csv(std::string_view source, const TableLimits& limits) {
+    std::optional<CsvIndex> index = index_csv(source);
+    if (!index)
+        return std::nullopt;
+    CsvTable table;
+    for (CsvRow& row : csv_rows(source, *index, 0, limits.rows, limits.columns)) {
+        table.rows.push_back(std::move(row.cells));
+        table.row_offsets.push_back(row.offset);
+    }
+    table.column_count = index->column_count;
+    table.omitted_rows = index->row_count - table.rows.size();
+    return table;
 }
 
 std::optional<std::vector<JsonLine>> pretty_json(std::string_view source) {
     const std::size_t base = bom_size(source);
     return JsonPrinter(source.substr(base), base).print();
+}
+
+std::optional<JsonIndex> index_json(std::string_view source) {
+    const std::size_t base = bom_size(source);
+    JsonIndex index;
+    index.checkpoints.push_back({0, base, 0});
+    if (!JsonPrinter(source.substr(base), base, &index).print())
+        return std::nullopt;
+    return index;
+}
+
+std::vector<JsonLine> json_lines(std::string_view source, const JsonIndex& index, std::size_t first,
+                                 std::size_t count) {
+    if (index.checkpoints.empty() || count == 0 || first >= index.line_count)
+        return {};
+    const auto after = std::ranges::upper_bound(index.checkpoints, first, {}, &JsonIndex::Checkpoint::line);
+    return JsonLineReader(source, *std::prev(after)).read(first, count);
 }
 
 namespace {
@@ -414,6 +599,34 @@ FenceRun fence_in(std::string_view row) {
     fence.indent += content->columns;
     fence.in_list = true;
     return fence;
+}
+
+// Zorla kesilen kodun parçasına taşınan açılış satırı öneki: girinti ve (liste imli satırda) im, çit ve dil sözcüğü
+// (renk için). Önekin TAMAMI `max_prefix_bytes`a sığmalı: sözcükle sığmazsa yalnız çit, çit de sığmazsa hiçbir şey
+// (her parçaya dev satır kopyalanmasın; yarım çit taşınmaz).
+std::size_t carried_fence_bytes(std::string_view row, const FenceRun& fence, std::size_t max_prefix_bytes) {
+    const auto run_end = static_cast<std::size_t>(fence.rest.data() - row.data());
+    if (run_end > max_prefix_bytes)
+        return 0;  // dev çit koşusu taşınmaz; kısaltılmış çit kodu erken kapatırdı
+    const std::size_t word = std::min(row.find_first_not_of(" \t", run_end), row.size());
+    if (word > max_prefix_bytes)
+        return run_end;  // sözcükten önceki dev boşluk taşınmaz, yalnız çit
+    const std::size_t word_end = std::min(row.find_first_of(" \t\r", word), row.size());
+    return word_end <= max_prefix_bytes ? word_end : run_end;
+}
+
+// GFM tablo ayraç satırı: `|`ler arasında yalnız `-` (en az bir), iki yanda isteğe bağlı `:` ve boşluk.
+bool is_table_delimiter(std::string_view row) {
+    if (row.ends_with('\r'))
+        row.remove_suffix(1);
+    bool dash = false;
+    for (const char c : row) {
+        if (c == '-')
+            dash = true;
+        else if (c != '|' && c != ':' && c != ' ' && c != '\t')
+            return false;
+    }
+    return dash && row.find('|') != std::string_view::npos;
 }
 
 // Boş satırdan sonra açık blokları (liste, alıntı, tablo, paragraf) kapatıp yenisini başlatan satır. Girinti
@@ -643,16 +856,19 @@ std::optional<std::string_view> link_definition_label(std::string_view row) {
 // true. Kap (liste, alıntı) izlenmez: girintili çitin içinde ondan az girintili dolu satır, çit liste öğesindeyse
 // öğeyi ve çiti kapatır, üst düzeydeyse içeriktir. Bundan sonra durum bilinemez; izleyici kesimi bir daha
 // önermez (yanlış kesim kodu bölerdi, kesmemek yalnız parçayı büyütür).
+// `opener`: açık çitin taşınacak öneki [başı, sonu) (carried_fence_bytes); kod bilinmiyorsa ya da yoksa boş.
 template <typename Visit>
-bool walk_lines(std::string_view text, const Visit& visit) {
+bool walk_lines(std::string_view text, std::size_t max_info_bytes, const Visit& visit) {
     FenceRun open;  // açık kuşatılmış kod; mark '\0' ise yok
+    std::pair<std::size_t, std::size_t> opener;
     bool unsure = false;
     bool after_blank = false;
     std::size_t line = 0;
     for (std::size_t at = 0; at < text.size(); ++line) {
         const std::size_t eol = std::min(text.find('\n', at), text.size());
         const std::string_view row = text.substr(at, eol - at);
-        visit(row, at, line, after_blank, unsure || open.mark != '\0');
+        visit(row, at, line, after_blank, unsure || open.mark != '\0',
+              !unsure && open.mark != '\0' ? opener : std::pair<std::size_t, std::size_t>{});
         // Satır başına sabit iş: çoğu satır harfle başlar, ne çit ne boş satırdır (20 MiB'ta ~1 milyon satır).
         const char first = row.empty() ? '\0' : row.front();
         const bool indented = first == ' ' || first == '\t' || first == '\r';
@@ -663,8 +879,10 @@ bool walk_lines(std::string_view text, const Visit& visit) {
         const auto open_if_fence = [&] {
             const FenceRun fence = fence_in(row);
             // Ters tırnak çitinin bilgi dizgesinde ters tırnak olamaz (CommonMark): o satır satır içi koddur.
-            if (fence.mark == '~' || (fence.mark == '`' && fence.rest.find('`') == std::string_view::npos))
+            if (fence.mark == '~' || (fence.mark == '`' && fence.rest.find('`') == std::string_view::npos)) {
                 open = fence;
+                opener = {at, at + carried_fence_bytes(row, fence, max_info_bytes)};
+            }
         };
         if (open.mark == '\0') {
             open_if_fence();
@@ -696,8 +914,13 @@ bool walk_lines(std::string_view text, const Visit& visit) {
 }
 
 // Tanım satırının normalleşmiş etiketi (satır toplanırken tanım olduğu doğrulandı).
+// Satır toplanırken tanım olduğu doğrulandı: yalnız etiket ayrılır (label_close, en çok 999 birim). Satırın tamamını
+// yeniden doğrulamak özeti çakışan grupta başvuru başına uzun tanım satırını baştan sona tarardı.
 std::u32string definition_label(std::string_view text, const MarkdownDefinition& definition) {
-    return normalized_label(*link_definition_label(text.substr(definition.begin, definition.end - definition.begin)));
+    const std::string_view row = text.substr(definition.begin, definition.end - definition.begin);
+    const std::size_t open = row.find('[');
+    const std::size_t close = label_close(row, open + 1);
+    return normalized_label(row.substr(open + 1, close - open - 1));
 }
 
 }  // namespace
@@ -738,16 +961,52 @@ void keep_first_definitions(std::string_view text, MarkdownDefinitions& definiti
     std::ranges::sort(definitions.repeats);
 }
 
-MarkdownScan scan_markdown(std::string_view text, std::size_t target_bytes) {
+MarkdownScan scan_markdown(std::string_view text, std::size_t target_bytes, std::size_t max_bytes,
+                           const MarkdownChunkLimits& limits) {
     MarkdownScan scan{{{0, text.size(), 0}}, {}};
     std::vector<MarkdownChunk>& chunks = scan.chunks;
     MarkdownDefinitions& definitions = scan.definitions;
     bool previous_definition = false;
-    const bool open_fence = walk_lines(text, [&](std::string_view row, std::size_t at, std::size_t line,
-                                                 bool after_blank, bool in_fence) {
-        if (!in_fence && after_blank && at - chunks.back().begin >= target_bytes && starts_top_level_block(row)) {
-            chunks.back().end = at;
-            chunks.push_back({at, text.size(), line});
+    std::size_t block_row = 0;                    // satırın bloğundaki sırası (boş satırdan sonra 0)
+    std::pair<std::size_t, std::size_t> table{};  // bloğun tablo başlığı ve ayraç satırı (son satır sonu hariç)
+    // Taşınan satır sayısı bir kez bilinir: çit öneki tek satır, tablo iki.
+    const auto cut = [&](std::size_t at, std::size_t line, bool in_fence, std::pair<std::size_t, std::size_t> carry) {
+        chunks.back().end = at;
+        chunks.back().open_fence = in_fence;
+        const std::size_t lines = carry.second == carry.first ? 0 : in_fence ? 1 : 2;
+        chunks.push_back({at, text.size(), line, false, carry.first, carry.second, lines});
+    };
+    const bool open_fence = walk_lines(text, limits.fence_info_bytes, [&](std::string_view row, std::size_t at, std::size_t line,
+                                                 bool after_blank, bool in_fence,
+                                                 std::pair<std::size_t, std::size_t> opener) {
+        block_row = after_blank || line == 0 ? 0 : block_row + 1;
+        if (block_row == 0 || in_fence)
+            table = {};  // koddaki tablo görünümlü satır tablo değildir
+        if (block_row == 1 && !in_fence && is_table_delimiter(row) && line > 0) {
+            const std::size_t header = text.rfind('\n', at - 1);
+            const std::size_t header_begin = header == 0 ? 0 : text.rfind('\n', header - 1) + 1;  // npos + 1 == 0
+            const std::size_t delimiter_end = at + row.size();
+            if (text.substr(header_begin, header - header_begin).find('|') != std::string_view::npos &&
+                delimiter_end - header_begin <= limits.table_header_bytes)  // dev başlık her parçaya kopyalanmasın
+                table = {header_begin, delimiter_end};
+        }
+        const auto carry = in_fence ? opener : table;
+        const std::size_t row_end = std::min(at + row.size() + 1, text.size());  // satır sonu dahil
+        if (!in_fence && after_blank && at - chunks.back().begin >= target_bytes && starts_top_level_block(row))
+            cut(at, line, false, {});
+        else if (row_end - chunks.back().begin > max_bytes && at > chunks.back().begin && at > carry.second)
+            cut(at, line, in_fence, carry);
+        // Satırın kendisi sınırdan uzunsa içinden kesilir (son boşlukta, yoksa kod noktası sınırında).
+        while (row_end - chunks.back().begin > max_bytes) {
+            std::size_t split = chunks.back().begin + max_bytes;
+            // Boşluk yalnız kesimin son yarısında aranır: boşluksuz dev satırda geri arama notun başına dek gitmesin.
+            const std::size_t lower = std::max(at, chunks.back().begin + (max_bytes / 2));
+            const std::size_t space = text.substr(lower, split - lower).rfind(' ');
+            if (space != std::string_view::npos)
+                split = lower + space + 1;
+            while (split > chunks.back().begin + 1 && (static_cast<unsigned char>(text[split]) & 0xC0) == 0x80)
+                --split;
+            cut(split, line, in_fence, at > carry.second ? carry : std::pair<std::size_t, std::size_t>{});
         }
         // Hızlı ret: tanım satırı `[` ya da girintiyle başlar. Paragraf devamı tanım değildir.
         const std::optional<std::string_view> label =
@@ -764,22 +1023,34 @@ MarkdownScan scan_markdown(std::string_view text, std::size_t target_bytes) {
     return scan;
 }
 
-std::vector<MarkdownChunk> markdown_chunks(std::string_view text, std::size_t target_bytes) {
-    return scan_markdown(text, target_bytes).chunks;
+std::vector<MarkdownChunk> markdown_chunks(std::string_view text, std::size_t target_bytes, std::size_t max_bytes) {
+    return scan_markdown(text, target_bytes, max_bytes).chunks;
 }
 
 MarkdownDefinitions markdown_link_definitions(std::string_view text) {
     return scan_markdown(text).definitions;
 }
 
+MarkdownChunkLimits markdown_chunk_limits_of(const core::TuiLimits& limits) {
+    return {.definition_bytes = limits.preview_definition_bytes.cap(),
+            .fence_info_bytes = limits.preview_fence_info_bytes.cap(),
+            .table_header_bytes = limits.preview_table_header_bytes.cap()};
+}
+
 std::string markdown_chunk_source(std::string_view text, const MarkdownChunk& chunk,
-                                  const MarkdownDefinitions& definitions) {
-    std::string source(text.substr(chunk.begin, chunk.end - chunk.begin));
+                                  const MarkdownDefinitions& definitions, const MarkdownChunkLimits& limits) {
+    std::string source(text.substr(chunk.carry_begin, chunk.carry_end - chunk.carry_begin));
+    if (!source.empty())
+        source += '\n';
+    const std::size_t carried = source.size();
+    source += text.substr(chunk.begin, chunk.end - chunk.begin);
     const auto first = std::ranges::lower_bound(definitions.repeats, chunk.begin, {},
                                                 &std::pair<std::size_t, std::size_t>::first);
     for (auto repeat = first; repeat != definitions.repeats.end() && repeat->first < chunk.end; ++repeat)
-        std::fill(source.begin() + static_cast<std::ptrdiff_t>(repeat->first - chunk.begin),
-                  source.begin() + static_cast<std::ptrdiff_t>(repeat->second - chunk.begin), ' ');
+        std::fill(source.begin() + static_cast<std::ptrdiff_t>(carried + repeat->first - chunk.begin),
+                  source.begin() + static_cast<std::ptrdiff_t>(carried + std::min(repeat->second, chunk.end) -
+                                                               chunk.begin),
+                  ' ');
     if (definitions.empty() || chunk.open_fence)
         return source;
     // Başvurunun her biçimi ([metin][etiket], [etiket][], [etiket]) köşeli ayraç içinde etiketi taşır: parçadaki
@@ -829,11 +1100,17 @@ std::string markdown_chunk_source(std::string_view text, const MarkdownChunk& ch
     wanted.erase(last, end);
     if (wanted.empty())
         return source;
+    // İş bütçesi: tanımlar belge sırasıyla, bütçe dolana dek (sığmayan uzun tanım atlanır, sonrakiler denenir).
+    // Parçanın md4c'ye verilen metni en çok parça + bütçe; bütçeyi aşan başvuru çözülmez.
     source += "\n\n";
+    std::size_t budget = limits.definition_bytes;
     for (const auto& [begin, end] : wanted) {
         std::string_view line = text.substr(begin, end - begin);
         if (line.ends_with('\r'))
             line.remove_suffix(1);
+        if (line.size() + 1 > budget)
+            continue;
+        budget -= line.size() + 1;
         source += line;
         source += '\n';
     }

@@ -1,5 +1,6 @@
 #include "tui/view.hpp"
 
+#include "app/map_relations.hpp"
 #include "core/file_stat.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
@@ -1075,6 +1076,17 @@ std::string totals_text(const TuiState& state, int panel_height) {
 
 // Yol girdisi: imleç metnin içindedir; uzun yolda imleç çevresi görünür kalır.
 ftxui::Element rename_bar(const RenameState& rename, int width) {
+    if (rename.is_relation()) {
+        // Yön işareti kutunun yerine: → yönlü, — yönsüz (Ctrl+D değiştirir).
+        const std::string label = core::tr(
+            rename.renaming() ? "tui.relation_rename_label" : "tui.relation_label",
+            {{"from", terminal_safe(rename.from().string())},
+             {"arrow", rename.directed() ? "→" : "—"},
+             {"to", terminal_safe(rename.relation_to().string())}});
+        return input_line_bar(label, rename.line(), {}, rename.ghost(),
+                              core::tr(rename.renaming() ? "tui.relation_rename_hints" : "tui.relation_hints"),
+                              width);
+    }
     const char* label = rename.is_link()      ? "tui.link_label"
                         : rename.is_move_to() ? "tui.move_to_label"
                         : rename.is_export()  ? "tui.export_label"
@@ -1391,7 +1403,10 @@ ftxui::Element link_row(const TuiState& state, const core::LinkLine& line, int c
     if (line.is_header)
         return text(core::tr(core::link_group_key(line.group), {{"count", std::to_string(line.index)}})) |
                bold;
-    const std::string safe = terminal_safe(core::link_text(links, line));
+    const bool related = line.group == core::LinkGroup::Related;
+    // İlişkide yön oku ve ad da (F1): "↗ b.md — uses"; ikon yine yoldan.
+    const std::string path = terminal_safe(core::link_text(links, line));
+    const std::string safe = related ? terminal_safe(app::related_row_text(links.related[line.index])) : path;
     const auto room = static_cast<std::size_t>(std::max(columns - 8, 1));
     Elements cells = {text("  ")};
     if (line.group == core::LinkGroup::Missing) {
@@ -1399,7 +1414,7 @@ ftxui::Element link_row(const TuiState& state, const core::LinkLine& line, int c
         cells.push_back(text("[[" + tail_cells(safe, room) + "]]") | dim);
     } else {
         if (state.icon_style() != core::IconStyle::Off) {
-            const core::FileIcon icon = core::file_icon(safe);
+            const core::FileIcon icon = core::file_icon(path);
             cells.push_back(text(core::icon_text(icon, state.icon_style())) | color(icon_color(icon.color)));
             cells.push_back(text(std::string(kIconGap)));
         }
@@ -1561,6 +1576,11 @@ void PreviewCache::build_rendered(int width) {
     rendered_ok_ = false;
     rendered_chunks_.clear();
     rendered_definitions_ = {};
+    csv_index_.reset();
+    json_index_.reset();
+    source_lines_.reset();
+    csv_columns_ = {};
+    rendered_chunk_count_ = 0;
     rendered_next_ = 0;
     const std::string_view source = preview_.text;
     if (source.size() > view_limits_.source_bytes) {
@@ -1572,26 +1592,44 @@ void PreviewCache::build_rendered(int width) {
     switch (preview_.view_kind) {
     case ViewKind::Markdown: {
         // Tek parçalık not bütün olarak üretilir (çıktı aynı); büyüğü parça parça (extend_rendered).
-        app::MarkdownScan scan = app::scan_markdown(source);
+        app::MarkdownScan scan = app::scan_markdown(source, app::kMarkdownChunkBytes, app::kMarkdownMaxChunkBytes,
+                                                    view_limits_.markdown);
         rendered_chunks_ = std::move(scan.chunks);
+        rendered_chunk_count_ = rendered_chunks_.size();
         rendered_next_ = 1;
         if (rendered_chunks_.size() > 1)
             rendered_definitions_ = std::move(scan.definitions);
         const std::string first =
             rendered_definitions_.empty()
                 ? std::string{}
-                : app::markdown_chunk_source(source, rendered_chunks_.front(), rendered_definitions_);
+                : app::markdown_chunk_source(source, rendered_chunks_.front(), rendered_definitions_,
+                                             view_limits_.markdown);
         view = render_markdown(first.empty() ? source.substr(0, rendered_chunks_.front().end) : std::string_view(first),
                                width, terminal_cell_width, view_limits_);
         break;
     }
     case ViewKind::Csv:
-        view = render_csv(source, width, terminal_cell_width, view_limits_);
-        rendered_note_ = view ? std::string{} : core::tr("tui.view_note_not_table");
+        // Dizin bir geçiştir (hücre kurulmaz); görünüm satır öbekleriyle parça parça.
+        csv_index_ = app::index_csv(source);
+        if (!csv_index_) {
+            rendered_note_ = core::tr("tui.view_note_not_table");
+            break;
+        }
+        source_lines_.emplace(source);
+        rendered_chunk_count_ = std::max<std::size_t>(
+            (std::min(csv_index_->row_count, view_limits_.table_rows) + kDataChunkLines - 1) / kDataChunkLines, 1);
+        view = data_chunk(rendered_next_++, view_limits_);
         break;
     case ViewKind::Json:
-        view = render_json(source, width, terminal_cell_width, view_limits_);
-        rendered_note_ = view ? std::string{} : core::tr("tui.view_note_invalid_json");
+        json_index_ = app::index_json(source);
+        if (!json_index_) {
+            rendered_note_ = core::tr("tui.view_note_invalid_json");
+            break;
+        }
+        source_lines_.emplace(source);
+        rendered_chunk_count_ =
+            std::max<std::size_t>((json_index_->line_count + kDataChunkLines - 1) / kDataChunkLines, 1);
+        view = data_chunk(rendered_next_++, view_limits_);
         break;
     case ViewKind::None:
         return;
@@ -1601,22 +1639,57 @@ void PreviewCache::build_rendered(int width) {
         rendered_ = rendered_preview(std::move(*view), preview_.view_kind);
         rendered_ok_ = true;
         if (truncated)
-            rendered_next_ = rendered_chunks_.size();
-        rendered_.partial = rendered_next_ < rendered_chunks_.size();
+            rendered_next_ = rendered_chunk_count_;
+        rendered_.partial = rendered_next_ < rendered_chunk_count_;
     }
+}
+
+RenderedView PreviewCache::data_chunk(std::size_t chunk, const ViewLimits& limits) {
+    const std::size_t first = chunk * kDataChunkLines;
+    if (csv_index_)
+        return render_csv_rows(preview_.text, *csv_index_, *source_lines_, first, kDataChunkLines,
+                               chunk + 1 == rendered_chunk_count_, csv_columns_, rendered_width_, terminal_cell_width,
+                               limits);
+    return render_json_lines(preview_.text, *json_index_, *source_lines_, first, kDataChunkLines, rendered_width_,
+                             terminal_cell_width, limits);
+}
+
+std::size_t PreviewCache::chunk_first_line(std::size_t chunk) const {
+    if (preview_.view_kind == ViewKind::Markdown)
+        return rendered_chunks_[chunk].first_line;
+    const std::size_t first = chunk * kDataChunkLines;
+    if (csv_index_)
+        return source_lines_->line_of(app::csv_rows(preview_.text, *csv_index_, first, 1, 0).at(0).offset);
+    const std::vector<app::JsonLine> line = app::json_lines(preview_.text, *json_index_, first, 1);
+    return line.empty() ? source_lines_->count() - 1 : source_lines_->line_of(line.front().offset);
 }
 
 // Parçanın kendi üretimi tek geçişle aynıdır; aradaki boş satır (üst düzey bloklar arası) ve satır sınırı
 // (limits.tui.view_lines) parçalar arasında sürer. Sınır aşan parçanın soluk notu onun üretiminden gelir.
 void PreviewCache::append_chunk() {
+    if (preview_.view_kind != ViewKind::Markdown) {
+        ViewLimits limits = view_limits_;
+        limits.lines = view_limits_.lines - std::min(view_limits_.lines, rendered_.lines.size());
+        RenderedView view = data_chunk(rendered_next_++, limits);
+        const bool truncated = view.lines.size() > limits.lines;
+        append_rendered(rendered_, std::move(view), 0);
+        if (truncated)
+            rendered_next_ = rendered_chunk_count_;
+        rendered_.partial = rendered_next_ < rendered_chunk_count_;
+        return;
+    }
     const app::MarkdownChunk& chunk = rendered_chunks_[rendered_next_++];
     // Başka parçadaki başvuru tanımı da çözülsün: tanımlar ardına eklenir (çıktı ve satır eşlemesi değişmez).
-    const std::string source = app::markdown_chunk_source(preview_.text, chunk, rendered_definitions_);
+    const std::string source =
+        app::markdown_chunk_source(preview_.text, chunk, rendered_definitions_, view_limits_.markdown);
     // Boş satır da sınıra sayılır; sınır dolduysa tek geçişteki gibi düşer.
     const bool gap = rendered_.lines.size() < view_limits_.lines;
     ViewLimits limits = view_limits_;
     limits.lines = view_limits_.lines - std::min(view_limits_.lines, rendered_.lines.size() + (gap ? 1 : 0));
     RenderedView view = render_markdown(source, rendered_width_, terminal_cell_width, limits);
+    // Zorla kesilen dev bloğun önüne taşınan satırlar (kod çiti, tablo başlığı) notta parçanın ilk satırındadır.
+    for (std::size_t& line : view.source_lines)
+        line -= std::min(line, chunk.carry_lines);
     const bool truncated = view.lines.size() > limits.lines;
     if (gap && !view.source_lines.empty()) {
         rendered_.line_starts.push_back(rendered_.text.size());
@@ -1627,8 +1700,8 @@ void PreviewCache::append_chunk() {
     }
     append_rendered(rendered_, std::move(view), chunk.first_line);
     if (truncated)
-        rendered_next_ = rendered_chunks_.size();
-    rendered_.partial = rendered_next_ < rendered_chunks_.size();
+        rendered_next_ = rendered_chunk_count_;
+    rendered_.partial = rendered_next_ < rendered_chunk_count_;
 }
 
 void PreviewCache::extend_rendered(const TuiState& state) {
@@ -1640,7 +1713,7 @@ void PreviewCache::extend_rendered(const TuiState& state) {
     const std::size_t wanted = state.preview_scroll() + (2 * static_cast<std::size_t>(std::max(state.window_height(), 1)));
     while (rendered_.partial &&
            (whole || rendered_.lines.size() <= wanted ||
-            (pending && rendered_chunks_[rendered_next_].first_line <= *pending)))
+            (pending && chunk_first_line(rendered_next_) <= *pending)))
         append_chunk();
 }
 

@@ -1,4 +1,5 @@
 #include "app/commands.hpp"
+#include "app/map_relations.hpp"
 #include "core/editor.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
@@ -163,31 +164,26 @@ void GuiState::link_note() {
         fail(core::Error{core::Error::Code::NotFound, "error.not_found", {{"path", *typed}}});
         return;
     }
-    if (const auto added = store_.add_relation(from, *target); !added) {
-        fail(added.error());
-        return;
-    }
-    changed();
-    map_.edges_changed();
-    reload_links();
-    status_ = core::tr("gui.linked", {{"path", target->string()}});
+    // TUI `L` gibi: hedeften sonra ilişkinin adı ve yönü sorulur (F1).
+    relate_map_notes({MapNodeKind::Note, from.string()}, {MapNodeKind::Note, target->string()});
 }
 
-void GuiState::unlink_note(const core::NotePath& other) {
+void GuiState::unlink_note(const core::RelatedNote& selected) {
     if (!shown_ || new_note_)
         return;
+    // Satır links_'tedir: reload_links onu yok eder, kopya alınır.
+    const core::RelatedNote relation = selected;
     const core::NotePath from = shown_->path;
-    if (!deciders.confirm_delete(
-            core::tr("gui.confirm_unlink", {{"from", from.string()}, {"to", other.string()}})))
+    const core::NotePath& other = relation.path;
+    const std::string question =
+        relation.name.empty()
+            ? core::tr("gui.confirm_unlink", {{"from", from.string()}, {"to", other.string()}})
+            : core::tr("gui.confirm_unlink_named",
+                       {{"from", from.string()}, {"to", other.string()}, {"name", relation.name}});
+    if (!deciders.confirm_delete(question))
         return;
-    if (const auto removed = store_.remove_relation(from, other); !removed) {
-        fail(removed.error());
-        return;
-    }
-    changed();
-    map_.edges_changed();
-    reload_links();
-    status_ = core::tr("gui.unlinked", {{"path", other.string()}});
+    finish_relation(app::unrelate_map_notes(store_, {MapNodeKind::Note, from.string()},
+                                            {MapNodeKind::Note, other.string()}, relation.id));
 }
 
 void GuiState::focus_links() {

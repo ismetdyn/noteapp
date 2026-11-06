@@ -332,50 +332,6 @@ std::expected<void, Error> WriteContext::link_appeared(const std::array<std::byt
     return {};
 }
 
-// İki yöndeki kenarlar: iki cihaz aynı ilişkiyi ters yönde kurmuş olabilir, ikisi de aynı ilişkidir.
-std::expected<std::vector<EdgeId>, Error> WriteContext::relation_edges(const NodeId& one, const NodeId& other,
-                                                                       std::string_view path) {
-    auto cursor = txn.neighbors(one, graph::Direction::Both, kRelatedTo);
-    if (!cursor)
-        return std::unexpected(from_graph(cursor.error(), path));
-    std::vector<EdgeId> edges;
-    while (true) {
-        auto next = cursor->next();
-        if (!next)
-            return std::unexpected(from_graph(next.error(), path));
-        if (!*next)
-            return edges;
-        if ((*next)->node == other)
-            edges.push_back((*next)->edge);
-    }
-}
-
-std::expected<void, Error> WriteContext::add_relation(const NodeId& from, const NodeId& to,
-                                                      std::string_view path) {
-    auto edges = relation_edges(from, to, path);
-    if (!edges)
-        return std::unexpected(edges.error());
-    if (!edges->empty())
-        return std::unexpected(already_exists(path));
-    // Kimlik uçlardan türer: iki cihazın aynı kurulumu tek kenardır.
-    const std::string canonical = id_text(from) + id_text(to);
-    NOTEAPP_TRY_GRAPH(
-        txn.put_edge(graph::derive_edge_id(kRelatedTo, as_bytes(canonical)), from, kRelatedTo, to), path);
-    return {};
-}
-
-std::expected<void, Error> WriteContext::remove_relation(const NodeId& one, const NodeId& other,
-                                                         std::string_view path) {
-    auto edges = relation_edges(one, other, path);
-    if (!edges)
-        return std::unexpected(edges.error());
-    if (edges->empty())
-        return std::unexpected(not_found(path));
-    for (const EdgeId& edge : *edges)
-        NOTEAPP_TRY_GRAPH(txn.delete_edge(edge), path);
-    return {};
-}
-
 std::expected<std::optional<NodeId>, Error> WriteContext::ensure_folder(std::string_view path) {
     std::optional<NodeId> parent;
     if (path.empty())

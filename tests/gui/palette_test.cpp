@@ -179,10 +179,20 @@ TEST_CASE_FIXTURE(PaletteScene, "Ctrl+R relates the shown note to another; the r
         return std::optional<std::string>("b");
     };
     state->deciders.confirm_delete = [](const std::string&) { return true; };
+    // F1: hedeften sonra ad penceresi (TUI `L` ile aynı); ad ve yön ilişkiye gider.
+    noteapp::gui::RelationRequest asked;
+    state->deciders.relation = [&](const noteapp::gui::RelationRequest& request) {
+        asked = request;
+        return std::optional(noteapp::core::RelationSpec{"uses", true});
+    };
     press(*view, ImGuiMod_Ctrl | ImGuiKey_R);
     CHECK_FALSE(asked_title.empty());
+    CHECK(asked.from == "a.md");
+    CHECK(asked.to == "b.md");
     REQUIRE(state->links().related.size() == 1);
-    CHECK(state->links().related.front().string() == "b.md");
+    CHECK(state->links().related.front().path.string() == "b.md");
+    CHECK(state->links().related.front().name == "uses");
+    CHECK(state->links().related.front().direction == noteapp::core::RelationDirection::Outgoing);
 
     state->set_links_open(false);
     press(*view, ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_L);
@@ -190,7 +200,7 @@ TEST_CASE_FIXTURE(PaletteScene, "Ctrl+R relates the shown note to another; the r
     CHECK(state->links_open());
     CHECK(view->item_rects().contains("link:b.md"));
 
-    state->unlink_note(*noteapp::core::NotePath::parse("b.md"));
+    state->unlink_note(state->links().related.front());
     CHECK(state->links().related.empty());
 }
 

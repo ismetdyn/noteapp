@@ -157,8 +157,14 @@ public:
     void add(const DeviceId& device, const Frame& frame) {
         const std::size_t index = frames_.size();
         frames_.push_back(info_of(device, frame));
-        for (std::size_t position = 0; position < frame.ops.size(); ++position)
-            add_op(At{index, position}, frame.ops[position]);
+        // Kenar özelliği dışındaki her işlem bir dönem açar: aynı dönemdeki özellik yazmaları aynı
+        // karardadır.
+        std::size_t epoch = 0;
+        for (std::size_t position = 0; position < frame.ops.size(); ++position) {
+            add_op(At{index, position}, frame.ops[position], epoch);
+            if (!propped_edge(frame.ops[position]))
+                ++epoch;
+        }
     }
 
     void decide() {
@@ -183,7 +189,7 @@ public:
             return edge != edges_.end() && std::ranges::binary_search(edge->second.deletes, frame);
         }
         if (const std::optional<EdgeId> edge = propped_edge(op))
-            return edge_keeps(*edge, At{frame, position});
+            return prop_keeps(*edge, At{frame, position});
         return true;
     }
 
@@ -215,6 +221,10 @@ private:
         std::vector<At> props;
         std::vector<std::size_t> deletes;
         std::vector<At> kept;
+        std::vector<At> kept_props;  // props'tan tutulanlar, sıralı
+        // Çerçeve başına silmelerin konumları: aynı çerçevedeki put ve özellikle sıra konumla belirlenir.
+        std::map<std::size_t, std::vector<std::size_t>> delete_ops;
+        std::pair<std::size_t, std::size_t> last_prop{SIZE_MAX, 0};  // son kaydedilen (çerçeve, dönem)
     };
 
     static FrameInfo info_of(const DeviceId& device, const Frame& frame) {
@@ -252,14 +262,31 @@ private:
     }
 
     void add_put(EdgeHistory& edge, At at, const EdgePut& put) {
-        // Art arda gelen aynı kimlik karara bir şey katmaz; aynı çerçevede tekrar da çoğaltmaz.
+        // Art arda gelen aynı kimlik karara bir şey katmaz; aynı çerçevede tekrar da çoğaltmaz. Araya aynı
+        // çerçevede bu kenarın silmesi girdiyse tekrar değildir: silinen kenarı yeniden kurar (yerinde
+        // uygulama da öyle yapar).
+        const auto deleted_since = [&] {
+            const auto ops = edge.delete_ops.find(at.frame);
+            return ops != edge.delete_ops.end() && ops->second.back() > edge.puts.back().at.op;
+        };
         if (!edge.puts.empty() && edge.puts.back().at.frame == at.frame && edge.puts.back().src == put.src &&
-            edge.puts.back().type == put.type && edge.puts.back().dst == put.dst)
+            edge.puts.back().type == put.type && edge.puts.back().dst == put.dst && !deleted_since())
             return;
         edge.puts.push_back(PutAt{at, put.src, put.type, put.dst});
     }
 
-    void add_op(At at, const Op& op) {
+    // Çerçevenin bir dönemindeki ilk özellik yazması yeter: dönem içinde araya put, silme ya da düğüm yazması
+    // girmez, sonraki yazmalar aynı şeyleri görür ve aynı kararı alır. Dönemler çerçevenin işlem sayısıyla
+    // sınırlıdır; karar bütçesi (kMaxEdgePropDecisions) kayıtları sayar.
+    static void add_prop(EdgeHistory& edge, At at, std::size_t epoch) {
+        const std::pair<std::size_t, std::size_t> key{at.frame, epoch};
+        if (edge.last_prop == key)
+            return;
+        edge.last_prop = key;
+        edge.props.push_back(at);
+    }
+
+    void add_op(At at, const Op& op, std::size_t epoch) {
         if (const std::optional<NodeId> node = written_node(op)) {
             add_write(nodes_[*node].writes, at);
         } else if (const auto* del = std::get_if<NodeDel>(&op)) {
@@ -267,9 +294,11 @@ private:
         } else if (const auto* put = std::get_if<EdgePut>(&op)) {
             add_put(edges_[put->id], at, *put);
         } else if (const auto* edge_del = std::get_if<EdgeDel>(&op)) {
-            add_unique(edges_[edge_del->id].deletes, at.frame);
+            EdgeHistory& edge = edges_[edge_del->id];
+            add_unique(edge.deletes, at.frame);
+            edge.delete_ops[at.frame].push_back(at.op);
         } else if (const std::optional<EdgeId> edge = propped_edge(op)) {
-            add_write(edges_[*edge].props, at);
+            add_prop(edges_[*edge], at, epoch);
         }
     }
 
@@ -406,8 +435,20 @@ private:
     // Cihazın en son görülen put'u yeter: bir silme onu görmediyse, daha sonrakileri de görmemiştir... tersi
     // de: daha eskisini görmeyen silme sonrakini hiç görmez, dolayısıyla eski geçerliyse yenisi de
     // geçerlidir.
+    // `prop`, `put`'u silen bir silmeyi gördü mü. Farklı çerçeveler görmeyle, aynı çerçeve konumla sıralanır.
+    bool saw_put_deleted(At prop, At put, std::size_t del, const std::vector<std::size_t>& positions) const {
+        const bool after_put = del != put.frame ? frame_sees(del, put.frame) : positions.back() > put.op;
+        if (del != prop.frame)
+            return after_put && frame_sees(prop.frame, del);
+        if (del != put.frame)
+            return after_put && positions.front() < prop.op;
+        // Üçü aynı çerçevede: put ile özellik arasında bir silme.
+        const auto next = std::ranges::upper_bound(positions, put.op);
+        return next != positions.end() && *next < prop.op;
+    }
+
     bool saw_live_put(At prop, const std::map<DeviceId, std::vector<At>>& live_by_device,
-                      const std::vector<std::size_t>& deletes) const {
+                      const EdgeHistory& edge) const {
         return std::ranges::any_of(live_by_device, [&](const auto& entry) {
             const std::vector<At>& puts = entry.second;
             const std::uint64_t seen = seen_on(prop.frame, entry.first);
@@ -418,8 +459,8 @@ private:
             if (after == puts.begin())
                 return false;
             const At put = *(after - 1);
-            return std::ranges::none_of(deletes, [&](std::size_t del) {
-                return frame_sees(prop.frame, del) && frame_sees(del, put.frame);
+            return std::ranges::none_of(edge.deletes, [&](std::size_t del) {
+                return saw_put_deleted(prop, put, del, edge.delete_ops.at(del));
             });
         });
     }
@@ -444,10 +485,12 @@ private:
         // Silme yoksa karşılaştırma da yoktur: sınır hızlı yolun gördüğü durumu değiştirmez.
         const bool within_budget =
             edge.deletes.empty() || edge.props.size() <= kMaxEdgePropDecisions / edge.deletes.size();
+        edge.kept_props.clear();
         if (within_budget)
             for (const At prop : edge.props)
-                if (!blocked(prop) && saw_live_put(prop, live_by_device, edge.deletes))
-                    edge.kept.push_back(prop);
+                if (!blocked(prop) && saw_live_put(prop, live_by_device, edge))
+                    edge.kept_props.push_back(prop);
+        edge.kept.insert(edge.kept.end(), edge.kept_props.begin(), edge.kept_props.end());
         std::ranges::sort(edge.kept);
         keep_effective_deletes(edge.deletes, edge.kept);
     }
@@ -455,6 +498,21 @@ private:
     bool edge_keeps(const EdgeId& id, At at) const {
         const auto edge = edges_.find(id);
         return edge != edges_.end() && std::ranges::binary_search(edge->second.kept, at);
+    }
+
+    // Özellik yazması, aynı çerçevede kendinden önceki son kayıtlı yazmanın (dönemin ilkinin) kararını alır
+    // (add_prop). Tam konum aranırsa dönemin ikinci yazması yeniden kurmada düşer, yerinde uygulamada
+    // kalırdı.
+    bool prop_keeps(const EdgeId& id, At at) const {
+        const auto edge = edges_.find(id);
+        if (edge == edges_.end())
+            return false;
+        const std::vector<At>& props = edge->second.props;
+        auto recorded = std::ranges::upper_bound(props, at);
+        if (recorded == props.begin())
+            return false;
+        --recorded;
+        return recorded->frame == at.frame && std::ranges::binary_search(edge->second.kept_props, *recorded);
     }
 
     std::vector<FrameInfo> frames_;

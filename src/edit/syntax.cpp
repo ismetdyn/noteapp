@@ -1212,6 +1212,19 @@ SyntaxLanguage syntax_language_for(std::string_view extension) {
     return rule == std::ranges::end(kExtensions) ? SyntaxLanguage::Plain : rule->language;
 }
 
+SyntaxLanguage fence_language(std::string_view tag) {
+    // Tokenizer uzantı bekler; kod bloğu etiketi çoğu zaman dilin tam adıdır.
+    static constexpr std::pair<std::string_view, std::string_view> kAliases[] = {
+        {"python", "py"}, {"javascript", "js"}, {"typescript", "ts"}, {"shell", "sh"},          {"golang", "go"},
+        {"rust", "rs"},   {"c++", "cpp"},       {"cplusplus", "cpp"}, {"docker", "dockerfile"},
+    };
+    std::string lowered(tag);
+    std::ranges::transform(lowered, lowered.begin(), folded);
+    const auto* alias = std::ranges::find(kAliases, std::string_view(lowered),
+                                          &std::pair<std::string_view, std::string_view>::first);
+    return syntax_language_for(alias == std::ranges::end(kAliases) ? std::string_view(lowered) : alias->second);
+}
+
 SyntaxState highlight_line(SyntaxLanguage language, std::string_view line, SyntaxState entry,
                            std::vector<SyntaxSpan>* spans, std::size_t max_line_bytes) {
     if (line.size() > max_line_bytes)

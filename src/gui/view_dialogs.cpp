@@ -1,16 +1,20 @@
+#include "app/map_relations.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
+#include "edit/display_text.hpp"
 #include "gui/view_internal.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <imgui.h>
 #include <imgui_stdlib.h>
 #include <iterator>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <utility>
 
@@ -122,6 +126,7 @@ void View::install_deciders() {
     state_.deciders.link_target = [this](const std::string& title) {
         return ask_folder_name(title, {}, core::tr("gui.link_label"));
     };
+    state_.deciders.relation = [this](const RelationRequest& request) { return ask_relation(request); };
     state_.deciders.palette = [this] { return ask_palette(); };
     state_.deciders.help = [this] { show_help_dialog(); };
     state_.deciders.export_path = [this](const std::string& suggested) { return ask_export_path(suggested); };
@@ -271,6 +276,123 @@ std::optional<std::string> View::ask_folder_name(const std::string& title, const
         const auto first = name.find_first_not_of(" \t");
         if (first != std::string::npos)
             result = name.substr(first, name.find_last_not_of(" \t") - first + 1);
+        return true;
+    });
+    return result;
+}
+
+// F1 ad penceresi (SPEC-gui "Harita"): ad alanı, altında var olan adlar (app::match_relation_names; sayı
+// soluk), "Yönlü" kutusu, Tamam/Vazgeç. ↑↓ listede yürür, Enter seçili adı (yoksa yazılanı) alır; tıklama adı
+// alana koyar. Boş ad adsızdır. Ad güvenilmezdir (senkron): bidi/sıfır genişlik U+FFFD (terminal_safe), uzun ad
+// kısalır, biçim dizgisine girmez.
+std::optional<core::RelationSpec> View::ask_relation(const RelationRequest& request) {
+    constexpr std::size_t kNone = SIZE_MAX;
+    constexpr float kVisibleRows = 8.0F;
+    const std::span<const core::RelationName> names =
+        request.names ? std::span<const core::RelationName>(*request.names) : std::span<const core::RelationName>{};
+    std::string name = request.initial;
+    std::optional<bool> directed_choice;  // kutuya dokunulmadıkça adın varsayılanı
+    std::size_t selected = kNone;
+    bool focus_field = true;
+    std::string error;  // reddedilen adın nedeni; yazımla kalkar
+    std::optional<core::RelationSpec> result;
+    const std::string title =
+        core::tr(request.rename ? "map.relation_rename_title" : "map.relation_title",
+                 {{"from", label_safe(tui::terminal_safe(request.from))}, {"to", label_safe(tui::terminal_safe(request.to))}});
+    run_modal(title, [&]() -> bool {
+        const app::RelationMatches matches = app::match_relation_names(names, name);
+        if (selected != kNone && selected >= matches.names.size())
+            selected = kNone;
+        const float width = dialog_content_width();
+        if (std::exchange(focus_field, false))
+            ImGui::SetKeyboardFocusHere();
+        ImGui::SetNextItemWidth(width);
+        PaletteKeys keys{&selected, matches.names.size()};
+        const std::string hint = core::tr("map.relation_name_hint");
+        bool submitted = ImGui::InputTextWithHint(
+            "##relation_name", hint.c_str(), &name,
+            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory, palette_callback, &keys);
+        remember_item_center("relation_name");
+        if (ImGui::IsItemEdited()) {
+            selected = kNone;
+            error.clear();
+        }
+
+        std::optional<std::size_t> clicked;
+        if (!matches.names.empty()) {
+            const float row_height = ImGui::GetTextLineHeightWithSpacing();
+            const float rows = std::min(static_cast<float>(matches.names.size()), kVisibleRows);
+            ImGui::BeginChild("##relation_rows", ImVec2(width, row_height * rows), theme::kPaneChildFlags);
+            const float pad = ImGui::GetStyle().FramePadding.x;
+            for (std::size_t i = 0; i < matches.names.size(); ++i) {
+                const core::RelationName& candidate = matches.names[i];
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::Selectable("##row", i == selected))
+                    clicked = i;
+                if (i == selected && !ImGui::IsItemVisible())
+                    ImGui::SetScrollHereY();
+                const ImVec2 min = ImGui::GetItemRectMin();
+                const ImVec2 max = ImGui::GetItemRectMax();
+                const std::string count = std::to_string(candidate.count);
+                const float count_width = text_width(count);
+                const std::string shown =
+                    keep_start(tui::terminal_safe(candidate.display), max.x - min.x - count_width - 3.0F * pad);
+                ImDrawList* draw = ImGui::GetWindowDrawList();
+                draw->AddText(ImVec2(min.x + pad, min.y), ImGui::GetColorU32(ImGuiCol_Text), shown.c_str());
+                draw->AddText(ImVec2(max.x - pad - count_width, min.y), ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                              count.c_str());
+                remember_item_center("relation_row:" + candidate.key);
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+        }
+        if (clicked) {
+            name = matches.names[*clicked].display;
+            selected = kNone;
+            error.clear();
+            focus_field = true;  // Enter yine alandan: tıklama alanın odağını aldı
+        }
+        if (!error.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::current().danger);
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
+            ImGui::TextUnformatted(error.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::PopStyleColor();
+            remember_item_center("relation_error");
+        }
+
+        // Yazılan yeni bir adsa ya da boşsa ne olacağı söylenir.
+        const auto trimmed = core::relation_name(name, SIZE_MAX);
+        if (trimmed && trimmed->empty()) {
+            ImGui::TextDisabled("%s", core::tr("map.relation_unnamed_hint").c_str());
+        } else if (trimmed && !matches.exact) {
+            const std::string fresh = core::tr("map.relation_new", {{"name", tui::terminal_safe(*trimmed)}});
+            ImGui::TextDisabled("%s", keep_start(fresh, width).c_str());
+            remember_item_center("relation_new");
+        }
+
+        bool directed = directed_choice.value_or(app::default_directed(names, name));
+        if (!request.rename) {
+            if (ImGui::Checkbox(core::tr("map.relation_directed_box").c_str(), &directed))
+                directed_choice = directed;
+            remember_item_center("relation_directed");
+        }
+        const DialogAnswer answer = dialog_ok_cancel();
+        if (answer.cancel || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+            return true;  // result boş: vazgeçti
+        if (!submitted && !answer.ok)
+            return false;
+        if (submitted && selected != kNone) {
+            name = matches.names[selected].display;
+            directed = directed_choice.value_or(app::default_directed(names, name));
+        }
+        // Deponun kuralı burada da (TUI ad satırı gibi): geçersiz ad pencereyi kapatmaz, metin kaybolmaz.
+        if (const auto valid = core::relation_name(name, request.max_bytes); !valid) {
+            error = tui::terminal_safe(core::format_error(valid.error()));
+            focus_field = true;
+            return false;
+        }
+        result = core::RelationSpec{name, directed};
         return true;
     });
     return result;

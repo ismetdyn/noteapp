@@ -240,6 +240,27 @@ Result<bool> ReadTxn::has_node(NodeId id) {
     return row_exists(*store_, StatementId::NodeGet, id.bytes);
 }
 
+Result<std::optional<EdgeEnds>> ReadTxn::edge(EdgeId id) {
+    if (const Result<void> open = require_open(store_); !open)
+        return std::unexpected(open.error());
+    Result<Statement> statement = store_->statement(StatementId::EdgeGet);
+    if (!statement)
+        return std::unexpected(statement.error());
+    statement->bind_blob(1, id.bytes);
+    const Result<bool> row = statement->step();
+    if (!row)
+        return std::unexpected(row.error());
+    if (!*row)
+        return std::optional<EdgeEnds>{};
+    const Result<NodeId> src = id_from<NodeId>(statement->column_blob(0));
+    if (!src)
+        return std::unexpected(src.error());
+    const Result<NodeId> dst = id_from<NodeId>(statement->column_blob(2));
+    if (!dst)
+        return std::unexpected(dst.error());
+    return std::optional<EdgeEnds>{EdgeEnds{*src, std::string(statement->column_text(1)), *dst}};
+}
+
 Result<std::vector<std::string>> ReadTxn::labels(NodeId id) {
     if (const Result<void> open = require_open(store_); !open)
         return std::unexpected(open.error());

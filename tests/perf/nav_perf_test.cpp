@@ -1,10 +1,12 @@
 // T64: gezinme depo okuması yapmaz (G4'ten beri okuma graph.db'dendir; generation her gövde okumasında
 // artar). Sayaç ölçülür, duvar saati değil: yük altında yanlış kırmızı vermez. Gerçek terminal sayıları
 // (boşalma süresi, kare, tuş gecikmesi) tmux ölçümündedir; bkz. SPEC-tui "Değişiklik 2026-11-01".
+#include "app/data_preview.hpp"
 #include "core/config.hpp"
 #include "core/note_store.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
+#include "tui/editor_view.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
@@ -188,26 +190,30 @@ std::string large_markdown(std::size_t bytes) {
     return text;
 }
 
-}  // namespace
+// Biçimli REVIEW ölçümü (NX-D, NY-P): sınırlar kapalı (view_bytes, view_lines, table_rows = 0). Görünüm görünen
+// pencere kadar üretilir: biçimli görünüme geçiş karesi tuş bütçesinde (50 ms), kaydırma karesi 16 ms'de, sona
+// atlamadan sonraki kare 16 ms'de. Notun okunması (ham görünümle ortak, satırlara bölme) ayrı ölçülür; sona atlama
+// (`G`) tüm görünümü üretir: süresi bilgi için yazılır. Wine çarpanı wine.hpp kuralıyla.
+struct ReviewSample {
+    double load = 0.0;
+    double first = 0.0;
+    double worst = 0.0;
+    double bottom = 0.0;
+    double after_bottom = 0.0;
+    double rss_mib = -1.0;  // -1: bu platformda ölçülmez
+};
 
-// NX-D: biçimli REVIEW'da 20 MiB md notu, sınırlar kapalı (view_bytes = 0, view_lines = 0). Görünüm görünen
-// pencere kadar üretilir: biçimli görünüme geçiş karesi tuş bütçesinde (50 ms), kaydırma karesi 16 ms'de. Notun
-// okunması (ham görünümle ortak, satırlara bölme) ayrı ölçülür; sona atlama (`G`) tüm görünümü üretir. İkisinin
-// süresi bilgi için yazılır.
-TEST_CASE("nav perf: REVIEW renders a 20 MiB markdown note lazily within the key budget") {
-    constexpr std::size_t kNoteBytes = std::size_t{20} * 1024 * 1024;
-    constexpr double kFirstBudgetMs = 50.0;
-    constexpr double kFrameBudgetMs = 16.0;
+ReviewSample review_formatted(const std::string& name, const std::string& note) {
     constexpr int kFrames = 10;
     const test::TempDir dir;
-    test::upsert_note(dir.path(), "büyük.md", large_markdown(kNoteBytes));
+    test::upsert_note(dir.path(), name, note);
     const core::NoteStore store(dir.path());
     tui::TuiState state;
     state.set_notes(store.list());
     const ftxui::Dimensions window{120, 40};
     state.set_window(window.dimx, window.dimy);
     const core::TuiLimits limits =
-        core::parse_config("[limits.tui]\nview_bytes = 0\nview_lines = 0\n").config.limits.tui;
+        core::parse_config("[limits.tui]\nview_bytes = 0\nview_lines = 0\ntable_rows = 0\n").config.limits.tui;
     tui::PreviewCache cache(tui::view_limits_of(limits), tui::syntax_limits_of(limits));
     const std::chrono::steady_clock::time_point now{std::chrono::hours(1)};
     auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(window.dimx), ftxui::Dimension::Fixed(window.dimy));
@@ -218,45 +224,159 @@ TEST_CASE("nav perf: REVIEW renders a 20 MiB markdown note lazily within the key
         ftxui::Render(screen, tui::render(state, shown, {"sync off", ""}, window));
         return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     };
+    ReviewSample sample;
     state.handle(tui::Key::Right);
     state.handle(tui::Key::Char, "R");  // ham: yalnız notun okunması
-    const double load = frame();
+    sample.load = frame();
     REQUIRE_FALSE(cache.shown().rendered);
     state.handle(tui::Key::Char, "R");
     const auto before = test::resident_bytes();
-    const double first = frame();
+    sample.first = frame();
     REQUIRE(cache.shown().rendered);
-    const double rss_mib = test::resident_growth_mib(before).value_or(-1.0);  // -1: bu platformda ölçülmez
-    double worst = 0.0;
+    sample.rss_mib = test::resident_growth_mib(before).value_or(-1.0);
     for (int i = 0; i < kFrames; ++i) {
         state.handle(tui::Key::PageDown);
-        worst = std::max(worst, frame());
+        sample.worst = std::max(sample.worst, frame());
     }
     CHECK(state.preview_scroll() > 0);
     state.handle(tui::Key::Char, "G");
-    const double bottom = frame();
-    const double steady_after_bottom = frame();
-    MESSAGE("TUI REVIEW 20 MiB md: note read (raw) ", load, " ms; formatted first ", first, " ms, worst scroll frame ",
-            worst, " ms, rss +", rss_mib, " MiB; G ", bottom, " ms, then ", steady_after_bottom, " ms");
-    CHECK(first <= kFirstBudgetMs);
-    CHECK(worst <= kFrameBudgetMs);
-    CHECK(steady_after_bottom <= kFrameBudgetMs);
+    sample.bottom = frame();
+    sample.after_bottom = frame();
+    return sample;
+}
 
-    // Bilgi: tek blok (20 MiB'lık tek satır) parçalara bölünmez; biçimli görünüm satırın tamamını sarar
-    // (limits.tui.view_bytes varsayılanı bu yüzden kalır).
-    const test::TempDir single_dir;
-    test::upsert_note(single_dir.path(), "tek.md", std::string(kNoteBytes, 'x'));
-    const core::NoteStore single_store(single_dir.path());
-    tui::TuiState single;
-    single.set_notes(single_store.list());
-    single.set_window(window.dimx, window.dimy);
-    tui::PreviewCache single_cache(tui::view_limits_of(limits), tui::syntax_limits_of(limits));
+void check_review(const char* label, const std::string& name, const std::string& note) {
+    const double factor = test::running_under_wine() ? test::kWineFactor : 1.0;
+    constexpr double kFirstBudgetMs = 50.0;
+    constexpr double kFrameBudgetMs = 16.0;
+    const ReviewSample sample = review_formatted(name, note);
+    MESSAGE("TUI REVIEW ", std::string(label), ": note read (raw) ", sample.load, " ms; formatted first ", sample.first,
+            " ms, worst scroll frame ", sample.worst, " ms, rss +", sample.rss_mib, " MiB; G ", sample.bottom,
+            " ms, then ", sample.after_bottom, " ms");
+    CHECK(sample.first <= kFirstBudgetMs * factor);
+    CHECK(sample.worst <= kFrameBudgetMs * factor);
+    CHECK(sample.after_bottom <= kFrameBudgetMs * factor);
+}
+
+constexpr std::size_t kLargeNoteBytes = std::size_t{20} * 1024 * 1024;
+
+}  // namespace
+
+TEST_CASE("nav perf: REVIEW renders a 20 MiB markdown note lazily within the key budget") {
+    check_review("20 MiB md", "büyük.md", large_markdown(kLargeNoteBytes));
+}
+
+// NY-P: kesim yeri olmayan tek blok zorla parçalanır (kMarkdownMaxChunkBytes); csv ve json dizinden satır öbekleriyle.
+TEST_CASE("nav perf: REVIEW renders a 20 MiB single-line markdown note lazily within the key budget") {
+    check_review("20 MiB single-line md", "tek.md", std::string(kLargeNoteBytes, 'x'));
+}
+
+TEST_CASE("nav perf: REVIEW renders a 20 MiB JSON note lazily within the key budget") {
+    std::string text = "[";
+    for (int i = 0; text.size() < kLargeNoteBytes; ++i)
+        text += (i > 0 ? "," : "") + std::string("{\"id\":") + std::to_string(i) +
+                ",\"ad\":\"Çağrı\",\"etiketler\":[\"a\",\"b\",[]],\"iç\":{\"x\":1.5,\"y\":null,\"z\":{}}}";
+    check_review("20 MiB minified JSON", "büyük.json", text + "]");
+}
+
+TEST_CASE("nav perf: REVIEW renders a 20 MiB CSV note lazily within the key budget") {
+    std::string text = "id,ad,şehir,not,a,b,c,d\n";
+    for (int i = 0; text.size() < kLargeNoteBytes; ++i)
+        text += std::to_string(i) + ",Çağrı,\"İstanbul, merkez\",\"uzun \"\"alıntılı\"\" not\",1,2.5,x,y\n";
+    check_review("20 MiB CSV", "büyük.csv", text);
+}
+
+// NY-P inceleme: CSV satır dizininin belleği. 20 MiB'lık 2 baytlık satırlar (~10 milyon satır): satır başına 8 baytlık
+// ofset ~80 MB olurdu (notun 4 katı). Dizin notun dörtte birinden küçük kalmalı.
+TEST_CASE("nav perf: the row index of a 20 MiB CSV of 2-byte lines stays small") {
+    std::string text = "a,b\n";
+    text.reserve(kLargeNoteBytes + 8);
+    while (text.size() < kLargeNoteBytes)
+        text += ",\n";
+    const auto before = test::resident_bytes();
     const auto start = std::chrono::steady_clock::now();
-    const tui::Preview& single_shown = single_cache.throttled(single, single_store, now);
-    single.set_preview_lines(&single_shown.lines, single_cache.generation(), single_shown.partial);
-    ftxui::Render(screen, tui::render(single, single_shown, {"sync off", ""}, window));
-    MESSAGE("TUI REVIEW 20 MiB single-line md, formatted: first ",
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(), " ms");
+    const std::optional<app::CsvIndex> index = app::index_csv(text);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    REQUIRE(index);
+    const std::optional<double> rss = test::resident_growth_mib(before);
+    MESSAGE("CSV index, 20 MiB of 2-byte rows: ", ms, " ms, rss +", rss.value_or(-1.0), " MiB");
+    if (rss)
+        CHECK(*rss <= static_cast<double>(kLargeNoteBytes) / (4.0 * 1024.0 * 1024.0));
+}
+
+// NY-P güvenlik (Sev-3): kontrol noktası satır sayısının yanında bayt mesafesiyle de konur. Satırları arasında 10 MB
+// boş satır (csv) ya da belirteçleri arasında 10 MB boşluk (json) olan notta görünen pencere her karede notun başından
+// ya da bloğun başından taranmaz: 200 karelik pencere okuması 50 ms'de biter (önce kare başına ~10 MB tarama).
+TEST_CASE("nav perf: reading a window after 10 MB of padding does not rescan the padding every frame") {
+    constexpr std::size_t kPadding = std::size_t{10} * 1024 * 1024;
+    constexpr int kFrames = 200;
+    constexpr double kBudgetMs = 50.0;
+    const auto timed = [](const auto& frame) {
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < kFrames; ++i)
+            frame();
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    };
+
+    std::string csv = "n,x\n";
+    for (int i = 1; i < 100; ++i) {
+        csv += std::to_string(i) + ",x\n";
+        if (i == 30)
+            csv += std::string(kPadding, '\n');
+    }
+    const std::optional<app::CsvIndex> rows = app::index_csv(csv);
+    REQUIRE(rows);
+    const double csv_ms = timed([&] { CHECK(app::csv_rows(csv, *rows, 40, 30).front().cells.front() == "40"); });
+
+    std::string json = "[";
+    for (int i = 0; i < 100; ++i) {
+        json += std::to_string(i) + (i + 1 < 100 ? "," : "");
+        if (i == 50)
+            json += std::string(kPadding, ' ');
+    }
+    json += "]";
+    const std::optional<app::JsonIndex> lines = app::index_json(json);
+    REQUIRE(lines);
+    const double json_ms = timed([&] { CHECK(app::json_lines(json, *lines, 60, 30).front().text == "59,"); });
+    MESSAGE("200 frames after 10 MB of padding: csv ", csv_ms, " ms, json ", json_ms, " ms");
+    CHECK(csv_ms <= kBudgetMs);
+    CHECK(json_ms <= kBudgetMs);
+}
+
+// NY-P güvenlik (Sev-2): düşman not; 10 MB tanım ve her parçası tanım tablosunun büyük bölümünü anan yalnız-başvuru
+// satırları. Parça başına eklenen tanım iş bütçesiyle sınırlı (limits.tui.preview_definition_bytes): bütün parçaların
+// üretimi (TUI'de `G` ya da not içi arama) tanımsız aynı notun en çok 4 katı sürer. Bütçesiz her parça ~1,3 MB tanım
+// ayrıştırırdı (parça sayısı × tanım baytı).
+TEST_CASE("nav perf: rendering every chunk of a note referencing 10 MB of definitions stays linear") {
+    constexpr std::size_t kDefinitionBytes = std::size_t{10} * 1024 * 1024;
+    constexpr double kMaxRatio = 4.0;
+    std::string definitions;
+    int labels = 0;
+    for (; definitions.size() < kDefinitionBytes; ++labels)
+        definitions += "[e" + std::to_string(labels) + "]: https://example.org/uzun/bir/yol/" +
+                       std::to_string(labels) + "/" + std::string(40, 'p') + "\n";
+    std::string references;
+    for (int i = 0; references.size() < kDefinitionBytes; ++i) {
+        references += "[e" + std::to_string(i % labels) + "] ";
+        if (i % 20 == 19)
+            references += i % 400 == 399 ? "\n\nBölüm\n\n" : "\n";
+    }
+    const auto render_all = [](const std::string& note) {
+        const auto start = std::chrono::steady_clock::now();
+        const app::MarkdownScan scan = app::scan_markdown(note);
+        std::size_t lines = 0;
+        for (const app::MarkdownChunk& chunk : scan.chunks)
+            lines += tui::render_markdown(app::markdown_chunk_source(note, chunk, scan.definitions), 120,
+                                          tui::terminal_cell_width)
+                         .lines.size();
+        CHECK(lines > 0);
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    };
+    const double crafted = render_all(references + "\n\n" + definitions);
+    const double plain = render_all(references + "\n\n" + std::string(definitions.size(), 'x') + "\n");
+    MESSAGE("all chunks, 10 MB references + 10 MB definitions: ", crafted, " ms; same size without definitions: ",
+            plain, " ms");
+    CHECK(crafted <= kMaxRatio * plain);
 }
 
 namespace {

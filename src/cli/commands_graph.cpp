@@ -5,6 +5,7 @@
 //   {"k":"edge","id":"<32 hex>","src":"<32 hex>","type":"IN_FOLDER","dst":"<32 hex>","props":{}}
 // Değer: s metin, b bayt (base64), i tam sayı (metin), f double (metin), t zaman (ms, metin), p bool.
 // Eşzamanlı head'lerden yalnız okunan değer yazılır: taşıma biçimidir, senkronun yerine geçmez.
+#include "app/map_relations.hpp"
 #include "cli/commands.hpp"
 #include "cli/highlight.hpp"
 #include "core/atomic_file.hpp"
@@ -23,6 +24,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <span>
@@ -950,6 +952,258 @@ int run_graph(const ParsedArgs& args, const core::Config& config) {
     if (sub == "import")
         return run_graph_import(args.rest, config);
     return usage_error("graph");
+}
+
+namespace {
+
+// --- note relation (SPEC-cli "İlişkiler"): kural NoteStore'un, ileti app::map_relations'ın (TUI/GUI ile aynı). ---
+
+int relation_usage() {
+    return usage_error("relation");
+}
+
+struct RelationArgs {
+    std::vector<std::string> positional;
+    std::optional<std::string> name;
+    std::optional<std::string> id;
+    bool directed = false;
+    bool json = false;
+};
+
+// `allowed`: fiilin seçenekleri. `--` sonrası her şey konumludur (`-` ile başlayan ad böyle verilir).
+std::expected<RelationArgs, int> parse_relation_args(const std::vector<std::string>& rest,
+                                                     std::span<const std::string_view> allowed) {
+    RelationArgs parsed;
+    bool only_positional = false;
+    for (std::size_t i = 1; i < rest.size(); ++i) {
+        const std::string& arg = rest[i];
+        if (only_positional || arg.empty() || arg[0] != '-') {
+            parsed.positional.push_back(arg);
+            continue;
+        }
+        if (arg == "--") {
+            only_positional = true;
+            continue;
+        }
+        if (std::ranges::find(allowed, arg) == allowed.end())
+            return std::unexpected(unknown_option_error("relation", arg));
+        if (arg == "--directed") {
+            parsed.directed = true;
+        } else if (arg == "--json") {
+            parsed.json = true;
+        } else if (i + 1 >= rest.size()) {
+            return std::unexpected(missing_value_error("relation", arg));
+        } else {
+            (arg == "--name" ? parsed.name : parsed.id) = rest[++i];
+        }
+    }
+    return parsed;
+}
+
+std::expected<core::NotePath, int> relation_note(const std::string& text) {
+    auto path = core::NotePath::parse(text);
+    if (!path)
+        return std::unexpected(fail(path.error()));
+    return std::move(*path);
+}
+
+app::MapNode map_note(const core::NotePath& path) {
+    return {app::MapNodeKind::Note, path.string()};
+}
+
+std::string_view direction_word(core::RelationDirection direction) {
+    switch (direction) {
+    case core::RelationDirection::Outgoing:
+        return "outgoing";
+    case core::RelationDirection::Incoming:
+        return "incoming";
+    case core::RelationDirection::Undirected:
+        break;
+    }
+    return "undirected";
+}
+
+// A ile B arasındaki tek ilişki: --id, --name (tag_key ile, boş = adsız) ya da çiftin tek ilişkisi.
+std::expected<core::RelatedNote, int> pick_relation(const core::NoteStore& store, const core::NotePath& first,
+                                                    const core::NotePath& second, const RelationArgs& args) {
+    const auto links = store.links(first);
+    if (!links)
+        return std::unexpected(fail(links.error()));
+    std::vector<core::RelatedNote> rows;
+    std::ranges::copy_if(links->related, std::back_inserter(rows),
+                         [&](const core::RelatedNote& row) { return row.path == second; });
+    const auto pair_args = [&](std::vector<std::pair<std::string, std::string>> more) {
+        more.emplace_back("from", first.string());
+        more.emplace_back("to", second.string());
+        return more;
+    };
+    if (args.id) {
+        const auto id = id_from_hex<core::RelationId>(*args.id);
+        if (!id) {
+            std::cerr << sanitize_for_terminal(core::tr("cli.relation_bad_id", {{"id", *args.id}})) << '\n';
+            return std::unexpected(kExitUsage);
+        }
+        const auto found = std::ranges::find(rows, *id, &core::RelatedNote::id);
+        if (found == rows.end())
+            return std::unexpected(fail(core::Error{core::Error::Code::NotFound, "error.relation_not_found", {}}));
+        return *found;
+    }
+    if (args.name) {
+        const auto name = core::relation_name(*args.name, SIZE_MAX);
+        if (!name)
+            return std::unexpected(fail(name.error()));
+        const std::string key = core::tag_key(*name);
+        const auto found =
+            std::ranges::find_if(rows, [&](const core::RelatedNote& row) { return core::tag_key(row.name) == key; });
+        if (found == rows.end()) {
+            std::cerr << sanitize_for_terminal(core::tr("cli.relation_no_name", pair_args({{"name", *name}}))) << '\n';
+            return std::unexpected(kExitUser);
+        }
+        return *found;
+    }
+    if (rows.size() == 1)
+        return rows.front();
+    const char* key = rows.empty() ? "cli.relation_none" : "cli.relation_ambiguous";
+    std::cerr << sanitize_for_terminal(core::tr(key, pair_args({{"count", std::to_string(rows.size())}}))) << '\n';
+    return std::unexpected(kExitUser);
+}
+
+int print_relation_done(const std::expected<std::string, core::Error>& done, const core::Config& config) {
+    if (!done)
+        return fail(done.error());
+    std::cout << sanitize_for_terminal(*done) << '\n';
+    start_background_sync(config, false);
+    return kExitOk;
+}
+
+int run_relation_add(const RelationArgs& args, core::NoteStore& store, const core::Config& config) {
+    if (args.positional.size() != 2)
+        return relation_usage();
+    const auto first = relation_note(args.positional[0]);
+    if (!first)
+        return first.error();
+    const auto second = relation_note(args.positional[1]);
+    if (!second)
+        return second.error();
+    return print_relation_done(app::relate_map_notes(store, map_note(*first), map_note(*second),
+                                                     {args.name.value_or(""), args.directed}),
+                               config);
+}
+
+int run_relation_rm(const RelationArgs& args, core::NoteStore& store, const core::Config& config) {
+    if (args.positional.size() != 2 || (args.name && args.id))
+        return relation_usage();
+    const auto first = relation_note(args.positional[0]);
+    if (!first)
+        return first.error();
+    const auto second = relation_note(args.positional[1]);
+    if (!second)
+        return second.error();
+    const auto picked = pick_relation(store, *first, *second, args);
+    if (!picked)
+        return picked.error();
+    return print_relation_done(app::unrelate_map_notes(store, map_note(*first), map_note(*second), picked->id),
+                               config);
+}
+
+int run_relation_rename(const RelationArgs& args, core::NoteStore& store, const core::Config& config) {
+    if (args.positional.size() != 4)
+        return relation_usage();
+    const auto first = relation_note(args.positional[0]);
+    if (!first)
+        return first.error();
+    const auto second = relation_note(args.positional[1]);
+    if (!second)
+        return second.error();
+    RelationArgs old_name;
+    old_name.name = args.positional[2];
+    const auto picked = pick_relation(store, *first, *second, old_name);
+    if (!picked)
+        return picked.error();
+    return print_relation_done(
+        app::rename_map_relation(store, *first, *second, picked->id, args.positional[3]), config);
+}
+
+// Adlar: GÖSTERİM<TAB>SAYI (note tags gibi); --json: name, display, count, directed.
+int run_relation_names(const RelationArgs& args, const core::NoteStore& store) {
+    const auto names = store.relation_names();
+    if (!names)
+        return fail(names.error());
+    if (!args.json) {
+        for (const core::RelationName& name : **names)
+            std::cout << sanitize_for_terminal(name.display) << '\t' << name.count << '\n';
+        return kExitOk;
+    }
+    std::string out = "[";
+    for (const core::RelationName& name : **names) {
+        out += out.size() > 1 ? ",{\"name\":" : "{\"name\":";
+        append_json_string(out, name.key);
+        out += ",\"display\":";
+        append_json_string(out, name.display);
+        out += ",\"count\":" + std::to_string(name.count) + ",\"directed\":" + std::to_string(name.directed) + "}";
+    }
+    std::cout << out << "]\n";
+    return kExitOk;
+}
+
+// Notun ilişkileri: YOL<TAB>AD<TAB>YÖN<TAB>KİMLİK (kimlik `rm --id` içindir); --json aynı alanlar.
+int run_relation_ls(const RelationArgs& args, const core::NoteStore& store) {
+    if (args.positional.empty())
+        return run_relation_names(args, store);
+    if (args.positional.size() != 1)
+        return relation_usage();
+    const auto note = relation_note(args.positional[0]);
+    if (!note)
+        return note.error();
+    const auto links = store.links(*note);
+    if (!links)
+        return fail(links.error());
+    if (!args.json) {
+        for (const core::RelatedNote& row : links->related)
+            std::cout << sanitize_for_terminal(row.path.string()) << '\t' << sanitize_for_terminal(row.name) << '\t'
+                      << direction_word(row.direction) << '\t' << hex_of(row.id.bytes) << '\n';
+        return kExitOk;
+    }
+    std::string out = "[";
+    for (const core::RelatedNote& row : links->related) {
+        out += out.size() > 1 ? ",{\"path\":" : "{\"path\":";
+        append_json_string(out, row.path.string());
+        out += ",\"name\":";
+        append_json_string(out, row.name);
+        out += ",\"direction\":\"" + std::string(direction_word(row.direction)) + "\",\"id\":\"" +
+               hex_of(row.id.bytes) + "\"}";
+    }
+    std::cout << out << "]\n";
+    return kExitOk;
+}
+
+}  // namespace
+
+int run_relation(const ParsedArgs& args, const core::Config& config) {
+    static constexpr std::array<std::string_view, 2> kRelationAdd{"--name", "--directed"};
+    static constexpr std::array<std::string_view, 2> kRelationRm{"--name", "--id"};
+    static constexpr std::array<std::string_view, 1> kRelationLs{"--json"};
+    const std::string verb = args.rest.empty() ? std::string() : args.rest.front();
+    std::span<const std::string_view> allowed;
+    if (verb == "add")
+        allowed = kRelationAdd;
+    else if (verb == "rm")
+        allowed = kRelationRm;
+    else if (verb == "ls")
+        allowed = kRelationLs;
+    else if (verb != "rename")
+        return relation_usage();
+    const auto parsed = parse_relation_args(args.rest, allowed);
+    if (!parsed)
+        return parsed.error();
+    core::NoteStore store = core::NoteStore::for_config(config);
+    if (verb == "add")
+        return run_relation_add(*parsed, store, config);
+    if (verb == "rm")
+        return run_relation_rm(*parsed, store, config);
+    if (verb == "rename")
+        return run_relation_rename(*parsed, store, config);
+    return run_relation_ls(*parsed, store);
 }
 
 int run_export_all(const std::string& directory, bool ignore_skipped, const core::Config& config) {

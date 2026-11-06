@@ -132,11 +132,58 @@ struct ImportedNote {
     std::optional<std::chrono::system_clock::time_point> deleted_at = std::nullopt;
 };
 
+// Adlı ilişki (SPEC-graph "Adlı ilişkiler"): RELATED_TO kenarı, `name` (gösterim; yoksa adsız) ve `directed`
+// (yoksa yönsüz). Bir not çiftinde ad anahtarı (tag_key) başına tek ilişki, adsız en çok bir tane.
+struct RelationSpec {
+    std::string name;  // kırpılır; boş = adsız
+    bool directed = false;
+};
+
+// defaults.toml `limits.graph.relation_name_bytes`ın yapılandırmasız NoteStore'daki karşılığı; bir test
+// ikisinin aynı olduğunu denetler.
+inline constexpr std::size_t kDefaultRelationNameBytes = 1024;
+// Yeni ilişki adı: kenar boşlukları kırpılır; geçerli UTF-8, denetim karakteri (satır sonu, sekme dahil) ve
+// görünmez biçim karakteri (yön, sıfır genişlik: core::find_hidden_control) yok, en çok max_bytes (SIZE_MAX:
+// sınırsız). Boş sonuç adsızdır. Hata InvalidPath (error.invalid_relation_name; reason invalid_utf8,
+// control_char, hidden_control, too_long). Senkronla gelen ad okunurken temizlenir (SPEC-graph).
+std::expected<std::string, Error> relation_name(std::string_view raw,
+                                                std::size_t max_bytes = kDefaultRelationNameBytes);
+
+// Notun gözünden ilişkinin yönü: yönsüz, bu nottan çıkan ya da bu nota gelen.
+enum class RelationDirection { Undirected, Outgoing, Incoming };
+// İlişkinin kenar kimliği (graph::EdgeId'nin baytları). Ön yüz seçtiği satırın ilişkisini bununla hedefler:
+// çiftin başka ilişkilerine dokunulmaz. Senkron ya da yön değişimi kenarı değiştirmiş olabilir: o zaman
+// NotFound.
+struct RelationId {
+    std::array<std::byte, 16> bytes{};
+    auto operator<=>(const RelationId&) const = default;
+};
+
+struct RelatedNote {
+    NotePath path;
+    std::string name = {};  // gösterim; boş = adsız. Senkronla gelebilir: güvenilmez
+    RelationDirection direction = RelationDirection::Undirected;
+    RelationId id = {};
+    auto operator<=>(const RelatedNote&) const = default;
+};
+
+// `relation_names()` satırı: canlı iki not arasındaki adlı ilişkilerin adları.
+struct RelationName {
+    std::string key;      // tag_key
+    std::string display;  // en çok kullanılan yazım (eşitlikte bayt sırası küçük olan); güvenilmez
+    std::size_t count = 0;     // kenar sayısı (senkronla oluşmuş paralel kenar da sayılır)
+    std::size_t directed = 0;  // bu adı taşıyan yönlü ilişki sayısı
+    // Seçicinin "Yönlü" varsayılanı: adın ilişkilerinin çoğu yönlüyse. Ayrı durum dosyası yoktur;
+    // kullanıcının seçimi veriden türer, senkronla her cihaza ve üç arayüze aynı gelir.
+    bool default_directed() const { return directed * 2 > count; }
+    bool operator==(const RelationName&) const = default;
+};
+
 // Bir notun grafta komşuları (SPEC-graph "Bağlantılar"); yollar sıralı, çöp ve ulaşılamayan not yok.
 struct NoteLinks {
     std::vector<NotePath> outgoing;      // LINKS_TO çıkan, ayrıca metinde olup kenarı henüz kurulmamış hedef
     std::vector<NotePath> incoming;      // LINKS_TO gelen
-    std::vector<NotePath> related;       // RELATED_TO, iki yönde
+    std::vector<RelatedNote> related;    // RELATED_TO, ilişki başına bir satır: yol, sonra ad sırası
     std::vector<std::string> missing;    // canlı nota çözülemeyen [[hedef]]; ham metin, güvenilmez
     std::vector<std::string> tags = {};  // TAGGED: etiketin ilk yazılışı, anahtar sırası; güvenilmez
     bool empty() const {
@@ -144,12 +191,16 @@ struct NoteLinks {
     }
 };
 
-// Canlı iki not arasındaki kenar (GUI haritası). RelatedTo yönsüzdür: from, to'dan küçüktür (yol sırası).
+// Canlı iki not arasındaki kenar (harita). Yönsüz RelatedTo'da from, to'dan küçüktür (yol sırası); yönlüde
+// from kaynaktır.
 enum class EdgeKind { LinksTo, RelatedTo };
 struct NoteEdge {
     NotePath from;
     NotePath to;
     EdgeKind kind = EdgeKind::LinksTo;
+    std::string name = {};  // RelatedTo'nun adı; boş = adsız. Güvenilmez
+    bool directed = false;  // yalnız RelatedTo
+    RelationId relation = {};  // yalnız RelatedTo
     auto operator<=>(const NoteEdge&) const = default;
 };
 
@@ -266,11 +317,26 @@ public:
     // [[hedef]] metnini yazmanın kuralıyla (yol, uzantısız yol, dosya adı, yalın ad) canlı nota çözer;
     // "|takma ad" ve "#başlık" atılır. Çözülemezse ya da depo açılamadıysa nullopt.
     std::optional<NotePath> resolve_link(std::string_view target) const;
-    // Kullanıcının kurduğu RELATED_TO kenarı. Çözülen yönsüzdür: iki yönde de aynı ilişkidir. Kendine ilişki
-    // InvalidPath, var olan AlreadyExists, not yoksa NotFound.
-    std::expected<void, Error> add_relation(const NotePath& from, const NotePath& to);
-    // İki yöndeki kenarları siler; ilişki yoksa NotFound.
-    std::expected<void, Error> remove_relation(const NotePath& first, const NotePath& second);
+    // Kullanıcının kurduğu RELATED_TO kenarı (SPEC-graph "Adlı ilişkiler"). Yönsüzde from/to sırası
+    // önemsizdir. Kendine ilişki InvalidPath, geçersiz ad InvalidPath (error.invalid_relation_name), çiftte
+    // aynı ad anahtarlı ilişki (yön ne olursa olsun) AlreadyExists, not yoksa NotFound. Başarıda yeni kimlik.
+    std::expected<RelationId, Error> add_relation(const NotePath& from, const NotePath& to,
+                                                  const RelationSpec& relation = {});
+    // Aşağıdakiler tek ilişkiyi kimliğiyle hedefler (RelatedNote::id, NoteEdge::relation). Kenar yoksa,
+    // ilişki değilse ya da bir ucu canlı not değilse NotFound (error.relation_not_found).
+    // Ad değişir, kenar kimliği aynı kalır. Boş ad ilişkiyi adsız yapar. Yeni anahtar çiftin başka
+    // ilişkisinde AlreadyExists, geçersiz ad InvalidPath.
+    std::expected<void, Error> rename_relation(const RelationId& relation, std::string_view new_name);
+    // source boşsa yönsüz, doluysa o uçtan öbürüne yönlü; source ilişkinin ucu değilse InvalidPath. Kaynak
+    // değişirse kenar tek işlemde silinip aynı adla yeniden kurulur. Senkronla grafta saklı adı aynı birden
+    // çok kenar varsa teke iner; gösterimi aynı ama saklı adı farklı ilişki ayrıdır, kalır.
+    std::expected<void, Error> set_relation_direction(const RelationId& relation,
+                                                      const std::optional<NotePath>& source);
+    // Yalnız bu ilişki silinir; çiftin öbür ilişkileri kalır.
+    std::expected<void, Error> remove_relation(const RelationId& relation);
+    // Canlı notlar arası adlı ilişkilerin adları: sayı azalan, eşitlikte anahtar artan. Adsız ilişki yoktur.
+    // Görüntü başına bir kez kurulur ve paylaşılır (seçici her tuşta sorar, kopyalanmaz); depo yoksa boş.
+    std::expected<std::shared_ptr<const std::vector<RelationName>>, Error> relation_names() const;
 
     // Klasör adları NotePath kurallarıyla doğrulanır. Boş klasör bir Folder düğümüdür.
     std::expected<void, Error> create_folder(std::string_view folder);

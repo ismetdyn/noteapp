@@ -48,6 +48,9 @@ int run_tags(const ParsedArgs& args, const core::Config& config);  // args.rest:
 int run_import(const ParsedArgs& args, const core::Config& config);
 // args.rest: save AD CYPHER [--force] | ls [--json] | run AD [--json] | rm AD | show AD
 int run_view(const ParsedArgs& args, const core::Config& config);
+// args.rest: add A B [--name AD] [--directed] | rm A B [--name AD | --id KİMLİK] | rename A B ESKİ YENİ |
+// ls [NOT] [--json] (commands_graph.cpp)
+int run_relation(const ParsedArgs& args, const core::Config& config);
 // args.rest: zsh | bash | fish. Tamamlama betiğini stdout'a yazar (commands_complete.cpp).
 int run_completion(const ParsedArgs& args);
 // args.rest: TÜR [ÖNEK]. Kabuk betiklerinin gizli yardımcısı: adayları satır satır yazar, salt okur.

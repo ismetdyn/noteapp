@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/data_preview.hpp"
+#include "edit/syntax.hpp"
 #include "pdf/markdown_blocks.hpp"
 
 #include <cstddef>
@@ -43,10 +44,13 @@ struct PreviewRun {
     PreviewInk ink = PreviewInk::Text;
     bool underline = false;
     bool code_background = false;  // satır içi kod
+    bool strike = false;           // ~~üstü çizili~~
     // Koşunun satırı: koşu sırasıyla azalmaz (pos.y azalabilir: büyük başlığın satırında küçük im aşağıda
     // ortalanır). Görünen aralık bununla aranır.
     float line_top = 0.0F;
     float line_bottom = 0.0F;
+    // Kod bloğunda sözdizimi türü (TUI ile aynı tokenizer ve aile tablosu, token_color); Plain metin rengidir.
+    tui::TokenKind token = tui::TokenKind::Plain;
 };
 
 struct PreviewBox {
@@ -77,8 +81,10 @@ struct PreviewLayout {
 // `font_size` ölçekli gövde yazı boyudur; `width` metnin sarıldığı genişlik (kod ve tablo taşabilir, yatay
 // kaydırılır). Kare içinde çağrılmalı: ölçüm ImGui atlasıyla yapılır. `following`: bloklardan sonra gelen ilk
 // blok (sonraki parçanın); son blokla arasındaki boşluk ona göre, yerleşimin yüksekliğine dahildir.
+// `highlight_line_bytes`: kod satırı renklendirmesinin sınırı (limits.tui.highlight_line_bytes, TUI ile aynı).
 PreviewLayout layout_preview(const std::vector<pdf::Block>& blocks, const PreviewFonts& fonts, float font_size,
-                             float width, const LinkResolves& resolves, const pdf::Block* following = nullptr);
+                             float width, const LinkResolves& resolves, const pdf::Block* following = nullptr,
+                             std::size_t highlight_line_bytes = tui::kDefaultHighlightLineBytes);
 
 // Notun önizlemesi parça parça (app::markdown_chunks): yalnız görünen parçalar ayrıştırılıp yerleştirilir,
 // uzaktakiler bırakılır. Ölçülmemiş parçanın yüksekliği bayt oranından tahmindir. Kare işi ve bellek notla değil
@@ -94,10 +100,13 @@ public:
         std::optional<std::size_t> first_block;
     };
 
-    // Metin değişti: parçalar baştan. `source` çağıranda yaşar ve değişmez.
-    void reset(std::string_view source);
+    // Metin ya da parçalama korumaları değişti: parçalar baştan. `source` çağıranda yaşar ve değişmez.
+    void reset(std::string_view source, const app::MarkdownChunkLimits& limits = {});
+    const app::MarkdownChunkLimits& chunk_limits() const { return limits_; }
     // Bağlantı çözümü değişti: yerleşimler atılır, yükseklikler tahmin olarak kalır.
     void relayout();
+    // Kod renklendirmesinin satır sınırı (limits.tui.highlight_line_bytes); değişince yeniden yerleşir.
+    void set_highlight_line_bytes(std::size_t bytes);
     // [scroll, scroll + view_height] alanındaki parçaları yerleştirir; yazı ya da genişlik değiştiyse önce relayout.
     // `to_end`: sona atlama istendi (End); ölçüm toplamı değiştirse de sonda kalınır. `end_slack`: pencerenin
     // içeriğe eklediği dolgu (ImGui'nin en büyük kaydırması toplam + dolgu - görünen yükseklik).
@@ -110,9 +119,7 @@ public:
 
 private:
     struct Chunk {
-        std::size_t begin = 0;
-        std::size_t end = 0;
-        bool open_fence = false;
+        app::MarkdownChunk range;
         std::optional<std::vector<pdf::Block>> blocks = {};
         std::optional<std::size_t> block_count = {};  // bir kez ayrıştırıldıysa
         std::optional<PreviewLayout> layout = {};
@@ -127,12 +134,14 @@ private:
     void release_outside(const std::vector<float>& tops, float top, float bottom);
 
     std::string_view source_;
+    app::MarkdownChunkLimits limits_;
     app::MarkdownDefinitions definitions_;  // birden çok parçada notun başvuru tanımları (her parçaya taşınır)
     std::vector<Chunk> chunks_;
     float pixels_per_byte_ = 0.0F;  // ilk ölçümden; ölçülmemiş parçanın tahmini
     PreviewFonts fonts_;
     float font_size_ = 0.0F;
     float width_ = -1.0F;
+    std::size_t highlight_line_bytes_ = tui::kDefaultHighlightLineBytes;
 };
 
 // [top, bottom] dikey aralığına (yerleşim koordinatı) düşen koşular.

@@ -1,5 +1,6 @@
 #include "app/map_relations.hpp"
 #include "core/i18n.hpp"
+#include "edit/display_text.hpp"
 #include "gui/view_internal.hpp"
 
 #include <SDL3/SDL.h>
@@ -40,7 +41,8 @@ constexpr float kMapRingThickness = 2.0F;
 // Kenar metin renginin bu kadarı (G13): koyuda daha soluk, açıkta zeminle karışmasın diye biraz koyu.
 constexpr float kMapEdgeAlphaDark = 0.18F;
 constexpr float kMapEdgeAlphaLight = 0.25F;
-constexpr float kMapRelatedAlpha = 0.8F;  // ilişki yönsüzdür: oksuz, renkli ve bağlantıdan belirgin
+constexpr float kMapRelatedAlpha = 0.8F;  // ilişki renkli ve bağlantıdan belirgin; yönlüsü oklu
+constexpr float kMapRelationNameMaxEms = 10.0F;  // kenar etiketi ve menüdeki ilişki adı bundan uzunsa kısalır
 constexpr float kMapDimAlpha = 0.2F;      // aramada eşleşmeyen ya da üzerine gelinen düğüme komşu olmayan
 constexpr float kMapLabelBackgroundAlpha = 0.8F;
 // Düğüm bağlantı sayısıyla büyür (Obsidian kalıbı): r = taban × (1 + 0,25 √derece), en çok 2 × taban.
@@ -131,6 +133,16 @@ float hit_radius(bool tag, float size, float zoom, float font) {
     return std::max(drawn_radius(tag, size, zoom, font), least);
 }
 
+// İlişki adı güvenilmezdir (senkron): denetim, bidi ve sıfır genişlikli karakter U+FFFD (terminal_safe).
+std::string relation_text(const std::string& name) {
+    return tui::terminal_safe(name);
+}
+
+// Menüdeki ilişki adı: temiz, kısalmış (uzun ad menüyü pencereden taşırmasın) ve `#`siz (label_safe).
+std::string menu_name(const std::string& name) {
+    return label_safe(keep_start(relation_text(name), kMapRelationNameMaxEms * ImGui::GetFontSize()));
+}
+
 std::string map_label(const MapNode& node) {
     if (node.kind == MapNodeKind::Tag)
         return printable("#" + node.key);
@@ -185,6 +197,14 @@ void View::draw_map() {
         map_pressed_.reset();
         map_link_from_.reset();  // dizin yeni çizgede başka düğüm olurdu
         map_connect_from_.reset();
+    }
+    // Kenar adları haritanın her değişiminde (ad ya da yön değişimi kuşağı artırmaz): eski ad kalmasın.
+    if (const std::size_t version = state_.map_version(); version != map_cache_.edges_version) {
+        map_cache_.edges_version = version;
+        map_cache_.edge_names.clear();
+        for (const MapEdge& edge : map.edges)
+            map_cache_.edge_names.push_back(edge.kind == MapEdgeKind::Related ? relation_text(edge.name)
+                                                                              : std::string());
     }
 
     const auto& positions = state_.map_layout().positions();
@@ -244,7 +264,7 @@ void View::open_map_edge_menu(const NoteMap& map, ImVec2 origin) {
     if (!edge)
         return;
     const MapEdge& hit = map.edges[*edge];
-    map_edge_menu_ = MapPair{map.nodes[hit.from], map.nodes[hit.to], hit.kind};
+    map_edge_menu_ = MapPair{map.nodes[hit.from], map.nodes[hit.to], hit.kind, hit.relation, hit.name, hit.directed};
     ImGui::OpenPopup("##map_edge_menu");
 }
 
@@ -254,7 +274,8 @@ void View::open_map_node_menu(const NoteMap& map, std::size_t node) {
     MapNodeMenu menu{.generation = map_cache_.generation, .node = node, .subject = map.nodes[node], .removable = {}};
     for (const MapEdge& edge : map.edges) {
         if ((edge.from == node || edge.to == node) && app::map_edge_removable(edge.kind))
-            menu.removable.push_back(MapPair{map.nodes[edge.from], map.nodes[edge.to], edge.kind});
+            menu.removable.push_back(
+                MapPair{map.nodes[edge.from], map.nodes[edge.to], edge.kind, edge.relation, edge.name, edge.directed});
     }
     map_node_menu_ = std::move(menu);
     ImGui::OpenPopup("##map_node_menu");
@@ -288,12 +309,19 @@ void View::draw_map_menus() {
                 const MapNode& tag = edge.from.kind == MapNodeKind::Tag ? edge.from : edge.to;
                 const std::string label =
                     edge.kind == MapEdgeKind::Tag
-                        ? core::tr("map.remove_tag", {{"tag", printable(tag.key)}, {"path", printable(note.key)}})
-                        : core::tr("map.remove_related_to", {{"path", printable(other.key)}});
+                        ? core::tr("map.remove_tag",
+                                   {{"tag", label_safe(printable(tag.key))}, {"path", label_safe(printable(note.key))}})
+                    : edge.name.empty()
+                        ? core::tr("map.remove_related_to", {{"path", label_safe(printable(other.key))}})
+                        : core::tr("map.remove_named_related_to",
+                                   {{"name", menu_name(edge.name)}, {"path", label_safe(printable(other.key))}});
                 ImGui::PushID(static_cast<int>(i));
                 if (ImGui::MenuItem(label.c_str()))
-                    queue([this, edge] { state_.disconnect_map_nodes(edge.from, edge.to, edge.kind); });
-                remember_item_center("map_node_remove:" + other.key);
+                    queue([this, edge] {
+                        state_.disconnect_map_nodes(edge.from, edge.to, edge.kind, edge.relation);
+                    });
+                remember_item_center("map_node_remove:" + other.key +
+                                     (edge.name.empty() ? "" : ":" + edge.name));
                 ImGui::PopID();
             }
             ImGui::EndMenu();
@@ -304,10 +332,11 @@ void View::draw_map_menus() {
     }
     if (map_choice_ && ImGui::BeginPopup("##map_connect")) {
         const MapPair pair = *map_choice_;
+        // F1: ilişki ad penceresinden geçer (ad, "Yönlü"); bağlantı ve etiket hemen yazılır.
         if (ImGui::MenuItem((core::tr("map.choose_related") + "###map_connect_related").c_str()))
-            queue([this, pair] { state_.connect_map_nodes(pair.from, pair.to, MapEdgeKind::Related); });
+            queue([this, pair] { state_.relate_map_notes(pair.from, pair.to); });
         remember_item_center("map_connect_related");
-        const std::string link = core::tr("map.choose_link", {{"from", printable(pair.from.key)}});
+        const std::string link = core::tr("map.choose_link", {{"from", label_safe(printable(pair.from.key))}});
         if (ImGui::MenuItem((link + "###map_connect_link").c_str()))
             queue([this, pair] { state_.connect_map_nodes(pair.from, pair.to, MapEdgeKind::Link); });
         remember_item_center("map_connect_link");
@@ -318,15 +347,20 @@ void View::draw_map_menus() {
         const MapNode& note = edge.from.kind == MapNodeKind::Note ? edge.from : edge.to;
         const MapNode& tag = edge.from.kind == MapNodeKind::Tag ? edge.from : edge.to;
         const std::string label =
-            edge.kind == MapEdgeKind::Related ? core::tr("map.remove_related")
+            edge.kind == MapEdgeKind::Related
+                ? (edge.name.empty() ? core::tr("map.remove_related")
+                                     : core::tr("map.remove_named_related", {{"name", menu_name(edge.name)}}))
             : edge.kind == MapEdgeKind::Tag
-                ? core::tr("map.remove_tag", {{"tag", printable(tag.key)}, {"path", printable(note.key)}})
+                ? core::tr("map.remove_tag", {{"tag", label_safe(printable(tag.key))}, {"path", label_safe(printable(note.key))}})
                 : core::tr("map.remove_link");
+        if (edge.kind == MapEdgeKind::Related)
+            draw_relation_items(edge);
         // Bağlantı notun metnindedir: kaldırma kapalı, ipucu nerede silineceğini söyler.
         const bool removable = app::map_edge_removable(edge.kind);
         ImGui::BeginDisabled(!removable);
         if (ImGui::MenuItem((label + "###map_edge_remove").c_str()))
-            queue([this, edge] { state_.disconnect_map_nodes(edge.from, edge.to, edge.kind); });
+            queue(
+                [this, edge] { state_.disconnect_map_nodes(edge.from, edge.to, edge.kind, edge.relation); });
         remember_item_center("map_edge_remove");
         ImGui::EndDisabled();
         if (!removable)
@@ -335,6 +369,42 @@ void View::draw_map_menus() {
                                             .c_str());
         ImGui::EndPopup();
     }
+}
+
+// Kenar menüsünün ilişki öğeleri (F1): yeniden adlandır, yön; hepsi kenarın kimliğiyle. Yönlüde from
+// kaynaktır: çevirmek kaynağı to yapar; yönsüz, gösterilen uçtan (yoksa from'dan) öbürüne yönlenir.
+void View::draw_relation_items(const MapPair& edge) {
+    const auto from = core::NotePath::parse(edge.from.key);
+    const auto to = core::NotePath::parse(edge.to.key);
+    if (!from || !to)
+        return;
+    const auto direct = [this, edge, first = *from, second = *to](std::optional<core::NotePath> source) {
+        queue([this, edge, first, second, source] { state_.direct_relation(first, second, edge.relation, source); });
+    };
+    if (ImGui::MenuItem((core::tr("map.rename_relation") + "###map_edge_rename").c_str()))
+        queue([this, edge, first = *from, second = *to] {
+            state_.rename_relation(first, second, edge.relation, edge.name);
+        });
+    remember_item_center("map_edge_rename");
+    if (edge.directed) {
+        if (ImGui::MenuItem((core::tr("map.flip_relation") + "###map_edge_flip").c_str()))
+            direct(*to);
+        remember_item_center("map_edge_flip");
+        if (ImGui::MenuItem((core::tr("map.make_undirected") + "###map_edge_undirect").c_str()))
+            direct(std::nullopt);
+        remember_item_center("map_edge_undirect");
+    } else {
+        // Gösterilen not uçlardan biriyse ondan başlar (TUI `f` ve bağlantı paneli gibi); değilse yol sırası.
+        const bool from_shown_end = state_.current_path() == *to;
+        const MapNode& start = from_shown_end ? edge.to : edge.from;
+        const MapNode& end = from_shown_end ? edge.from : edge.to;
+        const std::string label = core::tr("map.make_directed", {{"from", label_safe(map_label(start))},
+                                                                 {"to", label_safe(map_label(end))}});
+        if (ImGui::MenuItem((label + "###map_edge_direct").c_str()))
+            direct(from_shown_end ? *to : *from);
+        remember_item_center("map_edge_direct");
+    }
+    ImGui::Separator();
 }
 
 void View::draw_map_controls(const NoteMap& map) {
@@ -613,7 +683,8 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
     }
     draw->AddCallback(draw_map_lines, &map_lines_);  // düğüm ve oklardan önce: onlar çizgilerin üstünde
     for (const MapEdge& edge : map.edges) {          // ok yalnız yakınken: görünen kenar az
-        if (!arrows || edge.kind != MapEdgeKind::Link)
+        const bool pointed = edge.kind == MapEdgeKind::Link || (edge.kind == MapEdgeKind::Related && edge.directed);
+        if (!arrows || !pointed)
             continue;
         const ImVec2 a = screen(edge.from);
         const ImVec2 b = screen(edge.to);
@@ -693,11 +764,57 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
         const ImU32 ink = emphasised ? text : label_muted;
         draw->AddText(ImVec2(box.x, box.y), lit(i) ? ink : with_alpha(ink, kMapDimAlpha), label.c_str());
     }
+    // İlişkinin adı kenarın ortasında, yalnız adların okunduğu yakınlıkta (F1); başka ada binen çizilmez.
+    if (all_labels) {
+        const float name_width = kMapRelationNameMaxEms * font;
+        for (std::size_t e = 0; e < map.edges.size() && e < map_cache_.edge_names.size(); ++e) {
+            const std::string& full = map_cache_.edge_names[e];
+            if (full.empty())
+                continue;
+            const ImVec2 a = screen(map.edges[e].from);
+            const ImVec2 b = screen(map.edges[e].to);
+            const ImVec2 middle((a.x + b.x) / 2.0F, (a.y + b.y) / 2.0F);
+            if (middle.x < clip_min.x || middle.x > clip_max.x || middle.y < clip_min.y || middle.y > clip_max.y)
+                continue;
+            const std::string label = text_width(full) > name_width ? keep_start(full, name_width) : full;
+            const float width = text_width(label);
+            const ImVec4 box(middle.x - width / 2.0F, middle.y - label_font / 2.0F, middle.x + width / 2.0F,
+                             middle.y + label_font / 2.0F);
+            if (std::ranges::any_of(placed, [&](const ImVec4& other) {
+                    return box.x < other.z && other.x < box.z && box.y < other.w && other.y < box.w;
+                }))
+                continue;
+            placed.push_back(box);
+            draw->AddRectFilled(ImVec2(box.x, box.y), ImVec2(box.z, box.w), label_background);
+            const ImU32 ink = edge_lit(map.edges[e]) ? kind_colors[1] : with_alpha(kind_colors[1], kMapDimAlpha);
+            draw->AddText(ImVec2(box.x, box.y), ink, label.c_str());
+            remember_rect("map_edge_label:" + full, ImVec2(box.x, box.y), ImVec2(box.z, box.w));
+        }
+    }
     ImGui::PopFont();
     if (hovered >= 0 && ImGui::IsItemHovered()) {
         const MapNode& node = map.nodes[static_cast<std::size_t>(hovered)];
         ImGui::SetTooltip("%s", printable(node.kind == MapNodeKind::Tag ? "#" + node.key : node.key).c_str());
+    } else if (ImGui::IsItemHovered()) {
+        draw_relation_tooltip(map, origin);
     }
+}
+
+// İşaretçinin yakınındaki ilişki: adı (adsızsa "adsız") ve uçları yönüyle; her yakınlıkta (F1).
+void View::draw_relation_tooltip(const NoteMap& map, ImVec2 origin) {
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    const MapCamera& camera = map_camera_;
+    const app::LayoutPoint at{(mouse.x - origin.x - camera.offset_x) / camera.zoom,
+                              (mouse.y - origin.y - camera.offset_y) / camera.zoom};
+    const float reach = kMapEdgeHitEms * ImGui::GetFontSize() / camera.zoom;
+    const auto hit = app::map_edge_at(map, state_.map_layout().positions(), at, reach);
+    if (!hit || map.edges[*hit].kind != MapEdgeKind::Related)
+        return;
+    const MapEdge& edge = map.edges[*hit];
+    const std::string name = *hit < map_cache_.edge_names.size() ? map_cache_.edge_names[*hit] : std::string();
+    const std::string ends = map_label(map.nodes[edge.from]) + (edge.directed ? " → " : " — ") +
+                             map_label(map.nodes[edge.to]);
+    ImGui::SetTooltip("%s\n%s", (name.empty() ? core::tr("map.unnamed_relation") : name).c_str(), ends.c_str());
 }
 
 }  // namespace noteapp::gui

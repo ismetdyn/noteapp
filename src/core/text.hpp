@@ -35,9 +35,10 @@ const HiddenControl* find_hidden_control(char32_t cp);  // değilse nullptr
 // Geçerli dizilerdeki görünmez biçim karakteri sayısı; bozuk bayt atlanır. Doğrusal, ayırma yapmaz.
 std::size_t count_hidden_controls(std::string_view utf8);
 
-// HTML varlığı ("&amp;", "&#351;") -> metin. Yalnız sayısal ve en yaygın adlı varlıklar çözülür; bilinmeyen
-// ad yazıldığı gibi kalır, geçersiz sayı U+FFFD olur. ponytail: tam tablo md4c-html'in entity.c'sinde;
-// ihtiyaç doğarsa o eklenir.
+// HTML varlığı ("&amp;", "&copy;", "&#351;") -> metin. Adlı varlık HTML5 tablosundan (md4c'nin entity.c'si,
+// CommonMark'ın istediği küme); bilinmeyen ad yazıldığı gibi kalır. Sayısal varlıkta sekme sekme, satır sonu boşluk
+// olur (biçimli görünümde '\n' zorunlu satır sonudur; adlı biçim de: `&NewLine;`); öbür denetim karakteri (C0, DEL,
+// C1), vekil, 0 ve U+10FFFF üstü U+FFFD.
 std::string decode_html_entity(std::string_view entity);
 
 // ç ğ ı İ ö ş ü ve büyük harfleri ASCII karşılığına çevirir; diğer karakterler aynen kalır.

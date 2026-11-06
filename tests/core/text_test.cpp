@@ -224,3 +224,39 @@ TEST_CASE("next_local_midnight is the start of the next local day") {
     // Tam gece yarısında bir sonraki gün: aynı an iki kez uyandırmaz.
     CHECK(next_local_midnight(local_time(2026, 10, 29, 0, 0, 0)) == local_time(2026, 10, 30, 0, 0, 0));
 }
+
+// NY-P: CommonMark'ın bütün HTML5 adlı varlıkları (md4c'nin tablosu) ve BMP dışı sayısal varlık çözülür.
+TEST_CASE("decode_html_entity decodes every HTML5 named entity and astral code points") {
+    CHECK(decode_html_entity("&copy;") == "©");
+    CHECK(decode_html_entity("&AElig;") == "Æ");
+    CHECK(decode_html_entity("&HilbertSpace;") == "ℋ");
+    CHECK(decode_html_entity("&ngE;") == "≧̸");  // iki kod noktası
+    CHECK(decode_html_entity("&amp;") == "&");
+    CHECK(decode_html_entity("&nbsp;") == "\xC2\xA0");
+    CHECK(decode_html_entity("&#x1F600;") == "😀");
+    CHECK(decode_html_entity("&#128512;") == "😀");
+    CHECK(decode_html_entity("&nosuchentity;") == "&nosuchentity;");
+}
+
+// Sayısal boşluk varlığı metinde boşluktur (HTML gibi); öbür denetim karakterleri ve geçersiz sayı U+FFFD. Satır
+// sonu döndürülmez: biçimli görünümde '\n' zorunlu satır sonudur.
+TEST_CASE("decode_html_entity turns numeric whitespace into a space and other controls into U+FFFD") {
+    CHECK(decode_html_entity("&#9;") == "\t");
+    CHECK(decode_html_entity("&#10;") == " ");
+    CHECK(decode_html_entity("&#13;") == " ");
+    CHECK(decode_html_entity("&#0;") == "\xEF\xBF\xBD");
+    CHECK(decode_html_entity("&#1;") == "\xEF\xBF\xBD");
+    CHECK(decode_html_entity("&#xD800;") == "\xEF\xBF\xBD");
+    CHECK(decode_html_entity("&#x110000;") == "\xEF\xBF\xBD");
+}
+
+// NY-P inceleme: adlı ve sayısal biçim aynı sonucu verir (`&NewLine;` = `&#10;`, `&Tab;` = `&#9;`); DEL ve C1 denetim
+// karakterleri (U+007F–U+009F, ör. tek baytlık CSI U+009B) de metne girmez.
+TEST_CASE("decode_html_entity treats named and numeric whitespace alike and drops DEL and C1 controls") {
+    CHECK(decode_html_entity("&NewLine;") == decode_html_entity("&#10;"));
+    CHECK(decode_html_entity("&Tab;") == decode_html_entity("&#9;"));
+    CHECK(decode_html_entity("&#x7f;") == "\xEF\xBF\xBD");
+    CHECK(decode_html_entity("&#x9b;") == "\xEF\xBF\xBD");
+    CHECK(decode_html_entity("&#x80;") == "\xEF\xBF\xBD");
+    CHECK(decode_html_entity("&#xa0;") == "\xC2\xA0");
+}

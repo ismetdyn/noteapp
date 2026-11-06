@@ -33,6 +33,11 @@ noteapp_add_test(tui
 target_include_directories(tui_tests SYSTEM PRIVATE ${ftxui_SOURCE_DIR}/src)
 target_link_libraries(tui_tests PRIVATE ftxui::component)
 
+# Markdown önizleme uygunluk koşumu (NY-P): spec örnekleri md4c arşivinin test dizininden okunur.
+noteapp_add_test(md_conformance markdown_conformance_test.cpp)
+target_link_libraries(md_conformance_tests PRIVATE noteapp_tui noteapp_pdf md4c md4c-html)
+target_compile_definitions(md_conformance_tests PRIVATE NOTEAPP_MD4C_TEST_DIR="${md4c_SOURCE_DIR}/test")
+
 # LSP istemcisi gerçek süreçle sınanır: sahte sunucu kabuksuz, her platformda derlenen ayrı bir ikilidir.
 add_executable(fake_lsp_server fake_lsp_server.cpp)
 target_link_libraries(fake_lsp_server PRIVATE noteapp_core)

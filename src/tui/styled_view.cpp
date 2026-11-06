@@ -175,7 +175,7 @@ TableLayout layout_table(const ViewBuilder& view, const TableData& table, int ro
 }
 
 void add_table_row(ViewBuilder& view, const std::vector<InlineText>& row, const std::vector<int>& widths,
-                   const InlineText& prefix, std::size_t source_line) {
+                   const std::vector<CellAlign>& aligns, const InlineText& prefix, std::size_t source_line) {
     static const InlineText kEmptyCell;
     const std::size_t columns = widths.size();
     std::vector<std::vector<ByteSpan>> wrapped(columns);
@@ -190,14 +190,19 @@ void add_table_row(ViewBuilder& view, const std::vector<InlineText>& row, const 
         line.append("│ ", kBorderLook);
         for (std::size_t c = 0; c < columns; ++c) {
             const InlineText& cell = c < row.size() ? row[c] : kEmptyCell;
-            int used = 0;
+            int spare = widths[c];
+            int before = 0;
             if (line_index < wrapped[c].size()) {
                 const ByteSpan slice = wrapped[c][line_index];
+                spare = std::max(
+                    widths[c] - view.cells(std::string_view(cell.text).substr(slice.first, slice.second - slice.first)),
+                    0);
+                const CellAlign align = c < aligns.size() ? aligns[c] : CellAlign::Left;
+                before = align == CellAlign::Right ? spare : align == CellAlign::Center ? spare / 2 : 0;
+                line.append(std::string(static_cast<std::size_t>(before), ' '));
                 append_slice(line, cell, slice, cursors[c]);
-                used =
-                    view.cells(std::string_view(cell.text).substr(slice.first, slice.second - slice.first));
             }
-            line.append(std::string(static_cast<std::size_t>(std::max(widths[c] - used, 0)), ' '));
+            line.append(std::string(static_cast<std::size_t>(spare - before), ' '));
             line.append(c + 1 < columns ? " │ " : " │", kBorderLook);
         }
         view.add_line(line, source_line);
@@ -224,7 +229,8 @@ ViewLimits view_limits_of(const core::TuiLimits& limits) {
             .lines = limits.view_lines.cap(),
             .table_rows = limits.table_rows.cap(),
             .table_columns = limits.table_columns.cap(),
-            .highlight_line_bytes = limits.highlight_line_bytes.cap()};
+            .highlight_line_bytes = limits.highlight_line_bytes.cap(),
+            .markdown = app::markdown_chunk_limits_of(limits)};
 }
 
 SyntaxLimits syntax_limits_of(const core::TuiLimits& limits) {
@@ -358,11 +364,18 @@ RenderedView ViewBuilder::finish() && {
     return std::move(view_);
 }
 
+TableColumns table_columns(const ViewBuilder& view, const TableData& table, const InlineText& prefix) {
+    TableLayout layout = layout_table(view, table, view.width() - view.cells(prefix.text));
+    return {std::move(layout.widths), layout.hidden_columns};
+}
+
 void add_table(ViewBuilder& view, const TableData& table, const InlineText& prefix) {
-    const int room = view.width() - view.cells(prefix.text);
-    const TableLayout layout = layout_table(view, table, room);
+    add_table(view, table, prefix, table_columns(view, table, prefix));
+}
+
+void add_table(ViewBuilder& view, const TableData& table, const InlineText& prefix, const TableColumns& layout) {
     for (std::size_t r = 0; r < table.rows.size(); ++r) {
-        add_table_row(view, table.rows[r], layout.widths, prefix, table.source_lines[r]);
+        add_table_row(view, table.rows[r], layout.widths, table.aligns, prefix, table.source_lines[r]);
         if (r + 1 == table.header_rows)
             add_header_rule(view, layout.widths, prefix, table.source_lines[r]);
     }
@@ -370,9 +383,8 @@ void add_table(ViewBuilder& view, const TableData& table, const InlineText& pref
     if (table.omitted_rows > 0)
         view.add_note(core::tr("tui.view_rows_cut", {{"count", std::to_string(table.omitted_rows)}}), prefix,
                       last);
-    if (layout.hidden_columns > 0)
-        view.add_note(core::tr("tui.view_columns_cut", {{"count", std::to_string(layout.hidden_columns)}}),
-                      prefix, last);
+    if (layout.hidden > 0)
+        view.add_note(core::tr("tui.view_columns_cut", {{"count", std::to_string(layout.hidden)}}), prefix, last);
 }
 
 }  // namespace noteapp::tui

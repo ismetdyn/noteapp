@@ -35,6 +35,13 @@ Texts texts(const std::vector<NotePath>& paths) {
     return out;
 }
 
+Texts texts(const std::vector<RelatedNote>& related) {
+    Texts out;
+    for (const RelatedNote& note : related)
+        out.push_back(note.path.string());
+    return out;
+}
+
 void exchange_log(NoteStore& from, NoteStore& to, const fs::path& logs) {
     REQUIRE(export_note_log(from, logs).has_value());
     const auto name = own_log_name(from);
@@ -404,7 +411,9 @@ TEST_CASE("add_relation shows on both notes, is removable from either side and s
     REQUIRE(store.move(np("b.md"), np("c.md")).has_value());
     CHECK(texts(store.links(np("a.md"))->related) == Texts{"c.md"});
 
-    REQUIRE(store.remove_relation(np("c.md"), np("a.md")).has_value());
+    // Kimlik iki notun panelinde aynıdır: kaldırma iki taraftan da aynı ilişkiyi hedefler.
+    CHECK(store.links(np("c.md"))->related.front().id == store.links(np("a.md"))->related.front().id);
+    REQUIRE(store.remove_relation(store.links(np("c.md"))->related.front().id).has_value());
     CHECK(store.links(np("a.md"))->empty());
     CHECK(store.links(np("c.md"))->empty());
 
@@ -424,16 +433,6 @@ TEST_CASE("add_relation rejects a missing note, a self relation and a duplicate 
     REQUIRE(store.add_relation(np("a.md"), np("b.md")).has_value());
     CHECK(store.add_relation(np("a.md"), np("b.md")).error().code == Error::Code::AlreadyExists);
     CHECK(store.add_relation(np("b.md"), np("a.md")).error().code == Error::Code::AlreadyExists);
-    CHECK(store.remove_relation(np("a.md"), np("yok.md")).error().code == Error::Code::NotFound);
-}
-
-TEST_CASE("remove_relation of an unrelated pair is NotFound and leaves LINKS_TO alone") {
-    const TempDir dir;
-    NoteStore store(dir.path());
-    REQUIRE(seed_note(store, "b.md", "b\n"));
-    REQUIRE(seed_note(store, "a.md", "[[b]]\n"));
-    CHECK(store.remove_relation(np("a.md"), np("b.md")).error().code == Error::Code::NotFound);
-    CHECK(store.links(np("a.md"))->outgoing.size() == 1);
 }
 
 TEST_CASE("a relation reaches a second device through the log, its removal too") {
@@ -448,7 +447,7 @@ TEST_CASE("a relation reaches a second device through the log, its removal too")
     exchange_log(a, b, logs.path());
     CHECK(texts(b.links(np("x.md"))->related) == Texts{"y.md"});
 
-    REQUIRE(b.remove_relation(np("y.md"), np("x.md")).has_value());
+    REQUIRE(b.remove_relation(b.links(np("y.md"))->related.front().id).has_value());
     exchange_log(b, a, logs.path());
     CHECK(a.links(np("x.md"))->related.empty());
 }

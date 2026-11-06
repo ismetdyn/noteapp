@@ -3,11 +3,13 @@
 #include "core/i18n.hpp"
 #include "core/text.hpp"
 #include "edit/display_text.hpp"
+#include "pdf/markdown_blocks.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <functional>
+#include <limits>
 #include <md4c.h>
 #include <utility>
 #include <vector>
@@ -21,12 +23,7 @@ constexpr std::string_view kReplacement = "\xEF\xBF\xBD";
 constexpr std::string_view kQuoteBar = "│ ";
 constexpr std::string_view kCodeIndent = "  ";
 constexpr int kTabCells = 4;  // EditorBuffer::kTabCells ile aynı: ham ve biçimli görünüm hizası tutsun
-// Kuşatılmış kod bloğu dil etiketleri: tokenizer uzantı bekler, etiket çoğu zaman dilin tam adıdır.
-constexpr std::pair<std::string_view, std::string_view> kLanguageAliases[] = {
-    {"python", "py"}, {"javascript", "js"}, {"typescript", "ts"}, {"shell", "sh"},          {"golang", "go"},
-    {"rust", "rs"},   {"c++", "cpp"},       {"cplusplus", "cpp"}, {"docker", "dockerfile"},
-};
-constexpr std::string_view kBullets[] = {"• ", "◦ ", "▪ "};
+constexpr const auto& kBullets = pdf::kListBullets;  // GUI önizlemesi ve PDF ile aynı imler
 
 TextLook bold_look() {
     TextLook look;
@@ -53,16 +50,6 @@ TextLook heading_look(int level) {
     return look;
 }
 
-SyntaxLanguage code_language(std::string_view tag) {
-    std::string lowered(tag);
-    std::ranges::transform(lowered, lowered.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    const auto* alias = std::ranges::find(kLanguageAliases, std::string_view(lowered),
-                                          &std::pair<std::string_view, std::string_view>::first);
-    return syntax_language_for(alias == std::ranges::end(kLanguageAliases) ? std::string_view(lowered)
-                                                                           : alias->second);
-}
-
 std::string_view attribute_text(const MD_ATTRIBUTE& attribute) {
     return {attribute.text, attribute.size};
 }
@@ -82,6 +69,10 @@ std::string decoded_attribute(const MD_ATTRIBUTE& attribute) {
             out += part;
     }
     return out;
+}
+
+CellAlign cell_align(MD_ALIGN align) {
+    return align == MD_ALIGN_RIGHT ? CellAlign::Right : align == MD_ALIGN_CENTER ? CellAlign::Center : CellAlign::Left;
 }
 
 // Kap öneki (girinti, `>`) atlanır; çit en az üç aynı karakter ve ardından yalnız boşluktur.
@@ -109,7 +100,7 @@ public:
     }
 
     void enter_block(MD_BLOCKTYPE type, const void* detail) {
-        if (enter_container(type, detail) || enter_table_part(type))
+        if (enter_container(type, detail) || enter_table_part(type, detail))
             return;
         close_leaf();
         switch (type) {
@@ -137,13 +128,15 @@ public:
         close_leaf();
         switch (type) {
         case MD_BLOCK_QUOTE:
-            --quote_depth_;
+            nesting_.pop_back();
+            quotes_.pop_back();
             pending_gap_ = true;
             break;
         case MD_BLOCK_UL:
         case MD_BLOCK_OL:
             flush_marker();
             lists_.pop_back();
+            nesting_.pop_back();
             pending_gap_ = !in_tight_list();
             break;
         case MD_BLOCK_LI:
@@ -242,7 +235,8 @@ private:
             close_leaf();
             flush_marker();
             add_gap(peek_unread_line());  // alıntıdan önceki boşluk barsız
-            ++quote_depth_;
+            quotes_.push_back(nesting_.size());
+            nesting_ += 'Q';
             return true;
         case MD_BLOCK_UL:
             open_list(static_cast<const MD_BLOCK_UL_DETAIL*>(detail)->is_tight != 0, 0);
@@ -263,7 +257,7 @@ private:
         }
     }
 
-    bool enter_table_part(MD_BLOCKTYPE type) {
+    bool enter_table_part(MD_BLOCKTYPE type, const void* detail) {
         switch (type) {
         case MD_BLOCK_TABLE:
             close_leaf();
@@ -282,6 +276,8 @@ private:
         case MD_BLOCK_TH:
         case MD_BLOCK_TD:
             inline_ = {};
+            if (in_table_head_)
+                open_table().aligns.push_back(cell_align(static_cast<const MD_BLOCK_TD_DETAIL*>(detail)->align));
             return true;
         default:
             return false;
@@ -316,6 +312,7 @@ private:
         const int base = lists_.empty() ? 0 : lists_.back().content_indent;
         const int indent = std::min(base, width_ / 4);  // düşman iç içelik metni sıfıra sıkıştırmasın
         lists_.push_back({tight, next_number, indent, indent});
+        nesting_ += 'L';
     }
 
     void open_item(const MD_BLOCK_LI_DETAIL& item) {
@@ -372,7 +369,7 @@ private:
         leaf_ = Leaf::Code;
         code_.clear();
         code_fence_ = code.fence_char;
-        code_language_ = code_language(attribute_text(code.lang));
+        code_language_ = fence_language(attribute_text(code.lang));
     }
 
     void enter_link(const MD_SPAN_A_DETAIL& link) {
@@ -469,20 +466,33 @@ private:
 
     bool in_tight_list() const { return !lists_.empty() && lists_.back().tight; }
 
-    InlineText quote_prefix() const {
+    // Kaplar dıştan içe (nesting_): alıntı çubuğu kendi kabının yerinde, liste girintisi kendi listesinin yerinde;
+    // öğedeki alıntının çubuğu öğe metninin hizasındadır. `cells` liste girintisinin toplamıdır (çubuklar hariç).
+    // Yalnız çizilen son çubuğa dek gezilir (çubuklar panelin çeyreği, kalan girinti sonda): düşman iç içelikte
+    // satır başına iş derinlikle büyümez.
+    InlineText indented_prefix(int cells, bool tail = true) const {
         constexpr int kWidthPerBar = 8;  // barlar panelin en çok çeyreğini alır
-        const int bars = std::min(quote_depth_, std::max(width_ / kWidthPerBar, 1));
+        const auto shown = std::min(quotes_.size(), static_cast<std::size_t>(std::max(width_ / kWidthPerBar, 1)));
+        const std::size_t walk = shown == 0 ? 0 : quotes_[shown - 1] + 1;
         InlineText prefix;
-        for (int i = 0; i < bars; ++i)
-            prefix.append(kQuoteBar, token_look(TokenKind::Comment));
+        int at = 0;
+        std::size_t list = 0;
+        for (std::size_t i = 0; i < walk; ++i) {
+            if (nesting_[i] == 'Q') {
+                prefix.append(kQuoteBar, token_look(TokenKind::Comment));
+                continue;
+            }
+            const int target = std::min(lists_[list++].content_indent, cells);
+            prefix.append(std::string(static_cast<std::size_t>(std::max(target - at, 0)), ' '));
+            at = std::max(at, target);
+        }
+        if (tail)
+            prefix.append(std::string(static_cast<std::size_t>(std::max(cells - at, 0)), ' '));
         return prefix;
     }
 
-    InlineText indented_prefix(int cells) const {
-        InlineText prefix = quote_prefix();
-        prefix.append(std::string(static_cast<std::size_t>(cells), ' '));
-        return prefix;
-    }
+    // Bloklar arası boş satır: yalnız çubuklar (aradaki liste girintisiyle), sonda boşluk yok.
+    InlineText gap_prefix() const { return indented_prefix(std::numeric_limits<int>::max(), false); }
 
     int content_indent() const { return lists_.empty() ? 0 : lists_.back().content_indent; }
 
@@ -504,7 +514,7 @@ private:
 
     void add_gap(std::size_t source_line) {
         if (pending_gap_ && !view_.empty())
-            view_.add_line(quote_prefix(), source_line);
+            view_.add_line(gap_prefix(), source_line);
         pending_gap_ = false;
     }
 
@@ -542,7 +552,7 @@ private:
         add_gap(line);
         const std::string marker = std::string(static_cast<std::size_t>(heading_level_), '#') + " ";
         InlineText first = first_prefix();
-        const int hanging = view_.cells(first.text) - view_.cells(quote_prefix().text) + view_.cells(marker);
+        const int hanging = content_indent() + view_.cells(marker);
         first.append(marker, dim_look());
         view_.add(first, indented_prefix(hanging), inline_, line);
         pending_gap_ = !in_tight_list();
@@ -554,7 +564,7 @@ private:
             code_.pop_back();
         InlineText first = first_prefix();
         first.append(kCodeIndent);
-        const int hanging = view_.cells(first.text) - view_.cells(quote_prefix().text);
+        const int hanging = content_indent() + view_.cells(kCodeIndent);
         const InlineText next = indented_prefix(hanging);
         const InlineText* prefix = &first;
         SyntaxState state = kInitialSyntaxState;
@@ -629,7 +639,8 @@ private:
     std::string code_;
     char code_fence_ = '\0';  // 0: girintili kod
     SyntaxLanguage code_language_ = SyntaxLanguage::Plain;
-    int quote_depth_ = 0;
+    std::string nesting_;  // açık kaplar dıştan içe: 'Q' alıntı, 'L' liste (pdf::Block::nesting gibi)
+    std::vector<std::size_t> quotes_;  // nesting_'teki alıntıların yeri
     std::vector<ListFrame> lists_;
     std::optional<InlineText> pending_marker_;
     bool pending_gap_ = false;

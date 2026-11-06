@@ -28,6 +28,8 @@ target_include_directories(noteapp_core PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_compile_definitions(noteapp_core PRIVATE NOTEAPP_VERSION="${PROJECT_VERSION}")
 # toml++ yalnız config.cpp'de kullanılır; istisnasız mod: ayrıştırma hatası parse_result ile döner.
 target_link_libraries(noteapp_core PRIVATE tomlplusplus::tomlplusplus)
+# decode_html_entity: md4c'nin HTML5 varlık tablosu.
+target_link_libraries(noteapp_core PRIVATE md4c_entity)
 # Notlar graph.db'dedir; başlıkta yalnız note_store_impl.hpp, note_sync.hpp ve graph_limits.hpp motor türü
 # taşır, SQLite görünmez.
 target_link_libraries(noteapp_core PUBLIC noteapp_graph)

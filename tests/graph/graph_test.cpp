@@ -540,6 +540,34 @@ TEST_CASE("write_validation_refuses_dangling_references_and_changed_edges") {
     GRAPH_OK(txn.commit());
 }
 
+TEST_CASE("edge_returns_the_ends_and_type_of_a_live_edge_only") {
+    TempDir dir;
+    Graph graph = open_graph(dir.path() / "graph.db");
+    const NodeId a = node_named("a");
+    const NodeId b = node_named("b");
+    const EdgeId ab = edge_named("ab");
+    {
+        WriteTxn txn = begin_write(graph);
+        GRAPH_OK(txn.put_node(a));
+        GRAPH_OK(txn.put_node(b));
+        GRAPH_OK(txn.put_edge(ab, a, "T", b));
+        GRAPH_OK(txn.commit());
+    }
+    {
+        ReadTxn txn = begin_read(graph);
+        const auto ends = txn.edge(ab);
+        REQUIRE(ends.has_value());
+        CHECK(*ends == EdgeEnds{a, "T", b});
+        CHECK(txn.edge(edge_named("yok")).value() == std::nullopt);
+    }
+    {
+        WriteTxn txn = begin_write(graph);
+        GRAPH_OK(txn.delete_edge(ab));
+        CHECK(txn.edge(ab).value() == std::nullopt);
+        GRAPH_OK(txn.commit());
+    }
+}
+
 TEST_CASE("delete_node_refuses_edges_unless_detach_and_leaves_no_trace") {
     TempDir dir;
     const auto path = dir.path() / "graph.db";

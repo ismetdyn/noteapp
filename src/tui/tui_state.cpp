@@ -439,17 +439,54 @@ std::optional<Intent> TuiState::handle_map_link_key(Key key, std::string_view te
     }
     if (link.choosing) {
         if (text == "r")
-            return request_map_edit(app::MapEdgeKind::Related, true);
+            return request_map_edit(app::MapEdgeKind::Related, MapEditAction::Connect);
         if (text == "l")
-            return request_map_edit(app::MapEdgeKind::Link, true);
+            return request_map_edit(app::MapEdgeKind::Link, MapEditAction::Connect);
         return Intent::None;
     }
-    if (text != "d")
+    if (text != "d" && text != "n" && text != "f" && text != "u")
         return std::nullopt;
     if (!link.target)
         return Intent::None;
-    const auto kind = link.edge ? link.edge : app::map_edge_between(map_.map(), link.source, *link.target);
-    return request_map_edit(kind, false);
+    return handle_map_edge_key(text);
+}
+
+std::optional<TuiState::MapLinkEdge> TuiState::map_link_edge() const {
+    if (!map_link_ || !map_link_->target)
+        return std::nullopt;
+    const MapLink& link = *map_link_;
+    // Sağ tıklanan kenarın dizini o anki çizgeye aittir: uçlar kipin kopyalarıdır (kaynak = kenarın from'u).
+    if (link.edge)
+        return MapLinkEdge{*link.edge, link.source, *link.target};
+    const app::NoteMap& map = map_.map();
+    const app::MapEdge* edge = app::map_edge_between(map, link.source, *link.target);
+    if (edge == nullptr)
+        return std::nullopt;
+    return MapLinkEdge{*edge, map.nodes[edge->from], map.nodes[edge->to]};
+}
+
+// `d` kenarı kaldırır; `n` `f` `u` yalnız ilişkide (adı, yönü), başka kenarda yutulur.
+Intent TuiState::handle_map_edge_key(std::string_view text) {
+    const std::optional<MapLinkEdge> found = map_link_edge();
+    if (!found)
+        return text == "d" ? request_map_edit(std::nullopt, MapEditAction::Remove) : Intent::None;
+    const app::MapEdge& edge = found->edge;
+    if (text == "d") {
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- map_link_edge hedefi denetledi
+        return request_map_edit({map_link_->source, *map_link_->target, edge.kind, MapEditAction::Remove,
+                                 edge.relation});
+    }
+    if (edge.kind != app::MapEdgeKind::Related)
+        return Intent::None;
+    MapEditRequest request{found->from, found->to, edge.kind, MapEditAction::Direct, edge.relation};
+    if (text == "n") {
+        request.action = MapEditAction::Rename;
+        request.name = edge.name;
+    } else if (text == "f") {
+        // Yönlü kenarın kaynağı from'dur: çevirince öbür uç; yönsüz kipin kaynağından hedefe yönlenir.
+        request.source = edge.directed ? found->to : map_link_->source;
+    }
+    return request_map_edit(std::move(request));
 }
 
 // Kaynak Tab'la seçilen not, yoksa gösterilen not (çevrenin merkezi); haritada yoksa kip açılmaz.
@@ -496,16 +533,20 @@ Intent TuiState::confirm_map_link() {
         map_link_->choosing = true;
         return Intent::None;
     case app::MapDrop::AddTag:
-        return request_map_edit(app::MapEdgeKind::Tag, true);
+        return request_map_edit(app::MapEdgeKind::Tag, MapEditAction::Connect);
     case app::MapDrop::None:
         break;
     }
     return Intent::None;
 }
 
-Intent TuiState::request_map_edit(std::optional<app::MapEdgeKind> kind, bool connect) {
+Intent TuiState::request_map_edit(std::optional<app::MapEdgeKind> kind, MapEditAction action) {
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- çağıranlar hedefi denetledi
-    map_edit_ = MapEditRequest{map_link_->source, *map_link_->target, kind, connect};
+    return request_map_edit({map_link_->source, *map_link_->target, kind, action});
+}
+
+Intent TuiState::request_map_edit(MapEditRequest request) {
+    map_edit_ = std::move(request);
     map_link_.reset();
     return Intent::MapEdit;
 }
@@ -592,7 +633,7 @@ void TuiState::open_map_edge(int column, int row) {
     leave_preview();
     focus_ = Focus::List;
     const app::MapEdge& hit = map.edges[*edge];
-    map_link_ = MapLink{map.nodes[hit.from], map.nodes[hit.to], hit.kind};
+    map_link_ = MapLink{map.nodes[hit.from], map.nodes[hit.to], hit};
 }
 
 std::string TuiState::name_prefix_for(std::string_view folder) const {
@@ -1736,6 +1777,14 @@ Intent TuiState::handle_links_letter(std::string_view text) {
         const core::LinkLine* line = links_.selected_line();
         return line && line->group == core::LinkGroup::Related ? Intent::UnlinkSelected
                                                                : intent_if_selected(Intent::LinkNote);
+    } else if (text == "n" || text == "f" || text == "u") {
+        // İlişkili satırın adı (name), yönü (flip) ya da yönsüzlüğü (undirected); başka satırda bir şey olmaz.
+        const core::LinkLine* line = links_.selected_line();
+        if (!line || line->is_header || line->group != core::LinkGroup::Related || !selected_row())
+            return Intent::None;
+        return text == "n" ? Intent::RenameRelation
+               : text == "f" ? Intent::FlipRelation
+                             : Intent::UndirectRelation;
     }
     return Intent::None;
 }

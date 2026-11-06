@@ -354,6 +354,79 @@ TEST_CASE("edge_writes_concurrent_with_an_edge_delete_converge") {
     CHECK(has(dump, "prop x"));
 }
 
+// F1 bulgusu: yeniden kurmada çerçevenin bir kenara ilk özellik yazması dışındakiler düşüyordu (adlı ilişkide
+// `name` kalıp `directed` gidiyordu); yerinde uygulama hepsini tutar, sonuç teslim sırasına bağlıydı.
+TEST_CASE("edge_props_written_in_one_frame_all_survive_a_concurrent_delete") {
+    const Authored base = authored(kA, 1, {}, {NodePut{kN}, NodePut{kM}, EdgePut{kE, kN, "REL", kM}});
+    const Authored del = authored(kB, 1, {dot_of(base)}, {EdgeDel{kE}});
+    const Authored edit = authored(kC, 1, {dot_of(base)},
+                                   {PropSet{kE, "x", std::int64_t{1}}, PropSet{kE, "y", std::int64_t{2}}});
+    const std::string dump = converged_dump({base, del, edit});
+    CHECK(has(dump, "edge "));
+    CHECK(has(dump, "prop x"));
+    CHECK(has(dump, "prop y"));
+}
+
+// İnceleme bulgusu: aynı çerçevede put'tan önceki ve sonraki özellik yazmalarının kararı farklıdır. Yalnız
+// ilk özellik kaydedilirse, put'tan önceki (düşen) yazma sonrakini de düşürür; yerinde uygulama tutar.
+TEST_CASE("edge_props_before_and_after_a_put_in_one_frame_decide_alike_on_both_paths") {
+    const NodeId k = node_named("k");
+    const Authored base = authored(kA, 1, {}, {NodePut{kN}, NodePut{kM}, NodePut{k}});
+    const Authored edit = authored(
+        kC, 1, {dot_of(base)},
+        {PropSet{kE, "y", std::int64_t{1}}, EdgePut{kE, kN, "REL", kM}, PropSet{kE, "x", std::int64_t{2}}});
+    // İlgisiz eşzamanlı silme ve yazma: hangi sırayla gelirse gelsin yeniden kurma koşar.
+    const Authored remove_k = authored(kB, 1, {dot_of(base)}, {NodeDel{k}});
+    const Authored label_k = authored(kD, 1, {dot_of(base)}, {LabelAdd{k, "L"}});
+    const std::string dump = converged_dump({base, edit, remove_k, label_k});
+    CHECK(has(dump, "edge "));
+    CHECK(has(dump, "prop x"));
+    CHECK_FALSE(has(dump, "prop y"));  // kenar yokken yazıldı: iki yolda da düşer
+}
+
+// Çerçeve [özellik, put, özellik] ve eşzamanlı silme: ilk özellik ayaktaki put'u görmüştür, hepsi kalır.
+TEST_CASE("edge_prop_put_prop_frame_concurrent_with_a_delete_converges_with_both_props") {
+    const Authored base = authored(kA, 1, {}, {NodePut{kN}, NodePut{kM}, EdgePut{kE, kN, "REL", kM}});
+    const Authored del = authored(kB, 1, {dot_of(base)}, {EdgeDel{kE}});
+    const Authored edit = authored(
+        kC, 1, {dot_of(base)},
+        {PropSet{kE, "x", std::int64_t{1}}, EdgePut{kE, kN, "REL", kM}, PropSet{kE, "y", std::int64_t{2}}});
+    const std::string dump = converged_dump({base, del, edit});
+    CHECK(has(dump, "edge "));
+    CHECK(has(dump, "prop x"));
+    CHECK(has(dump, "prop y"));
+}
+
+// Tek çerçevede silip yeniden kurma ve özellik (NoteStore böyle çerçeve üretmez: bir çağrı tek işlemdir ve
+// yeni ilişki çiftteki kimlikleri atlar; motor yine de tutarlı karar vermeli). Eşzamanlı özellik yazması
+// silmeyi etkisiz kılar.
+TEST_CASE("edge_delete_put_prop_in_one_frame_keeps_the_new_prop_on_both_paths") {
+    const Authored base = authored(kA, 1, {}, {NodePut{kN}, NodePut{kM}, EdgePut{kE, kN, "REL", kM}});
+    const Authored redo = authored(
+        kC, 1, {dot_of(base)}, {EdgeDel{kE}, EdgePut{kE, kN, "REL", kM}, PropSet{kE, "x", std::int64_t{1}}});
+    const Authored other = authored(kB, 1, {dot_of(base)}, {PropSet{kE, "y", std::int64_t{2}}});
+    const std::string dump = converged_dump({base, redo, other});
+    CHECK(has(dump, "edge "));
+    CHECK(has(dump, "prop x"));
+    CHECK(has(dump, "prop y"));
+}
+
+// İnceleme bulgusu: aynı çerçevede kur-sil-kur. Yeniden kurma ikinci put'u ilkinin tekrarı sayıp atıyordu
+// (kenar ölü), yerinde uygulama tutuyordu (kenar ayakta): kalıcı ayrışma.
+TEST_CASE("edge_put_delete_put_in_one_frame_is_alive_on_both_paths") {
+    const NodeId k = node_named("k");
+    const Authored base = authored(kA, 1, {}, {NodePut{kN}, NodePut{kM}, NodePut{k}});
+    const Authored redo = authored(kC, 1, {dot_of(base)},
+                                   {EdgePut{kE, kN, "REL", kM}, EdgeDel{kE}, EdgePut{kE, kN, "REL", kM},
+                                    PropSet{kE, "x", std::int64_t{1}}});
+    // İlgisiz eşzamanlı silme ve yazma: hangi sırayla gelirse gelsin yeniden kurma koşar.
+    const Authored remove_k = authored(kB, 1, {dot_of(base)}, {NodeDel{k}});
+    const Authored label_k = authored(kD, 1, {dot_of(base)}, {LabelAdd{k, "L"}});
+    const std::string dump = converged_dump({base, redo, remove_k, label_k});
+    CHECK(has(dump, "edge "));
+    CHECK(has(dump, "prop x"));
+}
+
 TEST_CASE("edge_reput_concurrent_with_a_delete_keeps_the_state_the_delete_removed") {
     const Authored base = authored(
         kA, 1, {}, {NodePut{kN}, NodePut{kM}, EdgePut{kE, kN, "REL", kM}, PropSet{kE, "y", std::int64_t{7}}});

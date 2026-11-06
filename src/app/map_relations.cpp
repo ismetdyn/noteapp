@@ -3,6 +3,7 @@
 #include "core/i18n.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 #include <utility>
 #include <vector>
@@ -189,13 +190,27 @@ std::expected<std::string, Error> connect_map_nodes(core::NoteStore& store, cons
     const auto& [first, second] = *pair;
     if (kind == MapEdgeKind::Link)
         return add_link(store, first, second, before_write);
-    if (const auto added = store.add_relation(first, second); !added)
+    return relate_map_notes(store, from, to, {});
+}
+
+std::expected<std::string, Error> relate_map_notes(core::NoteStore& store, const MapNode& from,
+                                                   const MapNode& to, const core::RelationSpec& relation) {
+    const auto pair = note_pair(from, to);
+    if (!pair)
+        return std::unexpected(pair.error());
+    const auto& [first, second] = *pair;
+    if (const auto added = store.add_relation(first, second, relation); !added)
         return std::unexpected(added.error());
-    return core::tr("map.related", {{"from", first.string()}, {"to", second.string()}});
+    const auto name = core::relation_name(relation.name);  // add_relation kabul ettiyse geçerlidir
+    if (!name || name->empty())
+        return core::tr("map.related", {{"from", first.string()}, {"to", second.string()}});
+    return core::tr("map.related_named",
+                    {{"name", *name}, {"from", first.string()}, {"to", second.string()}});
 }
 
 std::expected<std::string, Error> disconnect_map_nodes(core::NoteStore& store, const MapNode& from,
                                                        const MapNode& to, MapEdgeKind kind,
+                                                       const core::RelationId& relation,
                                                        const BeforeWrite& before_write) {
     if (kind == MapEdgeKind::Tag) {
         const auto target = note_and_tag(from, to);
@@ -210,22 +225,111 @@ std::expected<std::string, Error> disconnect_map_nodes(core::NoteStore& store, c
     if (kind == MapEdgeKind::Link)
         return std::unexpected(map_error(Error::Code::InvalidPath, "map.link_in_text",
                                          {{"from", first.string()}, {"to", second.string()}}));
-    if (const auto removed = store.remove_relation(first, second); !removed)
-        return std::unexpected(removed.error());
-    return core::tr("map.unrelated", {{"from", first.string()}, {"to", second.string()}});
+    return unrelate_map_notes(store, from, to, relation);
 }
 
-std::optional<MapEdgeKind> map_edge_between(const NoteMap& map, const MapNode& first, const MapNode& second) {
+std::expected<std::string, Error> unrelate_map_notes(core::NoteStore& store, const MapNode& from,
+                                                     const MapNode& to, const core::RelationId& relation) {
+    const auto pair = note_pair(from, to);
+    if (!pair)
+        return std::unexpected(pair.error());
+    const auto& [first, second] = *pair;
+    // İletideki ad, silinen ilişkinin okunan adıdır (temizlenmiş; güvenilmez, arayüz yine temizler).
+    const auto links = store.links(first);
+    if (!links)
+        return std::unexpected(links.error());
+    const auto row = std::ranges::find(links->related, relation, &core::RelatedNote::id);
+    if (row == links->related.end() || row->path != second)
+        return std::unexpected(Error{Error::Code::NotFound, "error.relation_not_found", {}});
+    const std::string name = row->name;
+    if (const auto removed = store.remove_relation(relation); !removed)
+        return std::unexpected(removed.error());
+    if (name.empty())
+        return core::tr("map.unrelated", {{"from", first.string()}, {"to", second.string()}});
+    return core::tr("map.unrelated_named",
+                    {{"name", name}, {"from", first.string()}, {"to", second.string()}});
+}
+
+std::expected<std::string, Error> rename_map_relation(core::NoteStore& store, const core::NotePath& first,
+                                                      const core::NotePath& second,
+                                                      const core::RelationId& relation, std::string_view new_name) {
+    if (const auto renamed = store.rename_relation(relation, new_name); !renamed)
+        return std::unexpected(renamed.error());
+    const auto name = core::relation_name(new_name, SIZE_MAX);  // rename_relation kabul ettiyse geçerlidir
+    if (!name || name->empty())
+        return core::tr("map.relation_unnamed", {{"from", first.string()}, {"to", second.string()}});
+    return core::tr("map.relation_renamed", {{"name", *name}, {"from", first.string()}, {"to", second.string()}});
+}
+
+std::expected<std::string, Error> direct_map_relation(core::NoteStore& store, const core::NotePath& first,
+                                                      const core::NotePath& second,
+                                                      const core::RelationId& relation,
+                                                      const std::optional<core::NotePath>& source) {
+    if (const auto directed = store.set_relation_direction(relation, source); !directed)
+        return std::unexpected(directed.error());
+    if (!source) {
+        // Yönsüz ilişkinin uçları sıralıdır (NoteEdge): ileti hangi uçtan istendiğine bağlı kalmasın.
+        const auto [low, high] = std::minmax(first, second);
+        return core::tr("map.relation_undirected", {{"from", low.string()}, {"to", high.string()}});
+    }
+    const core::NotePath& target = *source == first ? second : first;
+    return core::tr("map.relation_directed", {{"from", source->string()}, {"to", target.string()}});
+}
+
+core::NotePath flipped_source(const core::NotePath& shown, const core::NotePath& other,
+                              core::RelationDirection direction) {
+    return direction == core::RelationDirection::Outgoing ? other : shown;
+}
+
+std::string related_row_text(const core::RelatedNote& row) {
+    std::string text = row.direction == core::RelationDirection::Outgoing   ? "↗ "
+                       : row.direction == core::RelationDirection::Incoming ? "↙ "
+                                                                             : "";
+    text += row.path.string();
+    if (!row.name.empty())
+        text += " — " + row.name;
+    return text;
+}
+
+RelationMatches match_relation_names(std::span<const core::RelationName> names, std::string_view typed) {
+    RelationMatches out;
+    const auto name = core::relation_name(typed);
+    if (!name)
+        return out;
+    const std::string key = core::tag_key(*name);
+    std::vector<core::RelationName> containing;
+    for (const core::RelationName& candidate : names) {
+        const auto at = candidate.key.find(key);
+        if (at == std::string::npos)
+            continue;
+        out.exact = out.exact || candidate.key == key;
+        (at == 0 ? out.names : containing).push_back(candidate);
+    }
+    out.names.insert(out.names.end(), containing.begin(), containing.end());
+    return out;
+}
+
+bool default_directed(std::span<const core::RelationName> names, std::string_view typed) {
+    const auto name = core::relation_name(typed);
+    if (!name)
+        return false;
+    const std::string key = core::tag_key(*name);
+    const auto found = std::ranges::find(names, key, &core::RelationName::key);
+    return found != names.end() && found->default_directed();
+}
+
+const MapEdge* map_edge_between(const NoteMap& map, const MapNode& first, const MapNode& second) {
     const auto same = [](const MapNode& a, const MapNode& b) { return a.kind == b.kind && a.key == b.key; };
-    std::optional<MapEdgeKind> found;
+    const MapEdge* found = nullptr;
     for (const MapEdge& edge : map.edges) {
         const MapNode& from = map.nodes[edge.from];
         const MapNode& to = map.nodes[edge.to];
         if (!(same(from, first) && same(to, second)) && !(same(from, second) && same(to, first)))
             continue;
         if (map_edge_removable(edge.kind))
-            return edge.kind;
-        found = edge.kind;
+            return &edge;
+        if (found == nullptr)
+            found = &edge;
     }
     return found;
 }

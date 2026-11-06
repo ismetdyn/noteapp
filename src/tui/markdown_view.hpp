@@ -29,4 +29,15 @@ std::optional<RenderedView> render_json(std::string_view source, int width, Cell
 std::optional<RenderedView> render_csv(std::string_view source, int width, CellWidthFn cell_width,
                                        const ViewLimits& limits = {});
 
+// Büyük csv/json parça parça (PreviewCache): dizinden yalnız istenen satırlar üretilir. `lines` kaynağın satır
+// eşlemesi (bir kez kurulur). csv: [first, first + count) satırları (limits.table_rows altında; satır 0 başlık);
+// `columns` boşsa bu parçadan hesaplanıp yazılır, doluysa onunla çizilir; `last` son parça (kesilen satır ve sütun
+// notu orada). json: [first, first + count) girintili satırları.
+RenderedView render_csv_rows(std::string_view source, const app::CsvIndex& index, const SourceLines& lines,
+                             std::size_t first, std::size_t count, bool last, TableColumns& columns, int width,
+                             CellWidthFn cell_width, const ViewLimits& limits);
+RenderedView render_json_lines(std::string_view source, const app::JsonIndex& index, const SourceLines& lines,
+                               std::size_t first, std::size_t count, int width, CellWidthFn cell_width,
+                               const ViewLimits& limits);
+
 }  // namespace noteapp::tui

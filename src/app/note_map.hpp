@@ -37,10 +37,14 @@ struct MapNode {
     std::string key;  // not yolu ya da etiket anahtarı (tag_key)
 };
 
+// Related'da yön ve ad core::NoteEdge'inkidir: yönsüzde from/to sırası anlamsız, yönlüde from kaynaktır.
 struct MapEdge {
     std::size_t from{};
     std::size_t to{};
     MapEdgeKind kind = MapEdgeKind::Link;
+    std::string name = {};  // ilişkinin adı; boş = adsız. Güvenilmez: arayüz kendi temizliğiyle çizer
+    bool directed = false;
+    core::RelationId relation = {};  // Related'ın kimliği: kaldırma yalnız bu ilişkiyi siler
 };
 
 struct NoteMap {
@@ -92,6 +96,9 @@ public:
     const GraphLayout& layout() const { return layout_; }
     const std::optional<core::NotePath>& center() const { return center_; }
     std::size_t generation() const { return generation_; }  // yerleşimin çizgesi her değiştiğinde artar
+    // Harita her değiştiğinde artar, yalnız ilişkinin adı ya da yönü değişse de (yerleşim ve kuşak aynı
+    // kalır): kenar başına çizim önbelleği buna bağlıdır, kameranın sığdırması generation'a.
+    std::size_t version() const { return version_; }
     std::size_t reads() const { return reads_; }            // test kancası: okuyucu çağrısı
 
     // Arama süzgeci (listeyle aynı ayrıştırıcı) eşleşen notları yakar, gerisi söner; etiket eşleşen bir
@@ -116,6 +123,7 @@ private:
     bool stale_ = true;
     std::size_t reads_ = 0;
     std::size_t generation_ = 0;
+    std::size_t version_ = 0;
 };
 
 }  // namespace noteapp::app

@@ -1,6 +1,7 @@
 // T84: not haritası (Harita görünümü). Veri GuiState'te, çizim ve etkileşim gerçek View'da; fare ve tuşlar
 // gerçek ImGui/SDL olaylarıyla verilir.
 #include "gui/gui_state.hpp"
+#include "graph/graph.hpp"
 #include "gui/view.hpp"
 #include "support/note_seed.hpp"
 #include "window_fixture.hpp"
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <doctest/doctest.h>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <string>
@@ -140,6 +142,71 @@ void focus_canvas(MapScene& scene) {
     mouse_button(*scene.view, true);
     mouse_button(*scene.view, false);
     settle(*scene.view);
+}
+
+
+// F1 ad penceresi: modal döngüsünün karelerinde sırayla adımlar, her biri kendi karesinde (ImGui olay kuyruğu
+// bas-bırak ve fare olaylarını ardışık karelere dağıtır). Yanıt tutmazsa Esc: test asılı kalmaz.
+using ModalStep = std::function<void()>;
+struct ModalSteps {
+    std::vector<ModalStep> steps;
+    std::size_t frame = 0;
+    void operator()() {
+        constexpr std::size_t kSettleFrames = 4;  // odak ve kısayol rotası yerleşsin
+        constexpr std::size_t kStepFrames = 3;
+        constexpr std::size_t kGiveUpFrame = 300;
+        ++frame;
+        if (frame == 1) {  // açan sürükleme ve tıklamanın tuşları bırakılır
+            ImGuiIO& io = ImGui::GetIO();
+            io.AddKeyEvent(ImGuiMod_Shift, false);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        }
+        if (frame > kSettleFrames && (frame - kSettleFrames) % kStepFrames == 0) {
+            const std::size_t index = (frame - kSettleFrames) / kStepFrames - 1;
+            if (index < steps.size())
+                steps[index]();
+        }
+        if (frame == kGiveUpFrame)
+            gui_test::tap_key(ImGuiKey_Escape);
+    }
+};
+
+ModalStep press_key(ImGuiKey key) {
+    return [key] { gui_test::tap_key(key); };
+}
+
+ModalStep type(std::string text) {
+    return [text = std::move(text)] { ImGui::GetIO().AddInputCharactersUTF8(text.c_str()); };
+}
+
+// Diyalogdaki adlı alana tıklama: konum, basış ve bırakış kuyrukta ardışık karelere düşer.
+ModalStep click(const View& view, std::string name) {
+    return [&view, name = std::move(name)] {
+        REQUIRE_MESSAGE(view.item_rects().contains(name), name);
+        const auto [x, y] = view.button_center(name);
+        ImGuiIO& io = ImGui::GetIO();
+        io.AddMousePosEvent(x, y);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    };
+}
+
+std::vector<core::RelatedNote> related_of(const MapScene& scene, const std::string& path) {
+    return core::NoteStore(scene.fixture.store_dir()).links(np(path)).value().related;
+}
+
+void put_relation(const MapScene& scene, const std::string& from, const std::string& to,
+                  const core::RelationSpec& spec) {
+    core::NoteStore store(scene.fixture.store_dir());
+    REQUIRE(store.add_relation(np(from), np(to), spec).has_value());
+}
+
+// Tekerlek `x`,`y` çevresinde yakınlaştırır (o nokta yerinde kalır).
+void wheel_at(View& view, float x, float y, float notches) {
+    mouse_to(view, x, y);
+    ImGui::GetIO().AddMouseWheelEvent(0.0F, notches);
+    view.draw_frame();
+    settle(view);
 }
 
 }  // namespace
@@ -349,6 +416,9 @@ TEST_CASE("map: no frames are drawn once the layout has settled") {
 TEST_CASE("map: Shift+dragging a note onto another asks Related or Link; Related adds the relation") {
     MapScene scene;
     scene.open();
+    scene.view->install_deciders();
+    ModalSteps accept{{press_key(ImGuiKey_Enter)}};
+    scene.view->on_modal_frame = std::ref(accept);
     shift_drag(*scene.view, "map:d.md", "map:e.md");
     REQUIRE(scene.view->item_rects().contains("map_connect_related"));
     CHECK(scene.view->item_rects().contains("map_connect_link"));
@@ -357,7 +427,8 @@ TEST_CASE("map: Shift+dragging a note onto another asks Related or Link; Related
     CHECK(scene.state->status() == "Related: d.md and e.md");
     CHECK(has_map_edge(*scene.state, "d.md", "e.md", noteapp::gui::MapEdgeKind::Related));
     const auto links = core::NoteStore(scene.fixture.store_dir()).links(np("d.md")).value();
-    CHECK(links.related == std::vector{np("e.md")});
+    REQUIRE(links.related.size() == 1);
+    CHECK(links.related.front().path == np("e.md"));
     CHECK(scene.fixture.read_note("d.md") == "ilgisiz\n");
     for (std::size_t node = 0; node < scene.state->map_layout().size(); ++node)
         CHECK_FALSE(scene.state->map_layout().pinned(node));  // Shift+sürükleme iğnelemez
@@ -635,6 +706,9 @@ TEST_CASE("map: right-click Connect… then a click on another note asks Related
     click_button(*scene.view, "map:e.md");
     REQUIRE(scene.view->item_rects().contains("map_connect_related"));
     CHECK(scene.state->current_path()->string() == "a.md");  // bağlama tıklaması notu açmaz
+    scene.view->install_deciders();
+    ModalSteps accept{{press_key(ImGuiKey_Enter)}};
+    scene.view->on_modal_frame = std::ref(accept);
     click_button(*scene.view, "map_connect_related");
     CHECK(has_map_edge(*scene.state, "d.md", "e.md", noteapp::gui::MapEdgeKind::Related));
 }
@@ -677,6 +751,9 @@ TEST_CASE("map: C on the focused canvas connects from the shown note") {
     press(*scene.view, ImGuiKey_C);
     click_button(*scene.view, "map:d.md");
     REQUIRE(scene.view->item_rects().contains("map_connect_related"));
+    scene.view->install_deciders();
+    ModalSteps accept{{press_key(ImGuiKey_Enter)}};
+    scene.view->on_modal_frame = std::ref(accept);
     click_button(*scene.view, "map_connect_related");
     CHECK(has_map_edge(*scene.state, "a.md", "d.md", noteapp::gui::MapEdgeKind::Related));
 }
@@ -697,4 +774,274 @@ TEST_CASE("map: Connect… from a menu opened before the map rebuilt does nothin
     settle(*scene.view);
     CHECK_FALSE(rendered.contains(core::tr("map.connect_pending", {{"from", "d.md"}})));
     CHECK(rendered.contains(core::tr("map.connect_hint")));
+}
+
+// F1: "İlişkili" ad penceresini açar. Liste var olan adları sayılarıyla süzer, ↓ Enter seçer; seçilen adın
+// "Yönlü" varsayılanı adın alışkanlığıdır.
+TEST_CASE("map: Related asks a name; the list filters known names, Down and Enter take one") {
+    MapScene scene;
+    put_relation(scene, "b.md", "c.md", {"uses", true});
+    put_relation(scene, "a.md", "c.md", {"cites", false});
+    scene.open();
+    scene.view->install_deciders();
+    const View& view = *scene.view;
+    bool listed_both = false;
+    bool filtered = false;
+    ModalSteps steps{{[&] {
+                          listed_both = view.item_rects().contains("relation_row:uses") &&
+                                        view.item_rects().contains("relation_row:cites");
+                      },
+                      type("u"),
+                      [&] {
+                          filtered = view.item_rects().contains("relation_row:uses") &&
+                                     !view.item_rects().contains("relation_row:cites");
+                      },
+                      press_key(ImGuiKey_DownArrow), press_key(ImGuiKey_Enter)}};
+    scene.view->on_modal_frame = std::ref(steps);
+    shift_drag(*scene.view, "map:d.md", "map:e.md");
+    click_button(*scene.view, "map_connect_related");
+    CHECK(listed_both);
+    CHECK(filtered);
+    const auto rows = related_of(scene, "d.md");
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].path == np("e.md"));
+    CHECK(rows[0].name == "uses");
+    CHECK(rows[0].direction == core::RelationDirection::Outgoing);  // "uses" çoğunlukla yönlü
+    CHECK(scene.state->status() == "Related as 'uses': d.md and e.md");
+    REQUIRE_FALSE(scene.state->notices().items().empty());
+    CHECK(scene.state->notices().items().back().text == "Related as 'uses': d.md and e.md");
+}
+
+TEST_CASE("map: the name dialog takes a new name and the Directed box; a click on a listed name fills it") {
+    MapScene scene;
+    put_relation(scene, "b.md", "c.md", {"cites", false});
+    scene.open();
+    scene.view->install_deciders();
+    const View& view = *scene.view;
+    bool shows_new = false;
+    ModalSteps fresh{{type("parent of"), [&] { shows_new = view.item_rects().contains("relation_new"); },
+                      click(view, "relation_directed"), click(view, "dialog_ok")}};
+    scene.view->on_modal_frame = std::ref(fresh);
+    shift_drag(*scene.view, "map:d.md", "map:e.md");
+    click_button(*scene.view, "map_connect_related");
+    CHECK(shows_new);
+    INFO(scene.state->status());
+    auto rows = related_of(scene, "d.md");
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].name == "parent of");
+    CHECK(rows[0].direction == core::RelationDirection::Outgoing);
+
+    scene.settle_layout();
+    // Tıklama alanı odağa geri çağırır; odak bir karede oturur, Enter ondan sonra.
+    ModalSteps listed{{click(view, "relation_row:cites"), [] {}, press_key(ImGuiKey_Enter)}};
+    scene.view->on_modal_frame = std::ref(listed);
+    shift_drag(*scene.view, "map:a.md", "map:d.md");
+    click_button(*scene.view, "map_connect_related");
+    rows = related_of(scene, "a.md");
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].name == "cites");
+    CHECK(rows[0].direction == core::RelationDirection::Undirected);
+}
+
+TEST_CASE("map: Esc in the name dialog writes nothing; a refused name is reported") {
+    MapScene scene;
+    put_relation(scene, "d.md", "e.md", {"uses", false});
+    scene.open();
+    scene.view->install_deciders();
+    ModalSteps cancel{{type("x"), press_key(ImGuiKey_Escape)}};
+    scene.view->on_modal_frame = std::ref(cancel);
+    shift_drag(*scene.view, "map:a.md", "map:d.md");
+    click_button(*scene.view, "map_connect_related");
+    CHECK(related_of(scene, "a.md").empty());
+
+    scene.settle_layout();
+    ModalSteps duplicate{{type("USES"), press_key(ImGuiKey_Enter)}};
+    scene.view->on_modal_frame = std::ref(duplicate);
+    shift_drag(*scene.view, "map:e.md", "map:d.md");
+    click_button(*scene.view, "map_connect_related");
+    CHECK(related_of(scene, "d.md").size() == 1);
+    REQUIRE_FALSE(scene.state->notices().items().empty());
+    CHECK(scene.state->notices().items().back().kind == noteapp::app::NoticeKind::Error);
+}
+
+TEST_CASE("map: the edge menu renames, directs, flips, undirects and removes a relation by its id") {
+    MapScene scene;
+    put_relation(scene, "d.md", "e.md", {"uses", false});
+    scene.open();
+    scene.view->install_deciders();
+    const auto menu = [&] {
+        scene.settle_layout();
+        const auto [x, y] = edge_middle(*scene.view, "map:d.md", "map:e.md");
+        right_click(*scene.view, x, y);
+    };
+    const auto relation = [&] {
+        const auto rows = related_of(scene, "d.md");
+        REQUIRE(rows.size() == 1);
+        return rows[0];
+    };
+    menu();
+    REQUIRE(scene.view->item_rects().contains("map_edge_rename"));
+    CHECK_FALSE(scene.view->item_rects().contains("map_edge_flip"));  // yönsüz: çevrilecek yön yok
+    click_button(*scene.view, "map_edge_direct");
+    CHECK(relation().direction == core::RelationDirection::Outgoing);
+    CHECK(scene.state->status() == "Relation directed: d.md → e.md");
+
+    menu();
+    click_button(*scene.view, "map_edge_flip");
+    CHECK(relation().direction == core::RelationDirection::Incoming);
+    CHECK(scene.state->status() == "Relation directed: e.md → d.md");
+
+    menu();
+    click_button(*scene.view, "map_edge_undirect");
+    CHECK(relation().direction == core::RelationDirection::Undirected);
+
+    menu();
+    ModalSteps rename{{press_key(ImGuiKey_Backspace), press_key(ImGuiKey_Backspace), press_key(ImGuiKey_Backspace),
+                       press_key(ImGuiKey_Backspace), type("cites"), press_key(ImGuiKey_Enter)}};
+    scene.view->on_modal_frame = std::ref(rename);
+    click_button(*scene.view, "map_edge_rename");
+    CHECK(rename.frame > 0);
+    CHECK(relation().name == "cites");
+    CHECK(scene.state->status() == "Relation renamed to 'cites': d.md and e.md");
+
+    menu();
+    click_button(*scene.view, "map_edge_remove");
+    CHECK(related_of(scene, "d.md").empty());
+    CHECK(scene.state->status() == "Relation 'cites' removed: d.md and e.md");
+}
+
+TEST_CASE("map: a relation's name is drawn on its edge only when zoomed in enough; hover always tells it") {
+    MapScene scene;
+    put_relation(scene, "d.md", "e.md", {"uses", true});
+    scene.open();
+    const auto [x, y] = edge_middle(*scene.view, "map:d.md", "map:e.md");
+    wheel_at(*scene.view, x, y, 4.0F);
+    CHECK(scene.view->item_rects().contains("map_edge_label:uses"));
+    {
+        const gui_test::RenderedText rendered;
+        mouse_to(*scene.view, x, y);
+        settle(*scene.view);
+        CHECK(rendered.contains("uses"));
+        CHECK(rendered.contains("d.md → e.md"));
+    }
+    wheel_at(*scene.view, x, y, -16.0F);
+    CHECK_FALSE(scene.view->item_rects().contains("map_edge_label:uses"));
+}
+
+TEST_CASE("map: a hostile relation name is drawn without control or hidden characters") {
+    MapScene scene;
+    put_relation(scene, "d.md", "e.md", {"x", false});
+    {
+        auto raw = noteapp::graph::Graph::open(scene.fixture.store_dir() / "graph.db");
+        REQUIRE(raw.has_value());
+        REQUIRE(raw->query("MATCH ()-[r:RELATED_TO]->() SET r.name = $name",
+                           {{"name", noteapp::graph::QueryValue(std::string("ab\xE2\x80\xAE" "cd"))}},
+                           noteapp::graph::QueryMode::ReadWrite)
+                    .has_value());
+    }
+    scene.open();
+    const auto [x, y] = edge_middle(*scene.view, "map:d.md", "map:e.md");
+    wheel_at(*scene.view, x, y, 4.0F);
+    std::vector<std::string> labels;
+    for (const auto& [name, rect] : scene.view->item_rects())
+        if (name.starts_with("map_edge_label:"))
+            labels.push_back(name);
+    CHECK(labels == std::vector<std::string>{"map_edge_label:ab\xEF\xBF\xBD" "cd"});
+}
+
+// İnceleme (F1): kenar adı önbelleği yerleşim kuşağına bağlıydı; ad değişimi kuşağı artırmaz, eski ad kalırdı.
+TEST_CASE("map: a renamed relation's label and tooltip show the new name") {
+    MapScene scene;
+    put_relation(scene, "d.md", "e.md", {"uses", false});
+    scene.open();
+    scene.view->install_deciders();
+    const auto [x, y] = edge_middle(*scene.view, "map:d.md", "map:e.md");
+    wheel_at(*scene.view, x, y, 4.0F);
+    REQUIRE(scene.view->item_rects().contains("map_edge_label:uses"));
+    right_click(*scene.view, x, y);
+    ModalSteps rename{{press_key(ImGuiKey_Backspace), press_key(ImGuiKey_Backspace), press_key(ImGuiKey_Backspace),
+                       press_key(ImGuiKey_Backspace), type("cites"), press_key(ImGuiKey_Enter)}};
+    scene.view->on_modal_frame = std::ref(rename);
+    click_button(*scene.view, "map_edge_rename");
+    REQUIRE(related_of(scene, "d.md").at(0).name == "cites");
+    settle(*scene.view);
+    CHECK(scene.view->item_rects().contains("map_edge_label:cites"));
+    CHECK_FALSE(scene.view->item_rects().contains("map_edge_label:uses"));
+    const gui_test::RenderedText rendered;
+    mouse_to(*scene.view, x, y);
+    settle(*scene.view);
+    CHECK(rendered.contains("cites"));
+    CHECK_FALSE(rendered.contains("uses"));
+}
+
+// İnceleme (güvenlik): ImGui etiketteki `##`i kimlik ayırıcısı sayar; senkronla gelen ad menüde gerçek yolu
+// gizleyip yanlış ilişkiyi sildirebilirdi. Ad ve yoldaki `#` görünür işarete (U+FF03) döner.
+TEST_CASE("map: a # in a relation name cannot cut the menu label that names the relation") {
+    MapScene scene;
+    put_relation(scene, "d.md", "e.md", {"a##b", false});
+    scene.open();
+    {
+        const auto [x, y] = edge_middle(*scene.view, "map:d.md", "map:e.md");
+        const gui_test::RenderedText rendered;
+        right_click(*scene.view, x, y);
+        REQUIRE(scene.view->item_rects().contains("map_edge_remove"));
+        CHECK(rendered.contains("a\xEF\xBC\x83\xEF\xBC\x83" "b"));
+        press(*scene.view, ImGuiKey_Escape);
+    }
+    const auto [nx, ny] = scene.view->button_center("map:d.md");
+    right_click(*scene.view, nx, ny);
+    // Alt menünün metni ImGui günlüğüne düşmez: öğenin varlığı ve kaldırdığı ilişki denetlenir.
+    const auto [mx, my] = scene.view->button_center("map_node_remove");
+    mouse_to(*scene.view, mx, my);
+    settle(*scene.view);
+    REQUIRE(scene.view->item_rects().contains("map_node_remove:e.md:a##b"));
+    click_button(*scene.view, "map_node_remove:e.md:a##b");
+    CHECK(related_of(scene, "d.md").empty());
+}
+
+// İnceleme (eşitlik): "Yönlü yap" gösterilen not uçlardan biriyse ondan başlar (TUI ve bağlantı paneli gibi).
+TEST_CASE("map: Make directed starts at the shown note when it is an end of the relation") {
+    MapScene scene;
+    put_relation(scene, "d.md", "e.md", {"uses", false});
+    scene.open();
+    scene.state->open_note(np("e.md"));
+    scene.settle_layout();
+    const auto [x, y] = edge_middle(*scene.view, "map:d.md", "map:e.md");
+    {
+        const gui_test::RenderedText rendered;
+        right_click(*scene.view, x, y);
+        CHECK(rendered.contains("e.md → d.md"));
+    }
+    click_button(*scene.view, "map_edge_direct");
+    CHECK(related_of(scene, "d.md").at(0).direction == core::RelationDirection::Incoming);
+    CHECK(scene.state->status() == "Relation directed: e.md → d.md");
+}
+
+// İnceleme (eşitlik): geçersiz ad pencereyi kapatıp metni yitirmez; neden pencerede kalır (TUI gibi).
+TEST_CASE("map: an invalid relation name keeps the dialog open with the reason") {
+    MapScene scene;
+    scene.fixture.config.limits.graph.relation_name_bytes = core::Limit{4, "4"};
+    scene.open();
+    scene.view->install_deciders();
+    const View& view = *scene.view;
+    bool hidden_refused = false;
+    bool long_refused = false;
+    bool cleared_on_edit = false;
+    // Ret alanı yeniden odaklar (metin seçili): ilk Backspace metni siler, hata kalkar.
+    ModalSteps steps{{type("a\xE2\x80\xAE" "b"), press_key(ImGuiKey_Enter),
+                      [&] { hidden_refused = view.item_rects().contains("relation_error"); },
+                      press_key(ImGuiKey_Backspace),
+                      [&] { cleared_on_edit = !view.item_rects().contains("relation_error"); },
+                      press_key(ImGuiKey_Backspace), press_key(ImGuiKey_Backspace),
+                      type("abcdef"), press_key(ImGuiKey_Enter),
+                      [&] { long_refused = view.item_rects().contains("relation_error"); },
+                      press_key(ImGuiKey_Escape)}};
+    scene.view->on_modal_frame = std::ref(steps);
+    shift_drag(*scene.view, "map:d.md", "map:e.md");
+    click_button(*scene.view, "map_connect_related");
+    CHECK(hidden_refused);
+    CHECK(cleared_on_edit);
+    CHECK(long_refused);
+    CHECK(steps.frame < 200);  // Esc'e dek açık kaldı, vazgeçme zaman aşımından değil
+    CHECK(related_of(scene, "d.md").empty());
 }

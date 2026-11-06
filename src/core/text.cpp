@@ -11,6 +11,11 @@
 #include <system_error>
 #include <utility>
 
+// md4c'nin C başlığı C++ bağlama bildirmez.
+extern "C" {
+#include <entity.h>
+}
+
 namespace noteapp::core {
 
 namespace {
@@ -178,27 +183,45 @@ std::optional<std::u32string> decode_utf8(std::string_view utf8) {
     return out;
 }
 
-std::string decode_html_entity(std::string_view entity) {
+namespace {
+
+// Varlığın tek kod noktası metne nasıl girer (adlı ve sayısal biçim aynı kuraldan geçer: `&NewLine;` = `&#10;`).
+// HTML'de boşluk varlığı boşluktur; satır sonu burada zorunlu satır sonu olurdu. Vekil, 0, U+10FFFF üstü ve
+// denetim karakteri (C0, DEL, C1: tek baytlık CSI U+009B dahil) metne girmez.
+std::string entity_code_point(char32_t value) {
     constexpr std::string_view kReplacement = "\xEF\xBF\xBD";
-    constexpr std::pair<std::string_view, std::string_view> kNamed[] = {
-        {"&amp;", "&"}, {"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&apos;", "'"}, {"&nbsp;", " "},
-    };
-    for (const auto& [name, value] : kNamed)
-        if (entity == name)
-            return std::string(value);
-    if (entity.size() <= 3 || entity[1] != '#')
-        return std::string(entity);
+    constexpr char32_t kMaxCodePoint = 0x10FFFF;
+    if (value == '\t')
+        return "\t";
+    if (value == '\n' || value == '\r')
+        return " ";
+    const bool is_control = value < 0x20 || (value >= 0x7F && value <= 0x9F);
+    const bool is_valid = !is_control && value <= kMaxCodePoint && !(value >= 0xD800 && value <= 0xDFFF);
+    return is_valid ? encode_utf8(std::u32string(1, value)) : std::string(kReplacement);
+}
+
+}  // namespace
+
+std::string decode_html_entity(std::string_view entity) {
+    if (entity.size() <= 3 || entity[1] != '#') {
+        // entity_lookup önek karşılaştırır (strncmp, anahtar boyunda): yalnız `&ad;` biçimi aranır.
+        const bool is_named = entity.starts_with('&') && entity.ends_with(';');
+        const ENTITY* named = is_named ? entity_lookup(entity.data(), entity.size()) : nullptr;
+        if (named == nullptr)
+            return std::string(entity);
+        std::string out = entity_code_point(static_cast<char32_t>(named->codepoints[0]));
+        if (named->codepoints[1] != 0)
+            out += entity_code_point(static_cast<char32_t>(named->codepoints[1]));
+        return out;
+    }
     const bool is_hex = entity[2] == 'x' || entity[2] == 'X';
     const std::string_view digits = entity.substr(is_hex ? 3 : 2, entity.size() - (is_hex ? 4 : 3));
     std::uint32_t value = 0;
     const auto [end, ec] =
         std::from_chars(digits.data(), digits.data() + digits.size(), value, is_hex ? 16 : 10);
-    // Sınırların dışı (vekil, 0, 10FFFF üstü) ve denetim karakteri metne girmesin.
-    const bool is_valid = ec == std::errc{} && end == digits.data() + digits.size() && value >= 0x20 &&
-                          value <= 0xFFFF && !(value >= 0xD800 && value <= 0xDFFF);
-    if (!is_valid)
-        return std::string(kReplacement);
-    return encode_utf8(std::u32string(1, static_cast<char32_t>(value)));
+    if (ec != std::errc{} || end != digits.data() + digits.size())
+        return "\xEF\xBF\xBD";
+    return entity_code_point(static_cast<char32_t>(value));
 }
 
 std::string encode_utf8(std::u32string_view codepoints) {

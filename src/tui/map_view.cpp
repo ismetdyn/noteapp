@@ -4,10 +4,12 @@
 #include "core/file_icons.hpp"
 #include "core/i18n.hpp"
 #include "edit/display_text.hpp"
+#include "tui/input_view.hpp"
 #include "tui/view.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <ftxui/dom/canvas.hpp>
 #include <ftxui/screen/string.hpp>
 #include <string>
@@ -61,12 +63,24 @@ std::string status_text(const app::MapModel& model, int columns) {
     return fit_hints(text, columns);
 }
 
-// `C` kipi ve sürükleme (MAP-R): kaynak → hedef ve kipin tuşları.
-std::string link_text(const TuiState::MapLink& link, int columns) {
+// `C` kipi ve sürükleme (MAP-R): kaynak → hedef ve kipin tuşları. Hedefle arada ilişki varsa adı ve yönü
+// (F1): ad güvenilmezdir, temizlenir ve kısalır.
+std::string link_text(const TuiState& state, const TuiState::MapLink& link, int columns) {
     const auto name = [](const app::MapNode& node) { return label_text(node, kLabelMaxCells); };
     const std::string target = link.target ? name(*link.target) : "?";
-    return fit_hints(core::tr(link.choosing ? "tui.map_choose" : "tui.map_link",
-                              {{"from", name(link.source)}, {"to", target}}),
+    const std::optional<TuiState::MapLinkEdge> edge = link.choosing ? std::nullopt : state.map_link_edge();
+    if (!edge || edge->edge.kind != app::MapEdgeKind::Related)
+        return fit_hints(core::tr(link.choosing ? "tui.map_choose" : "tui.map_link",
+                                  {{"from", name(link.source)}, {"to", target}}),
+                         columns);
+    std::string relation = terminal_safe(edge->edge.name);
+    if (ftxui::string_width(relation) > kLabelMaxCells)
+        relation = head_cells(relation, kLabelMaxCells - 1) + "…";
+    return fit_hints(core::tr("tui.map_relation",
+                              {{"from", name(edge->from)},
+                               {"arrow", edge->edge.directed ? "→" : "—"},
+                               {"to", name(edge->to)},
+                               {"name", relation.empty() ? core::tr("tui.relation_unnamed") : "'" + relation + "'"}}),
                      columns);
 }
 
@@ -146,7 +160,7 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
     const app::NoteMap& map = model.map();
     const std::optional<TuiState::MapLink>& link = state.map_link();
     Element status =
-        link ? text(link_text(*link, columns)) | color(Color::Cyan) : text(status_text(model, columns)) | dim;
+        link ? text(link_text(state, *link, columns)) | color(Color::Cyan) : text(status_text(model, columns)) | dim;
     if (map.nodes.empty())
         return vbox({std::move(status), paragraph(core::tr("tui.map_empty")) | dim, filler()});
     const int canvas_rows = std::max(rows - 1, 1);

@@ -122,15 +122,26 @@ import_line_bytes = "128MiB"  # `note graph import` satırı; okunurken sınırl
 # Aynı satırın JSON değeri (etiket, özellik…); aşan satır reddedilir, satır numarasıyla. Ayrıştırılmış değer
 # ~100 bayt: 0'da 128 MiB'lık "[1,1,…]" satırı ~7 GiB bellek ister.
 import_line_values = 100000
+# İlişki adı (haritada ve listede gösterilen metin). Aşan yeni ad reddedilir; senkronla gelen uzun ad grafta
+# kalır, gösterimi ve eşleme anahtarı bu baytta kesilir. Cihaza özgü. 0: sınırsız.
+relation_name_bytes = 1024
 
 # Terminal arayüzü. Değerler tuş bütçesini (50 ms) korur; aşan iş reddedilmez: biçimli görünüm ham metne,
 # renklendirme düz metne düşer, kesilen tablo soluk satırla söylenir. 0'da büyük not o işi uzatır (ör. 10 MiB'lık
 # not biçimli görünümde ya da sona atlarken renklendirmede saniyeler sürebilir).
 [limits.tui]
-view_bytes = "256KiB"         # REVIEW biçimli görünümü (md, csv, json); büyüğü ham metin gösterilir
+view_bytes = 0                # REVIEW biçimli görünümü (md, csv, json); büyüğü ham metin gösterilir. 0: sınırsız (görünüm parça parça)
+# view_lines TUI'de üretilen görünümü sınırlar: `G` ve not içi arama tümünü üretir. 0'da büyük not hem süre hem bellek
+# ister: 10 milyon satırlık CSV ya da JSON'un biçimli görünümü GB'larca bellek ve saniyelerce iş (20 MiB JSON `G` ~4 s).
 view_lines = 100000           # biçimli görünümün satırı; fazlası soluk satırla söylenir
-table_rows = 5000             # biçimli tablonun satırı
+table_rows = 0                # biçimli tablonun satırı (csv dizinli, md parçalı: 0 sınırsız)
 table_columns = 128           # biçimli tablonun saklanan sütunu
+# Büyük md parça parça biçimlenir (TUI REVIEW ve GUI önizleme). Bunlar düşman (eşitlenmiş) nota karşı korumadır:
+# 0'da her parça notun bütün tanım tablosunu ya da dev çit/tablo başlığını yeniden ayrıştırabilir (parça sayısı ×
+# bayt; 10 MB tanımlı notta tümünü üretmek saniyeler, UI donar).
+preview_definition_bytes = "128KiB"  # parçaya eklenen başka parçadaki bağlantı tanımı; aşan başvuru metin kalır
+preview_fence_info_bytes = 64        # zorla kesilen koda taşınan çit satırı öneki (çit + dil); aşan taşınmaz
+preview_table_header_bytes = "4KiB"  # zorla kesilen tabloya taşınan başlık ve ayraç; büyüğü taşınmaz
 highlight_bytes = "2MiB"      # sözdizimi renklendirilen en büyük not
 highlight_line_bytes = "64KiB"   # renklendirilen en uzun satır; uzunu düz çizilir
 spellcheck_line_bytes = "8KiB"   # yazım denetlenen en uzun satır

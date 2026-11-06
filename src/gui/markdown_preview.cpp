@@ -35,6 +35,15 @@ constexpr float kEstimateBytesPerLine = 70.0F;
 // yerleştirmez, uzaktakiler bırakılır (bellek görünen alanla orantılı).
 constexpr float kKeptScreens = 1.0F;
 
+// `at`ten sonraki ilk kod noktası başı (devam baytları atlanır).
+std::size_t code_point_start(std::string_view text, std::size_t at) {
+    constexpr unsigned char kContinuationMask = 0xC0;
+    constexpr unsigned char kContinuation = 0x80;
+    while (at < text.size() && (static_cast<unsigned char>(text[at]) & kContinuationMask) == kContinuation)
+        ++at;
+    return std::min(at, text.size());
+}
+
 std::size_t utf8_length(char lead) {
     const auto byte = static_cast<unsigned char>(lead);
     constexpr unsigned char kTwo = 0xC0;
@@ -64,13 +73,19 @@ struct Look {
     bool code_background = false;
     std::string_view link;
     bool wiki = false;
+    bool strike = false;
 };
 
 Look look_of(const PreviewFonts& fonts, const pdf::Span& span, float size, bool bold, const LinkResolves& resolves) {
     pdf::TextStyle style = span.style;
     style.bold = style.bold || bold;
-    Look look{font_for(fonts, style), size,  span.link.empty() ? PreviewInk::Text : PreviewInk::Link,
-              span.style.mono,        span.link, span.wiki};
+    Look look{font_for(fonts, style),
+              size,
+              span.link.empty() ? PreviewInk::Text : PreviewInk::Link,
+              span.style.mono,
+              span.link,
+              span.wiki,
+              span.style.strike};
     // Çözülmeyen [[hedef]] bağlantı değildir: tıklama alanı ve alt çizgisi yok (bağlantı panelindeki "Eksik").
     if (span.wiki && !resolves(span.link)) {
         look.ink = PreviewInk::Missing;
@@ -153,7 +168,7 @@ private:
         const float width = measure(look.font, look.size, text);
         const ImVec2 pos(x_, y_ + ((line_height_ - look.size) / 2.0F));
         out_.runs.push_back({look.font, look.size, pos, width, text, look.ink, !look.link.empty(),
-                             look.code_background, y_, y_ + line_height_});
+                             look.code_background, look.strike, y_, y_ + line_height_});
         if (!look.link.empty()) {
             // Aynı bağlantının aynı satırdaki ardışık sözcükleri (aradaki boşluk dahil) tek tıklama alanı.
             if (last_hit_ && out_.hits.back().target == look.link && out_.hits.back().min.y == y_)
@@ -177,18 +192,41 @@ private:
     bool last_hit_ = false;
 };
 
+// Kapların yatay yeri dıştan içe (Block::nesting): alıntı payı ve liste girintisi sırayla; öğedeki alıntının çubuğu
+// öğe metninin hizasında. `bars` alıntı çubuklarının x'i, `marker` en içteki listenin im yeri, `left` metnin başı.
+struct Indents {
+    std::vector<float> bars;
+    float marker = 0.0F;
+    float left = 0.0F;
+};
+
+Indents indents_of(const pdf::Block& block, float em) {
+    Indents out;
+    for (const char container : block.nesting) {
+        if (container == 'Q') {
+            out.bars.push_back(out.left);
+            out.left += kQuoteIndentEms * em;
+        } else {
+            out.marker = out.left;
+            out.left += kListIndentEms * em;
+        }
+    }
+    return out;
+}
+
 class Layouter {
 public:
-    Layouter(PreviewLayout& out, const PreviewFonts& fonts, float em, float width, const LinkResolves& resolves)
-        : out_(out), fonts_(fonts), resolves_(resolves), em_(em), width_(width), line_height_(em * kLineSpacing) {}
+    Layouter(PreviewLayout& out, const PreviewFonts& fonts, float em, float width, const LinkResolves& resolves,
+             std::size_t highlight_line_bytes)
+        : out_(out), fonts_(fonts), resolves_(resolves), em_(em), width_(width), line_height_(em * kLineSpacing),
+          highlight_line_bytes_(highlight_line_bytes) {}
 
     // Bloğun altını döner; sağ kenarı `right_`a işler.
     float add(const pdf::Block& block, float top) {
         quoted_ = block.quote_depth > 0;
-        const float quote_left = static_cast<float>(block.quote_depth) * kQuoteIndentEms * em_;
-        const float list_indent = kListIndentEms * em_;
-        const float marker_left = quote_left + (static_cast<float>(std::max(block.list_depth - 1, 0)) * list_indent);
-        float left = block.list_depth > 0 ? marker_left + list_indent : quote_left;
+        const Indents indents = indents_of(block, em_);
+        const float marker_left = indents.marker;
+        float left = indents.left;
         if (!block.marker.empty()) {
             const Look muted{fonts_.regular, em_, PreviewInk::Muted, false, {}, false};
             // Geniş im ("10. [x] ") metni sağa iter: üst üste binmesin.
@@ -238,12 +276,25 @@ private:
         return flow.bottom();
     }
 
-    // Boşluklar korunur, sarma yok: uzun satır yatay kaydırılır.
+    // Boşluklar korunur, sarma yok: uzun satır yatay kaydırılır. Satır dil etiketine göre renklenir (TUI REVIEW ile
+    // aynı tokenizer); durum (çok satırlı yorum, dizge) satırdan satıra taşınır.
     float add_code(const pdf::Block& block, float left, float top) {
         const float pad = kCodePadEms * em_;
         float x = left + pad;
         float y = top + pad;
         float widest = x;
+        const tui::SyntaxLanguage language = tui::fence_language(block.language);
+        tui::SyntaxState state = tui::kInitialSyntaxState;
+        std::vector<tui::SyntaxSpan> tokens;
+        const auto place = [&](std::string_view piece, tui::TokenKind token) {
+            if (piece.empty())
+                return;
+            const float width = measure(fonts_.mono, em_, piece);
+            out_.runs.push_back({fonts_.mono, em_, ImVec2(x, y + ((line_height_ - em_) / 2.0F)), width, piece,
+                                 PreviewInk::Text, false, false, false, y, y + line_height_, token});
+            x += width;
+            widest = std::max(widest, x);
+        };
         for (std::size_t index = 0; index < block.spans.size(); ++index) {
             std::string_view text = block.spans[index].text;
             if (index + 1 == block.spans.size() && text.ends_with('\n'))
@@ -251,13 +302,19 @@ private:
             while (true) {
                 const std::size_t end = std::min(text.find('\n'), text.size());
                 const std::string_view line = text.substr(0, end);
-                if (!line.empty()) {
-                    const float width = measure(fonts_.mono, em_, line);
-                    out_.runs.push_back({fonts_.mono, em_, ImVec2(x, y + ((line_height_ - em_) / 2.0F)), width, line,
-                                         PreviewInk::Text, false, false, y, y + line_height_});
-                    x += width;
-                    widest = std::max(widest, x);
+                tokens.clear();
+                if (language != tui::SyntaxLanguage::Plain)
+                    state = tui::highlight_line(language, line, state, &tokens, highlight_line_bytes_);
+                std::size_t at = 0;
+                for (const tui::SyntaxSpan& token : tokens) {
+                    // Belirteç sınırı UTF-8 dizisinin ortasına düşebilir: koşu kod noktası başında bölünür.
+                    const std::size_t begin = std::max(code_point_start(line, token.begin), at);
+                    const std::size_t stop = std::max(code_point_start(line, token.end), begin);
+                    place(line.substr(at, begin - at), tui::TokenKind::Plain);
+                    place(line.substr(begin, stop - begin), token.kind);
+                    at = stop;
                 }
+                place(line.substr(at), tui::TokenKind::Plain);
                 if (end == text.size())
                     break;
                 text.remove_prefix(end + 1);
@@ -272,18 +329,21 @@ private:
         return bottom;
     }
 
+    float cell_width(const std::vector<pdf::Span>& cell, bool header) const {
+        float width = 0.0F;
+        for (const pdf::Span& span : cell)
+            width += measure(look_of(fonts_, span, em_, header, resolves_).font, em_, span.text);
+        return width;
+    }
+
     // Hücreler tek satır, sütun en geniş hücresi kadar; başlık satırı kalın. Sığmayan tablo yatay kaydırılır.
     float add_table(const pdf::Block& block, float left, float top) {
         const float pad = kCellPadEms * em_;
         std::vector<float> widths;
         for (const pdf::TableRow& row : block.rows) {
             widths.resize(std::max(widths.size(), row.cells.size()), 0.0F);
-            for (std::size_t column = 0; column < row.cells.size(); ++column) {
-                float width = 0.0F;
-                for (const pdf::Span& span : row.cells[column])
-                    width += measure(look_of(fonts_, span, em_, row.is_header, resolves_).font, em_, span.text);
-                widths[column] = std::max(widths[column], width);
-            }
+            for (std::size_t column = 0; column < row.cells.size(); ++column)
+                widths[column] = std::max(widths[column], cell_width(row.cells[column], row.is_header));
         }
         std::vector<float> edges{left};
         for (const float width : widths)
@@ -292,7 +352,13 @@ private:
         out_.boxes.push_back({PreviewBox::Kind::Line, ImVec2(left, y), ImVec2(edges.back(), y + kLineThickness)});
         for (const pdf::TableRow& row : block.rows) {
             for (std::size_t column = 0; column < row.cells.size(); ++column) {
-                Flow cell(out_, edges[column] + pad, FLT_MAX, y, line_height_);
+                // Sütun hizası (`--:`, `:-:`): hücre sütun genişliğinde sağa ya da ortaya kayar.
+                const pdf::Align align = column < block.aligns.size() ? block.aligns[column] : pdf::Align::Default;
+                const float spare = widths[column] - cell_width(row.cells[column], row.is_header);
+                const float shift = align == pdf::Align::Right    ? spare
+                                    : align == pdf::Align::Center ? spare / 2.0F
+                                                                  : 0.0F;
+                Flow cell(out_, edges[column] + pad + shift, FLT_MAX, y, line_height_);
                 for (const pdf::Span& span : row.cells[column])
                     cell.add(span.text, look_of(fonts_, span, em_, row.is_header, resolves_));
             }
@@ -311,6 +377,7 @@ private:
     float em_;
     float width_;
     float line_height_;
+    std::size_t highlight_line_bytes_;
     float right_ = 0.0F;
     bool quoted_ = false;  // eklenen blok alıntıda
 };
@@ -322,9 +389,10 @@ bool is_list_item(const pdf::Block& block) {
 }  // namespace
 
 PreviewLayout layout_preview(const std::vector<pdf::Block>& blocks, const PreviewFonts& fonts, float font_size,
-                             float width, const LinkResolves& resolves, const pdf::Block* following) {
+                             float width, const LinkResolves& resolves, const pdf::Block* following,
+                             std::size_t highlight_line_bytes) {
     PreviewLayout out;
-    Layouter layouter(out, fonts, font_size, width, resolves);
+    Layouter layouter(out, fonts, font_size, width, resolves, highlight_line_bytes);
     const float bar_width = kQuoteBarEms * font_size;
     float y = 0.0F;
     for (std::size_t index = 0; index < blocks.size(); ++index) {
@@ -335,13 +403,18 @@ PreviewLayout layout_preview(const std::vector<pdf::Block>& blocks, const Previe
         float gap_ems = kBlockGapEms;
         if (next != nullptr && next->kind == pdf::Block::Kind::Heading)
             gap_ems = kHeadingGapEms;
-        else if (next != nullptr && is_list_item(block) && is_list_item(*next))
+        else if (next != nullptr && is_list_item(block) && is_list_item(*next) &&
+                 !(next->list_start && next->list_depth <= block.list_depth))  // aynı ya da dıştaki yeni liste
             gap_ems = kListItemGapEms;
         const float gap = gap_ems * font_size;
         // Alıntı çubuğu aynı alıntının sonraki bloğuna aradaki boşluk boyunca uzar: kesik çizgi olmasın.
-        for (int depth = 0; depth < block.quote_depth; ++depth) {
-            const float x = static_cast<float>(depth) * kQuoteIndentEms * font_size;
-            const bool continues = next != nullptr && next->quote_depth > depth;
+        const std::vector<float> bars = indents_of(block, font_size).bars;
+        std::size_t quote = 0;
+        for (std::size_t at = 0; at < block.nesting.size(); ++at) {
+            if (block.nesting[at] != 'Q')
+                continue;
+            const float x = bars[quote++];
+            const bool continues = next != nullptr && next->nesting.compare(0, at + 1, block.nesting, 0, at + 1) == 0;
             out.boxes.push_back(
                 {PreviewBox::Kind::QuoteBar, ImVec2(x, y), ImVec2(x + bar_width, continues ? bottom + gap : bottom)});
         }
@@ -375,9 +448,10 @@ void draw_preview_layout(const PreviewLayout& layout, ImVec2 origin, float top, 
     }
     for (const PreviewRun& run : visible_runs(layout, top, bottom)) {
         const bool dim = run.ink == PreviewInk::Muted || run.ink == PreviewInk::Missing;
-        const ImU32 color = ImGui::GetColorU32(run.ink == PreviewInk::Link ? ImGuiCol_TextLink
-                                               : dim                       ? ImGuiCol_TextDisabled
-                                                                           : ImGuiCol_Text);
+        const ImU32 color = run.token != tui::TokenKind::Plain ? token_color(run.token)
+                            : ImGui::GetColorU32(run.ink == PreviewInk::Link ? ImGuiCol_TextLink
+                                                 : dim                       ? ImGuiCol_TextDisabled
+                                                                             : ImGuiCol_Text);
         const ImVec2 pos = at(run.pos);
         if (run.code_background) {
             const float pad = run.size * kInlineCodePadEms;
@@ -388,7 +462,7 @@ void draw_preview_layout(const PreviewLayout& layout, ImVec2 origin, float top, 
         draw_list->AddText(run.font, run.size, pos, color, run.text.data(), run.text.data() + run.text.size());
         if (run.underline)
             draw_list->AddLine(ImVec2(pos.x, pos.y + run.size), ImVec2(pos.x + run.width, pos.y + run.size), color);
-        if (run.ink == PreviewInk::Missing) {
+        if (run.ink == PreviewInk::Missing || run.strike) {
             const float middle = pos.y + (run.size / 2.0F);
             draw_list->AddLine(ImVec2(pos.x, middle), ImVec2(pos.x + run.width, middle), color);
         }
@@ -397,14 +471,22 @@ void draw_preview_layout(const PreviewLayout& layout, ImVec2 origin, float top, 
     }
 }
 
-void PreviewDocument::reset(std::string_view source) {
+void PreviewDocument::reset(std::string_view source, const app::MarkdownChunkLimits& limits) {
     source_ = source;
+    limits_ = limits;
     chunks_.clear();
-    app::MarkdownScan scan = app::scan_markdown(source);
+    app::MarkdownScan scan = app::scan_markdown(source, app::kMarkdownChunkBytes, app::kMarkdownMaxChunkBytes, limits);
     for (const app::MarkdownChunk& range : scan.chunks)
-        chunks_.push_back({.begin = range.begin, .end = range.end, .open_fence = range.open_fence});
+        chunks_.push_back({.range = range});
     definitions_ = chunks_.size() > 1 ? std::move(scan.definitions) : app::MarkdownDefinitions{};
     pixels_per_byte_ = 0.0F;
+}
+
+void PreviewDocument::set_highlight_line_bytes(std::size_t bytes) {
+    if (bytes == highlight_line_bytes_)
+        return;
+    highlight_line_bytes_ = bytes;
+    relayout();
 }
 
 void PreviewDocument::relayout() {
@@ -415,7 +497,7 @@ void PreviewDocument::relayout() {
 float PreviewDocument::height_of(const Chunk& chunk) const {
     if (chunk.measured)
         return *chunk.measured;
-    const auto bytes = static_cast<float>(chunk.end - chunk.begin);
+    const auto bytes = static_cast<float>(chunk.range.end - chunk.range.begin);
     if (pixels_per_byte_ > 0.0F)
         return bytes * pixels_per_byte_;
     return bytes / kEstimateBytesPerLine * font_size_ * kLineSpacing;
@@ -437,13 +519,11 @@ std::vector<float> PreviewDocument::tops() const {
 const std::vector<pdf::Block>& PreviewDocument::parsed(std::size_t index) {
     Chunk& chunk = chunks_[index];
     if (!chunk.blocks) {
-        const std::string_view text = source_.substr(chunk.begin, chunk.end - chunk.begin);
-        // Başka parçadaki başvuru tanımı da çözülsün: tanımlar parçanın ardına eklenir (çıktı üretmezler).
-        chunk.blocks = definitions_.empty()
-                           ? pdf::parse_markdown(text, {.links = true})
-                           : pdf::parse_markdown(app::markdown_chunk_source(source_, {chunk.begin, chunk.end, 0,
-                                                                                      chunk.open_fence},
-                                                                            definitions_),
+        // Tek parça kopyasız; parçada başka parçadaki başvuru tanımı da çözülsün (tanımlar ardına eklenir, çıktı
+        // üretmezler) ve zorla kesilen dev bloğun taşınan satırları (kod çiti, tablo başlığı) önüne konsun.
+        chunk.blocks = chunks_.size() == 1
+                           ? pdf::parse_markdown(source_, {.links = true})
+                           : pdf::parse_markdown(app::markdown_chunk_source(source_, chunk.range, definitions_, limits_),
                                                  {.links = true});
         chunk.block_count = chunk.blocks->size();
     }
@@ -458,11 +538,11 @@ void PreviewDocument::lay_out(std::size_t index, const LinkResolves& resolves) {
         following = next.empty() ? nullptr : &next.front();
     }
     Chunk& chunk = chunks_[index];
-    chunk.layout = layout_preview(parsed(index), fonts_, font_size_, width_, resolves, following);
+    chunk.layout = layout_preview(parsed(index), fonts_, font_size_, width_, resolves, following, highlight_line_bytes_);
     chunk.measured = chunk.layout->size.y;
     chunk.right = chunk.layout->size.x;
-    if (pixels_per_byte_ == 0.0F && chunk.end > chunk.begin)
-        pixels_per_byte_ = *chunk.measured / static_cast<float>(chunk.end - chunk.begin);
+    if (pixels_per_byte_ == 0.0F && chunk.range.end > chunk.range.begin)
+        pixels_per_byte_ = *chunk.measured / static_cast<float>(chunk.range.end - chunk.range.begin);
 }
 
 // Yerleşim blokların metnine işaret eder: blok bırakılırken yerleşim de bırakılır. Ölçülen yükseklik kalır.

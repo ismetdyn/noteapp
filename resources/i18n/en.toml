@@ -3,6 +3,8 @@
 
 [error]
 invalid_path = "Invalid path '{path}': {reason}"
+invalid_relation_name = "Invalid relation name '{name}': {reason}"
+relation_not_found = "This relation no longer exists: it was removed or changed, possibly on another device"
 out_of_memory = "Not enough memory to read '{path}'; it was not imported"
 io = "I/O error at '{path}': {detail}"
 not_found = "Not found: {path}"
@@ -41,6 +43,7 @@ dot = "'.' is not allowed"
 dot_dot = "'..' is not allowed"
 hidden = "names starting with '.' are not allowed"
 control_char = "contains a control character"
+hidden_control = "contains an invisible formatting character (bidi or zero-width)"
 invalid_char = "contains a character that is not allowed"
 reserved_name = "reserved name"
 trailing_space = "names must not end with a space"
@@ -51,6 +54,7 @@ link = "goes through a link (symbolic link or junction); notes cannot live behin
 contains_link = "the folder contains a link (symbolic link or junction), so it is not deleted"
 into_itself = "a folder cannot be moved into itself"
 self_relation = "a note cannot be related to itself"
+not_relation_end = "is not an end of this relation"
 invalid_type = "invalid note type"
 invalid_name = "invalid note name"
 must_be_string = "must be a string"
@@ -140,13 +144,13 @@ palette_hints = "↑↓ select  Enter run  Esc close"
 key_hints_list = ": cmd  t trash  Space open  o sort  V col  s search  F1 help  Enter edit  → preview  / filter  n add  a new  d to trash  ← up  u undo  v select  y copy  p paste  m move  L relate  gg top  F2 rename  PgDn page  c copy  q quit  D delete  E external  x export  T tags  i import  r move  ^S sync  Alt+→ details  I all  </> width  z zoom  Tab content  , config"
 key_hints_search = "Enter keep  Esc close  ↑↓ select  Tab complete  ^T content  ^P history  → accept  F1 help  ^O new  ^R move  ^D trash  ^S sync  F9 config"
 key_hints_preview = ": cmd  ← list  e edit  ↑↓ scroll  / find  b links  L relate  n/N next  c copy  R raw/rendered  q quit  g/G top/end  J/K 5 lines  ^U/^D half page  F2 rename  z zoom  </> width  E external  F1 help  , config"
-key_hints_links = "↑↓ select  Enter open  Esc back  L relate/remove  PgDn page  z zoom  F1 help"
+key_hints_links = "↑↓ select  Enter open  Esc back  L relate/remove  n rename  f flip  u undirected  PgDn page  z zoom  F1 help"
 link_label = "Relate to:"
 link_missing = "No note has this name: the text points nowhere, fix it in the note"
-related = "Related: {path}"
 unlink_label = "Note"
 link_title = "Remove relation"
 confirm_unlink = "Remove the relation between '{from}' and '{to}'?"
+confirm_unlink_named = "Remove the relation '{name}' between '{from}' and '{to}'?"
 unlinked = "Relation removed: {path}"
 key_hints_editor = "Ctrl+S save  Ctrl+Q quit  Ctrl+F find  Ctrl+Z undo  F1 help  Ctrl+Y redo  ^X cut  ^C copy  ^V paste  F9 config"
 key_hints_editor_readonly = "Ctrl+Q quit  ↑↓ scroll  Ctrl+F find  ^C copy  F1 help"
@@ -175,6 +179,12 @@ map_status = "{scope}{tags}  Tab select  Enter open  C connect  arrows + - 0  w 
 map_link = "{from} → {to}  Tab target  Enter connect  d remove edge  Esc cancel"
 map_choose = "{from} → {to}  r related  l link ([[wiki]] in {from})  Esc cancel"
 map_no_edge = "No edge between {from} and {to}"
+map_relation = "{from} {arrow} {to}  {name}  n rename  f flip  u undirected  d remove  Esc cancel"
+relation_unnamed = "(unnamed)"
+relation_label = "Relation {from} {arrow} {to}, name:"
+relation_rename_label = "New name for {from} and {to}:"
+relation_hints = "Enter relate  Tab names  ^D directed  empty = unnamed  Esc cancel"
+relation_rename_hints = "Enter rename  Tab names  empty = unnamed  Esc cancel"
 map_capped = "{shown} of {total} nodes"
 map_empty = "No notes to show on the map"
 editor_leave_title = "Unsaved changes"
@@ -224,6 +234,7 @@ y             copy the selection or row
 p             paste here; a taken name gets -2
 m             move to a folder (input, Tab lists)
 L             relate to a note (input, Tab lists)
+              then a name: Tab names, ^D directed
 Esc           cancel the pending y
 → l S         preview; on a folder: enter
 ← h           parent folder (root: nothing);
@@ -319,6 +330,7 @@ n N           next / previous match
 b             links section under the preview
 Tab ⇧Tab      next / prev [[link]], Enter opens
 L             relate to a note (input, Tab lists)
+              then a name: Tab names, ^D directed
 ← h Esc       back to the list (Esc clears find)
 q             quit
 < >           pane width  z zoom pane
@@ -327,6 +339,8 @@ Links (b in the preview, or click)
 Enter         open the note; click does too
 L             on a related row: remove (asks)
               on any other row: relate to a note
+n f u         on a related row: rename it, flip
+              its direction, make it undirected
 Esc b         back to the preview
 [[name]]      no such note; a renamed target stays
               stale here, text is not rewritten
@@ -357,6 +371,8 @@ C             connect from the selected note:
               it), d remove edge, Esc cancel
 Right-drag    node onto node: same as C
 Right click   an edge: select it, d removes
+n f u         on a relation: rename, flip, make
+              undirected; r asks a name (^D)
 Tabs (on the right pane's top border)
 ^T            new tab with an empty note
 ^W            close the tab (asks if unsaved)
@@ -795,10 +811,9 @@ help_palette = "Command palette"
 help_no_key = "button, menu or palette"
 help_unbound = "not in this window yet"
 link_title = "Relate to note (path or name)"
-linked = "Related: {path}"
-unlinked = "Relation removed: {path}"
 unlink = "Remove relation"
 confirm_unlink = "Remove the relation between '{from}' and '{to}'?"
+confirm_unlink_named = "Remove the relation '{name}' between '{from}' and '{to}'?"
 icons_unsaved = "Save or revert the settings form first"
 cmd_why_note = "no note is shown"
 cmd_why_row = "no row is selected"
@@ -855,6 +870,11 @@ import_busy = "An import is already running; wait for it or cancel it"
 import_start_failed = "The import could not start; see the log"
 import_summary = "Imported: {imported}, skipped: {skipped}, not imported: {failed}"
 view_usage = "Usage: note view save NAME CYPHER [--force] | ls [--json] | run NAME [--json] | rm NAME | show NAME"
+relation_usage = "Usage: note relation add A B [--name NAME] [--directed] | rm A B [--name NAME | --id ID] | rename A B OLD NEW | ls [NOTE] [--json]"
+relation_bad_id = "'{id}' is not a relation id (32 hex digits, see 'note relation ls NOTE')"
+relation_no_name = "No relation named '{name}' between {from} and {to}"
+relation_none = "No relation between {from} and {to}"
+relation_ambiguous = "{from} and {to} have {count} relations; choose one with --name or --id (note relation ls {from})"
 view_saved = "Saved view: {name}"
 view_removed = "Removed view: {name}"
 view_exists = "A view named '{name}' already exists; add --force to replace it"
@@ -905,6 +925,7 @@ examples_query = "note query 'MATCH (n:Note) RETURN n.name'\ta read-only table\n
 examples_graph = "note graph status\tfiles that are not in the database\nnote graph export --format jsonl -o dump.jsonl\tdump the graph"
 examples_tags = "note tags\tNAME<TAB>COUNT per line\nnote tags --json\tas JSON"
 examples_view = "note view save recent 'MATCH (n:Note) RETURN n'\tsave a query\nnote ls view:recent\tuse it as a filter"
+examples_relation = "note relation add a.md b.md --name uses --directed\trelate a.md to b.md as 'uses'\nnote relation ls\tnames with their counts\nnote relation ls a.md\tPATH<TAB>NAME<TAB>DIRECTION<TAB>ID\nnote relation rename a.md b.md uses cites\trename one relation\nnote relation rm a.md b.md --name cites\tremove it"
 examples_import = "note import ~/Documents/notes\ta folder with its subfolders\nnote import --type md readme.txt\tone file with a given type"
 examples_completion = "note completion bash\tsource it in ~/.bashrc\nnote completion zsh > _note\ta zsh function file"
 see_also_ls = "note find, note show, note tags"
@@ -920,12 +941,14 @@ see_also_query = "note view, note graph"
 see_also_graph = "note export, note query"
 see_also_tags = "note ls"
 see_also_view = "note query, note ls"
+see_also_relation = "note query, note graph"
 see_also_import = "note export, note graph"
 see_also_completion = "note help"
 help_ls = "List notes: fuzzy order with a query, newest first without; -f limits to a folder. The query takes the search arguments (tag:NAME, type:, in:, size:, updated:, created:, origin:, sync:, sort:)"
 help_tags = "List the #tags of live notes with their note counts (NAME<TAB>COUNT); --json prints name, display and count"
 help_import = "Import files as notes, byte for byte (BOM, CRLF and binary kept; a binary note is read-only). A folder comes in under its own name with its subfolders. The name comes from the file name, the type from the extension (--type replaces it; no extension: detected from the content). A taken name gets -2, -3; --overwrite replaces that note instead. --name names a single PATH. Links are not followed, hidden entries inside folders are left out, the original files are never changed. Exit 1 if anything was skipped or not imported"
 help_view = "Saved Cypher views: save a read-only query under a name (--force replaces), list them (NAME<TAB>QUERY), run one with the note query output, remove or print one. Views sync like notes; a query that writes is refused on save and on run. view:NAME in a search filters notes to the ones the view returns"
+help_relation = "Named relations between notes (RELATED_TO). add relates A to B: unnamed and undirected by default, --name names it, --directed points it from A to B. A pair has at most one relation per name and one unnamed. rm removes the pair's only relation, or the one picked by --name (empty: unnamed) or --id; rename renames the relation called OLD (empty: unnamed) to NEW (empty: unnamed). ls lists the names with their counts (NAME<TAB>COUNT); ls NOTE lists the note's relations (PATH<TAB>NAME<TAB>DIRECTION<TAB>ID). Names from other devices are shown without control or hidden characters"
 help_find = "Search note contents (all terms must appear); prints path:line: snippet; --limit N caps the notes shown"
 help_show = "Print the best match (an exact path wins; the chosen path goes to stderr)"
 help_edit = "Open the best match in your editor"
@@ -1011,6 +1034,7 @@ desc_query = "Run a Cypher query on the graph"
 desc_graph = "Migrate, check, dump or load the graph"
 desc_tags = "List #tags with their note counts"
 desc_view = "Saved read-only Cypher views"
+desc_relation = "Named relations between notes"
 desc_import = "Import files or folders as notes"
 desc_completion = "Print a shell completion script"
 desc_help = "Show help for a command"
@@ -1033,6 +1057,10 @@ desc_view_ls = "List saved views"
 desc_view_run = "Run a saved view"
 desc_view_rm = "Remove a saved view"
 desc_view_show = "Print a saved view's query"
+desc_relation_add = "Relate two notes"
+desc_relation_rm = "Remove a relation"
+desc_relation_rename = "Rename a relation"
+desc_relation_ls = "List relation names, or a note's relations"
 desc_completion_zsh = "Script for zsh"
 desc_completion_bash = "Script for bash"
 desc_completion_fish = "Script for fish"
@@ -1065,6 +1093,9 @@ opt_skip_failed = "Go on past files that cannot be migrated"
 opt_clear_skipped = "Forget the list of left-out files"
 opt_format = "Dump format (jsonl)"
 opt_force = "Replace a view with the same name"
+opt_relation_name = "Relation name (empty: unnamed)"
+opt_directed = "Point the relation from the first note to the second"
+opt_relation_id = "Relation id from note relation ls NOTE"
 completion_usage = "Usage: note completion zsh | bash | fish"
 help_completion = "Print a completion script for your shell: Tab then offers commands, options, note paths, folders, types, tags, views and config keys, with descriptions in your language. zsh: note completion zsh > ~/.local/share/zsh/site-functions/_note (that directory must be in fpath before compinit); bash: source <(note completion bash) in ~/.bashrc; fish: note completion fish > ~/.config/fish/completions/note.fish"
 migrate_backup_hint = "Backup kept at {path} (private). When you no longer need it, delete it yourself: rm -r {path}"
@@ -1111,9 +1142,11 @@ missing = "Missing ({count})"
 # Joining nodes on the map (app::map_relations; GUI Shift+drag, TUI right-drag and C). Paths are untrusted.
 [map]
 related = "Related: {from} and {to}"
+related_named = "Related as '{name}': {from} and {to}"
 linked = "Link added to {from}: [[{to}]]"
 tagged = "Tag #{tag} added to {path}"
 unrelated = "Relation removed: {from} and {to}"
+unrelated_named = "Relation '{name}' removed: {from} and {to}"
 untagged = "Tag #{tag} removed from {path}"
 already_linked = "{from} already links to {to}"
 already_tagged = "{path} already has the tag #{tag}"
@@ -1126,6 +1159,7 @@ invalid_pair = "These two map nodes cannot be joined"
 choose_related = "Related (RELATED_TO)"
 choose_link = "Link ([[wiki]] link added to {from})"
 remove_related = "Remove relation"
+remove_named_related = "Remove relation '{name}'"
 remove_tag = "Remove tag #{tag} from {path}"
 remove_link = "Remove link"
 connect = "Connect…"
@@ -1133,6 +1167,22 @@ connect_hint = "To relate notes: Shift+drag, or right-click a node → Connect�
 connect_pending = "{from} → click the node to connect to; Esc cancels"
 remove_relations = "Remove relations"
 remove_related_to = "Remove relation: {path}"
+remove_named_related_to = "Remove relation '{name}': {path}"
+relation_renamed = "Relation renamed to '{name}': {from} and {to}"
+relation_unnamed = "Relation name removed: {from} and {to}"
+relation_directed = "Relation directed: {from} → {to}"
+relation_undirected = "Relation made undirected: {from} and {to}"
+relation_title = "Relate {from} and {to}"
+relation_rename_title = "Rename the relation of {from} and {to}"
+relation_name_hint = "Relation name (empty: unnamed)"
+relation_unnamed_hint = "Empty name: an unnamed relation"
+relation_new = "New name: {name}"
+relation_directed_box = "Directed (first → second)"
+unnamed_relation = "(unnamed relation)"
+rename_relation = "Rename…"
+flip_relation = "Flip direction"
+make_undirected = "Make undirected"
+make_directed = "Make directed: {from} → {to}"
 
 [graph]
 cypher_syntax = "Query syntax error at line {line}, column {col}: {what}"

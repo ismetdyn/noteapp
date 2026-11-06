@@ -60,6 +60,19 @@ using app::MapNodeKind;
 using app::MapOptions;
 using app::NoteMap;
 
+// F1 "Bağla…" ad penceresinin girdisi: uçlar (yönlüde from kaynaktır), seçicinin adları (relation_names) ve
+// ön değer. `rename`: var olan ilişkinin adı değişir, "Yönlü" kutusu yoktur.
+struct RelationRequest {
+    std::string from;
+    std::string to;
+    std::shared_ptr<const std::vector<core::RelationName>> names;
+    std::string initial = {};
+    bool rename = false;
+    // limits.graph.relation_name_bytes (SIZE_MAX: sınırsız): pencere adı deponun kuralıyla önceden denetler,
+    // geçersiz adda nedenle açık kalır.
+    std::size_t max_bytes = SIZE_MAX;
+};
+
 // Kullanıcı kararları tek yerden geçer: üretimde view gerçek diyalogları kurar, testler değiştirir.
 // Varsayılan hep "vazgeç": kurulmamış karar veri kaybettirmez.
 struct Deciders {
@@ -93,6 +106,9 @@ struct Deciders {
     std::function<std::optional<std::string>(const std::string& title)> link_target = [](const std::string&) {
         return std::nullopt;
     };
+    // İlişkinin adı ve yönü (F1 ad penceresi); nullopt = vazgeçti. Yeniden adlandırmada `directed` yok sayılır.
+    std::function<std::optional<core::RelationSpec>(const RelationRequest&)> relation =
+        [](const RelationRequest&) { return std::nullopt; };
     // Sistem panosuna metin (TUI `c`); false = yazılamadı. Üretimde SDL panosu.
     std::function<bool(const std::string& text)> copy_text = [](const std::string&) { return false; };
     // Sistem panosundaki metin (editörde Ctrl+V); nullopt = pano boş ya da okunamadı: iç pano yapıştırılır.
@@ -384,6 +400,11 @@ public:
         ensure_map();
         return map_.generation();
     }
+    // Harita her değiştiğinde artar (ilişkinin adı ya da yönü de): kenar adları önbelleği buna bağlıdır.
+    std::size_t map_version() {
+        ensure_map();
+        return map_.version();
+    }
     // Düğüm başına arama kutusunun süzgeci (listeyle aynı ayrıştırıcı, `tag:` dahil); sorgu boşken hepsi 1.
     const std::vector<char>& map_matches();
     // Düğüme tıklama: bekleyen düzenleme önce kendi notuna yazılır (flush_for), sonra not açılır (open_link).
@@ -393,7 +414,18 @@ public:
     // (flush_for); kayıt olmazsa işlem yapılmaz. Sonuç ya da hata durum satırında; harita hemen yeni kenarı
     // gösterir.
     void connect_map_nodes(const MapNode& from, const MapNode& to, MapEdgeKind kind);
-    void disconnect_map_nodes(const MapNode& from, const MapNode& to, MapEdgeKind kind);
+    // Related'da yalnız `relation` silinir (MapEdge::relation).
+    void disconnect_map_nodes(const MapNode& from, const MapNode& to, MapEdgeKind kind,
+                              const core::RelationId& relation = {});
+    // F1 adlı ilişki: ad penceresi sorulur (deciders.relation), vazgeçilirse bir şey yazılmaz; ilişki
+    // `from` → `to` (yönlüyse) kurulur (app::relate_map_notes).
+    void relate_map_notes(const MapNode& from, const MapNode& to);
+    // Kenar menüsü ve bağlantı paneli: tek ilişki kimliğiyle. Ad penceresi var olan adla açılır.
+    void rename_relation(const core::NotePath& first, const core::NotePath& second,
+                         const core::RelationId& relation, const std::string& current);
+    // `source` boş: yönsüz; dolu: o uçtan öbürüne (app::direct_map_relation).
+    void direct_relation(const core::NotePath& first, const core::NotePath& second,
+                         const core::RelationId& relation, const std::optional<core::NotePath>& source);
     std::size_t map_reads() const { return map_.reads(); }  // test kancası: NoteStore::edges çağrısı
 
     // --- Editör ---
@@ -585,7 +617,8 @@ public:
     bool take_quit_request() { return std::exchange(quit_requested_, false); }
     // İlişki (TUI `L`): hedef not sorulur, RELATED_TO kurulur; satırdaki ilişki onayla kaldırılır.
     void link_note();
-    void unlink_note(const core::NotePath& other);
+    // Bağlantı panelinin seçili ilişki satırı: yalnız o ilişki silinir, onay metni adını söyler.
+    void unlink_note(const core::RelatedNote& selected);
     void focus_links();
     // TUI `E`: seçili not config'deki dış editörde (core::run_editor). Bekleyen düzenleme önce yazılır;
     // editör işçide beklenir (pencere donmaz), not NoteStore::edit_in_temp_file ile çakışma denetimli geri
@@ -738,7 +771,14 @@ private:
     void show_sync_label(const sync::SyncStatus& status, bool running);
     bool apply_sync_states(app::SyncStates states);  // durumlar değiştiyse true
     void ensure_map();
-    void edit_map(const MapNode& from, const MapNode& to, MapEdgeKind kind, bool connect);
+    void edit_map(const MapNode& from, const MapNode& to, MapEdgeKind kind, bool connect,
+                  const core::RelationId& relation = {});
+    // Ad penceresi: adlar depodan bir kez okunur; okunamazsa hata bildirilir, nullopt.
+    std::optional<core::RelationSpec> ask_relation(const std::string& from, const std::string& to,
+                                                   std::string initial, bool rename);
+    // İlişki işinin sonu: hata ya da ileti (temizlenmiş) durum satırında ve bildirimde, kenarlar ve panel
+    // tazelenir.
+    void finish_relation(const std::expected<std::string, core::Error>& done);
     bool show_folder(const std::string& folder, bool scope);
     bool select_nearest_note(int from);
     void activate_row(int index);

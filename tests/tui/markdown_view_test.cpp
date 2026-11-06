@@ -308,6 +308,19 @@ TEST_CASE("markdown view: bidi and zero-width characters render as a visible mar
     CHECK(contains(joined_text, "\xef\xbf\xbdy"));
 }
 
+// NY-P inceleme: varlıkla yazılan denetim karakteri (C1 CSI U+009B, DEL, bidi U+202E) de terminale ulaşmaz; gövde
+// ve bağlantı adresi (soluk URL) aynı arındırmadan geçer.
+TEST_CASE("entity-encoded control and bidi characters never reach the terminal") {
+    const RenderedView view = md("x &#x9b;2J &#x202E; &#x7f; &#X1b;[31m\n\n[l](http://a&#x9b;2J/&#x202e;)\n");
+    for (const std::string& line : view.lines) {
+        CAPTURE(line);
+        CHECK(line == tui::terminal_safe(line));
+        CHECK_FALSE(contains(line, "\xc2\x9b"));
+        CHECK_FALSE(contains(line, "\xe2\x80\xae"));
+        CHECK_FALSE(contains(line, "\x7f"));
+    }
+}
+
 TEST_CASE("control and bidi bytes never reach the terminal") {
     const std::string hostile =
         "# ba\x1b[31mşlık\n\nmetin \x1b]8;;http://x\x07y\xc2\x9b z \xe2\x80\xae\x07\n\n"
@@ -434,16 +447,21 @@ TEST_CASE("hostile nesting stays bounded, inside the width and fast") {
     }
 }
 
-TEST_CASE("huge tables are bounded and say how much is hidden") {
+// Varsayılan sınırsızdır (NY-P); kullanıcının verdiği limits.tui.table_rows tabloyu keser ve kalanı söyler.
+constexpr std::size_t kTableRowsCap = 5000;
+
+TEST_CASE("huge tables are bounded by a configured row limit and say how much is hidden") {
     std::string rows;
     for (int i = 0; i < 100000; ++i)
         rows += "| a" + std::to_string(i) + " | b |\n";
     const std::string source = "| x | y |\n|---|---|\n" + rows;
+    tui::ViewLimits capped;
+    capped.table_rows = kTableRowsCap;
     const long ms = elapsed_ms([&] {
-        const RenderedView view = md(source, 40);
+        const RenderedView view = tui::render_markdown(source, 40, tui::terminal_cell_width, capped);
         check_fits(view, 40);
-        CHECK(view.lines.size() <= tui::ViewLimits{}.table_rows + 3);
-        CHECK(contains(joined(view), std::to_string(100000 + 1 - tui::ViewLimits{}.table_rows)));
+        CHECK(view.lines.size() <= kTableRowsCap + 3);
+        CHECK(contains(joined(view), std::to_string(100000 + 1 - kTableRowsCap)));
     });
     if (noteapp::test::kWallClockBudgets)
         CHECK(ms < kHostileBudgetMs);
@@ -545,10 +563,12 @@ TEST_CASE("csv handles quotes, crlf, short rows and hostile input") {
     std::string big = "a,b\n";
     for (int i = 0; i < 100000; ++i)
         big += "1,2\n";
+    tui::ViewLimits limits;
+    limits.table_rows = kTableRowsCap;
     const long ms = elapsed_ms([&] {
-        const auto capped = tui::render_csv(big, 40, tui::terminal_cell_width);
+        const auto capped = tui::render_csv(big, 40, tui::terminal_cell_width, limits);
         REQUIRE(capped);
-        CHECK(capped->lines.size() <= tui::ViewLimits{}.table_rows + 3);
+        CHECK(capped->lines.size() <= kTableRowsCap + 3);
     });
     if (noteapp::test::kWallClockBudgets)
         CHECK(ms < kHostileBudgetMs);
@@ -1009,24 +1029,38 @@ TEST_CASE("invalid json and non-table csv stay raw highlighted with a dim note")
     CHECK(g.shown->note == core::tr("tui.view_note_not_table"));
 }
 
-TEST_CASE("notes over the view limit stay raw with a note") {
+constexpr std::size_t kOldViewBytes = std::size_t{256} * 1024;  // NY-P öncesi limits.tui.view_bytes varsayılanı
+
+TEST_CASE("notes over a configured view limit stay raw with a note") {
+    const tui::ViewLimits capped =
+        tui::view_limits_of(core::parse_config("[limits.tui]\nview_bytes = \"256KiB\"\n").config.limits.tui);
     ReviewFixture f;
-    f.open("a.json", "[" + repeated("1,", tui::ViewLimits{}.source_bytes / 2) + "1]");
+    f.preview = tui::PreviewCache(capped, {});
+    f.open("a.json", "[" + repeated("1,", kOldViewBytes / 2) + "1]");
     CHECK_FALSE(f.shown->rendered);
     CHECK(contains(f.shown->note, "KiB"));
     ReviewFixture g;
-    g.open("a.md", repeated("# a\n", tui::ViewLimits{}.source_bytes / 4 + 1));
+    g.preview = tui::PreviewCache(capped, {});
+    g.open("a.md", repeated("# a\n", kOldViewBytes / 4 + 1));
     CHECK_FALSE(g.shown->rendered);
     CHECK(g.shown->lines[0] == "# a");
 }
 
-TEST_CASE("a note above the old 256 KiB view limit renders when limits.tui.view_bytes is 0") {
+// NY-P: varsayılan sınırsızdır; eski 256 KiB sınırın üstündeki md, json ve csv biçimli açılır.
+TEST_CASE("notes above the old 256 KiB view limit render with the default limits") {
     ReviewFixture f;
-    f.preview = tui::PreviewCache(
-        tui::view_limits_of(core::parse_config("[limits.tui]\nview_bytes = 0\n").config.limits.tui), {});
-    f.open("a.md", repeated("# a\n", tui::ViewLimits{}.source_bytes / 4 + 1));
+    f.preview = tui::PreviewCache(tui::view_limits_of(core::parse_config("").config.limits.tui), {});
+    f.open("a.md", repeated("# a\n", kOldViewBytes / 4 + 1));
     CHECK(f.shown->rendered);
     CHECK(f.shown->note.empty());
+    ReviewFixture j;
+    j.preview = tui::PreviewCache(tui::view_limits_of(core::parse_config("").config.limits.tui), {});
+    j.open("a.json", "[" + repeated("1,", kOldViewBytes / 2) + "1]");
+    CHECK(j.shown->rendered);
+    ReviewFixture c;
+    c.preview = tui::PreviewCache(tui::view_limits_of(core::parse_config("").config.limits.tui), {});
+    c.open("a.csv", "a,b\n" + repeated("1,2\n", kOldViewBytes / 4 + 1));
+    CHECK(c.shown->rendered);
 }
 
 namespace {

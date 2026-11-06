@@ -27,6 +27,7 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `note query [--write] [--json] [--param K=D]… CYPHER` | Graph sorgusu (aşağıda) |
 | `note tags [--json]` | Canlı notların `#etiket`leri ve not sayıları, `Tag.name` sırasıyla: satır `gösterim<TAB>sayı`; `--json` `[{"name","display","count"}]` (SPEC-graph "Etiketler") |
 | `note view save AD CYPHER [--force]` · `view ls [--json]` · `view run AD [--json]` · `view rm AD` · `view show AD` | Kayıtlı Cypher görünümleri (T81, SPEC-graph "Görünümler"). `save` sorguyu çalıştırmadan denetler: yazan, `$parametre`li ya da bozuk sorgu çıkış 2, hiçbir şey kaydedilmez; var olan ad (`Work` = `work`) `--force` olmadan çıkış 1. `ls` satırı `ad<TAB>sorgu` (sorgunun satır sonu `\n`), `--json` `[{"name","query","created_at","updated_at"}]` (zaman unix ms). `run` çıktısı `note query`yle (`--json` dahil) bayt bayt aynıdır, her zaman salt okunur ve görünüm profiliyle (`limits.view.*`, SPEC-graph "Görünümler") çalışır; yazan görünüm (senkronla ya da `query --write` ile gelmiş) çıkış 2 ile reddedilir, graf değişmez. `show` sorguyu yazar. Bilinmeyen ad çıkış 1. Ad ve sorgu senkronla gelebilir: terminal temizliğinden geçer. `save` ve `rm` notlar gibi arka plan senkronunu başlatır |
+| `note relation add A B [--name AD] [--directed]` · `relation rm A B [--name AD \| --id KİMLİK]` · `relation rename A B ESKİ YENİ` · `relation ls [NOT] [--json]` | Adlı ilişkiler (F1, SPEC-graph "Adlı ilişkiler"). A ve B tam yoldur (`rm` gibi, fuzzy yok). `add` varsayılan adsız ve yönsüzdür; `--name` ad verir (kırpılır), `--directed` A→B yönlüdür; çiftte aynı ad anahtarı (yön ne olursa olsun) çıkış 1, geçersiz ad ya da kendine ilişki çıkış 2, olmayan not çıkış 1. `rm` çiftin tek ilişkisini, ya da `--name` (boş = adsız, `tag_key` ile) veya `--id` ile seçileni kaldırır; çiftte birden çok ilişki varken seçicisiz çağrı çıkış 1 ve ipucu; ikisi birden çıkış 2. `rename` ESKİ adlı ilişkiyi (boş = adsız) YENİ ada çevirir (boş = adsız), kimlik ve yön kalır. `ls` adları sayılarıyla verir (`gösterim<TAB>sayı`, `relation_names` sırası; `--json` `[{"name","display","count","directed"}]`; `count` adı taşıyan ilişki sayısı, `directed` bunların kaçının yönlü olduğu, bir sayı, bool değil); `ls NOT` notun ilişkilerini `yol<TAB>ad<TAB>yön<TAB>kimlik` (yön `undirected`/`outgoing`/`incoming`, kimlik 32 küçük hex; `--json` `[{"path","name","direction","id"}]`). İletiler TUI/GUI ile aynıdır (`app::map_relations`). Ad senkronla gelebilir: metin çıktısı terminal temizliğinden geçer, JSON kaçışlıdır. `add`, `rm`, `rename` arka plan senkronunu başlatır |
 | `note graph migrate [--skip-failed]` | Eski düz dosyaları içe aktar ([SPEC-graph.md](SPEC-graph.md)) |
 | `note import YOL… [--folder KLASÖR] [--type TİP] [--name AD] [--overwrite] [--json] [--no-sync]` | Dosya sisteminden not olarak içe alma; kural `app::import_paths`tedir, TUI ve GUI de onu çağırır (aşağıda "Dosya içe alma") |
 | `note graph export --format jsonl [-o DOSYA]`, `note graph import [--overwrite] DOSYA` | Tüm graph'ı JSON satırları olarak çıkar ya da yükle; satırın JSON kuralları ve sınırları SPEC-graph "Sınırlar" (bilinmeyen alanda `null` kabul). İçe aktarma satır aralarında işlemlere bölünür; bir satır tek işlemdir (ya hepsi ya hiç): çerçeveden (`limits.graph.frame_ops`, `frame_bytes`) büyük satır reddedilmez; yineleme işlem yazmaz |
@@ -183,7 +184,7 @@ Binary (ikili) not reddedilir, çıkış 1. `pdf::export_pdf` hatasında çıkı
 Varsayılan çıktı: geçerli dizinde `<ad>.pdf`; `-o` geçerli dizine göredir. `--pdf` zorunludur, yoksa kullanım hatası (2).
 Kapsam: A4, 15 mm; Markdown (`.md`, `.markdown`) için başlık, kalın/italik, liste, kod, alıntı, bağlantı metni, GFM tablo; diğer
 tipler düz metin (eş aralıklı). Yalnız soldan sağa yazı: Arapça/İbranice ve karmaşık shaping yok, Türkçe tam desteklenir.
-Gömülü DejaVu'da olmayan glifler (CJK vb.) için PDF çıktısı doğrulanmadı; BMP dışı kod noktaları (emoji) `U+FFFD` olur. Görseller alt
+Gömülü DejaVu'da olmayan glifler (CJK vb.) için PDF çıktısı doğrulanmadı; BMP dışı kod noktaları (emoji) `U+FFFD` olur; HTML varlığıyla yazılan BMP dışı karakter (`&#x1F600;`, NY-P) PDF'te boşluk olur (libharu yalnız BMP glifi yazar; önizlemeler onu gösterir). Görseller alt
 metne (yoksa `pdf.image_placeholder`) iner; hiçbir görsel/bağlantı hedefine istek yapılmaz.
 
 ## Dosya içe alma
@@ -284,6 +285,7 @@ Argüman ayrıştırma elle yazılır (ek kütüphane yok). Windows'ta UTF-8 arg
     `-T`, `-s` çıktısı ve `--json`'u uzun yazımla aynı; `cat` = `show`; `-a ls` metin ekler; `-n -i` adı "-i";
     ilk olmayan bayrak çıkış 2; yardım ve üç kabuğun tamamlaması bayrakları sunar (`cli_short_flags_test.cpp`,
     `completion_shell_test.sh`).
+21. İlişkiler: `relation add` adsız/adlı/yönlü kurar, çift ad çıkış 1, geçersiz ad ve kendine ilişki çıkış 2; `ls` adları sayılarıyla ve `ls NOT` satırları kimlikle (`--json` dahil); `rm` tek ilişkiyi, `--name` ya da `--id` ile seçileni kaldırır, belirsizde çıkış 1; `rename` adı değiştirir; senkronla gelen bozuk ad denetim ve görünmez karakter olmadan yazılır (`tests/cli/cli_relation_test.cpp`).
 
 **Elle:** Windows Terminal ve Fedora'da `edit`/`micro`/`nano`/`vim` ile editör akışı; Türkçe karakterli argümanlar;
 Windows Terminal'de renk ve ilerleme satırı (VT kipi), pager yokluğu.
@@ -340,3 +342,7 @@ Etkileşimli seçici (fzf benzeri seçim TUI'nin işi), `mkdir/rmdir` komutları
   düz ekleme, `note cat` = `show`; kabul 20. Neden: kullanıcı kararı, harfler TUI tuşlarıyla aynı (NY-T2).
 - **MODIFIED** Ayrılmış sözcükler: `cat` ve komut bayrakları. Daha önce `note cat` "cat" notunu ekliyordu, `note -l`
   bilinmeyen seçenekti (çıkış 2); şimdi ikisi de komuttur. Eski yazımların stdout'u, `--json`'u ve çıkış kodları aynı.
+
+## Değişiklik 2026-11-06 (F1 adlı ilişki, CLI)
+- **ADDED** `note relation add|rm|rename|ls` ve kabul 21. Neden: kullanıcı isteği "ilişki kurulurken edge'e isim verilebilsin" (plan-graph-map F1); GUI/TUI ile aynı kural ve iletiler (`app::map_relations`).
+- **MODIFIED** Ayrılmış sözcükler: `relation`. Daha önce `note relation` bilinmeyen komuttu (çıkış 2).

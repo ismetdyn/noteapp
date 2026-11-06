@@ -219,7 +219,7 @@ config'tedir.
   `std::to_array` ile satırlardan çıkar, elle sayı yoktur); (4) bir test
   (varsayılan, `0`, geçersiz → uyarı). Okuyan kod `config.limits.<modül>.<ad>`'ı kullanır, kopya sabit tutmaz.
 - **Graf ve sorgu (L4):** `[limits.graph]` motorun sınırları (çerçeve, cihaz, ingest, rapor, kenara alınan günlük,
-  `note graph import` satırının baytı ve JSON değeri); `[limits.query]` kullanıcının kendi sorgusu (`note query`), `[limits.view]` görünüm
+  `note graph import` satırının baytı ve JSON değeri; ayrıca not deposunun ilişki adı baytı `relation_name_bytes`, SPEC-graph "Adlı ilişkiler"); `[limits.query]` kullanıcının kendi sorgusu (`note query`), `[limits.view]` görünüm
   (`view:`, `note view run`, kayıt denetimi) — iki profil aynı 12 anahtarı taşır, varsayılanları aynıdır. Motor
   config okumaz: `core::graph_limits_of` / `core::query_limits_of` (`core/graph_limits.hpp`) çevirir, `0` →
   `SIZE_MAX` (süre `milliseconds::max()`); `NoteStore::for_config` ve CLI motoru bu değerlerle açar. Bir test
@@ -238,8 +238,10 @@ config'tedir.
   Not başına bağlantı/etiket tavanı, klasör derinliği, kopya sayacı ve ad arama sigortası kaldırıldı (sonlu
   kümede arama doğal olarak biter). Kalan tek ad deneme sigortası `create_private_temp_file`'ındır (rastgele ad,
   dosya sistemi arızasına karşı; kapasite sınırı değildir).
-- **TUI ve dil sunucusu (L2, L5):** `[limits.tui]` biçimli görünüm (`view_bytes` 256 KiB, `view_lines`, `table_rows`,
-  `table_columns`), renklendirme (`highlight_bytes` 2 MiB, `highlight_line_bytes` 64 KiB), yazım satırı, tamamlama
+- **TUI ve dil sunucusu (L2, L5):** `[limits.tui]` biçimli görünüm (`view_bytes` 0 = sınırsız (NY-P), `view_lines`, `table_rows`,
+  `table_columns`), büyük md parçalarının düşman girdi korumaları (`preview_definition_bytes` 128 KiB,
+  `preview_fence_info_bytes` 64, `preview_table_header_bytes` 4 KiB; `app::markdown_chunk_limits_of`, iki arayüz; 0
+  sınırsız, riski defaults.toml'da), renklendirme (`highlight_bytes` 2 MiB, `highlight_line_bytes` 64 KiB), yazım satırı, tamamlama
   (`completion_*`), yapıştırma (`paste_bytes` 32 MiB, terminal yapıştırmasında da; bitiş işareti gelmeyen yapıştırmanın sessizlik süresi `paste_timeout` 1 sn, 0 = hiç), arama geçmişi, geri alma (`undo_bytes` 64 MiB), taşıma
   diyaloğu önerileri ve açılıştaki geçiş dışı dosya ipucu bütçesi (`stray_notice_files`, `stray_notice_bytes`).
   `[limits.lsp]` sunucu çıktısı korumaları (çerçeve, JSON iç içeliği/değer sayısı, tanı, öneri, bekleyen cevap),
@@ -249,8 +251,9 @@ config'tedir.
   (`tui::view_limits_of`, `syntax_limits_of`, `completion_limits_of`, `lsp_limits_of`); bir test bu struct'ların
   kod varsayılanlarının defaults.toml ile aynı olduğunu denetler. `note graph status`, `migrate --new` ve TUI
   açılış ipucu depoyu config'le açar (`limits.core.folder_path_bytes`). OSC 52'nin 75.000 baytı terminal protokolü
-  sınırıdır, config'te değildir. `view_bytes` GUI önizlemesinin de sınırıdır: üstündeki not iki arayüzde de
-  reddedilmez, biçimlenmeden ham metinle ve nedeniyle (anahtar adı dahil) gösterilir.
+  sınırıdır, config'te değildir. `view_bytes` GUI önizlemesinin de sınırıdır: kullanıcı bir sınır verirse üstündeki not iki arayüzde de
+  reddedilmez, biçimlenmeden ham metinle ve nedeniyle (anahtar adı dahil) gösterilir. Varsayılan sınırsızdır: md, csv ve
+  json biçimli görünümü parça parça üretilir (SPEC-tui "REVIEW biçimli görünüm", SPEC-gui "Önizleme").
 - **Uygulama (L1):** `[limits.app]` `recent_commands` (20), `trash_undo_steps` (0), `tabs` (0), `map_nodes` (2.000) ve
   `map_depth` (6; harita çevre kapsamının en çok adımı, `MapOptions::kMaxDepth` sabiti yerine; TUI `1`–`9` tuşları ve GUI
   adımlayıcısı `app::MapModel::max_depth`'ten okur, sınır küçülürse geçerli derinlik ona iner). İki arayüz aynı değeri

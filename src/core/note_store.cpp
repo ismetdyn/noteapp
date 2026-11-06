@@ -192,6 +192,7 @@ NoteStore NoteStore::for_config(const Config& config) {
     store.impl_->legacy_notes_dir = config.notes_dir;
     store.impl_->batch_ops = config.tuning.graph_batch_ops;
     store.impl_->folder_path_bytes = config.limits.core.folder_path_bytes.cap();
+    store.impl_->relation_name_bytes = config.limits.graph.relation_name_bytes.cap();
     store.impl_->graph_limits = graph_limits_of(config.limits.graph);
     store.impl_->view_limits = query_limits_of(config.limits.view);
     return store;

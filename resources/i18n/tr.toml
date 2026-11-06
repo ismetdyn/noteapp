@@ -3,6 +3,8 @@
 
 [error]
 invalid_path = "Geçersiz yol '{path}': {reason}"
+invalid_relation_name = "Geçersiz ilişki adı '{name}': {reason}"
+relation_not_found = "Bu ilişki artık yok: kaldırılmış ya da değişmiş, belki başka bir cihazda"
 out_of_memory = "'{path}' okunamadı: bellek yetmiyor; içe alınmadı"
 io = "'{path}' için G/Ç hatası: {detail}"
 not_found = "Bulunamadı: {path}"
@@ -41,6 +43,7 @@ dot = "'.' kullanılamaz"
 dot_dot = "'..' kullanılamaz"
 hidden = "'.' ile başlayan adlara izin verilmez"
 control_char = "denetim karakteri içeriyor"
+hidden_control = "görünmez biçim karakteri içeriyor (bidi ya da sıfır genişlikli)"
 invalid_char = "izin verilmeyen bir karakter içeriyor"
 reserved_name = "ayrılmış ad"
 trailing_space = "adlar boşlukla bitemez"
@@ -51,6 +54,7 @@ link = "bir bağdan (sembolik bağ ya da junction) geçiyor; notlar bağların a
 contains_link = "klasör bir bağ (sembolik bağ ya da junction) içerdiği için silinmez"
 into_itself = "klasör kendi içine taşınamaz"
 self_relation = "not kendisiyle ilişkilendirilemez"
+not_relation_end = "bu ilişkinin bir ucu değil"
 invalid_type = "geçersiz not türü"
 invalid_name = "geçersiz not adı"
 must_be_string = "bir metin olmalı"
@@ -139,13 +143,13 @@ palette_title = "Komutlar"
 palette_hints = "↑↓ gez  Enter çalıştır  Esc kapat"
 key_hints_list = ": komut  t çöp  Space aç  o sırala  V sütun  s ara  F1 yardım  Enter düzenle  → önizle  / süz  n ekle  a yeni  d çöpe at  ← üst  u geri al  v seç  y kopya  p yapıştır  m taşı  L ilişkilendir  gg baş  F2 ad değiştir  PgDn sayfa  c kopya  q çık  D kalıcı sil  E harici  x dışa aktar  T etiket  i içe al  r taşı  ^S senkron  Alt+→ detay  I tümü  </> genişlik  z yakınlaştır  Tab içerik  , ayar"
 key_hints_search = "Enter tut  Esc kapat  ↑↓ seç  Tab tamamla  ^T içerik  ^P geçmiş  → öneri  F1 yardım  ^O yeni  ^R taşı  ^D çöp  ^S senkron  F9 ayar"
-key_hints_links = "↑↓ seç  Enter aç  Esc geri  L ilişkilendir/kaldır  PgDn sayfa  z yakınlaştır  F1 yardım"
+key_hints_links = "↑↓ seç  Enter aç  Esc geri  L ilişkilendir/kaldır  n ad  f yön çevir  u yönsüz  PgDn sayfa  z yakınlaştır  F1 yardım"
 link_label = "İlişkilendir:"
 link_missing = "Bu adda not yok: metin boşa gösteriyor, notta düzeltin"
-related = "İlişkilendirildi: {path}"
 unlink_label = "Not"
 link_title = "İlişkiyi kaldır"
 confirm_unlink = "'{from}' ile '{to}' arasındaki ilişki kaldırılsın mı?"
+confirm_unlink_named = "'{from}' ile '{to}' arasındaki '{name}' ilişkisi kaldırılsın mı?"
 unlinked = "İlişki kaldırıldı: {path}"
 key_hints_preview = ": komut  ← liste  e düzenle  ↑↓ kaydır  / bul  b bağlantılar  L ilişkilendir  n/N sonraki  c kopya  R ham/görünüm  q çık  g/G baş/son  J/K 5 satır  ^U/^D yarım sayfa  F2 ad değiştir  z yakınlaştır  </> genişlik  E harici  F1 yardım  , ayar"
 key_hints_editor = "Ctrl+S kaydet  Ctrl+Q çık  Ctrl+F bul  Ctrl+Z geri al  F1 yardım  Ctrl+Y yinele  ^X kes  ^C kopyala  ^V yapıştır  F9 ayar"
@@ -174,6 +178,12 @@ map_tags = " · etiketler"
 map_status = "{scope}{tags}  Tab seç  Enter aç  C bağla  oklar + - 0  w bütün  t etiket  1-{max} derinlik"
 map_link = "{from} → {to}  Tab hedef  Enter bağla  d kenarı kaldır  Esc vazgeç"
 map_choose = "{from} → {to}  r ilişkili  l bağlantı ({from} içine [[wiki]])  Esc vazgeç"
+map_relation = "{from} {arrow} {to}  {name}  n ad  f yön çevir  u yönsüz  d kaldır  Esc vazgeç"
+relation_unnamed = "(adsız)"
+relation_label = "İlişki {from} {arrow} {to}, ad:"
+relation_rename_label = "{from} ve {to} ilişkisinin yeni adı:"
+relation_hints = "Enter ilişkilendir  Tab adlar  ^D yönlü  boş = adsız  Esc vazgeç"
+relation_rename_hints = "Enter adlandır  Tab adlar  boş = adsız  Esc vazgeç"
 map_no_edge = "{from} ile {to} arasında kenar yok"
 map_capped = "{total} düğümden {shown}"
 map_empty = "Haritada gösterilecek not yok"
@@ -224,6 +234,7 @@ y             seçimi ya da satırı kopyala
 p             buraya yapıştır; dolu ada -2
 m             klasöre taşı (girdi, Tab listeler)
 L             nota bağla (girdi, Tab listeler)
+              sonra adı: Tab adlar, ^D yönlü
 Esc           bekleyen y'den vazgeç
 → l S         önizle; klasörde içeri gir
 ← h           üst klasör (kökte etkisiz);
@@ -319,6 +330,7 @@ n N           sonraki / önceki eşleşme
 b             önizleme altındaki bağlantılar
 Tab ⇧Tab      [[bağlantı]] seç, Enter açar
 L             nota bağla (girdi, Tab listeler)
+              sonra adı: Tab adlar, ^D yönlü
 ← h Esc       listeye dön (Esc önce aramayı siler)
 q             çık
 < >           panel genişliği  z yakınlaştır
@@ -327,6 +339,8 @@ Bağlantılar (önizlemede b ya da tıklama)
 Enter         nota git; tıklama da gider
 L             ilişkili satırda: kaldır (sorar)
               diğer satırda: nota bağla
+n f u         ilişkili satırda: yeniden adlandır,
+              yönü çevir, yönsüz yap
 Esc b         önizlemeye dön
 [[ad]]        böyle not yok; adı değişen hedef
               eski kalır, metin yeniden yazılmaz
@@ -357,6 +371,8 @@ C             seçili nottan bağla: Tab hedef,
               d kenarı kaldırır, Esc vazgeçer
 Sağ sürükle   düğümden düğüme: C ile aynı
 Sağ tık       kenarda: seçer, d kaldırır
+n f u         ilişkide: ad, yön çevir, yönsüz;
+              r ad sorar (^D yönlü)
 Sekmeler (sağ panelin üst kenarında)
 ^T            yeni sekmede boş not
 ^W            sekmeyi kapat (değişiklikte sorar)
@@ -796,10 +812,9 @@ help_palette = "Komut paleti"
 help_no_key = "düğme, menü ya da palet"
 help_unbound = "bu pencerede henüz yok"
 link_title = "Notla ilişkilendir (yol ya da ad)"
-linked = "İlişkilendirildi: {path}"
-unlinked = "İlişki kaldırıldı: {path}"
 unlink = "İlişkiyi kaldır"
 confirm_unlink = "'{from}' ile '{to}' arasındaki ilişki kaldırılsın mı?"
+confirm_unlink_named = "'{from}' ile '{to}' arasındaki '{name}' ilişkisi kaldırılsın mı?"
 icons_unsaved = "Önce ayarlar formunu kaydedin ya da geri alın"
 cmd_why_note = "gösterilen not yok"
 cmd_why_row = "seçili satır yok"
@@ -856,6 +871,11 @@ import_busy = "Bir içe alma sürüyor; bitmesini bekleyin ya da durdurun"
 import_start_failed = "İçe alma başlatılamadı; ayrıntı günlükte"
 import_summary = "İçe alınan: {imported}, atlanan: {skipped}, alınamayan: {failed}"
 view_usage = "Kullanım: note view save AD CYPHER [--force] | ls [--json] | run AD [--json] | rm AD | show AD"
+relation_usage = "Kullanım: note relation add A B [--name AD] [--directed] | rm A B [--name AD | --id KİMLİK] | rename A B ESKİ YENİ | ls [NOT] [--json]"
+relation_bad_id = "'{id}' bir ilişki kimliği değil (32 onaltılık hane, bkz. 'note relation ls NOT')"
+relation_no_name = "{from} ile {to} arasında '{name}' adlı ilişki yok"
+relation_none = "{from} ile {to} arasında ilişki yok"
+relation_ambiguous = "{from} ile {to} arasında {count} ilişki var; --name ya da --id ile birini seçin (note relation ls {from})"
 view_saved = "Görünüm kaydedildi: {name}"
 view_removed = "Görünüm silindi: {name}"
 view_exists = "'{name}' adlı görünüm zaten var; değiştirmek için --force ekleyin"
@@ -906,6 +926,7 @@ examples_query = "note query 'MATCH (n:Note) RETURN n.name'\tsalt okunur tablo\n
 examples_graph = "note graph status\tveritabanında olmayan dosyalar\nnote graph export --format jsonl -o dokum.jsonl\tgraph'ı dök"
 examples_tags = "note tags\tsatır başına AD<TAB>SAYI\nnote tags --json\tJSON olarak"
 examples_view = "note view save son 'MATCH (n:Note) RETURN n'\tsorguyu kaydet\nnote ls view:son\tsüzgeç olarak kullan"
+examples_relation = "note relation add a.md b.md --name kullanır --directed\ta.md ile b.md'yi 'kullanır' olarak ilişkilendir\nnote relation ls\tadlar ve sayıları\nnote relation ls a.md\tYOL<TAB>AD<TAB>YÖN<TAB>KİMLİK\nnote relation rename a.md b.md kullanır alıntılar\tbir ilişkiyi yeniden adlandır\nnote relation rm a.md b.md --name alıntılar\tkaldır"
 examples_import = "note import ~/Belgeler/notlar\talt klasörleriyle bir klasör\nnote import --type md beni-oku.txt\tverilen tipte tek dosya"
 examples_completion = "note completion bash\t~/.bashrc içinde source edin\nnote completion zsh > _note\tzsh işlev dosyası"
 see_also_ls = "note find, note show, note tags"
@@ -921,12 +942,14 @@ see_also_query = "note view, note graph"
 see_also_graph = "note export, note query"
 see_also_tags = "note ls"
 see_also_view = "note query, note ls"
+see_also_relation = "note query, note graph"
 see_also_import = "note export, note graph"
 see_also_completion = "note help"
 help_ls = "Notları listeler: sorguyla fuzzy sırada, sorgusuz en yeniden eskiye; -f klasörle sınırlar. Sorgu arama argümanlarını alır (tag:AD, type:, in:, size:, updated:, created:, origin:, sync:, sort:)"
 help_tags = "Canlı notların #etiketlerini not sayılarıyla listeler (AD<TAB>SAYI); --json ad, gösterim ve sayı yazar"
 help_import = "Dosyaları bayt bayt not olarak içe alır (BOM, CRLF ve ikili korunur; ikili not salt okunurdur). Klasör kendi adıyla, alt klasörleriyle gelir. Ad dosya adından, tip uzantıdan gelir (--type yerine geçer; uzantı yoksa içerikten tespit). Dolu ad -2, -3 alır; --overwrite bunun yerine o notun üzerine yazar. --name tek YOL'u adlandırır. Bağlar izlenmez, klasör içindeki gizli girdiler dışarıda kalır, özgün dosyalar hiç değişmez. Atlanan ya da alınamayan varsa çıkış 1"
 help_view = "Kayıtlı Cypher görünümleri: salt okunur sorguyu adla kaydet (--force değiştirir), listele (AD<TAB>SORGU), note query çıktısıyla çalıştır, sil ya da yazdır. Görünümler notlar gibi senkronlanır; yazan sorgu kayıtta da çalıştırmada da reddedilir. Aramada view:AD notları görünümün döndürdüklerine süzer"
+help_relation = "Notlar arası adlı ilişkiler (RELATED_TO). add A ile B'yi ilişkilendirir: varsayılan adsız ve yönsüz, --name ad verir, --directed A'dan B'ye yönlendirir. Bir çiftte ad başına en çok bir ilişki ve bir adsız ilişki olur. rm çiftin tek ilişkisini ya da --name (boş: adsız) veya --id ile seçileni kaldırır; rename ESKİ adlı ilişkiyi (boş: adsız) YENİ ada (boş: adsız) çevirir. ls adları sayılarıyla (AD<TAB>SAYI), ls NOT notun ilişkilerini (YOL<TAB>AD<TAB>YÖN<TAB>KİMLİK) listeler. Başka cihazdan gelen adlar denetim ve görünmez karakter olmadan yazılır"
 help_find = "Not içeriklerinde arar (tüm terimler geçmeli); yol:satır: kesit yazar; --limit N gösterilen not sayısını sınırlar"
 help_show = "En iyi eşleşmeyi yazdırır (tam yol önceliklidir; seçilen yol stderr'e yazılır)"
 help_edit = "En iyi eşleşmeyi editörde açar"
@@ -1012,6 +1035,7 @@ desc_query = "Graph'ta Cypher sorgusu çalıştır"
 desc_graph = "Graph'ı geçir, denetle, dök ya da yükle"
 desc_tags = "#etiketleri not sayılarıyla listele"
 desc_view = "Kayıtlı salt okunur Cypher görünümleri"
+desc_relation = "Notlar arası adlı ilişkiler"
 desc_import = "Dosyaları ya da klasörleri not olarak içe al"
 desc_completion = "Kabuk tamamlama betiğini yazdır"
 desc_help = "Bir komutun yardımını göster"
@@ -1034,6 +1058,10 @@ desc_view_ls = "Kayıtlı görünümleri listele"
 desc_view_run = "Kayıtlı görünümü çalıştır"
 desc_view_rm = "Kayıtlı görünümü sil"
 desc_view_show = "Kayıtlı görünümün sorgusunu yazdır"
+desc_relation_add = "İki notu ilişkilendir"
+desc_relation_rm = "İlişkiyi kaldır"
+desc_relation_rename = "İlişkiyi yeniden adlandır"
+desc_relation_ls = "İlişki adlarını ya da notun ilişkilerini listele"
 desc_completion_zsh = "zsh betiği"
 desc_completion_bash = "bash betiği"
 desc_completion_fish = "fish betiği"
@@ -1066,6 +1094,9 @@ opt_skip_failed = "Geçirilemeyen dosyaları atlayıp sürdür"
 opt_clear_skipped = "Dışarıda kalan dosyalar listesini unut"
 opt_format = "Döküm biçimi (jsonl)"
 opt_force = "Aynı adlı görünümün yerine yaz"
+opt_relation_name = "İlişkinin adı (boş: adsız)"
+opt_directed = "İlişkiyi ilk nottan ikinciye yönlendir"
+opt_relation_id = "note relation ls NOT çıktısındaki ilişki kimliği"
 completion_usage = "Kullanım: note completion zsh | bash | fish"
 help_completion = "Kabuğun için tamamlama betiğini yazdırır: Tab sonra komutları, seçenekleri, not yollarını, klasörleri, tipleri, etiketleri, görünümleri ve config anahtarlarını senin dilindeki açıklamalarla önerir. zsh: note completion zsh > ~/.local/share/zsh/site-functions/_note (bu dizin compinit'ten önce fpath'te olmalı); bash: ~/.bashrc'ye source <(note completion bash); fish: note completion fish > ~/.config/fish/completions/note.fish"
 migrate_backup_hint = "Yedek {path} altında (özel). Gerekmediğinde kendiniz silin: rm -r {path}"
@@ -1112,9 +1143,11 @@ missing = "Eksik ({count})"
 # Haritada düğüm birleştirme (app::map_relations; GUI Shift+sürükleme, TUI sağ sürükleme ve C). Yollar güvenilmez.
 [map]
 related = "İlişkili: {from} ve {to}"
+related_named = "'{name}' olarak ilişkili: {from} ve {to}"
 linked = "{from} notuna bağlantı eklendi: [[{to}]]"
 tagged = "#{tag} etiketi {path} notuna eklendi"
 unrelated = "İlişki kaldırıldı: {from} ve {to}"
+unrelated_named = "'{name}' ilişkisi kaldırıldı: {from} ve {to}"
 untagged = "#{tag} etiketi {path} notundan kaldırıldı"
 already_linked = "{from} zaten {to} notuna bağlanıyor"
 already_tagged = "{path} notunda #{tag} etiketi zaten var"
@@ -1127,6 +1160,7 @@ invalid_pair = "Bu iki harita düğümü birleştirilemez"
 choose_related = "İlişkili (RELATED_TO)"
 choose_link = "Bağlantı ({from} notuna [[wiki]] bağlantısı)"
 remove_related = "İlişkiyi kaldır"
+remove_named_related = "'{name}' ilişkisini kaldır"
 remove_tag = "#{tag} etiketini {path} notundan kaldır"
 remove_link = "Bağlantıyı kaldır"
 connect = "Bağla…"
@@ -1134,6 +1168,22 @@ connect_hint = "İlişki kurmak için: Shift+sürükle ya da düğüme sağ tık
 connect_pending = "{from} → bağlanacak düğüme tıklayın; Esc vazgeçer"
 remove_relations = "İlişkileri kaldır"
 remove_related_to = "İlişkiyi kaldır: {path}"
+remove_named_related_to = "'{name}' ilişkisini kaldır: {path}"
+relation_renamed = "İlişkinin adı '{name}' oldu: {from} ve {to}"
+relation_unnamed = "İlişkinin adı kaldırıldı: {from} ve {to}"
+relation_directed = "İlişki yönlü: {from} → {to}"
+relation_undirected = "İlişki yönsüz yapıldı: {from} ve {to}"
+relation_title = "{from} ve {to} ilişkisi"
+relation_rename_title = "{from} ve {to} ilişkisini yeniden adlandır"
+relation_name_hint = "İlişkinin adı (boş: adsız)"
+relation_unnamed_hint = "Boş ad: adsız ilişki"
+relation_new = "Yeni ad: {name}"
+relation_directed_box = "Yönlü (ilk → ikinci)"
+unnamed_relation = "(adsız ilişki)"
+rename_relation = "Yeniden adlandır…"
+flip_relation = "Yönü çevir"
+make_undirected = "Yönsüz yap"
+make_directed = "Yönlü yap: {from} → {to}"
 
 [graph]
 cypher_syntax = "Sorgu söz dizimi hatası, satır {line}, sütun {col}: {what}"

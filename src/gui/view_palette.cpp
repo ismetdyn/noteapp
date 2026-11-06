@@ -4,6 +4,7 @@
 #include "gui/view_internal.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <imgui.h>
 #include <imgui_internal.h>  // GetKeyChordName
 #include <imgui_stdlib.h>
@@ -53,25 +54,22 @@ std::string command_keys(std::string_view id) {
     return core::tr(bound ? "gui.help_no_key" : "gui.help_unbound");
 }
 
-struct PaletteKeys {
-    std::size_t* selected;
-    std::size_t count;
-};
+}  // namespace
 
 // Yukarı/Aşağı alanın geçmiş olayıdır: odak listeye kaçmaz, seçim yürür.
 int palette_callback(ImGuiInputTextCallbackData* data) {
     auto* keys = static_cast<PaletteKeys*>(data->UserData);
     if (data->EventFlag == ImGuiInputTextFlags_CallbackHistory && keys->count > 0) {
         std::size_t& selected = *keys->selected;
-        if (data->EventKey == ImGuiKey_UpArrow && selected > 0)
+        if (selected == SIZE_MAX)  // seçim yok: Aşağı ilk satıra iner, Yukarı bir şey yapmaz
+            selected = data->EventKey == ImGuiKey_DownArrow ? 0 : SIZE_MAX;
+        else if (data->EventKey == ImGuiKey_UpArrow && selected > 0)
             --selected;
         else if (data->EventKey == ImGuiKey_DownArrow && selected + 1 < keys->count)
             ++selected;
     }
     return 0;
 }
-
-}  // namespace
 
 // Çalışamayan satır da seçilebilir: GuiState nedenini durum çubuğunda söyler (TUI paleti gibi).
 // G12: 36 em genişlik, pencerenin üstünden %18 aşağıda; satırda etiket solda, kısayol sağa yaslı çip; engelli

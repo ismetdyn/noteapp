@@ -352,3 +352,103 @@ TEST_CASE("preview layout: inline code shading stands out in the light and the d
         CHECK(contrast(shade, ImGui::ColorConvertU32ToFloat4(colors->text)) >= kMinTextContrast);
     }
 }
+
+// NY-P uygunluk (md_conformance): blok modelinin taşıdığı üstü çizili, kap sırası ve tablo hizası çizimde de
+// görünür.
+namespace {
+
+// Yerleşim blokların metnine işaret eder (layout_preview sözleşmesi): bloklar yerleşimle birlikte yaşar. Vektörün
+// taşınması öğelerin yerini değiştirmez.
+struct Laid {
+    std::vector<pdf::Block> blocks;
+    PreviewLayout layout;
+};
+
+Laid laid_out(const FontScene& scene, std::string_view markdown, float width) {
+    Laid out{pdf::parse_markdown(markdown, {.links = true}), {}};
+    out.layout = layout_preview(out.blocks, scene.fonts(), kFontPixels, width, resolve_all);
+    return out;
+}
+
+const PreviewRun& run_of(const PreviewLayout& layout, std::string_view text) {
+    for (const PreviewRun& run : layout.runs)
+        if (run.text == text)
+            return run;
+    FAIL("no run: ", std::string(text));
+    return layout.runs.front();
+}
+
+}  // namespace
+
+TEST_CASE("preview layout: struck text is drawn struck") {
+    const FontScene scene;
+    const Laid laid = laid_out(scene, "~~eski~~ yeni", 400.0F);
+    const PreviewLayout& layout = laid.layout;
+    CHECK(run_of(layout, "eski").strike);
+    CHECK_FALSE(run_of(layout, "yeni").strike);
+}
+
+TEST_CASE("preview layout: a quote inside a list item keeps its bar at the item's text, not the margin") {
+    const FontScene scene;
+    const Laid laid = laid_out(scene, "- madde\n\n  > alıntı\n", 400.0F);
+    const PreviewLayout& layout = laid.layout;
+    const float item_left = run_of(layout, "madde").pos.x;
+    std::vector<float> bars;
+    for (const auto& box : layout.boxes)
+        if (box.kind == noteapp::gui::PreviewBox::Kind::QuoteBar)
+            bars.push_back(box.min.x);
+    REQUIRE(bars.size() == 1);
+    CHECK(bars.front() >= item_left);
+    CHECK(run_of(layout, "alıntı").pos.x > bars.front());
+}
+
+// İki ayrı liste HTML'deki gibi paragraf aralığıyla ayrılır; aynı listenin öğeleri ve iç listenin ilk öğesi sık kalır.
+TEST_CASE("preview layout: adjacent separate lists keep a block gap, items of one list stay tight") {
+    const FontScene scene;
+    const auto gap_after_first = [&](std::string_view markdown) {
+        const Laid laid = laid_out(scene, markdown, 400.0F);
+        const PreviewLayout& layout = laid.layout;
+        REQUIRE(layout.block_spans.size() >= 2);
+        return layout.block_spans[1].first - layout.block_spans[0].second;
+    };
+    const float same_list = gap_after_first("- a\n- b\n");
+    CHECK(gap_after_first("- a\n\n1. b\n") > same_list);
+    CHECK(gap_after_first("- a\n\n* b\n") > same_list);
+    CHECK(gap_after_first("- a\n  - b\n") == doctest::Approx(same_list));
+}
+
+// Lider kararı (NY-P): GUI kod bloğu TUI gibi dil etiketinden renklenir (ortak sözdizimi ve aile tablosu; tam ad
+// `python` da kısaltmaya iner). Etiketsiz kod düz kalır.
+TEST_CASE("preview layout: a fenced code block is coloured by its language like the TUI") {
+    const FontScene scene;
+    const auto token_of = [&](std::string_view markdown, std::string_view word) {
+        const Laid laid = laid_out(scene, markdown, 400.0F);
+        for (const PreviewRun& run : laid.layout.runs)
+            if (run.text.find(word) != std::string_view::npos)
+                return run.token;
+        FAIL("no run with: ", std::string(word));
+        return noteapp::tui::TokenKind::Plain;
+    };
+    CHECK(token_of("```python\ndef f():\n    return 1\n```\n", "def") == noteapp::tui::TokenKind::Keyword);
+    CHECK(token_of("```py\nx = \"dizge\"\n```\n", "dizge") == noteapp::tui::TokenKind::String);
+    CHECK(token_of("```\ndef f():\n```\n", "def") == noteapp::tui::TokenKind::Plain);
+}
+
+TEST_CASE("preview layout: right and center aligned table columns line up like the source asks") {
+    const FontScene scene;
+    const std::string table =
+        "| sol | sağ | orta |\n|-----|----:|:----:|\n| a | 1 | x |\n| bbbbbb | 22222 | yyyyy |\n";
+    const Laid laid = laid_out(scene, table, 600.0F);
+    const PreviewLayout& layout = laid.layout;
+    const auto right_of = [&](std::string_view text) {
+        const PreviewRun& run = run_of(layout, text);
+        return run.pos.x + run.width;
+    };
+    const auto middle_of = [&](std::string_view text) {
+        const PreviewRun& run = run_of(layout, text);
+        return run.pos.x + (run.width / 2.0F);
+    };
+    CHECK(run_of(layout, "a").pos.x == doctest::Approx(run_of(layout, "bbbbbb").pos.x));
+    CHECK(right_of("1") == doctest::Approx(right_of("22222")));
+    CHECK(middle_of("x") == doctest::Approx(middle_of("yyyyy")).epsilon(0.02));
+}

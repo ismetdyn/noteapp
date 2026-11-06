@@ -94,6 +94,9 @@ struct SyntaxLimits {
 
 // Noktasız uzantıdan dil; büyük/küçük harf ayırmaz. Bilinmeyen uzantı Plain.
 SyntaxLanguage syntax_language_for(std::string_view extension);
+// Kuşatılmış kod bloğunun dil etiketinden dil: uzantı ya da dilin tam adı (`python`, `javascript`…). TUI REVIEW ve
+// GUI önizlemesi aynı eşlemeyi kullanır.
+SyntaxLanguage fence_language(std::string_view tag);
 
 // Bir satırı işler, çıkış durumunu döner. `spans` nullptr ise yalnız durum ilerletilir (görünmeyen satırlar).
 // Süre satır uzunluğuyla doğrusaldır; bayt içeriği ne olursa olsun çökmez. `max_line_bytes`tan uzun satır

@@ -860,9 +860,9 @@ TEST_CASE("L3 limits keep today's defaults, accept 0 as unlimited and reject a w
 TEST_CASE("limits.tui and limits.lsp keep today's defaults, accept 0 as unlimited and reject a wrong unit") {
     const Config defaults = parse_config("").config;
     const TuiLimits& tui = defaults.limits.tui;
-    CHECK(tui.view_bytes == Limit{256U * 1024U, "256KiB"});
+    CHECK(tui.view_bytes == Limit{0, "0"});  // NY-P: biçimli görünüm parça parça, varsayılan sınırsız
     CHECK(tui.view_lines.value == 100000U);
-    CHECK(tui.table_rows.value == 5000U);
+    CHECK(tui.table_rows == Limit{0, "0"});  // NY-P: satırlar dizinli, varsayılan sınırsız
     CHECK(tui.table_columns.value == 128U);
     CHECK(tui.highlight_bytes.value == 2U * 1024U * 1024U);
     CHECK(tui.highlight_line_bytes.value == 64U * 1024U);
@@ -903,7 +903,7 @@ TEST_CASE("limits.tui and limits.lsp keep today's defaults, accept 0 as unlimite
         "[tuning]\ncompletion_min_prefix_bytes = 0\n");
     CHECK(sized.config.limits.tui.view_bytes.value == 4U * 1024U * 1024U);
     CHECK(sized.config.limits.lsp.initialize_timeout.value == 120000U);
-    CHECK(sized.config.limits.tui.table_rows.value == 5000U);
+    CHECK(sized.config.limits.tui.table_rows.unlimited());  // geçersiz değer varsayılana (0) döner
     CHECK(has_warning_about(sized, "limits.tui.table_rows", "config.invalid_value"));
     CHECK(sized.config.tuning.completion_min_prefix_bytes == 2U);  // alt sınır: 0 geçersiz
     CHECK(has_warning_about(sized, "tuning.completion_min_prefix_bytes", "config.invalid_value"));
@@ -967,6 +967,37 @@ TEST_CASE("limits.app.tabs defaults to 0 (unlimited), limits.app.map_nodes to 20
 }
 
 // NX-B (L1): harita çevre derinliğinin sabit tavanı (MapOptions::kMaxDepth = 6) config'e taşındı.
+// NY-P: önizleme parçalarının düşman girdi korumaları config'te (kural: kodda sabit sınır yok); 0 = sınırsız.
+TEST_CASE("limits.tui preview chunk guards default to 128KiB, 64 and 4KiB, accept 0 and round-trip") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+    const Config defaults = parse_config("").config;
+    CHECK(defaults.limits.tui.preview_definition_bytes == Limit{128U * 1024U, "128KiB"});
+    CHECK(defaults.limits.tui.preview_fence_info_bytes == Limit{64, "64"});
+    CHECK(defaults.limits.tui.preview_table_header_bytes == Limit{4U * 1024U, "4KiB"});
+
+    const LoadedConfig zero = parse_config(
+        "[limits.tui]\npreview_definition_bytes = 0\npreview_fence_info_bytes = 0\npreview_table_header_bytes = 0\n");
+    CHECK(zero.warnings.empty());
+    CHECK(zero.config.limits.tui.preview_definition_bytes.unlimited());
+    CHECK(zero.config.limits.tui.preview_fence_info_bytes.unlimited());
+    CHECK(zero.config.limits.tui.preview_table_header_bytes.unlimited());
+    const LoadedConfig bad = parse_config("[limits.tui]\npreview_definition_bytes = \"2s\"\n");
+    CHECK(bad.config.limits.tui.preview_definition_bytes == Limit{128U * 1024U, "128KiB"});
+    CHECK(has_warning_about(bad, "limits.tui.preview_definition_bytes", "config.invalid_value"));
+
+    Config config = defaults;
+    REQUIRE(set_config_value(config, "limits.tui.preview_definition_bytes", "1MiB"));
+    REQUIRE(set_config_value(config, "limits.tui.preview_fence_info_bytes", "16"));
+    REQUIRE(set_config_value(config, "limits.tui.preview_table_header_bytes", "0"));
+    REQUIRE(save_config(config).has_value());
+    const LoadedConfig reloaded = load_config();
+    CHECK(reloaded.warnings.empty());
+    CHECK(reloaded.config.limits.tui.preview_definition_bytes == Limit{1024U * 1024U, "1MiB"});
+    CHECK(reloaded.config.limits.tui.preview_fence_info_bytes == Limit{16, "16"});
+    CHECK(reloaded.config.limits.tui.preview_table_header_bytes.unlimited());
+}
+
 TEST_CASE("limits.app.map_depth defaults to 6, takes a count, accepts 0 as unlimited and round-trips") {
     const TempDir tmp(kTurkishUncreated);
     const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());

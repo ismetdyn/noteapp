@@ -94,6 +94,10 @@ struct GraphLimits {
     Limit set_aside_logs;      // tutulan kenara alınmış yerel günlük kopyası
     Limit import_line_bytes;   // `note graph import` satırı
     Limit import_line_values;  // aynı satırın JSON değeri (ayrıştırılmış belleği sınırlar)
+    // İlişki adının baytı (NoteStore, SPEC-graph "Adlı ilişkiler"): yazmada aşan ad reddedilir; senkronla
+    // gelen uzun ad grafta kalır, gösterim ve anahtar bu sınırda kesilir. Cihaza özgüdür, birleşimi
+    // değiştirmez.
+    Limit relation_name_bytes;
 
     bool operator==(const GraphLimits&) const = default;
 };
@@ -124,7 +128,12 @@ struct TuiLimits {
     Limit view_lines;               // biçimli görünümün satırı
     Limit table_rows;               // biçimli tablonun (csv, md) satırı
     Limit table_columns;            // biçimli tablonun saklanan sütunu
-    Limit highlight_bytes;          // sözdizimi renklendirilen en büyük not
+    // Büyük md parçalarının düşman girdi korumaları (iki arayüz, app::MarkdownChunkLimits); 0 sınırsız (riski
+    // defaults.toml'da).
+    Limit preview_definition_bytes;    // parçaya eklenen başka parçadaki bağlantı tanımları
+    Limit preview_fence_info_bytes;    // zorla kesilen koda taşınan çit satırı öneki (girinti, çit, dil)
+    Limit preview_table_header_bytes;  // zorla kesilen tabloya taşınan başlık ve ayraç satırı
+    Limit highlight_bytes;         // sözdizimi renklendirilen en büyük not
     Limit highlight_line_bytes;     // renklendirilen en uzun satır
     Limit spellcheck_line_bytes;    // yazım denetlenen en uzun satır
     Limit completion_window_bytes;  // tamamlamanın imleç çevresinde taradığı pencere (iki yana)

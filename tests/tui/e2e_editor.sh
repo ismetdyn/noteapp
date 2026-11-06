@@ -1756,5 +1756,49 @@ check "open tabs come back after a restart" screen_has "[b.md]"
 keys q
 wait_exit >/dev/null
 
+# F1: `L` adlı ilişki. Hedeften sonra ad satırı; Ctrl+D yönlü yapar, Tab var olan adı tamamlar. Sonuç
+# `note relation ls` ile ayrı süreçten okunur.
+relations_of() {
+    podman run --rm -e NOTEAPP_HOME=/data/home -v "$work:/data:z" -v "$volume:/build:ro,z" "$image" \
+        /build/src/cli/note relation ls "$1"
+}
+relation_listed() { relations_of "$1" | grep -qF -- "$2"; }
+clear_notes
+printf 'ra\n' | put_note ra.md
+printf 'rb\n' | put_note rb.md
+printf 'rc\n' | put_note rc.md
+start_app
+keys /
+literal ra.md
+keys Enter
+sleep 0.3
+keys L
+wait_screen "Relate to:"
+literal rb.md
+keys Enter
+wait_screen "Relation ra.md — rb.md, name:"
+check "the name line names both notes and starts undirected" screen_has "^D directed"
+literal uses
+keys C-d
+sleep 0.3
+check "Ctrl+D turns the relation directed" screen_has "Relation ra.md → rb.md, name:"
+keys Enter
+wait_screen "Related as 'uses': ra.md and rb.md"
+check "L with a name and Ctrl+D stores a named directed relation" relation_listed ra.md $'rb.md\tuses\toutgoing'
+keys L
+wait_screen "Relate to:"
+literal rc.md
+keys Enter
+wait_screen "Relation ra.md — rc.md, name:"
+literal u
+keys Tab
+sleep 0.3
+check "Tab completes a known name and takes its direction" screen_has "Relation ra.md → rc.md, name: uses"
+keys Enter
+wait_screen "Related as 'uses': ra.md and rc.md"
+check "the completed name is stored with it" relation_listed ra.md $'rc.md\tuses\toutgoing'
+keys q
+wait_exit >/dev/null
+
 echo "passed=$passed failed=$failed"
 [[ "$failed" -eq 0 ]]

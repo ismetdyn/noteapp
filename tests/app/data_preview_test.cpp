@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <doctest/doctest.h>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -52,6 +53,58 @@ TEST_CASE("csv limits keep rows and columns but count what they drop") {
     CHECK(table->omitted_rows == 3);
 }
 
+// NY-P inceleme: satır dizini kCsvBlockRows satırda bir ofset tutar; her pencere (blok sınırında, boş satırlar ve
+// tırnak içi satır sonu araya girse de) doğru satırları verir.
+TEST_CASE("csv rows from the block index match their source rows in every window") {
+    std::string source = "\xEF\xBB\xBFn,metin\n";
+    for (int i = 1; i < 300; ++i) {
+        source += std::to_string(i) + (i % 11 == 0 ? ",\"iki\nsatır\"\n" : ",x\n");
+        if (i % 7 == 0)
+            source += "\n";
+    }
+    const auto index = noteapp::app::index_csv(source);
+    REQUIRE(index);
+    CHECK(index->row_count == 300);
+    CHECK(index->checkpoints.size() == (300 + noteapp::app::kCsvBlockRows - 1) / noteapp::app::kCsvBlockRows);
+    for (const std::size_t first : {std::size_t{0}, std::size_t{1}, std::size_t{63}, std::size_t{64},
+                                    std::size_t{65}, std::size_t{127}, std::size_t{290}}) {
+        CAPTURE(first);
+        const auto rows = noteapp::app::csv_rows(source, *index, first, 20);
+        REQUIRE(rows.size() == std::min<std::size_t>(20, 300 - first));
+        for (std::size_t k = 0; k < rows.size(); ++k) {
+            const std::size_t row = first + k;
+            CHECK(rows[k].cells.front() == (row == 0 ? "n" : std::to_string(row)));
+            CHECK(source.substr(rows[k].offset).starts_with(rows[k].cells.front()));
+            if (row % 11 == 0 && row > 0)
+                CHECK(rows[k].cells[1] == "iki\nsatır");
+        }
+    }
+    CHECK(noteapp::app::csv_rows(source, *index, 300, 5).empty());
+}
+
+// NY-P güvenlik (Sev-3): kontrol noktaları bayt mesafesiyle de konur; boş satır dolgusu ya da belirteçler arası dev
+// boşluk iki nokta arasında kCsvCheckpointBytes / kJsonCheckpointBytes'tan fazla taranacak yer bırakmaz.
+TEST_CASE("csv and json checkpoints are byte-aware across padding") {
+    constexpr std::size_t kPadding = std::size_t{1} << 20;
+    std::string csv = "n,x\n1,x\n" + std::string(kPadding, '\n') + "2,x\n";
+    const auto rows = noteapp::app::index_csv(csv);
+    REQUIRE(rows);
+    CHECK(rows->row_count == 3);
+    for (std::size_t i = 1; i < rows->checkpoints.size(); ++i)
+        CHECK(rows->checkpoints[i].offset - rows->checkpoints[i - 1].offset <= noteapp::app::kCsvCheckpointBytes + 4);
+    CHECK(noteapp::app::csv_rows(csv, *rows, 2, 1).at(0).cells.front() == "2");
+
+    const std::string json = "[1," + std::string(kPadding, ' ') + "2]";
+    const auto lines = noteapp::app::index_json(json);
+    REQUIRE(lines);
+    const auto& last = lines->checkpoints.back();
+    CHECK(last.pos == json.find('2'));  // nokta dolgudan sonraki belirteçte
+    const auto window = noteapp::app::json_lines(json, *lines, 2, 2);
+    REQUIRE(window.size() == 2);
+    CHECK(window[0].text == "2");
+    CHECK(window[1].text == "]");
+}
+
 TEST_CASE("json pretty lines carry their depth and the offset of their first token") {
     const std::string source = "{\"ad\":\"Çağrı\",\n\"liste\":[1,{}],\"n\":null}";
     const auto lines = noteapp::app::pretty_json(source);
@@ -74,6 +127,43 @@ TEST_CASE("json pretty lines carry their depth and the offset of their first tok
     CHECK((*with_bom)[0].offset == 3);
     CHECK_FALSE(noteapp::app::pretty_json("[1,]"));
     CHECK_FALSE(noteapp::app::pretty_json(std::string(100000, '[')));
+}
+
+// NY-P: büyük JSON dizinle parça parça üretilir; her pencere bütün yazdırmanın aynı satırlarıdır (kontrol noktası
+// sınırları, boş kaplar, kaçışlı dizgedeki ayraçlar, BOM dahil).
+TEST_CASE("json lines from the index match the whole pretty print in every window") {
+    std::string source = "\xEF\xBB\xBF{\"liste\": [\n";
+    for (int i = 0; i < 1500; ++i)
+        source += "  {\"ad\": \"x\\\"]}[{" + std::to_string(i) + "\", \"boş\": {}, \"dizi\": [ ], \"n\": -1.5e3, \"d\": [[" +
+                  std::to_string(i) + "], {\"t\": true}]},\n";
+    source += "  null\n], \"son\": false}";
+    const auto whole = noteapp::app::pretty_json(source);
+    REQUIRE(whole);
+    const auto index = noteapp::app::index_json(source);
+    REQUIRE(index);
+    CHECK(index->line_count == whole->size());
+    CHECK(index->checkpoints.size() > whole->size() / noteapp::app::kJsonCheckpointLines);
+    const auto same = [](const noteapp::app::JsonLine& a, const noteapp::app::JsonLine& b) {
+        return a.depth == b.depth && a.text == b.text && a.offset == b.offset;
+    };
+    for (const std::size_t first : {std::size_t{0}, std::size_t{1}, std::size_t{255}, std::size_t{256},
+                                    std::size_t{257}, std::size_t{4000}, whole->size() - 3}) {
+        CAPTURE(first);
+        const auto window = noteapp::app::json_lines(source, *index, first, 40);
+        const std::size_t expected = std::min<std::size_t>(40, whole->size() - first);
+        REQUIRE(window.size() == expected);
+        for (std::size_t i = 0; i < window.size(); ++i) {
+            CAPTURE(i);
+            CHECK(same(window[i], (*whole)[first + i]));
+        }
+    }
+    CHECK(noteapp::app::json_lines(source, *index, whole->size(), 10).empty());
+    CHECK_FALSE(noteapp::app::index_json("[1,]"));
+    CHECK_FALSE(noteapp::app::index_json(std::string(100000, '[')));
+    const auto scalar = noteapp::app::index_json(" 7 ");
+    REQUIRE(scalar);
+    CHECK(scalar->line_count == 1);
+    CHECK(noteapp::app::json_lines(" 7 ", *scalar, 0, 5).front().text == "7");
 }
 
 namespace {
@@ -115,6 +205,123 @@ TEST_CASE("markdown chunks cover the note, know their first line and cut only be
     }
     // Kuşatılmış koddaki "# kodda", liste devamı, alıntı, sıralı liste ve girintili kod kesim yeri değil.
     CHECK(chunk_starts(text, 1) == std::vector<std::string>{"# Bir\n", "metin\n", "```\nko", "Son\n"});
+}
+
+namespace {
+
+// Parçalar notu boşluksuz örter ve hiçbiri sınırdan büyük değildir.
+void check_bounded_cover(std::string_view text, const std::vector<noteapp::app::MarkdownChunk>& chunks) {
+    REQUIRE_FALSE(chunks.empty());
+    CHECK(chunks.front().begin == 0);
+    CHECK(chunks.back().end == text.size());
+    for (std::size_t i = 0; i < chunks.size(); ++i) {
+        CAPTURE(i);
+        CHECK(chunks[i].end - chunks[i].begin <= noteapp::app::kMarkdownMaxChunkBytes);
+        if (i > 0)
+            CHECK(chunks[i].begin == chunks[i - 1].end);
+    }
+}
+
+}  // namespace
+
+// NY-P: kesim yeri olmayan dev blok (tek satır, uzun paragraf, kod, tablo, sıkı liste) da sınırlı parçalara bölünür;
+// kod ve tablo parçası önüne taşınan çit ya da başlıkla yine kod ve tablo olarak biçimlenir.
+TEST_CASE("markdown chunks split one huge block at line starts, or inside a huge line, carrying fences and headers") {
+    using noteapp::app::kMarkdownMaxChunkBytes;
+    const std::string line(5 * kMarkdownMaxChunkBytes, 'x');
+    const auto single = noteapp::app::markdown_chunks(line);
+    check_bounded_cover(line, single);
+    CHECK(single.size() >= 5);
+    CHECK(single.back().first_line == 0);
+
+    std::string words;  // tek satır, sözcükler: kesim boşluktan sonra
+    while (words.size() < 3 * kMarkdownMaxChunkBytes)
+        words += "kelime ğüşıöç ";
+    const auto spaced = noteapp::app::markdown_chunks(words);
+    check_bounded_cover(words, spaced);
+    for (std::size_t i = 1; i < spaced.size(); ++i)
+        CHECK(words[spaced[i].begin - 1] == ' ');
+
+    std::string multibyte;  // boşluksuz çok baytlı: kesim kod noktası sınırında
+    while (multibyte.size() < 3 * kMarkdownMaxChunkBytes)
+        multibyte += "ğ";
+    const auto glyphs = noteapp::app::markdown_chunks(multibyte);
+    check_bounded_cover(multibyte, glyphs);
+    for (const auto& chunk : glyphs)
+        CHECK((static_cast<unsigned char>(multibyte[chunk.begin]) & 0xC0) != 0x80);
+
+    std::string code = "# Başlık\n\n```cpp\n";
+    while (code.size() < 3 * kMarkdownMaxChunkBytes)
+        code += "int satir = 1;\n";
+    code += "```\n";
+    const auto fenced = noteapp::app::markdown_chunks(code);
+    check_bounded_cover(code, fenced);
+    REQUIRE(fenced.size() >= 3);
+    for (std::size_t i = 1; i < fenced.size(); ++i) {
+        CAPTURE(i);
+        CHECK(code[fenced[i].begin - 1] == '\n');  // satır başında
+        CHECK(code.substr(fenced[i].carry_begin, fenced[i].carry_end - fenced[i].carry_begin) == "```cpp");
+        CHECK(fenced[i].carry_lines == 1);
+        CHECK(fenced[i - 1].open_fence);
+        CHECK(noteapp::app::markdown_chunk_source(code, fenced[i], {}).starts_with("```cpp\nint satir"));
+    }
+
+    std::string table = "| ad | değer |\n|---|--:|\n";
+    while (table.size() < 3 * kMarkdownMaxChunkBytes)
+        table += "| a | 1 |\n";
+    const auto rows = noteapp::app::markdown_chunks(table);
+    check_bounded_cover(table, rows);
+    REQUIRE(rows.size() >= 3);
+    for (std::size_t i = 1; i < rows.size(); ++i) {
+        CHECK(table.substr(rows[i].carry_begin, rows[i].carry_end - rows[i].carry_begin) ==
+              "| ad | değer |\n|---|--:|");
+        CHECK(rows[i].carry_lines == 2);
+        CHECK_FALSE(rows[i - 1].open_fence);
+    }
+
+    std::string list;
+    while (list.size() < 3 * kMarkdownMaxChunkBytes)
+        list += "- madde\n";
+    const auto items = noteapp::app::markdown_chunks(list);
+    check_bounded_cover(list, items);
+    for (std::size_t i = 1; i < items.size(); ++i) {
+        CHECK(list.substr(items[i].begin).starts_with("- madde"));
+        CHECK(items[i].carry_end == items[i].carry_begin);
+    }
+}
+
+// NY-P inceleme (Sev-3): taşınan satır sınırlı önektir. Dev bilgi dizgeli çitten yalnız im ve dil sözcüğü, dev
+// başlıklı tablodan hiçbir şey taşınmaz (her parçaya kopyalanmaz). Kod içindeki tablo görünümlü satır sonraki dev
+// paragrafa sahte tablo başlığı taşıtmaz.
+TEST_CASE("markdown chunks carry only a bounded prefix and no header from a fenced table look-alike") {
+    using noteapp::app::kMarkdownMaxChunkBytes;
+    std::string code = "```cpp " + std::string(3 * kMarkdownMaxChunkBytes, 'i') + "\n";
+    while (code.size() < 6 * kMarkdownMaxChunkBytes)
+        code += "int satir = 1;\n";
+    code += "```\n";
+    const auto fenced = noteapp::app::markdown_chunks(code);
+    REQUIRE(fenced.size() >= 3);
+    for (std::size_t i = 1; i < fenced.size(); ++i) {
+        const std::string_view carry =
+            std::string_view(code).substr(fenced[i].carry_begin, fenced[i].carry_end - fenced[i].carry_begin);
+        CAPTURE(i);
+        CHECK((carry.empty() || carry == "```cpp"));
+        CHECK(fenced[i].carry_lines <= 1);
+    }
+
+    std::string wide = "| " + std::string(3 * kMarkdownMaxChunkBytes, 'b') + " |\n|---|\n";
+    while (wide.size() < 6 * kMarkdownMaxChunkBytes)
+        wide += "| a |\n";
+    for (const auto& chunk : noteapp::app::markdown_chunks(wide))
+        CHECK(chunk.carry_end == chunk.carry_begin);
+
+    std::string look_alike = "```\n\n| a |\n|---|\n```\n";  // koddaki boş satırdan sonra tablo görünümü
+    while (look_alike.size() < 3 * kMarkdownMaxChunkBytes)
+        look_alike += "uzun paragraf satırı devam ediyor\n";
+    const auto paragraph = noteapp::app::markdown_chunks(look_alike);
+    REQUIRE(paragraph.size() >= 2);
+    for (const auto& chunk : paragraph)
+        CHECK(chunk.carry_end == chunk.carry_begin);
 }
 
 TEST_CASE("markdown chunks keep a small note whole and reach the target size before cutting") {
@@ -181,8 +388,10 @@ TEST_CASE("markdown chunks see no fence after five columns of space behind a lis
         while (text.size() < 2 * noteapp::app::kMarkdownChunkBytes)
             text += "## Bölüm\n\nparagraf\n\n";
         text += "```\n\nson\n";
+        // Koddaki başlıktan yalnız zorunlu kesim (kMarkdownMaxChunkBytes) kesebilir; o parça açılış çitini taşır.
         for (const noteapp::app::MarkdownChunk& chunk : noteapp::app::markdown_chunks(text, 1))
-            CHECK_FALSE(text.substr(chunk.begin).starts_with("## Bölüm"));
+            if (text.substr(chunk.begin).starts_with("## Bölüm"))
+                CHECK(text.substr(chunk.carry_begin, chunk.carry_end - chunk.carry_begin) == "```");
     }
 }
 
@@ -218,6 +427,77 @@ TEST_CASE("a chunk gets only the definitions it references from other chunks") {
     CHECK(noteapp::app::markdown_chunk_source(text, scan.chunks[1], scan.definitions) ==
           "# b\n\n[r][a]\n\n\n\n[a]: u\n");
     CHECK(noteapp::app::markdown_chunk_source(text, scan.chunks[2], scan.definitions) == "```\n[a]\n");
+}
+
+// NY-P güvenlik (Sev-2): parçanın andığı başka parçadaki tanımlar bir iş bütçesiyle eklenir. Her parça bütün tanım
+// tablosunu ansa da parçaya eklenen bayt bütçeyi aşmaz: toplam iş parça sayısı × tanım baytı değil, not boyuyla
+// doğrusaldır. Bütçeyi aşan başvuru çözülmez (metin olarak görünür).
+TEST_CASE("a chunk appends referenced definitions within a work budget") {
+    std::string references;
+    std::string definitions;
+    for (int i = 0; i < 4000; ++i) {
+        const std::string label = "e" + std::to_string(i);
+        references += "[" + label + "] ";
+        definitions += "[" + label + "]: https://example.org/" + std::string(60, 'p') + "/" + label + "\n";
+    }
+    const std::string text = references + "\n\n# tanımlar\n\n" + definitions;
+    const auto scan = noteapp::app::scan_markdown(text, 1);
+    REQUIRE(scan.chunks.size() >= 2);
+    const noteapp::app::MarkdownChunk& first = scan.chunks.front();
+    const std::string source = noteapp::app::markdown_chunk_source(text, first, scan.definitions);
+    const std::size_t budget = noteapp::app::MarkdownChunkLimits{}.definition_bytes;
+    REQUIRE(definitions.size() > budget);
+    CHECK(source.size() <= (first.end - first.begin) + budget + 2);
+    CHECK(source.find("[e0]: https://example.org/") != std::string::npos);  // bütçe içindekiler çözülür
+    // Bütçe config'tendir; 0 (sınırsız, SIZE_MAX) her anılan tanımı ekler.
+    const noteapp::app::MarkdownChunkLimits unlimited{.definition_bytes = std::numeric_limits<std::size_t>::max()};
+    const std::string all = noteapp::app::markdown_chunk_source(text, first, scan.definitions, unlimited);
+    CHECK(all.find("[e3999]: https://example.org/") != std::string::npos);
+}
+
+// Korumaların üye varsayılanları defaults.toml ile aynı; değerler limits.tui.preview_*'tan gelir.
+TEST_CASE("markdown chunk limits come from limits.tui.preview_* and match defaults.toml") {
+    noteapp::core::TuiLimits limits;
+    limits.preview_definition_bytes = {128U * 1024U, "128KiB"};
+    limits.preview_fence_info_bytes = {64, "64"};
+    limits.preview_table_header_bytes = {4U * 1024U, "4KiB"};
+    CHECK(noteapp::app::markdown_chunk_limits_of(limits) == noteapp::app::MarkdownChunkLimits{});
+    limits.preview_fence_info_bytes = {0, "0"};
+    CHECK(noteapp::app::markdown_chunk_limits_of(limits).fence_info_bytes == std::numeric_limits<std::size_t>::max());
+
+    using noteapp::app::kMarkdownMaxChunkBytes;
+    std::string code = "```" + std::string(100, 'l') + "\n";  // 64 baytı aşan dil sözcüğü
+    while (code.size() < 3 * kMarkdownMaxChunkBytes)
+        code += "satir\n";
+    const auto carried = [&](const noteapp::app::MarkdownChunkLimits& chunk_limits) {
+        const auto chunks = noteapp::app::scan_markdown(code, noteapp::app::kMarkdownChunkBytes, kMarkdownMaxChunkBytes,
+                                                        chunk_limits)
+                                .chunks;
+        REQUIRE(chunks.size() >= 2);
+        return chunks[1].carry_end - chunks[1].carry_begin;
+    };
+    CHECK(carried({}) == 3);  // yalnız çit
+    CHECK(carried({.fence_info_bytes = 128}) == 103);
+}
+
+// NY-P güvenlik (Sev-3): taşınan çit önekinin TAMAMI (girinti, im, çit koşusu, boşluk, dil sözcüğü) sınırdadır. Dev
+// çit koşusu ya da sözcükten önceki dev boşluk her parçaya kopyalanmaz; sınırı aşan çit hiç taşınmaz (kısaltılmış çit
+// kodu erken kapatırdı).
+TEST_CASE("the carried fence prefix is bounded as a whole, never shortened") {
+    using noteapp::app::kMarkdownMaxChunkBytes;
+    const std::size_t limit = noteapp::app::MarkdownChunkLimits{}.fence_info_bytes;
+    for (const std::string& opener : {std::string(3 * kMarkdownMaxChunkBytes, '~'),
+                                      "``` " + std::string(3 * kMarkdownMaxChunkBytes, ' ') + "cpp"}) {
+        std::string code = opener + "\n";
+        while (code.size() < 2 * opener.size())
+            code += "satir\n";
+        const auto chunks = noteapp::app::markdown_chunks(code);
+        REQUIRE(chunks.size() >= 3);
+        for (const auto& chunk : chunks) {
+            CHECK(chunk.carry_end - chunk.carry_begin <= limit);
+            CHECK(chunk.carry_lines == (chunk.carry_end > chunk.carry_begin ? 1U : 0U));
+        }
+    }
 }
 
 // NX-E F1: belge sırasıyla ilk tanım kazanır. Tekrar (büyük/küçük harf ve boşluk farkıyla da) ilk tanımın yerini
@@ -336,6 +616,35 @@ TEST_CASE("colliding label digests keep first definitions without quadratic work
     CHECK(definitions.first.size() == kLabels + 1);
     CHECK(definitions.repeats.size() == 2);
     CHECK(source == "[a][x]\n\n\n\n[X]: https://target.example\n");
+    CHECK(seconds < kBudgetSeconds);
+}
+
+// NY-P güvenlik (Sev-3): özeti çakışan grupta başvuru başına karşılaştırma tanım satırının yalnız etiketini okur
+// (satır toplanırken doğrulandı). Satırın tamamını yeniden doğrulamak 100 KB başlıklı iki tanım ve 2.000 başvuruda
+// ~400 MB tarama ederdi (Debug saniyeler).
+TEST_CASE("a colliding digest compares only the label of long definition lines") {
+    constexpr int kReferences = 2000;
+    constexpr double kBudgetSeconds = 0.5;
+    const std::uint64_t digest = noteapp::app::markdown_link_definitions("[x]: u\n").first.at(0).hash;
+    std::string text;
+    for (int i = 0; i < kReferences; ++i)
+        text += "[x] ";
+    text += "\n\n";
+    const noteapp::app::MarkdownChunk reference{0, text.size(), 0, false};
+    noteapp::app::MarkdownDefinitions definitions;
+    const std::string title(100 * 1024, 't');
+    for (const char* label : {"w", "x"}) {
+        const std::string line = std::string("[") + label + "]: https://x.example \"" + title + "\"";
+        definitions.first.push_back({digest, text.size(), text.size() + line.size()});
+        text += line + "\n\n";
+    }
+    noteapp::app::keep_first_definitions(text, definitions);
+    const auto start = std::chrono::steady_clock::now();
+    const std::string source = noteapp::app::markdown_chunk_source(text, reference, definitions);
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    MESSAGE("colliding digest, 2 long definitions, " << kReferences << " references: " << seconds * 1000 << " ms");
+    CHECK(source.find("[x]: https://x.example") != std::string::npos);
+    CHECK(source.find("[w]: https://x.example") == std::string::npos);
     CHECK(seconds < kBudgetSeconds);
 }
 
