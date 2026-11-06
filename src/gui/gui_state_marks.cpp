@@ -355,6 +355,7 @@ void GuiState::begin_quick_add() {
 }
 
 void GuiState::cancel_quick_add() {
+    map_new_at_.reset();
     quick_add_open_ = false;
     quick_add_.clear();
     quick_add_error_.clear();
@@ -389,6 +390,7 @@ void GuiState::submit_quick_add() {
             rescan();
         }
         quick_add_open_ = false;
+        map_new_at_.reset();
         set_expanded(core::parent_folder(folder), true);
         select_folder(folder);
         return;
@@ -402,6 +404,8 @@ void GuiState::submit_quick_add() {
         return;
     }
     quick_add_open_ = false;
+    if (const auto at = std::exchange(map_new_at_, std::nullopt))  // haritadan: not orada kalır (F2)
+        map_.keep(created->path.string(), *at);
     changed();
     rescan();
     open_note(created->path);

@@ -40,6 +40,10 @@ public:
     bool pinned(std::size_t node) const { return pinned_[node] != 0; }
     // Sürüklenen düğüm: konumu verilir ve sabitlenir. Komşular yeniden yerleşsin diye çizge ılınır.
     void pin(std::size_t node, LayoutPoint at);
+    // Açık sabitleme (F2): çözülen düğüm komşularıyla yeniden yerleşir. Oturumluktur, kaydedilmez.
+    void unpin(std::size_t node);
+    void unpin_all();
+    bool has_pins() const;
 
     // FR potansiyeli (kenarda d³/3k, kesme yarıçapı içindeki çiftte k²·ln(2k/d), merkez çekiminde g·d²/2):
     // testler azaldığını ölçer.

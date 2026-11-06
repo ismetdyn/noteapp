@@ -94,7 +94,9 @@ TEST_CASE("find --json prints path, line, snippet and byte ranges; no match is [
     box.put("hello.md", "say hello world\n");
     const auto result = box.run({"find", "--json", "hello"});
     CHECK(result.exit_code == 0);
-    CHECK(result.out == "[{\"path\":\"hello.md\",\"line\":1,\"snippet\":\"say hello world\",\"ranges\":[[4,9]]}]\n");
+    CHECK(result.out ==
+          "[{\"path\":\"hello.md\",\"line\":1,\"snippet\":\"say hello world\",\"ranges\":[[4,9]],"
+          "\"reason\":\"content\"}]\n");
     const auto none = box.run({"find", "--json", "zzzz"});
     CHECK(none.exit_code == 1);
     CHECK(none.out == "[]\n");

@@ -65,6 +65,7 @@ struct SearchLimits {
     Limit global_results;         // genel aramada (ad + içerik) listelenen en çok not
     Limit content_hits;           // içerik sonucunda not başına kesiti üretilen eşleşen satır
     Limit fuzzy_candidate_chars;  // fuzzy eşleşmenin konum ürettiği en uzun aday (kod noktası)
+    Limit relation_depth;         // aramada adı eşleşen komşunun en çok adımı (ilişki araması)
 
     bool operator==(const SearchLimits&) const = default;
 };

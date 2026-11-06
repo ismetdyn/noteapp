@@ -1,4 +1,5 @@
 // SPEC-search genel arama ve sorgu argümanı bütçeleri, SPEC-sync not durumu ölçümü (T55a). Yalnız Release.
+#include "app/listing.hpp"
 #include "core/config.hpp"
 #include "core/note_store.hpp"
 #include "core/note_sync.hpp"
@@ -12,11 +13,13 @@
 #include "sync/sync_service.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -104,25 +107,44 @@ TEST_CASE("global search: 5000 notes of ~5 KB, warm search and refresh within 10
     std::vector<core::NoteMeta> notes = store.list_meta();
     REQUIRE(notes.size() == kNotes);
 
-    const auto measure = [&](std::string_view query) {
+    // İlişki araması aynı bütçededir: not başına bir [[bağlantı]] ve bir adlı ilişki (10.000 kenar), her
+    // onuncu notta etiket. Kenarlar arayüzdeki gibi bellekte hazırdır (NoteStore::shared_edges önbelleği).
+    std::vector<core::NoteEdge> edges;
+    const std::array<std::string, 4> names{"uses", "cites", "proje planı", "depends on"};
+    for (std::size_t n = 0; n < notes.size(); ++n) {
+        edges.push_back({notes[n].path, notes[(n * 7 + 1) % notes.size()].path});
+        edges.push_back({.from = notes[n].path,
+                         .to = notes[(n * 13 + 5) % notes.size()].path,
+                         .kind = core::EdgeKind::RelatedTo,
+                         .name = names[n % names.size()]});
+        if (n % 10 == 0)
+            notes[n].tags = {"proje/" + std::to_string(n % 100)};
+    }
+
+    const auto measure = [&](std::string_view query, std::optional<std::size_t> depth = 1) {
         std::vector<double> samples;
         std::size_t found = 0;
         for (int run = 0; run < kRuns; ++run) {
             samples.push_back(time_ms([&] {
-                const auto hits = search::search_all(query, notes, index, limits);
+                const auto hits =
+                    search::search_all(query, notes, index, limits, {}, search::GraphInput{edges, depth});
                 REQUIRE(hits.has_value());
                 found = hits->size();
             }));
         }
-        MESSAGE("search_all(" << std::string(query) << "): median " << median(samples) << " ms, " << found
-                              << " hits");
+        MESSAGE("search_all(" << std::string(query) << ", depth " << (depth ? std::to_string(*depth) : "off")
+                              << "): median " << median(samples) << " ms, " << found << " hits");
         CHECK(found > 0);
         CHECK(median(samples) <= 100.0);
     };
     measure("proje bütçe");
-    measure("n42");                       // ad ağırlıklı
-    measure("e");                         // en kötü: her not eşleşir, limit kadar kesit
-    measure("proje type:md sort:-size");  // argümanlı
+    measure("n42");                        // ad ağırlıklı
+    measure("e");                          // en kötü: her not eşleşir, limit kadar kesit
+    measure("proje type:md sort:-size");   // argümanlı
+    measure("n42", SIZE_MAX);              // en kötü komşu gezintisi: bağlı bileşenin tamamı
+    measure("uses");                       // ilişki adı: 1.250 kenarın iki ucu
+    measure("rel:cites n4");               // ilişki süzgeci + ad
+    measure("proje bütçe", std::nullopt);  // ilişki araması kapalı: eski yol
 
     std::vector<double> refresh;
     for (int run = 0; run < kRuns; ++run)
@@ -132,6 +154,65 @@ TEST_CASE("global search: 5000 notes of ~5 KB, warm search and refresh within 10
         }));
     MESSAGE("refresh + list_meta, no changes: median " << median(refresh) << " ms");
     CHECK(median(refresh) <= 100.0);
+}
+
+// İnceleme ölçümü: çok kenarlı çizgede tuş başına liste araması (TUI ve GUI aynı app::Listing). Kenarlar
+// arayüzdeki gibi bellekte hazırdır (görüntü başına paylaşılan liste); bütçe tuş başına 50 ms.
+TEST_CASE("relation search: per-keystroke listing over a million edges, 5000 notes within 50 ms") {
+    constexpr std::size_t kEdges = 1'000'000;
+    for (const std::size_t note_count : {std::size_t{5000}, std::size_t{50'000}}) {
+        std::vector<core::NoteInfo> infos;
+        infos.reserve(note_count);
+        for (std::size_t n = 0; n < note_count; ++n)
+            infos.push_back(
+                {core::NotePath::parse("d" + std::to_string(n % 50) + "/n" + std::to_string(n) + ".md")
+                     .value(),
+                 fs::file_time_type{} + std::chrono::minutes(n), 100});
+        auto edges = std::make_shared<std::vector<core::NoteEdge>>();
+        edges->reserve(kEdges);
+        const std::array<std::string, 3> names{"uses", "cites", "depends on"};
+        for (std::size_t e = 0; e < kEdges; ++e) {
+            const std::size_t from = e % note_count;
+            const std::size_t to = (from * 31 + e / note_count + 1) % note_count;
+            if (from == to)
+                continue;
+            if (e % 2 == 0)
+                edges->push_back({infos[from].path, infos[to].path});
+            else
+                edges->push_back({.from = infos[from].path,
+                                  .to = infos[to].path,
+                                  .kind = core::EdgeKind::RelatedTo,
+                                  .name = names[e % names.size()]});
+        }
+        app::Listing listing;
+        listing.set_notes(std::move(infos));
+        listing.set_edge_source([edges] { return edges; });
+        // Kapalı: ilişkisiz taban çizgisi (aynı not sayısında ad araması ve satırlar).
+        for (const std::optional<std::size_t> depth :
+             {std::optional<std::size_t>{}, std::optional<std::size_t>{1},
+              std::optional<std::size_t>{SIZE_MAX}}) {
+            listing.set_relation_depth(depth);
+            // "n": her yol eşleşir (ilişkisiz en çok satır: liste satırlarının kendi bedeli).
+            for (const std::string_view query : {"n42", "uses", "n"}) {
+                std::vector<double> samples;
+                std::size_t rows = 0;
+                for (int run = 0; run < kRuns; ++run)
+                    samples.push_back(
+                        time_ms([&] { rows = listing.search(query, app::SearchMode::Name).rows.size(); }));
+                MESSAGE("listing(" << note_count << " notes, " << edges->size() << " edges, depth "
+                                   << (!depth               ? std::string("off")
+                                       : *depth == SIZE_MAX ? std::string("unlimited")
+                                                            : std::to_string(*depth))
+                                   << ", " << std::string(query) << "): median " << median(samples) << " ms, "
+                                   << rows << " rows");
+                CHECK((rows > 0 || !depth));
+                // Bütçe SPEC'in 5.000 notudur; 50.000 not yalnız ölçülür (her notu listeleyen sorguda
+                // satırların kendisi ~20 ms, ilişkiyle 30–66 ms; SPEC-search "İlişki araması").
+                if (note_count == 5000)
+                    CHECK(median(samples) <= 50.0);
+            }
+        }
+    }
 }
 
 // Durum, kayıtlı yazma numarasıyla karşılaştırmadır: libgit2 geçişi yok. Yine de 5.000 notta sayıya bağlanır.

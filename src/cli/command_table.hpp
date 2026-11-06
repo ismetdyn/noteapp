@@ -88,7 +88,7 @@ inline constexpr std::array kLs{
     O{"--print0", "-0", K::None, "cli.opt_print0"},     kJson,
     kNoPager,
 };
-inline constexpr std::array kFind{kLimit, kJson, kNoPager};
+inline constexpr std::array kFind{kLimit, O{"--long", "-l", K::None, "cli.opt_find_long"}, kJson, kNoPager};
 inline constexpr std::array kNoPagerOnly{kNoPager};
 inline constexpr std::array kJsonPaged{kJson, kNoPager};
 inline constexpr std::array kNoSyncOnly{kNoSync};

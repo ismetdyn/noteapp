@@ -306,7 +306,7 @@ std::expected<void, Error> WriteContext::link_appeared(const std::array<std::byt
         !notes_linking(snapshot, keys).empty();
     if (!candidate)
         return {};
-    auto after = build_snapshot(txn, device, snapshot.folder_path_bytes);
+    auto after = build_snapshot(txn, device, snapshot.folder_path_bytes, snapshot.name_bytes);
     if (!after)
         return std::unexpected(from_graph(after.error(), paths.front()));
     paths.clear();

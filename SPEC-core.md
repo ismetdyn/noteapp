@@ -157,6 +157,7 @@ graph_batch_ops = 30000        # bir graf yazma işleminin işlem bütçesi; aş
 completion_min_prefix_bytes = 2   # TUI gölge önerisinin beklediği en kısa önek (alt sınır, `0` geçersiz)
 notice_ms = 4000              # işlem bildiriminin süresi ("4s" yazılabilir); hata kalıcı; 0 = kendiliğinden kapanmaz
 tui_list_share = 0.33   # TUI ilk açılışta sol listenin pencereye oranı (0..1); seçilen genişlik geçer
+search_relations = true # aramalar etiket, ilişki adı ve bağlı notu da tarar (SPEC-search "İlişki araması"); false kapatır
 
 [limits.search]          # kapasite sınırları; aşağıdaki "Sınırlar"
 content_results = 1000   # içerik aramasında (TUI, GUI) listelenen en çok not; 0 = hepsi
@@ -232,6 +233,8 @@ config'tedir.
   güvenilmez girdi koruması, SPEC-graph "Sınırlar"), `limits.search.global_results` (200; genel arama sonucu),
   `limits.search.content_hits` (3; içerik sonucunda not başına kesitli satır), `limits.search.fuzzy_candidate_chars`
   (1024 kod noktası; vurgulu fuzzy eşleşmenin en uzun adayı, bellek sorgu × aday × 16 bayt),
+  `limits.search.relation_depth` (1; aramada adı eşleşen notun kaç adım uzağındaki bağlı notlar da bulunur, `0` bağlı bileşenin
+  tamamı; iş not + kenar sayısıyla doğrusal; kapatmak `[tuning] search_relations = false`),
   `limits.sync.merge_input_bytes` (4 MiB; üç yönlü birleştirmenin en büyük girdisi, aşan çakışma kopya not olur).
   Yapılandırmasız depo (`NoteStore(dizin)`, geçiş) `kDefaultFolderPathBytes` kullanır; bir test defaults.toml ile
   aynı olduğunu denetler. OS dosya adı sınırının tek sahibi `core::kMaxFileNameBytes` (255, `note_path.hpp`).
@@ -356,6 +359,15 @@ Bu bölüm yukarıdaki "Yazma", "Listeleme", "Klasörler", "Yol güvenliği" ve 
   zamanından üretilmez. `sync_status`'u `sync::fill_sync_status` doldurur (SPEC-sync).
 - **ADDED** `error.query_invalid`, `reason.must_be_{sort_field,size_bound,age_or_date,sync_state,folder}` katalog anahtarları (SPEC-search).
 - **MODIFIED** Kapsam dışı: "Çöp kutusu" çıkarıldı.
+
+## Değişiklik 2026-11-06 (ilişki araması)
+- **ADDED** `limits.search.relation_depth` (1, `0` sınırsız) ve `[tuning] search_relations` (true). Derinlik bir kapasite sınırıdır
+  (0 = sınırsız kuralı); kapatmak ayrı anahtardır, `0` "kapalı" anlamına gelmez.
+- **MODIFIED** Senkronla ya da Cypher'la gelen Tag düğümünün `name`/`display`'i ilişki adı gibi okunurken temizlenir
+  (`shown_name`: kırpılır, C0/DEL/C1/görünmez biçim U+FFFD, `limits.graph.relation_name_bytes`'ta kesilir); `tags()`, `list()`'in
+  etiketleri, bağlantı panelinin etiketleri ve `tag:` aynı temiz biçimi görür. Graf değişmez.
+- **ADDED** `NoteStore::shared_edges()`: `edges()` ile aynı liste, görüntü başına bir kez okunur ve paylaşılır (arama her tuşta sorar);
+  `edges()` artık bunun kopyasıdır.
 
 ## Değişiklik 2026-11-03 (T59e)
 - **ADDED** `[lsp.settings.<dil>]` → `LspConfig::settings` (`core::Json`), `reason.must_be_settings_table`; `LspConfig::kMaxServersPerLanguage`, `kMaxSettingsDepth`, `kMaxSettingsValues`.

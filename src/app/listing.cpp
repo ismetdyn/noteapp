@@ -1,10 +1,14 @@
 #include "app/listing.hpp"
 
+#include "core/i18n.hpp"
+#include "core/log.hpp"
 #include "core/note_views.hpp"
 #include "search/folder_order.hpp"
 #include "search/fuzzy.hpp"
 
 #include <algorithm>
+#include <iterator>
+#include <numeric>
 #include <set>
 #include <utility>
 
@@ -34,6 +38,43 @@ StoreScan scan_store(const core::NoteStore& store) {
 bool same_scan(const StoreScan& a, const StoreScan& b) {
     return same_listing(a.notes, b.notes) && a.trash == b.trash && a.folders == b.folders &&
            a.graph_version == b.graph_version;
+}
+
+std::shared_ptr<const std::vector<core::NoteEdge>> search_edges(const core::NoteStore& store) {
+    auto edges = store.shared_edges();
+    if (edges)
+        return std::move(*edges);
+    core::log_warn("search: cannot read edges: " + edges.error().message_key);
+    return nullptr;
+}
+
+std::optional<std::size_t> relation_depth(const core::Config& config) {
+    if (!config.tuning.search_relations)
+        return std::nullopt;
+    return config.limits.search.relation_depth.cap();
+}
+
+std::string reason_text(const search::RelationReason& reason) {
+    using Kind = search::RelationReason::Kind;
+    const std::string& other = reason.other;
+    switch (reason.kind) {
+    case Kind::Tag:
+        return core::tr("search.reason_tag", {{"tag", reason.label}});
+    case Kind::Relation: {
+        const char* arrow = reason.direction == core::RelationDirection::Outgoing   ? "→"
+                            : reason.direction == core::RelationDirection::Incoming ? "←"
+                                                                                    : "—";
+        return core::tr("search.reason_relation",
+                        {{"name", reason.label}, {"arrow", arrow}, {"path", other}});
+    }
+    case Kind::Linked:
+        break;
+    }
+    if (reason.hops > 1)
+        return core::tr("search.reason_linked_far", {{"path", other}, {"hops", std::to_string(reason.hops)}});
+    if (!reason.label.empty())
+        return core::tr("search.reason_linked_named", {{"path", other}, {"name", reason.label}});
+    return core::tr("search.reason_linked", {{"path", other}});
 }
 
 ContentSearcher content_searcher(std::function<const search::ContentIndex&()> index, core::Limit results) {
@@ -67,6 +108,7 @@ bool Listing::set_sync_states(std::map<core::NotePath, core::SyncState> states) 
 }
 
 void Listing::rebuild_metas() {
+    meta_nodes_.clear();  // sıralar değişti: index_of yeniden bulur
     metas_.clear();
     meta_index_.clear();
     metas_.reserve(notes_.size());
@@ -162,10 +204,44 @@ SearchResult Listing::search(std::string_view query, SearchMode mode, std::strin
     return result;
 }
 
-std::expected<std::vector<ListRow>, search::QueryError> Listing::rows_for(const search::ParsedQuery& parsed,
+namespace {
+
+// İzinli ama doğrudan satırda olmayan notlar (metas dizinleri; shown metas boyunda): ilişki yalnız bunlara
+// bakar. Dizinle işaretlenir, yol karşılaştırması yok (50.000 notta tuş başına).
+std::vector<std::size_t> not_shown(std::span<const std::size_t> allowed, const std::vector<char>& shown) {
+    std::vector<std::size_t> rest;
+    rest.reserve(allowed.size());
+    for (const std::size_t i : allowed)
+        if (shown[i] == 0)
+            rest.push_back(i);
+    return rest;
+}
+
+std::vector<ListRow> global_rows(std::vector<search::GlobalHit> hits) {
+    std::vector<ListRow> rows;
+    rows.reserve(hits.size());
+    for (search::GlobalHit& hit : hits) {
+        ListRow row{.path = std::move(hit.path),
+                    .positions = std::move(hit.name_positions),
+                    .hit_count = hit.content_hits,
+                    .reason = std::move(hit.reason)};
+        if (hit.best_line) {
+            row.hits.push_back(std::move(*hit.best_line));
+            row.show_best_line = true;
+        }
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
+}  // namespace
+
+std::expected<std::vector<ListRow>, search::QueryError> Listing::rows_for(search::ParsedQuery parsed,
                                                                           std::string_view query,
                                                                           SearchMode mode,
                                                                           std::string_view scope) const {
+    const auto edges = edges_for(parsed);
+    const search::RelationGraph* index = index_of(edges);
     // Kapsam: süzgeç ve arama yalnız klasörün alt ağacını görür. Kök kapsamında kopya yok.
     // ponytail: alt klasör kapsamı her aramada üst veriyi kopyalar; GUI'nin eski kapsam önbelleği gibi bir
     // önbellek, R3'te ölçüm gerekirse eklenir.
@@ -180,9 +256,14 @@ std::expected<std::vector<ListRow>, search::QueryError> Listing::rows_for(const 
             }
         metas = scoped_metas;
     }
-    const auto scoped_note = [&](std::size_t i) -> const core::NoteInfo& {
-        return notes_[scope.empty() ? i : scoped_index[i]];
-    };
+    const std::vector<std::size_t> scoped_nodes = scoped_meta_nodes(index, scope, scoped_index);
+    const search::GraphInput graph{edges ? std::span<const core::NoteEdge>(*edges)
+                                         : std::span<const core::NoteEdge>{},
+                                   relation_depth_, index,
+                                   index == nullptr ? std::span<const std::size_t>{}
+                                   : scope.empty()  ? std::span<const std::size_t>(meta_nodes_)
+                                                    : std::span<const std::size_t>(scoped_nodes)};
+    search::bind_graph_filters(parsed.filters, graph);
 
     std::vector<ListRow> rows;
     if (parsed.text.empty()) {
@@ -190,50 +271,123 @@ std::expected<std::vector<ListRow>, search::QueryError> Listing::rows_for(const 
             rows.push_back({.path = metas[i].path});
     } else if (mode == SearchMode::Global) {
         if (global_searcher_) {
-            auto hits = global_searcher_(query, metas);  // argümanları ve `sort:`u search_all uygular
+            auto hits = global_searcher_(query, metas, graph);  // argümanları ve `sort:`u search_all uygular
             if (!hits)
                 return std::unexpected(std::move(hits.error()));
-            for (search::GlobalHit& hit : *hits) {
-                ListRow row{.path = std::move(hit.path),
-                            .positions = std::move(hit.name_positions),
-                            .hit_count = hit.content_hits};
-                if (hit.best_line) {
-                    row.hits.push_back(std::move(*hit.best_line));
-                    row.show_best_line = true;
-                }
-                rows.push_back(std::move(row));
-            }
+            rows = global_rows(std::move(*hits));
         }
     } else if (mode == SearchMode::Content) {
-        if (content_searcher_) {
-            // İndeks listeden eski olabilir: listede olmayan sonuç düşer.
-            std::set<core::NotePath> allowed;
-            for (const std::size_t i : search::apply(parsed.filters, std::nullopt, metas))
-                allowed.insert(metas[i].path);
-            for (search::ContentResult& result : content_searcher_(parsed.text))
-                if (allowed.contains(result.path))
-                    rows.push_back({.path = std::move(result.path),
-                                    .hit_count = result.hit_count,
-                                    .hits = std::move(result.first_hits)});
-        }
+        rows = content_rows(parsed, metas, graph);
     } else {
-        // Argümansız kök aramasında tuş başına not kopyası yok.
-        std::vector<core::NoteInfo> subset;
-        std::span<const core::NoteInfo> candidates = notes_;
-        if (!parsed.filters.empty() || !scope.empty()) {
-            for (const std::size_t i : search::apply(parsed.filters, std::nullopt, metas))
-                subset.push_back(scoped_note(i));
-            candidates = subset;
-        }
-        for (search::Ranked& ranked : search::rank_notes(parsed.text, candidates, fuzzy_candidate_chars_))
-            rows.push_back(
-                {.path = candidates[ranked.index].path, .positions = std::move(ranked.match.positions)});
+        rows = name_rows(parsed, metas, scope.empty() ? nullptr : &scoped_index, graph);
     }
-    if (parsed.sort && !parsed.text.empty() && mode != SearchMode::Global)
-        sort_rows(rows, *parsed.sort);
     for (std::size_t i = 0; i < rows.size(); ++i)
         rows[i].number = i + 1;
     return rows;
+}
+
+std::shared_ptr<const std::vector<core::NoteEdge>>
+Listing::edges_for(const search::ParsedQuery& parsed) const {
+    // Kenarlar yalnız gerektiğinde ve arama başına bir kez (depo görüntü başına önbellekler).
+    const bool wants = search::has_graph_filter(parsed.filters) || (relation_depth_ && !parsed.text.empty());
+    return edge_source_ && wants ? edge_source_() : nullptr;
+}
+
+// Aynı liste (görüntü başına paylaşılan) tuş tuş geldikçe dizin yeniden kurulmaz; liste değişince yenisi.
+// Notların düğümleri (meta_nodes_) dizin ya da not listesi değişince yeniden bulunur.
+const search::RelationGraph*
+Listing::index_of(const std::shared_ptr<const std::vector<core::NoteEdge>>& edges) const {
+    if (!edges)
+        return nullptr;
+    if (edges != indexed_edges_) {
+        edge_index_ = std::make_shared<const search::RelationGraph>(*edges);
+        indexed_edges_ = edges;
+        meta_nodes_.clear();
+    }
+    if (meta_nodes_.size() != metas_.size())
+        meta_nodes_ = search::note_nodes(*edge_index_, metas_);
+    return edge_index_.get();
+}
+
+// Alt klasör kapsamında notların düğümleri (kökte meta_nodes_ doğrudan kullanılır).
+std::vector<std::size_t> Listing::scoped_meta_nodes(const search::RelationGraph* index,
+                                                    std::string_view scope,
+                                                    const std::vector<std::size_t>& scoped_index) const {
+    std::vector<std::size_t> nodes;
+    if (index == nullptr || scope.empty())
+        return nodes;
+    nodes.reserve(scoped_index.size());
+    for (const std::size_t i : scoped_index)
+        nodes.push_back(meta_nodes_[i]);
+    return nodes;
+}
+
+std::vector<ListRow> Listing::content_rows(const search::ParsedQuery& parsed,
+                                           std::span<const core::NoteMeta> metas,
+                                           const search::GraphInput& graph) const {
+    std::vector<ListRow> rows;
+    if (!content_searcher_)
+        return rows;
+    // İndeks listeden eski olabilir: listede olmayan sonuç düşer.
+    const std::vector<std::size_t> indices = search::apply(parsed.filters, std::nullopt, metas);
+    std::map<core::NotePath, std::size_t> allowed;  // yol -> metas dizini
+    for (const std::size_t i : indices)
+        allowed.emplace(metas[i].path, i);
+    std::vector<char> shown(metas.size(), 0);
+    for (search::ContentResult& result : content_searcher_(parsed.text))
+        if (const auto found = allowed.find(result.path); found != allowed.end()) {
+            shown[found->second] = 1;
+            rows.push_back({.path = std::move(result.path),
+                            .hit_count = result.hit_count,
+                            .hits = std::move(result.first_hits)});
+        }
+    return with_relation_rows(std::move(rows), parsed, metas, not_shown(indices, shown), graph);
+}
+
+// scoped_index nullptr ise kapsam köktür (metas = metas_); değilse metas[i] = metas_[(*scoped_index)[i]].
+std::vector<ListRow> Listing::name_rows(const search::ParsedQuery& parsed,
+                                        std::span<const core::NoteMeta> metas,
+                                        const std::vector<std::size_t>* scoped_index,
+                                        const search::GraphInput& graph) const {
+    // Argümansız kök aramasında tuş başına not kopyası yok.
+    std::vector<core::NoteInfo> subset;
+    std::span<const core::NoteInfo> candidates = notes_;
+    std::vector<std::size_t> indices;  // candidates -> metas; argümansız kökte birebir
+    if (!parsed.filters.empty() || scoped_index != nullptr) {
+        indices = search::apply(parsed.filters, std::nullopt, metas);
+        for (const std::size_t i : indices)
+            subset.push_back(notes_[scoped_index == nullptr ? i : (*scoped_index)[i]]);
+        candidates = subset;
+    } else {
+        indices.resize(metas.size());
+        std::iota(indices.begin(), indices.end(), std::size_t{0});
+    }
+    std::vector<ListRow> rows;
+    std::vector<char> shown(metas.size(), 0);
+    for (search::Ranked& ranked : search::rank_notes(parsed.text, candidates, fuzzy_candidate_chars_)) {
+        shown[indices[ranked.index]] = 1;
+        rows.push_back(
+            {.path = candidates[ranked.index].path, .positions = std::move(ranked.match.positions)});
+    }
+    return with_relation_rows(std::move(rows), parsed, metas, not_shown(indices, shown), graph);
+}
+
+// Doğrudan satırların altına `rest`in (doğrudan satırda olmayan izinli notlar) ilişki satırları
+// (relation_hits sırası); `sort:` iki grubu ayrı sıralar.
+std::vector<ListRow> Listing::with_relation_rows(std::vector<ListRow> direct,
+                                                 const search::ParsedQuery& parsed,
+                                                 std::span<const core::NoteMeta> metas,
+                                                 std::span<const std::size_t> rest,
+                                                 const search::GraphInput& graph) const {
+    std::vector<ListRow> related;
+    for (search::RelationHit& hit : search::relation_hits(parsed.text, metas, rest, graph))
+        related.push_back({.path = metas[hit.index].path, .reason = std::move(hit.reason)});
+    if (parsed.sort) {
+        sort_rows(direct, *parsed.sort);
+        sort_rows(related, *parsed.sort);
+    }
+    std::ranges::move(related, std::back_inserter(direct));
+    return direct;
 }
 
 // `sort:` açıkça verildiyse o sıra; eşitlikte arama sırası kalır (sort_notes kararlıdır).

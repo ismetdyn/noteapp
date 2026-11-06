@@ -317,6 +317,59 @@ TEST_CASE("relation_names shares one result per snapshot and rebuilds it after a
     CHECK((*first)->size() == 1);  // eski sonuç tutanında geçerli kalır
 }
 
+// Arama her tuşta kenar ister: aynı görüntüde aynı paylaşılan liste, kendi yazmamızdan sonra yenisi.
+TEST_CASE("shared_edges shares one list per snapshot and rebuilds it after a write") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    REQUIRE(seed_note(store, "a.md", "[[b]]\n"));
+    REQUIRE(seed_note(store, "b.md", "b\n"));
+    const auto first = store.shared_edges();
+    const auto second = store.shared_edges();
+    REQUIRE(first.has_value());
+    REQUIRE(second.has_value());
+    CHECK(first->get() == second->get());
+    CHECK(**first == store.edges().value());
+    REQUIRE(store.add_relation(np("a.md"), np("b.md"), {"uses", false}).has_value());
+    const auto third = store.shared_edges();
+    REQUIRE(third.has_value());
+    CHECK(third->get() != first->get());
+    CHECK((*third)->size() == 2);
+    CHECK((*first)->size() == 1);
+
+    const TempDir empty;
+    const NoteStore none(empty.path());
+    CHECK(none.shared_edges().value()->empty());
+}
+
+// Senkronla gelen Tag düğümünün adı yazma kuralından geçmemiştir: ilişki adı gibi okunurken temizlenir.
+TEST_CASE("a synced tag name is read sanitised, trimmed and capped like a relation name") {
+    const TempDir dir;
+    {
+        NoteStore store(dir.path());
+        REQUIRE(seed_note(store, "a.md", "#tagx\n"));
+    }
+    const auto set_tag = [&](const std::string& name) {
+        auto raw = graph::Graph::open(dir.path() / "graph.db");
+        REQUIRE(raw.has_value());
+        REQUIRE(raw->query("MATCH (t:Tag) SET t.name = $name, t.display = $name",
+                           {{"name", graph::QueryValue(name)}}, graph::QueryMode::ReadWrite)
+                    .has_value());
+    };
+    set_tag(" x\ny.md\x1b ");
+    {
+        const NoteStore store(dir.path());
+        const std::string clean = "x\xEF\xBF\xBDy.md\xEF\xBF\xBD";
+        REQUIRE(store.tags().size() == 1);
+        CHECK(store.tags().front().name == clean);
+        CHECK(store.tags().front().display == clean);
+        REQUIRE(store.list().size() == 1);
+        CHECK(store.list().front().tags == std::vector<std::string>{clean});
+    }
+    set_tag(std::string(kDefaultRelationNameBytes + 10, 'q'));
+    const NoteStore store(dir.path());
+    CHECK(store.tags().front().name.size() == kDefaultRelationNameBytes);
+}
+
 TEST_CASE("relation_names of a store without a database is empty and creates nothing") {
     const TempDir dir;
     const NoteStore store(dir.path());

@@ -23,6 +23,7 @@
 #include <ftxui/screen/screen.hpp>
 #include <mutex>
 #include <optional>
+#include <regex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -160,6 +161,50 @@ TEST_CASE("slash: query arguments filter and sort, the text still fuzzy matches"
     CHECK(row_paths(s) == std::vector<std::string>{"personal/todo.md"});
 }
 
+// İlişki araması (SPEC-tui): yalnız ilişkiyle bulunan satır en altta, nedeni satırın sonunda soluk.
+TEST_CASE("slash: a note found through a relation shows its reason dim after the row") {
+    StoreFixture f;
+    f.put("budget.md", "rakamlar\n");
+    f.put("team.md", "ekip\n");
+    f.put("other.md", "yok\n");
+    REQUIRE(f.store
+                ->add_relation(core::NotePath::parse("team.md").value(),
+                               core::NotePath::parse("budget.md").value(), {"funds", true})
+                .has_value());
+    f.load();
+    f.state.set_edge_source([&] { return app::search_edges(*f.store); });
+    f.state.handle(Key::Char, "/");
+    type(f.state, "budget");
+    REQUIRE(row_paths(f.state) == std::vector<std::string>{"budget.md", "team.md"});
+    REQUIRE(f.state.rows()[1].reason.has_value());
+
+    // Dar listede yol tam kalır, neden "…" ile kısalır (sağ sütun ona yer bırakır).
+    // Hücre biçimi (soluk) kaçış dizileri metinden ayıklanır: yalnız görünen karakterler.
+    const auto visible = [](const std::string& rendered) {
+        return std::regex_replace(rendered, std::regex("\x1b\\[[0-9;]*m"), "");
+    };
+    const std::string narrow = visible(screen_text(f.state));
+    INFO(narrow);
+    CHECK(has(narrow, "team.md  linked:"));
+    CHECK(has(narrow, "…"));
+
+    constexpr int kWide = 200;
+    f.state.set_window(kWide, kHeight);
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(kWide), ftxui::Dimension::Fixed(kHeight));
+    ftxui::Render(screen, tui::render(f.state, {}, {"", ""}, {kWide, kHeight}));
+    const std::string text = visible(screen.ToString());
+    INFO(text);
+    REQUIRE(has(text, "team.md  linked: budget.md (funds)"));
+    bool reason_is_dim = false;
+    for (int y = 0; y < kHeight && !reason_is_dim; ++y)
+        for (int x = 0; x + 1 < kWide; ++x)
+            if (screen.PixelAt(x, y).character == "(" && screen.PixelAt(x + 1, y).character == "f") {
+                reason_is_dim = screen.PixelAt(x, y).dim;
+                break;
+            }
+    CHECK(reason_is_dim);
+}
+
 // R1: klasör (ya da çöp) görünümü aramayı bitirir; sonraki bozuk sorgu eski aramanın satırlarına dönmez.
 TEST_CASE("slash: after the folder view an invalid argument does not bring back the earlier search") {
     core::init_i18n("en");
@@ -241,9 +286,10 @@ TEST_CASE("f: global search shows the hit line; Enter opens REVIEW scrolled to t
     f.load();
     search::ContentIndex index(*f.store, 1024 * 1024, 3);
     index.refresh();
-    f.state.set_global_searcher([&](std::string_view query, std::span<const core::NoteMeta> metas) {
-        return search::search_all(query, metas, index, core::SearchLimits{});
-    });
+    f.state.set_global_searcher(
+        [&](std::string_view query, std::span<const core::NoteMeta> metas, const search::GraphInput& graph) {
+            return search::search_all(query, metas, index, core::SearchLimits{}, {}, graph);
+        });
     CHECK(f.state.handle(Key::Char, "f") == Intent::None);
     CHECK(f.state.focus() == Focus::Search);
     CHECK(f.state.mode() == tui::Mode::Global);
@@ -270,9 +316,10 @@ TEST_CASE("f: arguments work and an invalid value shows an error") {
     f.load();
     search::ContentIndex index(*f.store, 1024 * 1024, 3);
     index.refresh();
-    f.state.set_global_searcher([&](std::string_view query, std::span<const core::NoteMeta> metas) {
-        return search::search_all(query, metas, index, core::SearchLimits{});
-    });
+    f.state.set_global_searcher(
+        [&](std::string_view query, std::span<const core::NoteMeta> metas, const search::GraphInput& graph) {
+            return search::search_all(query, metas, index, core::SearchLimits{}, {}, graph);
+        });
     f.state.handle(Key::Char, "f");
     type(f.state, "type:md icerik");
     CHECK(row_paths(f.state) == std::vector<std::string>{"a.md"});
@@ -825,7 +872,7 @@ TEST_CASE("snippets and trash paths are sanitized before rendering, without movi
     tui::TuiState s;
     s.set_notes({info("a.md")});
     const std::string evil = "x\xE2\x80\xAE\xE2\x80\x8B\x1B[31mkelime";
-    s.set_global_searcher([&](std::string_view, std::span<const core::NoteMeta>) {
+    s.set_global_searcher([&](std::string_view, std::span<const core::NoteMeta>, const search::GraphInput&) {
         search::GlobalHit hit{0, core::NotePath::parse("a.md").value()};
         hit.content_matched = true;
         hit.content_hits = 1;

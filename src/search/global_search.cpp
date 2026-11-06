@@ -4,6 +4,7 @@
 #include "search/fuzzy.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -17,7 +18,8 @@ namespace {
 constexpr double kStrongNameScorePerChar = 0.5;
 constexpr std::size_t kReservedLimitDivisor = 4;  // limit'in bu kadarda biri içerik/zayıf sonuçlara ayrılır
 
-enum class Tier { StrongName, Content, WeakName };
+// Relation: yalnız çizgeden (etiket, ilişki, bağlı not) gelen sonuç; doğrudan eşleşmelerin hep altında.
+enum class Tier { StrongName, Content, WeakName, Relation };
 
 struct Row {
     std::size_t index{};
@@ -27,6 +29,7 @@ struct Row {
     double name_score = 0;
     std::vector<std::size_t> positions = {};
     std::size_t content_hits = 0;
+    std::optional<RelationReason> reason = std::nullopt;
 };
 
 struct NameTerms {
@@ -63,7 +66,7 @@ void match_name(const NameTerms& query, const std::string& path, std::size_t max
 
 std::vector<Row> matching_rows(std::string_view text, const std::vector<std::size_t>& allowed,
                                std::span<const core::NoteMeta> notes, const ContentIndex& content_index,
-                               std::size_t max_candidate) {
+                               std::size_t max_candidate, const GraphInput& graph) {
     const NameTerms query = name_terms(text);
     std::vector<Row> rows;
     rows.reserve(allowed.size());
@@ -86,6 +89,20 @@ std::vector<Row> matching_rows(std::string_view text, const std::vector<std::siz
             row.tier = Tier::Content;
     }
     std::erase_if(rows, [](const Row& row) { return !row.name_matched && row.content_hits == 0; });
+
+    // Doğrudan bulunan not ilişkiyle yinelenmez: en güçlü nedeni ad ya da içeriktir.
+    std::vector<char> direct(notes.size(), 0);
+    for (const Row& row : rows)
+        direct[row.index] = 1;
+    std::vector<std::size_t> rest;
+    for (const std::size_t i : allowed)
+        if (direct[i] == 0)
+            rest.push_back(i);
+    for (RelationHit& hit : relation_hits(text, notes, rest, graph))
+        rows.push_back(Row{.index = hit.index,
+                           .path_size = notes[hit.index].path.string().size(),
+                           .tier = Tier::Relation,
+                           .reason = std::move(hit.reason)});
     return rows;
 }
 
@@ -93,6 +110,8 @@ void sort_by_relevance(std::vector<Row>& rows, std::span<const core::NoteMeta> n
     std::ranges::stable_sort(rows, [&](const Row& a, const Row& b) {
         if (a.tier != b.tier)
             return a.tier < b.tier;
+        if (a.tier == Tier::Relation)
+            return false;  // relation_hits sırası (neden türü, adım, güncelleme) kalır
         if (a.tier == Tier::Content && a.content_hits != b.content_hits)
             return a.content_hits > b.content_hits;
         if (a.tier != Tier::Content && a.name_score != b.name_score)
@@ -117,7 +136,7 @@ void keep_within_limit(std::vector<Row>& rows, std::size_t limit) {
 }
 
 // Açık sıralama: alaka sırası eşitlik bozucu kalır (sort_notes kararlıdır).
-void sort_explicitly(std::vector<Row>& rows, const SortSpec& sort, std::span<const core::NoteMeta> notes) {
+void sort_group(std::vector<Row>& rows, const SortSpec& sort, std::span<const core::NoteMeta> notes) {
     std::vector<std::size_t> indices;
     indices.reserve(rows.size());
     std::vector<std::size_t> row_of_note(notes.size());
@@ -133,18 +152,27 @@ void sort_explicitly(std::vector<Row>& rows, const SortSpec& sort, std::span<con
     rows = std::move(sorted);
 }
 
+// İlişki sonuçları açık sıralamada da doğrudan eşleşmelerin altında kalır; iki grup kendi içinde sıralanır.
+void sort_explicitly(std::vector<Row>& rows, const SortSpec& sort, std::span<const core::NoteMeta> notes) {
+    const auto first_relation = std::ranges::find(rows, Tier::Relation, &Row::tier);
+    std::vector<Row> related(std::make_move_iterator(first_relation), std::make_move_iterator(rows.end()));
+    rows.erase(first_relation, rows.end());
+    sort_group(rows, sort, notes);
+    sort_group(related, sort, notes);
+    std::ranges::move(related, std::back_inserter(rows));
+}
+
 }  // namespace
 
-namespace {
-
 std::expected<std::vector<GlobalHit>, QueryError>
-search_within(std::string_view query, std::span<const core::NoteMeta> notes,
-              const ContentIndex& content_index, std::size_t limit, std::size_t max_candidate,
-              std::chrono::system_clock::time_point now, const ViewLookup& views) {
-    const auto parsed = parse_query(query, views);
+search_all(std::string_view query, std::span<const core::NoteMeta> notes, const ContentIndex& content_index,
+           const core::SearchLimits& limits, const ViewLookup& views, const GraphInput& graph) {
+    const std::size_t limit = limits.global_results.cap();
+    auto parsed = parse_query(query, views);
     if (!parsed)
         return std::unexpected(parsed.error());
-    const std::vector<std::size_t> allowed = apply(parsed->filters, std::nullopt, notes, now);
+    bind_graph_filters(parsed->filters, graph);
+    const std::vector<std::size_t> allowed = apply(parsed->filters, std::nullopt, notes);
 
     std::vector<GlobalHit> hits;
     if (split_terms(parsed->text).empty()) {  // yalnız argüman: süzülmüş liste, eşleşme bilgisi yok
@@ -157,7 +185,8 @@ search_within(std::string_view query, std::span<const core::NoteMeta> notes,
         return hits;
     }
 
-    std::vector<Row> rows = matching_rows(parsed->text, allowed, notes, content_index, max_candidate);
+    std::vector<Row> rows =
+        matching_rows(parsed->text, allowed, notes, content_index, limits.fuzzy_candidate_chars.cap(), graph);
     sort_by_relevance(rows, notes);
     if (parsed->sort) {
         sort_explicitly(rows, *parsed->sort, notes);
@@ -172,19 +201,10 @@ search_within(std::string_view query, std::span<const core::NoteMeta> notes,
         hits.push_back(
             GlobalHit{row.index, path, row.name_matched, row.content_hits > 0, std::move(row.positions),
                       row.content_hits,
-                      row.content_hits > 0 ? content_index.best_hit(path, parsed->text) : std::nullopt});
+                      row.content_hits > 0 ? content_index.best_hit(path, parsed->text) : std::nullopt,
+                      std::move(row.reason)});
     }
     return hits;
-}
-
-}  // namespace
-
-std::expected<std::vector<GlobalHit>, QueryError>
-search_all(std::string_view query, std::span<const core::NoteMeta> notes, const ContentIndex& content_index,
-           const core::SearchLimits& limits, std::chrono::system_clock::time_point now,
-           const ViewLookup& views) {
-    return search_within(query, notes, content_index, limits.global_results.cap(),
-                         limits.fuzzy_candidate_chars.cap(), now, views);
 }
 
 }  // namespace noteapp::search

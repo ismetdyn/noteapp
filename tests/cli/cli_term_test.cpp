@@ -248,3 +248,19 @@ TEST_CASE("a mistyped quick add in a pipe prints exactly what it printed before"
     CHECK(result.out == "Saved: lss.md (md, suggested)\n");
     CHECK(result.err.empty());
 }
+
+#ifdef __linux__
+
+// İlişki araması: terminalde ilişkiyle bulunan not da nedeniyle gelir (boru çıktısı eskisi gibi kalır).
+TEST_CASE("find on a terminal lists notes found through a relation with their reason") {
+    const Sandbox box("en");
+    box.put("budget.md", "figures\n");
+    box.put("team.md", "people\n");
+    REQUIRE(box.run({"relation", "add", "team.md", "budget.md", "--name", "funds"}).exit_code == 0);
+    const auto shown = run_in_pty(NOTEAPP_NOTE_EXE, {"find", "budget"});
+    CHECK(shown.exit_code == 0);
+    CHECK(contains(shown.terminal, "team.md  linked: budget.md (funds)"));
+    CHECK(box.run({"find", "budget"}).exit_code == 1);  // boruda yalnız içerik
+}
+
+#endif  // __linux__

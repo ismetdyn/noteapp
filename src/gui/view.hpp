@@ -183,6 +183,9 @@ private:
     void open_map_node_menu(const NoteMap& map, std::size_t node);
     void start_map_connect(const NoteMap& map, std::size_t from);
     void draw_map_menus();
+    void draw_map_node_items(const MapNode& subject, std::size_t node, std::size_t generation);  // F2 keşif
+    void draw_map_find(const NoteMap& map);  // F2: Ctrl+F satırı
+    void focus_map_node(const NoteMap& map, std::size_t node, ImVec2 size);
     void draw_relation_tooltip(const NoteMap& map, ImVec2 origin);  // F1: işaretçinin yakınındaki ilişki
     void zoom_map(ImVec2 origin, ImVec2 anchor, float factor);
     void draw_trash_header();
@@ -328,6 +331,20 @@ private:
     // "Bağla…" ya da `C`: kaynak düğüm; sonraki tıklanan düğüm hedeftir (Shift+sürüklemenin bırakması), Esc ya da
     // boşluğa tıklama vazgeçer.
     std::optional<std::size_t> map_connect_from_;
+    // F2: kaynak seçildikten sonraki tıklamanın işi: bağla ya da en kısa yol (yönlü ya da değil).
+    enum class MapPick { Connect, Path, DirectedPath };
+    MapPick map_pick_ = MapPick::Connect;
+    std::optional<app::LayoutPoint> map_canvas_menu_;  // boşluğa sağ tık: yerleşim noktası (yeni not oraya)
+    bool map_focused_ = false;  // geçen karede tuval odaktaydı: Ctrl+F not içi bul değil haritada bul
+    bool map_find_open_ = false;
+    bool map_find_focus_ = false;  // satır açılınca ya da Enter'dan sonra odak satırda kalsın
+    std::string map_find_;
+    std::vector<std::size_t> map_found_;  // eşleşen düğümler (app::find_map_nodes), harita sırasıyla
+    std::size_t map_found_at_ = 0;
+    std::optional<std::size_t> map_focus_node_;  // kamera bu düğüme ortalanacak (tuvalin boyu bilinince)
+    std::size_t map_found_version_ = SIZE_MAX;  // eşleşmelerin kurulduğu harita sürümü
+    std::string map_tag_filter_;                // etiket süzgecinin kutusu (MapOptions::tag'a yazılır)
+    std::vector<core::RelationName> map_relation_names_;  // seçici açılınca okunur, kare başına değil
     int map_zoom_keys_ = 0;                 // SDL tuş kodundan: '+' ve '-' klavye düzeninden bağımsız okunur
     bool map_animating_ = false;            // bu karede yerleşim sürdü: boşta beklemeden yeni kare
     bool close_requested_ = false;

@@ -136,19 +136,30 @@ struct Snapshot {
     // relation_names() sonucu; ilk istekte kurulur, görüntüyle düşer (seçici her tuşta sorar). Impl::mutex
     // altında.
     mutable std::shared_ptr<const std::vector<RelationName>> relation_names;
+    // shared_edges() sonucu; ilk istekte kurulur, görüntüyle düşer (arama her tuşta sorar). Impl::mutex
+    // altında.
+    mutable std::shared_ptr<const std::vector<NoteEdge>> edges;
     std::size_t folder_path_bytes =
-        kDefaultFolderPathBytes;  // görüntünün kurulduğu sınır; yazma da bunu dayatır
+        kDefaultFolderPathBytes;                         // görüntünün kurulduğu sınır; yazma da bunu dayatır
+    std::size_t name_bytes = kDefaultRelationNameBytes;  // okunan etiket adının sınırı (build_snapshot)
     bool path_taken(const std::string& path) const {
         return live_by_path.contains(path) || folders.contains(path);
     }
 };
 
+// name_bytes: okunan ilişki ve etiket adının sınırı (limits.graph.relation_name_bytes; sınırsız SIZE_MAX).
 graph::Result<Snapshot> build_snapshot(graph::ReadTxn& txn, const std::array<std::byte, 16>& device,
-                                       std::size_t folder_path_bytes);
-// Canlı notların NoteInfo::tags'ini ve snapshot.tags'i doldurur; live_by_id kurulmuş olmalı.
+                                       std::size_t folder_path_bytes, std::size_t name_bytes);
+// Senkronla ya da Cypher'la gelmiş, yazma kuralından geçmemiş ad (ilişki, etiket): kırpılır, bozuk ya da
+// yasak karakter (C0, DEL, C1, görünmez biçim) U+FFFD olur, max_bytes'ta kod noktası sınırında kesilir.
+// Graf değişmez. Anahtar bu biçimden türer.
+std::string shown_name(std::string_view raw, std::size_t max_bytes);
+// Canlı notların NoteInfo::tags'ini ve snapshot.tags'i doldurur; live_by_id kurulmuş olmalı. Adlar
+// shown_name'den geçer (snapshot.name_bytes): her tüketici temiz metin görür, `tag:` bu biçimle eşleşir.
 graph::Result<void> load_tags(graph::ReadTxn& txn, Snapshot& snapshot);
-// Notun TAGGED komşularının gösterim adları, anahtar sırasıyla.
-graph::Result<std::vector<std::string>> read_note_tags(graph::ReadTxn& txn, const graph::NodeId& id);
+// Notun TAGGED komşularının gösterim adları (shown_name), anahtar sırasıyla.
+graph::Result<std::vector<std::string>> read_note_tags(graph::ReadTxn& txn, const graph::NodeId& id,
+                                                       std::size_t max_name_bytes);
 
 // link_target: core/note_store.hpp (arayüzler de kullanır).
 // [[bağlantı]] hedefleri (link_target kuralıyla), sıralı ve tekil.

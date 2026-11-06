@@ -314,6 +314,9 @@ public:
     // ulaşılamayan not, eksik hedef ve kendine kenar yoktur. Metinde olup kenarı henüz kurulmamış hedef de
     // yoktur (links()'ten farkı): harita kenar başına gövde okumaz. Depo yoksa boş.
     std::expected<std::vector<NoteEdge>, Error> edges() const;
+    // edges() ile aynı liste, görüntü başına bir kez okunur ve paylaşılır: arama her tuşta sorar,
+    // kopyalanmaz. Depo yoksa boş liste.
+    std::expected<std::shared_ptr<const std::vector<NoteEdge>>, Error> shared_edges() const;
     // [[hedef]] metnini yazmanın kuralıyla (yol, uzantısız yol, dosya adı, yalın ad) canlı nota çözer;
     // "|takma ad" ve "#başlık" atılır. Çözülemezse ya da depo açılamadıysa nullopt.
     std::optional<NotePath> resolve_link(std::string_view target) const;

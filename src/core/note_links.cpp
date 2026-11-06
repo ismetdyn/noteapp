@@ -70,9 +70,10 @@ std::string_view forbidden_in_name(char32_t cp) {
     return {};
 }
 
-// Okunan ad: senkronla ya da Cypher'la gelmiş, yazma kuralından geçmemiş olabilir. Kırpılır, bozuk ya da
-// yasak karakter U+FFFD olur, max_bytes'ta (kod noktası sınırında) kesilir. Graf değişmez: okuma yazmaz,
-// cihazlar arasında gidip gelme olmaz. Anahtar (tag_key) bu biçimden türer: " uses" ile "uses" aynı addır.
+}  // namespace
+
+// Okuma yazmaz: cihazlar arasında gidip gelme olmaz. Anahtar (tag_key) bu biçimden türer: " uses" ile
+// "uses" aynı addır.
 std::string shown_name(std::string_view raw, std::size_t max_bytes) {
     const std::string_view name = trim_name(raw);
     std::string out;
@@ -87,6 +88,8 @@ std::string shown_name(std::string_view raw, std::size_t max_bytes) {
     }
     return std::string(trim_name(out));
 }
+
+namespace {
 
 // RELATED_TO kenarı (SPEC-graph "Adlı ilişkiler"). src/dst kenarın kendi uçlarıdır.
 struct Relation {
@@ -231,7 +234,7 @@ graph::Result<NoteLinks> read_links(graph::ReadTxn& txn, const Snapshot& snapsho
     auto missing = add_text_targets(txn, snapshot, id, *outgoing);
     if (!missing)
         return std::unexpected(missing.error());
-    auto tags = read_note_tags(txn, id);
+    auto tags = read_note_tags(txn, id, max_name_bytes);
     if (!tags)
         return std::unexpected(tags.error());
     return NoteLinks{sorted_paths(std::move(*outgoing)), sorted_paths(std::move(*incoming)),
@@ -557,20 +560,30 @@ std::expected<NoteLinks, Error> NoteStore::links(const NotePath& path) const {
 }
 
 std::expected<std::vector<NoteEdge>, Error> NoteStore::edges() const {
+    auto shared = shared_edges();
+    if (!shared)
+        return std::unexpected(std::move(shared.error()));
+    return **shared;
+}
+
+std::expected<std::shared_ptr<const std::vector<NoteEdge>>, Error> NoteStore::shared_edges() const {
     const std::scoped_lock lock(impl_->mutex);
     const auto snapshot = impl_->current();
     if (!snapshot) {
         if (impl_->last_error)
             return std::unexpected(*impl_->last_error);
-        return std::vector<NoteEdge>{};
+        return std::make_shared<const std::vector<NoteEdge>>();
     }
+    if (snapshot->edges)
+        return snapshot->edges;
     auto txn = impl_->opened_graph().read();
     if (!txn)
         return std::unexpected(from_graph(txn.error(), {}));
     auto edges = read_edges(*txn, *snapshot, impl_->relation_name_bytes);
     if (!edges)
         return std::unexpected(from_graph(edges.error(), {}));
-    return std::move(*edges);
+    snapshot->edges = std::make_shared<const std::vector<NoteEdge>>(std::move(*edges));
+    return snapshot->edges;
 }
 
 std::expected<std::shared_ptr<const std::vector<RelationName>>, Error> NoteStore::relation_names() const {

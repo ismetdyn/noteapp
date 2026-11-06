@@ -904,6 +904,23 @@ TEST_CASE_FIXTURE(SettingsFixture, "saving Settings applies map limits changed o
     CHECK(state->note_map().nodes.size() == 1);
 }
 
+// Uygulama açıkken `[tuning] search_relations = false`: Ayarlar'da Kaydet açık aramadan ilişki satırlarını
+// hemen kaldırır.
+TEST_CASE_FIXTURE(SettingsFixture, "saving Settings applies relation search settings changed on disk") {
+    add_note("budget.md", "figures\n", 20);
+    add_note("team.md", "[[budget]]\n", 10);
+    auto state = make_state_wired();
+    state->set_query("budget");
+    REQUIRE(state->model().row_count() == 2);  // team.md bağlı
+    noteapp::core::Config disk = noteapp::core::load_config().config;
+    disk.tuning.search_relations = false;
+    REQUIRE(noteapp::core::save_config(disk));
+    state->settings().set_field("editor", "nano");
+    state->settings().save();
+    REQUIRE(get("editor") == "nano");
+    CHECK(state->model().row_count() == 1);
+}
+
 // TUI ile aynı: yazılmış ama kasaya gitmemiş token kaydedilmemiş değişikliktir.
 TEST_CASE_FIXTURE(SettingsFixture, "a typed token is an unsaved change: leaving asks, Revert drops it, Save stores it") {
     auto state = make_state_wired();

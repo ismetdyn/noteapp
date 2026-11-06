@@ -114,3 +114,39 @@ Kalıcı indeks, regex araması, fzf genişletilmiş sözdizimi (`^`, `$`, `!`, 
   - `best_line`: en çok farklı terim → en çok geçiş → en erken satır. `ContentIndex`'e `count_matches` ve `best_hit` eklendi; `search` davranışı aynı.
 - **ADDED** Kabul: 5.000 notta `apply` ≤ 20 ms; 5.000 × ~5 KB notta sıcak `search_all` ve değişiklik yokken `refresh` + `list_meta` ayrı ayrı ≤ 100 ms
   (`tests/perf/query_perf_test.cpp`, Release). Ölçüm (T55a, konteyner): `apply` 1,3 ms; `search_all` 18–31 ms (en kötü tek harf `e`, 200 kesit); `refresh` + `list_meta` 47 ms.
+
+## Değişiklik 2026-11-06 — İlişki araması
+- **ADDED** Arama yalnız ad ve içerik değildir: çizgedeki ilişkiler de eşleşir (`search/relation_search.hpp`,
+  `relation_hits(text, notes, allowed, GraphInput{edges, depth})`). Metnin katlanmış terimlerinin **hepsi** alt dizgi olarak aynı yerde geçmeli:
+  | Neden | Eşleşen | Gösterim (`app::reason_text`) |
+  |---|---|---|
+  | etiket | notun bir etiketi (`NoteMeta::tags`) | `etiket: #proje/alt` |
+  | ilişki | notun bir RELATED_TO kenarının adı; iki uç da gelir, yön notun gözünden | `ilişki: uses → b.md` (`←` gelen, `—` yönsüz) |
+  | bağlı | `depth` adım içindeki komşunun yolu (LINKS_TO ve RELATED_TO, iki yön) | `bağlı: b.md (uses)`; uzakta `bağlı: c.md, 2 adım` |
+  - Not başına en güçlü neden: etiket → ilişki → bağlı (az adım önce). Adı eşleşen notun kendisi (0 adım) ad eşleşmesidir, "bağlı" olmaz.
+  - **Doğrudan eşleşme önce:** ad ya da içerikte bulunan not ilişkiyle yinelenmez, nedeni gösterilmez. İlişki satırları her modda (ad, içerik,
+    genel; `note find`) doğrudan satırların altındadır; `sort:` iki grubu ayrı sıralar. Genel aramada sınırı (`global_results`) önce onlar bırakır.
+    İlişki satırlarının sırası neden → adım → en yeni.
+  - Eşleşen komşu süzgeç ve kapsam dışında da olabilir; sonuç süzgeçten geçen notlardır.
+  - Kenarlar arama başına bir kez gelir: `NoteStore::shared_edges()` görüntü başına bir kez okunur ve paylaşılır (kendi yazma ve başka
+    bağlantının yazması görüntüyü düşürür); satır başına sorgu yok. Komşu gezintisi adı eşleşen tüm notlardan aynı anda genişlik önceliklidir,
+    iş not + kenar sayısıyla doğrusaldır.
+- **ADDED** Config: `limits.search.relation_depth` (varsayılan `1`, `0` sınırsız: bağlı bileşenin tamamı) ve `[tuning] search_relations`
+  (`true`; `false` ilişki satırlarını kapatır, `rel:`/`linked:` süzmeye devam eder). Ön yüzler `app::relation_depth(config)` ile okur.
+- **ADDED** Sorgu anahtarları (`query_key_names`, tamamlama ve girdi boyama aynı listeyi görür):
+  | Argüman | Biçim |
+  |---|---|
+  | `rel:` | adı tam bu olan (katlanmış) ilişkinin iki ucu: `rel:uses`, `rel:"depends on"` |
+  | `linked:` | notun komşuları (bağlantı ya da ilişki, iki yön); not yol, uzantısız yol, dosya adı ya da uzantısız adla verilir: `linked:work/b.md` = `linked:b` |
+  - Notları `bind_graph_filters(filters, edges)` kurar (`view:` gibi `Filter::notes`); bağlanmamış süzgeç hiçbir notu geçirmez.
+- **MODIFIED** `search_all(query, notes, content_index, limits, views = {}, graph = {})`: `GraphInput` verilir; `now` parametresi kalktı
+  (her çağıran şimdiyi veriyordu; tarih süzgeçleri şimdiye göredir). `GlobalHit::reason` yalnız
+  ilişkiyle gelen sonuçta doludur. `app::GlobalSearcher` üçüncü parametre olarak `GraphInput` alır (`Listing` kenarları ve derinliği geçirir).
+- **ADDED** Kabul: aynı bütçe (5.000 × ~5 KB, sıcak `search_all` ≤ 100 ms) not başına bir bağlantı + bir adlı ilişki (10.000 kenar) ve
+  etiketlerle; TUI tuş başına süzme + çizim ≤ 50 ms aynı kenarlarla (`tests/perf/query_perf_test.cpp`, `perf_test.cpp`).
+  Ölçüm (konteyner, Release): `search_all` 19–31 ms (ilişki kapalı `proje bütçe` 21,6 ms, açık 24,3 ms; sınırsız derinlik 21,6 ms;
+  en kötü `e` 30,5 ms); TUI tuş başına en kötü 15,0 ms; GUI model 6,1 ms.
+- **ADDED** Kenar dizini (`search::RelationGraph`: düğüm yolları ve katlanmışları, komşuluk, ad -> kenarlar) kenar listesi başına bir kez
+  kurulur; `app::Listing` görüntü değişene dek tuş başına yeniden kullanır (`GraphInput::index`, notların düğümleri `GraphInput::nodes`).
+  Komşu gezintisi izinli hedeflerin hepsine ulaşınca durur. Ölçüm (Release, 10^6 kenar, tuş başına ad araması): 5.000 notta
+  1,4–13,7 ms (önbelleksiz 159–205 ms); 50.000 notta 30–66 ms, her notu listeleyen sorguda ilişkisiz taban 20 ms (bütçe 5.000 not içindir).

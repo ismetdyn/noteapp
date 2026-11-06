@@ -1,6 +1,7 @@
 #include "gui/note_list_model.hpp"
 
 #include "core/i18n.hpp"
+#include "edit/display_text.hpp"
 
 #include <algorithm>
 
@@ -53,6 +54,12 @@ std::string NoteListModel::display(int row) const {
     if (mode_ != app::SearchMode::Name && shown.hit_count > 0)
         path += "  (" + std::to_string(shown.hit_count) + ")";
     return path;
+}
+
+std::string NoteListModel::reason(int row) const {
+    const app::ListRow& shown = this->row(row);
+    // Ad ve yol güvenilmez; çekirdek okurken temizler, bu ikinci kemerdir (TUI ile aynı kural).
+    return shown.reason ? tui::terminal_safe(app::reason_text(*shown.reason)) : std::string{};
 }
 
 int NoteListModel::index_of(const core::NotePath& path) const {

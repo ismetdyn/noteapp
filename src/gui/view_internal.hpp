@@ -165,11 +165,17 @@ float draw_icon(ImVec2 position, const core::FileIcon& icon, core::IconStyle sty
 bool draw_fitted_row_text(ImVec2 position, const std::string& text, float width,
                           const std::vector<std::size_t>& highlights,
                           ImU32 color = ImGui::GetColorU32(ImGuiCol_Text));
-// `icon_path` boş değilse ikon ondan seçilir (ilişki satırı: metin ok ve ad da taşır).
+// Satırın isteğe bağlı parçaları.
+struct RowExtras {
+    const search::Hit* best_line =
+        nullptr;                      // verilirse satır iki satır boyunda, ikincisi en iyi eşleşen satır
+    bool marked = false;              // çoklu seçimde
+    std::string_view icon_path = {};  // boş değilse ikon ondan (ilişki satırı: metin ok ve ad da taşır)
+    // Satırın sağında soluk ikincil metin (ilişkiyle bulunan arama satırının nedeni); satır boyu değişmez.
+    std::string secondary = {};
+};
 bool plain_selectable(const std::string& text, bool selected, const std::vector<std::size_t>& highlights = {},
-                      core::IconStyle icon_style = core::IconStyle::Off,
-                      const search::Hit* best_line = nullptr, bool marked = false,
-                      std::string_view icon_path = {});
+                      core::IconStyle icon_style = core::IconStyle::Off, const RowExtras& extras = {});
 // Yukarı/Aşağı tek satırlık alanın geçmiş olayıdır: seçim listede yürür (palet, ilişki adı penceresi).
 // `selected` SIZE_MAX ise (seçim yok) Aşağı ilk satırı seçer.
 struct PaletteKeys {

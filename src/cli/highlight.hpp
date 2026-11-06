@@ -17,6 +17,14 @@ namespace noteapp::cli {
 // sıfır genişlikli karakterler (core::find_hidden_control, TUI/GUI ile aynı liste) de U+FFFD olur: metin
 // saklandığından farklı sırayla görünmesin (Trojan Source). Boruya/dosyaya giden çıktı buradan geçmez, bayt
 // bayt kalır. Tek geçiş (doğrusal).
+// Satır sonu ve sekme boşluk olur: TAB ayraçlı tek satırlık alan (`find -l` nedeni) bozulmasın. Kaynak
+// zaten temizlenmiştir (çekirdek adları okurken arındırır); bu ikinci kemerdir.
+inline std::string single_line(std::string_view text) {
+    std::string out(text);
+    std::ranges::replace_if(out, [](char c) { return c == '\n' || c == '\r' || c == '\t'; }, ' ');
+    return out;
+}
+
 inline std::string sanitize_for_terminal(std::string_view text) {
     constexpr std::string_view kPlaceholder = "\xEF\xBF\xBD";  // U+FFFD
     std::string out;

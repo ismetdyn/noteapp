@@ -1,5 +1,6 @@
 #include "app/document.hpp"
 #include "app/map_relations.hpp"
+#include "core/i18n.hpp"
 #include "edit/display_text.hpp"
 #include "gui/gui_state.hpp"
 
@@ -118,6 +119,90 @@ void GuiState::edit_map(const MapNode& from, const MapNode& to, MapEdgeKind kind
     rescan();              // gövde yazıldıysa: liste etiketleri ve temiz editör yeni metni alır
     status_ = *done;
     notify(app::NoticeKind::Success, status_);
+}
+
+// ---- Keşif (F2) ----
+
+void GuiState::toggle_map_neighbours(const MapNode& node) {
+    if (node.kind != MapNodeKind::Note)
+        return;
+    if (map_.options().whole_graph) {
+        status_ = core::tr("map.whole_graph_open");
+        notify(app::NoticeKind::Info, status_);
+        return;
+    }
+    map_.toggle_neighbours(node.key, app::expansion_for(map_.options()));
+}
+
+void GuiState::expand_map_node(const MapNode& node, const app::MapExpansion& spec) {
+    if (node.kind == MapNodeKind::Note)
+        map_.expand(node.key, spec);
+}
+
+void GuiState::collapse_map_node(const MapNode& node) {
+    if (node.kind == MapNodeKind::Note)
+        map_.collapse(node.key);
+}
+
+void GuiState::find_map_path(const MapNode& from, const MapNode& to, bool directed) {
+    if (from.kind != MapNodeKind::Note || to.kind != MapNodeKind::Note)
+        return;
+    ensure_map();  // kenarlar güncel olsun
+    const app::MapPathResult result = map_.find_path(model_.listing().metas(), from.key, to.key, directed);
+    // Yollar güvenilmezdir (senkron): durum satırına ve bildirime çıplak gitmez.
+    status_ = app::map_path_text(result, tui::terminal_safe(from.key), tui::terminal_safe(to.key), directed);
+    notify(result.status == app::MapPathResult::Status::Found ? app::NoticeKind::Success : app::NoticeKind::Info,
+           status_);
+}
+
+void GuiState::clear_map_path() {
+    map_.clear_path();
+}
+
+void GuiState::toggle_map_pin(std::size_t node) {
+    GraphLayout& layout = map_layout();
+    if (node >= layout.size())
+        return;
+    if (layout.pinned(node))
+        layout.unpin(node);
+    else
+        layout.pin(node, layout.positions()[node]);
+}
+
+void GuiState::unpin_map() {
+    map_layout().unpin_all();
+}
+
+void GuiState::begin_map_note(app::LayoutPoint at) {
+    begin_quick_add();
+    if (quick_add_open_)
+        map_new_at_ = at;
+}
+
+void GuiState::trash_map_note(const core::NotePath& path) {
+    if (current_path() == path) {
+        trash_note();
+        return;
+    }
+    const auto trashed = trash_.trash_note(store_, path);
+    if (!trashed) {
+        fail(trashed.error());
+        return;
+    }
+    changed();
+    rescan();
+    undo_status_ = core::tr("gui.trashed", {{"path", path.string()}});
+    status_ = undo_status_;
+    notify(app::NoticeKind::Success, status_);
+}
+
+std::vector<core::RelationName> GuiState::map_relation_names() {
+    const auto names = store_.relation_names();
+    if (!names) {
+        fail(names.error());
+        return {};
+    }
+    return **names;
 }
 
 }  // namespace noteapp::gui

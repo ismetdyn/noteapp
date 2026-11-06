@@ -730,7 +730,12 @@ TEST_CASE("names from sync are sanitized on a terminal and stay byte-exact in a 
                      "52;c;ZXZpbA==\xC2\x9C",
                      "MATCH (t:Tag) SET t.display = $d"})
                 .exit_code == 0);
-    REQUIRE(box.run({"tags"}).out.find("\xC2\x9D") != std::string::npos);  // boru: etiket bayt bayt
+    // Etiket adı çekirdekte okunurken temizlenir (ilişki adı kuralı): boruda da C1 yok, U+FFFD var. Not adı
+    // ise yoldur, boruda bayt bayt kalır (aşağıda).
+    const std::string piped_tags = box.run({"tags"}).out;
+    REQUIRE(piped_tags.find("\xC2\x9D") == std::string::npos);
+    REQUIRE(piped_tags.find("etiket\xEF\xBF\xBD"
+                            "52;c;ZXZpbA==\xEF\xBF\xBD") != std::string::npos);
 
     for (const std::vector<std::string>& args :
          {std::vector<std::string>{"ls"}, std::vector<std::string>{"show", "kotu"}, std::vector<std::string>{"ls", "-l"},

@@ -289,9 +289,10 @@ TEST_CASE("map: selecting a node moves no node, keeps the camera and starts no l
     unchanged();
 }
 
+// F2: haritada `/` haritada bul'dur (map_explore_test); ad araması paletin `search` komutuyla açılır.
 TEST_CASE("map: a search lights the matching notes and dims the rest") {
     MapFixture f;
-    f.state.handle(Key::Char, "/");
+    run(f.state, "search");
     f.state.handle(Key::Char, "b");
     f.update();
     const app::NoteMap& map = f.state.map_model().map();

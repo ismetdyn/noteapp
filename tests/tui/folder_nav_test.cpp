@@ -423,13 +423,14 @@ TEST_CASE("search: slash and f stay flat with full paths across folders, Esc ret
     CHECK(s.selected_row()->path.string() == "work/a.md");
 
     bool searched = false;
-    s.set_global_searcher([&](std::string_view, std::span<const core::NoteMeta> metas) {
-        searched = true;
-        std::vector<search::GlobalHit> hits;
-        for (const core::NoteMeta& meta : metas)
-            hits.push_back(search::GlobalHit{0, meta.path});
-        return hits;
-    });
+    s.set_global_searcher(
+        [&](std::string_view, std::span<const core::NoteMeta> metas, const search::GraphInput&) {
+            searched = true;
+            std::vector<search::GlobalHit> hits;
+            for (const core::NoteMeta& meta : metas)
+                hits.push_back(search::GlobalHit{0, meta.path});
+            return hits;
+        });
     type(s, "f");
     type(s, "z");
     CHECK(searched);

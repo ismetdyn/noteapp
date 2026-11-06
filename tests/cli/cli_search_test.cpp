@@ -74,6 +74,70 @@ TEST_CASE("find --limit caps the number of notes; usage errors exit 2") {
     CHECK(box.run({"find", "kelime", "--zorla"}).exit_code == 2);
 }
 
+// İlişki araması (SPEC-cli): içerikte geçmeyen ama etiketi, ilişkisi ya da bağlı notunun adı eşleşen not
+// içerik satırlarından sonra gelir; yalnız terminalde, -l ile ya da --json'da. Düz boru çıktısı eskisi gibi.
+TEST_CASE("find also lists notes found through relations after the content lines") {
+    const Sandbox box;
+    box.put("budget.md", "rakamlar\n");
+    box.put("plan.md", "budget kalemleri\n");
+    box.put("team.md", "ekip\n");
+    box.put("other.md", "yok\n");
+    REQUIRE(box.run({"relation", "add", "team.md", "budget.md", "--name", "funds", "--directed"}).exit_code ==
+            0);
+
+    const auto plain = box.run({"find", "budget"});
+    CHECK(plain.exit_code == 0);
+    CHECK(plain.out == "plan.md:1: budget kalemleri\n");
+
+    const auto long_form = box.run({"find", "budget", "-l"});
+    CHECK(long_form.exit_code == 0);
+    CHECK(long_form.out == "plan.md:1: budget kalemleri\nteam.md\tbağlı: budget.md (funds)\n");
+    CHECK(box.run({"find", "budget", "--long"}).out == long_form.out);
+
+    const auto json = box.run({"find", "budget", "--json"});
+    CHECK(json.exit_code == 0);
+    CHECK(json.out ==
+          "[{\"path\":\"plan.md\",\"line\":1,\"snippet\":\"budget kalemleri\",\"ranges\":[[0,6]],"
+          "\"reason\":\"content\"},{\"path\":\"team.md\",\"reason\":\"linked\",\"label\":\"funds\","
+          "\"other\":\"budget.md\",\"hops\":1}]\n");
+
+    // `ls` süzgeçleri: ilişki adı ve bağlı not.
+    const auto by_relation = box.run({"ls", "rel:funds"});
+    CHECK(by_relation.exit_code == 0);
+    CHECK((by_relation.out == "team.md\nbudget.md\n" || by_relation.out == "budget.md\nteam.md\n"));
+    CHECK(box.run({"ls", "linked:budget"}).out == "team.md\n");
+}
+
+TEST_CASE("find succeeds on relation hits alone; tags and relation names carry their own fields") {
+    const Sandbox box;
+    box.put("a.md", "#Proje notu\n");
+    box.put("b.md", "b\n");
+    box.put("c.md", "c\n");
+    REQUIRE(box.run({"relation", "add", "b.md", "c.md", "--name", "uses", "--directed"}).exit_code == 0);
+
+    // Düz boruda çıkış kodu içeriğe bağlı kalır: yalnız ilişkiyle eşleşme 1.
+    const auto piped = box.run({"find", "uses"});
+    CHECK(piped.exit_code == 1);
+    CHECK(piped.out.empty());
+    CHECK(box.run({"find", "uses", "-l"}).exit_code == 0);
+
+    const auto named = box.run({"find", "uses", "--json"});
+    CHECK(named.exit_code == 0);
+    CHECK(named.out.find("{\"path\":\"b.md\",\"reason\":\"relation\",\"label\":\"uses\",\"other\":\"c.md\","
+                         "\"direction\":\"outgoing\"}") != std::string::npos);
+    CHECK(named.out.find("\"direction\":\"incoming\"") != std::string::npos);
+
+    // Etiket metinde de geçer: içerik satırı kazanır, ilişki satırı yinelenmez.
+    CHECK(box.run({"find", "proje"}).out == "a.md:1: #Proje notu\n");
+    CHECK(box.run({"find", "zzz"}).exit_code == 1);
+}
+
+// -l boru çıktısında neden tek satırdır: satır sonu ya da sekme satırı ve TAB ayracını bozmasın.
+TEST_CASE("single_line turns line breaks and tabs into spaces") {
+    CHECK(noteapp::cli::single_line("x\ny\rz\tw") == "x y z w");
+    CHECK(noteapp::cli::single_line("bağlı: b.md") == "bağlı: b.md");
+}
+
 TEST_CASE("highlight wraps byte ranges in ANSI bold colour and tolerates bad ranges") {
     using noteapp::cli::highlight_ranges;
     const std::string on = "\x1b[1;33m";

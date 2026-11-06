@@ -408,6 +408,25 @@ void ListActions::run_intent(Intent intent, std::optional<ConfirmState>& confirm
     case Intent::MapEdit:
         apply_map_edit(rename);
         break;
+    case Intent::MapNotice:
+        if (const auto notice = host_.state.take_map_notice())
+            host_.status.notify(notice->kind, terminal_safe(notice->text));
+        break;
+    case Intent::MapRelationFilter: {
+        const auto names = [&] {
+            const std::scoped_lock lock(host_.store_mutex);
+            // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+            return host_.store->relation_names();
+        }();
+        if (!names)
+            host_.status.notify(app::NoticeKind::Error, terminal_safe(core::format_error(names.error())));
+        else
+            host_.state.begin_map_relation_filter(**names);
+        break;
+    }
+    case Intent::TrashMapNode:  // işaretler değil: haritanın hedefi seçili satır oldu
+        trash_selected();
+        break;
     case Intent::FlipRelation:
     case Intent::UndirectRelation:
         direct_selected_relation(intent == Intent::FlipRelation);
@@ -1179,6 +1198,7 @@ void ListActions::submit_new_row(std::optional<NewRowState>& row, const NewRowDe
     }
     row.reset();
     host_.refresh_notes();
+    host_.state.map_note_created(created->path);  // haritadan `n`: not haritada kalır, yerine sabitlenir
     host_.state.select_note(created->path);  // süzgeç notu gizliyorsa temizlenir
     open(created->path);
     host_.notify_changed();

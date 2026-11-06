@@ -13,6 +13,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -292,19 +293,42 @@ TEST_CASE("map: clicking a node saves the shown note's edit to that note only an
     CHECK(scene.state->browser_view() == BrowserView::Map);
 }
 
-TEST_CASE("map: double-clicking a node opens it and switches to the tree") {
+// F2: çift tıklama komşuları açar/kapar (Neo4j Browser); eskiden notu açıp Ağaç'a geçiyordu. İlk tıklama notu
+// açar, görünüm Harita'da kalır.
+TEST_CASE("map: double-clicking a node opens its neighbours, again closes them; the view stays the map") {
     MapScene scene;
-    scene.open();
-    const auto [x, y] = scene.view->button_center("map:c.md");
-    mouse_to(*scene.view, x, y);
-    for (int click = 0; click < 2; ++click) {
-        mouse_button(*scene.view, true);
-        mouse_button(*scene.view, false);
-    }
-    settle(*scene.view);
+    scene.open(false);
+    scene.state->set_map_options(MapOptions{.depth = 1});
+    scene.settle_layout();
+    const auto shown = [&] {
+        std::set<std::string> keys;
+        for (const auto& node : scene.state->note_map().nodes)
+            keys.insert(node.key);
+        return keys;
+    };
+    const auto double_click = [&](const std::string& node) {
+        const auto [x, y] = scene.view->button_center(node);
+        mouse_to(*scene.view, x, y);
+        for (int click = 0; click < 2; ++click) {
+            mouse_button(*scene.view, true);
+            mouse_button(*scene.view, false);
+        }
+        settle(*scene.view);
+    };
+    // Derinlik 1: c'nin çevresi c, a. İlk tıklama c'yi açıp merkez yapar, çift tıklama bir adım daha (b) açar;
+    // ikinci çift tıklama yalnız açılışın eklediğini geri alır (inceleme bulgusu: harita tek düğüme iniyordu).
+    double_click("map:c.md");
+    scene.settle_layout();
     REQUIRE(scene.state->current_path());
     CHECK(scene.state->current_path()->string() == "c.md");
-    CHECK(scene.state->browser_view() == BrowserView::Tree);
+    CHECK(scene.state->browser_view() == BrowserView::Map);
+    CHECK(shown() == std::set<std::string>{"a.md", "b.md", "c.md"});
+    focus_canvas(scene);  // başka yere tıklama: sonraki iki tıklama yeni bir çift tıklamadır (üçüncü değil)
+    double_click("map:c.md");
+    scene.settle_layout();
+    CHECK(shown() == std::set<std::string>{"a.md", "c.md"});
+    CHECK_FALSE(scene.state->map_scope().expanded.contains("c.md"));
+    CHECK_FALSE(scene.state->map_scope().collapsed.contains("c.md"));
 }
 
 TEST_CASE("map: dragging a node pins it where it was dropped") {
@@ -1044,4 +1068,197 @@ TEST_CASE("map: an invalid relation name keeps the dialog open with the reason")
     CHECK(long_refused);
     CHECK(steps.frame < 200);  // Esc'e dek açık kaldı, vazgeçme zaman aşımından değil
     CHECK(related_of(scene, "d.md").empty());
+}
+
+// ---- F2: keşif ve düğüm işlemleri (plan-graph-map). Kural app::MapModel'de (tests/app/map_explore_test);
+// burada GUI'nin menüleri, tuşları ve fareyle yolu. ----
+
+namespace {
+
+std::size_t node_index(GuiState& state, const std::string& key) {
+    const auto& nodes = state.note_map().nodes;
+    const auto found = std::ranges::find(nodes, key, &noteapp::app::MapNode::key);
+    REQUIRE(found != nodes.end());
+    return static_cast<std::size_t>(found - nodes.begin());
+}
+
+bool on_map(GuiState& state, const std::string& key) {
+    return std::ranges::any_of(state.note_map().nodes, [&](const auto& node) { return node.key == key; });
+}
+
+void open_submenu(View& view, const std::string& item) {
+    const auto [x, y] = view.button_center(item);
+    mouse_to(view, x, y);  // alt menü üzerine gelince açılır
+    settle(view);
+}
+
+// Tuvalin düğümsüz köşesine sağ tık: tuval menüsü.
+void right_click_canvas(MapScene& scene) {
+    const View::ItemRect canvas = scene.rect("map_canvas");
+    right_click(*scene.view, canvas.min_x + 3.0F, canvas.min_y + 3.0F);
+}
+
+void right_click_node(MapScene& scene, const std::string& key) {
+    const auto [x, y] = scene.view->button_center("map:" + key);
+    right_click(*scene.view, x, y);
+}
+
+}  // namespace
+
+TEST_CASE("map: the node menu opens neighbours by kind past the depth, closes them, and Open opens the note") {
+    MapScene scene;
+    scene.open(false);
+    scene.state->open_note(np("b.md"));
+    scene.state->set_map_options(MapOptions{.depth = 1});
+    scene.settle_layout();
+    REQUIRE_FALSE(on_map(*scene.state, "c.md"));  // b'den bir adım: a, b
+    right_click_node(scene, "a.md");
+    open_submenu(*scene.view, "map_node_expand");
+    REQUIRE(scene.view->item_rects().contains("map_expand_links"));
+    click_button(*scene.view, "map_expand_links");
+    scene.settle_layout();
+    CHECK(on_map(*scene.state, "c.md"));
+    CHECK(scene.state->map_scope().expanded.at("a.md").kind == noteapp::app::MapEdgeKind::Link);
+
+    right_click_node(scene, "a.md");
+    click_button(*scene.view, "map_node_collapse");
+    scene.settle_layout();
+    CHECK_FALSE(on_map(*scene.state, "c.md"));
+    CHECK(on_map(*scene.state, "b.md"));  // açılmış notu kapatmak yalnız açılışın eklediğini geri alır
+    CHECK_FALSE(scene.state->map_scope().expanded.contains("a.md"));
+    CHECK_FALSE(scene.state->map_scope().collapsed.contains("a.md"));
+
+    right_click_node(scene, "a.md");
+    click_button(*scene.view, "map_node_open");
+    CHECK(scene.state->current_path()->string() == "a.md");
+}
+
+TEST_CASE("map: Pin in the node menu and P on the canvas pin a node; U and the canvas menu unpin all") {
+    MapScene scene;
+    scene.open();
+    right_click_node(scene, "d.md");
+    click_button(*scene.view, "map_node_pin");
+    CHECK(scene.state->map_layout().pinned(node_index(*scene.state, "d.md")));
+    right_click_canvas(scene);
+    REQUIRE(scene.view->item_rects().contains("map_canvas_unpin_all"));
+    click_button(*scene.view, "map_canvas_unpin_all");
+    CHECK_FALSE(scene.state->map_layout().has_pins());
+
+    focus_canvas(scene);
+    const auto [x, y] = scene.view->button_center("map:e.md");
+    mouse_to(*scene.view, x, y);
+    press(*scene.view, ImGuiKey_P);
+    CHECK(scene.state->map_layout().pinned(node_index(*scene.state, "e.md")));
+    press(*scene.view, ImGuiKey_U);
+    CHECK_FALSE(scene.state->map_layout().has_pins());
+}
+
+TEST_CASE("map: Shortest path… and a click on the end show the path and its length; no path is said; Esc clears") {
+    MapScene scene;
+    scene.open();
+    right_click_node(scene, "c.md");
+    click_button(*scene.view, "map_node_path");
+    click_button(*scene.view, "map:b.md");
+    CHECK(scene.state->current_path()->string() == "a.md");  // yol tıklaması notu açmaz
+    CHECK(scene.state->status() == "Shortest path c.md → b.md: length 2");
+    {
+        const auto& map = scene.state->note_map();
+        REQUIRE(map.path.size() == 3);
+        CHECK(map.nodes[map.path[1]].key == "a.md");
+    }
+
+    right_click_node(scene, "b.md");
+    click_button(*scene.view, "map_node_path_directed");
+    click_button(*scene.view, "map:c.md");
+    CHECK(scene.state->status() == "No directed path from b.md to c.md");
+    CHECK(scene.state->note_map().path.empty());
+
+    right_click_node(scene, "d.md");
+    click_button(*scene.view, "map_node_path");
+    click_button(*scene.view, "map:b.md");
+    CHECK(scene.state->status() == "No path from d.md to b.md");
+
+    right_click_node(scene, "c.md");
+    click_button(*scene.view, "map_node_path");
+    click_button(*scene.view, "map:b.md");
+    REQUIRE(scene.state->map_scope().path);
+    focus_canvas(scene);
+    press(*scene.view, ImGuiKey_Escape);
+    CHECK_FALSE(scene.state->map_scope().path);
+}
+
+TEST_CASE("map: the link and relation chips and the relation picker filter edges; the tag box keeps tagged notes") {
+    MapScene scene;
+    {
+        core::NoteStore store(scene.fixture.store_dir());
+        REQUIRE(store.add_relation(np("d.md"), np("e.md"), {"uses", false}).has_value());
+    }
+    scene.open();
+    REQUIRE(has_map_edge(*scene.state, "d.md", "e.md", noteapp::gui::MapEdgeKind::Related));
+    click_button(*scene.view, "map_related");
+    CHECK_FALSE(scene.state->map_options().show_related);
+    CHECK_FALSE(has_map_edge(*scene.state, "d.md", "e.md", noteapp::gui::MapEdgeKind::Related));
+    click_button(*scene.view, "map_related");
+    click_button(*scene.view, "map_links");
+    CHECK_FALSE(scene.state->map_options().show_links);
+    CHECK_FALSE(has_map_edge(*scene.state, "a.md", "b.md", noteapp::gui::MapEdgeKind::Link));
+    click_button(*scene.view, "map_links");
+
+    click_button(*scene.view, "map_relation");
+    REQUIRE(scene.view->item_rects().contains("map_relation:uses"));
+    click_button(*scene.view, "map_relation:uses");
+    CHECK(scene.state->map_options().relation == std::optional<std::string>("uses"));
+
+    click_button(*scene.view, "map_tag");
+    gui_test::type_text(*scene.view, "proje");
+    settle(*scene.view);
+    CHECK(scene.state->map_options().tag == "proje");
+    CHECK(on_map(*scene.state, "e.md"));
+    CHECK_FALSE(on_map(*scene.state, "d.md"));
+    CHECK(on_map(*scene.state, "a.md"));  // gösterilen not
+}
+
+TEST_CASE("map: Ctrl+F on the canvas finds a node and centres it; Esc closes the find line") {
+    MapScene scene;
+    scene.open();
+    focus_canvas(scene);
+    press(*scene.view, ImGuiMod_Ctrl | ImGuiKey_F);
+    REQUIRE(scene.view->item_rects().contains("map_find"));
+    gui_test::type_text(*scene.view, "e.md");
+    scene.settle_layout();
+    const View::ItemRect canvas = scene.rect("map_canvas");
+    const auto [x, y] = scene.view->button_center("map:e.md");
+    CHECK(x == doctest::Approx((canvas.min_x + canvas.max_x) / 2.0F).epsilon(0.02));
+    CHECK(y == doctest::Approx((canvas.min_y + canvas.max_y) / 2.0F).epsilon(0.02));
+    press(*scene.view, ImGuiKey_Escape);
+    CHECK_FALSE(scene.view->item_rects().contains("map_find"));
+}
+
+TEST_CASE("map: New note here… makes the note with the quick-add line, keeps it on the map, pinned") {
+    MapScene scene;
+    scene.open(false);
+    right_click_canvas(scene);
+    click_button(*scene.view, "map_canvas_new_note");
+    REQUIRE(scene.view->item_rects().contains("quick_add"));
+    settle(*scene.view);
+    gui_test::type_text(*scene.view, "yeni");
+    CHECK(scene.state->quick_add_buffer() == "yeni");  // satır odakta açılır: yazı ona gider
+    press(*scene.view, ImGuiKey_Enter);
+    REQUIRE(scene.fixture.note_exists("yeni.md"));
+    scene.settle_layout();
+    REQUIRE(on_map(*scene.state, "yeni.md"));
+    CHECK(scene.state->map_layout().pinned(node_index(*scene.state, "yeni.md")));
+}
+
+TEST_CASE("map: Move to trash in the node menu trashes that note; undo brings it back") {
+    MapScene scene;
+    scene.open();
+    right_click_node(scene, "d.md");
+    click_button(*scene.view, "map_node_trash");
+    CHECK_FALSE(scene.fixture.note_exists("d.md"));
+    CHECK_FALSE(on_map(*scene.state, "d.md"));
+    CHECK(scene.state->current_path()->string() == "a.md");  // gösterilen not yerinde
+    REQUIRE(scene.state->can_undo_trash());
+    scene.state->undo_trash();
+    CHECK(scene.fixture.note_exists("d.md"));
 }

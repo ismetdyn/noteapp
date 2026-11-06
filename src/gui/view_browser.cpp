@@ -201,8 +201,8 @@ void View::draw_trash_rows(bool focus_row) {
             if (focus_row && row == current)
                 ImGui::SetKeyboardFocusHere();
             const std::string path = items[static_cast<std::size_t>(row)].path.string();
-            if (plain_selectable(path, row == current, {}, state_.icon_style(), nullptr,
-                                 state_.is_marked(path, false)))
+            if (plain_selectable(path, row == current, {}, state_.icon_style(),
+                                 {.marked = state_.is_marked(path, false)}))
                 queue([this, row] { state_.select_trash_row(row); });
             if (row == current)
                 draw_selection_bar();
@@ -732,10 +732,11 @@ void View::draw_note_rows(bool focus_row) {
         if (focus_row && row == current)
             ImGui::SetKeyboardFocusHere();
         const app::ListRow& shown = model.row(row);
-        const bool clicked =
-            plain_selectable(model.display(row), row == current, model.highlights(row), state_.icon_style(),
-                             shown.show_best_line && !shown.hits.empty() ? &shown.hits.front() : nullptr,
-                             state_.is_marked(model.note_at(row).path.string(), false));
+        const bool clicked = plain_selectable(
+            model.display(row), row == current, model.highlights(row), state_.icon_style(),
+            {.best_line = shown.show_best_line && !shown.hits.empty() ? &shown.hits.front() : nullptr,
+             .marked = state_.is_marked(model.note_at(row).path.string(), false),
+             .secondary = model.reason(row)});
         if (row == current)
             draw_selection_bar();
         remember_item_center("row:" + model.note_at(row).path.string());

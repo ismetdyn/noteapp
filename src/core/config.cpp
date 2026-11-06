@@ -386,6 +386,12 @@ void apply_lsp(Section& s, LspConfig& lsp) {
     s.warn_unknown();
 }
 
+// Açık/kapalı ayarlar (apply_tuning'in sayısal ayarlarından ayrı).
+void apply_tuning_flags(Section& s, Tuning& tuning) {
+    if (auto v = s.boolean("search_relations"))
+        tuning.search_relations = *v;
+}
+
 void apply_tuning(Section& s, Tuning& tuning) {
     if (auto v = s.positive_integer("slug_max_length"))
         tuning.slug_max_length = static_cast<std::size_t>(*v);
@@ -417,6 +423,7 @@ void apply_tuning(Section& s, Tuning& tuning) {
         tuning.notice_ms = std::move(*v);
     if (auto v = s.fraction("tui_list_share"))
         tuning.tui_list_share = *v;
+    apply_tuning_flags(s, tuning);
     s.warn_unknown();
 }
 
@@ -438,6 +445,7 @@ template <QueryLimits Limits::* Profile, Limit QueryLimits::* Field> Limit& quer
 
 constexpr auto kUserQuery = &Limits::query;
 constexpr auto kView = &Limits::view;
+constexpr auto kSearch = &Limits::search;
 
 // Modül struct'ının alanı: satır başına ayrı lambda yazılmasın.
 template <auto Module, auto Field> Limit& module_field(Limits& limits) {
@@ -455,13 +463,12 @@ std::span<const LimitKey> limit_keys() {
         {"app.map_depth", LimitUnit::Count, [](Limits& l) -> Limit& { return l.app.map_depth; }},
         {"core.folder_path_bytes", LimitUnit::Bytes,
          [](Limits& l) -> Limit& { return l.core.folder_path_bytes; }},
-        {"search.content_results", LimitUnit::Count,
-         [](Limits& l) -> Limit& { return l.search.content_results; }},
-        {"search.global_results", LimitUnit::Count,
-         [](Limits& l) -> Limit& { return l.search.global_results; }},
+        {"search.content_results", LimitUnit::Count, module_field<kSearch, &SearchLimits::content_results>},
+        {"search.global_results", LimitUnit::Count, module_field<kSearch, &SearchLimits::global_results>},
         {"search.content_hits", LimitUnit::Count, [](Limits& l) -> Limit& { return l.search.content_hits; }},
         {"search.fuzzy_candidate_chars", LimitUnit::Count,
          [](Limits& l) -> Limit& { return l.search.fuzzy_candidate_chars; }},
+        {"search.relation_depth", LimitUnit::Count, module_field<kSearch, &SearchLimits::relation_depth>},
         {"sync.merge_input_bytes", LimitUnit::Bytes,
          [](Limits& l) -> Limit& { return l.sync.merge_input_bytes; }},
         {"graph.frame_bytes", LimitUnit::Bytes, [](Limits& l) -> Limit& { return l.graph.frame_bytes; }},
@@ -757,6 +764,8 @@ std::span<const TuningKey> tuning_keys() {
          [](const Tuning& t) { return std::to_string(t.completion_min_prefix_bytes); }},
         {"notice_ms", [](const Tuning& t) { return limit_toml(t.notice_ms.text); }},
         {"tui_list_share", [](const Tuning& t) { return fraction_text(t.tui_list_share); }},
+        {"search_relations",
+         [](const Tuning& t) { return std::string(t.search_relations ? "true" : "false"); }},
     });
     return table;
 }

@@ -574,12 +574,13 @@ TEST_CASE("search: Enter stores valid queries only and a new note from the query
     auto global = search_state();
     global.handle(Key::Escape);
     global.handle(Key::Char, "f");
-    global.set_global_searcher([](std::string_view, std::span<const core::NoteMeta> notes)
-                                   -> std::expected<std::vector<search::GlobalHit>, search::QueryError> {
-        std::vector<search::GlobalHit> hits;
-        hits.push_back({.index = 0, .path = notes.front().path});
-        return hits;
-    });
+    global.set_global_searcher(
+        [](std::string_view, std::span<const core::NoteMeta> notes,
+           const search::GraphInput&) -> std::expected<std::vector<search::GlobalHit>, search::QueryError> {
+            std::vector<search::GlobalHit> hits;
+            hits.push_back({.index = 0, .path = notes.front().path});
+            return hits;
+        });
     type_chars(global, "pla");
     CHECK(global.handle(Key::Enter) == Intent::SavePrefs);
     CHECK(global.focus() == Focus::Preview);

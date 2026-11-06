@@ -45,8 +45,9 @@ std::string config_warnings_message(const std::vector<core::Error>& warnings);
 bool sync_restart_needed(const core::Config& before, const core::Config& after);
 
 // Ayarlar kaydında dosyadan çalışan config'e geçen sınırlar (TUI ve GUI aynı küme): haritanın düğüm ve
-// derinlik sınırı, uygulama açıkken `note config set limits.app.map_*` ile değişmiş olabilir; arayüz onları
-// haritaya hemen uygular. Diğer sınırlar açılışta kurulan modüllere verilir, yeniden başlatınca geçer.
+// derinlik sınırı ve ilişki araması (limits.search.relation_depth, tuning.search_relations), uygulama açıkken
+// `note config set` ile değişmiş olabilir; arayüz onları haritaya ve listeye hemen uygular. Diğer sınırlar
+// açılışta kurulan modüllere verilir, yeniden başlatınca geçer.
 void adopt_live_limits(core::Config& live, const core::Config& on_disk);
 
 }  // namespace noteapp::app

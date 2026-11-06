@@ -6,9 +6,11 @@
 #include "support/test_support.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <doctest/doctest.h>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace app = noteapp::app;
@@ -393,34 +395,54 @@ TEST_CASE("map relations: the picker filters folded names, prefix matches first,
 }
 
 TEST_CASE("map relations: rename and direction target one relation by id and say what changed") {
-    Scene s;
-    s.put("a.md", "a\n");
-    s.put("b.md", "b\n");
-    REQUIRE(app::relate_map_notes(s.store, note("a.md"), note("b.md"), {"uses", false}).has_value());
-    const core::RelationId id = s.links("a.md").related.front().id;
+    // Not kimlikleri UUIDv7: önde oluşturma milisaniyesi. Yönsüz kenar uçlarını kimlik sırasıyla saklar
+    // (relation_ends), yön değişiminde kenarın korunması ya da yeniden kurulması bu sıraya bağlıdır: iki sıra
+    // da denenir, ayrı milisaniyede oluşan notlarla sıra belirlenir.
+    for (const bool b_first : {false, true}) {
+        CAPTURE(b_first);
+        Scene s;
+        const std::string first = b_first ? "b.md" : "a.md";
+        const std::string second = b_first ? "a.md" : "b.md";
+        s.put(first, first.substr(0, 1) + "\n");
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        s.put(second, second.substr(0, 1) + "\n");
+        REQUIRE(app::relate_map_notes(s.store, note("a.md"), note("b.md"), {"uses", false}).has_value());
+        const core::RelationId id = s.links("a.md").related.front().id;
 
-    const auto renamed = app::rename_map_relation(s.store, np("a.md"), np("b.md"), id, "  cites ");
-    REQUIRE(renamed.has_value());
-    CHECK(*renamed == "Relation renamed to 'cites': a.md and b.md");
-    CHECK(s.related("a.md") == std::vector{core::RelatedNote{np("b.md"), "cites"}});
-    const auto unnamed = app::rename_map_relation(s.store, np("a.md"), np("b.md"), id, " ");
-    REQUIRE(unnamed.has_value());
-    CHECK(*unnamed == "Relation name removed: a.md and b.md");
-    CHECK(app::rename_map_relation(s.store, np("a.md"), np("b.md"), id, "a\nb").error().code ==
-          core::Error::Code::InvalidPath);
+        const auto renamed = app::rename_map_relation(s.store, np("a.md"), np("b.md"), id, "  cites ");
+        REQUIRE(renamed.has_value());
+        CHECK(*renamed == "Relation renamed to 'cites': a.md and b.md");
+        CHECK(s.related("a.md") == std::vector{core::RelatedNote{np("b.md"), "cites"}});
+        const auto unnamed = app::rename_map_relation(s.store, np("a.md"), np("b.md"), id, " ");
+        REQUIRE(unnamed.has_value());
+        CHECK(*unnamed == "Relation name removed: a.md and b.md");
+        CHECK(app::rename_map_relation(s.store, np("a.md"), np("b.md"), id, "a\nb").error().code ==
+              core::Error::Code::InvalidPath);
 
-    // Kaynak değişince kenar yeniden kurulur, kimliği değişir: satır yeniden okunur.
-    const auto directed = app::direct_map_relation(s.store, np("a.md"), np("b.md"), id, np("b.md"));
-    REQUIRE(directed.has_value());
-    CHECK(*directed == "Relation directed: b.md → a.md");
-    CHECK(s.related("a.md") == std::vector{core::RelatedNote{np("b.md"), "", core::RelationDirection::Incoming}});
-    const core::RelationId now = s.links("a.md").related.front().id;
-    const auto undirected = app::direct_map_relation(s.store, np("a.md"), np("b.md"), now, std::nullopt);
-    REQUIRE(undirected.has_value());
-    CHECK(*undirected == "Relation made undirected: a.md and b.md");
-    CHECK(s.related("a.md") == std::vector{core::RelatedNote{np("b.md")}});
-    CHECK(app::direct_map_relation(s.store, np("a.md"), np("b.md"), now, np("a.md")).error().code ==
-          core::Error::Code::NotFound);
+        // Kaynak değişince kenar yeniden kurulabilir, kimliği değişebilir: satır yeniden okunur.
+        const auto directed = app::direct_map_relation(s.store, np("a.md"), np("b.md"), id, np("b.md"));
+        REQUIRE(directed.has_value());
+        CHECK(*directed == "Relation directed: b.md → a.md");
+        CHECK(s.related("a.md") ==
+              std::vector{core::RelatedNote{np("b.md"), "", core::RelationDirection::Incoming}});
+        const core::RelationId now = s.links("a.md").related.front().id;
+        const auto undirected = app::direct_map_relation(s.store, np("a.md"), np("b.md"), now, std::nullopt);
+        REQUIRE(undirected.has_value());
+        CHECK(*undirected == "Relation made undirected: a.md and b.md");
+        CHECK(s.related("a.md") == std::vector{core::RelatedNote{np("b.md")}});
+
+        // Yönsüz↔yönlü geçişte kimlik sıraya göre kalabilir; ters yönlü iki kenarın uçları ise her sırada
+        // farklıdır: çevrilen yönlü ilişkinin eski kimliği her zaman bayatlar.
+        const core::RelationId plain = s.links("a.md").related.front().id;
+        REQUIRE(app::direct_map_relation(s.store, np("a.md"), np("b.md"), plain, np("a.md")).has_value());
+        CHECK(s.related("a.md") ==
+              std::vector{core::RelatedNote{np("b.md"), "", core::RelationDirection::Outgoing}});
+        const core::RelationId outgoing = s.links("a.md").related.front().id;
+        REQUIRE(app::direct_map_relation(s.store, np("a.md"), np("b.md"), outgoing, np("b.md")).has_value());
+        const auto stale = app::direct_map_relation(s.store, np("a.md"), np("b.md"), outgoing, np("a.md"));
+        REQUIRE_FALSE(stale.has_value());
+        CHECK(stale.error().code == core::Error::Code::NotFound);
+    }
 }
 
 TEST_CASE("map relations: a flip points the relation the other way from the shown note") {

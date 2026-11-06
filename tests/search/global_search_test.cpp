@@ -4,6 +4,8 @@
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <doctest/doctest.h>
 #include <fstream>
@@ -270,4 +272,73 @@ TEST_CASE("binary notes, trashed notes and notes outside the given list are not 
     const auto result = search_all("plan", w.notes, w.index, limits_with(std::nullopt));
     REQUIRE(result.has_value());
     CHECK(only(*result).path.string() == "canli.md");
+}
+
+namespace {
+
+core::NotePath np(std::string_view path) {
+    return core::NotePath::parse(path).value();
+}
+
+// budget.md adla, plan.md içerikle (ve [[bağlantı]]yla) bulunur; team.md yalnız "funds" ilişkisiyle bağlı.
+struct RelatedWorld : World {
+    std::vector<core::NoteEdge> edges;
+    RelatedWorld() {
+        note("budget.md", "rakamlar\n");
+        note("plan.md", "budget [[budget]]\n");
+        note("team.md", "ekip\n");
+        note("other.md", "yok\n");
+        REQUIRE(store.add_relation(np("team.md"), np("budget.md"), {"funds", true}).has_value());
+        refresh();
+        edges = store.edges().value();
+    }
+    std::vector<GlobalHit> find(std::string_view query, std::optional<std::size_t> depth = 1,
+                                std::optional<std::uint64_t> limit = std::nullopt) {
+        auto hits = search_all(query, notes, index, limits_with(limit), {}, GraphInput{edges, depth});
+        REQUIRE(hits.has_value());
+        return *hits;
+    }
+    static Paths paths_of(const std::vector<GlobalHit>& hits) {
+        Paths out;
+        for (const GlobalHit& hit : hits)
+            out.push_back(hit.path.string());
+        return out;
+    }
+};
+
+}  // namespace
+
+TEST_CASE("relation hits follow direct hits with a reason; a note found both ways shows once, directly") {
+    RelatedWorld w;
+    const auto hits = w.find("budget");
+    REQUIRE(RelatedWorld::paths_of(hits) == Paths{"budget.md", "plan.md", "team.md"});
+    CHECK_FALSE(hits[0].reason.has_value());
+    CHECK_FALSE(hits[1].reason.has_value());  // içerik + bağlı: doğrudan eşleşme kazanır
+    REQUIRE(hits[2].reason.has_value());
+    CHECK(hits[2].reason->kind == RelationReason::Kind::Linked);
+    CHECK(hits[2].reason->other == "budget.md");
+    CHECK(hits[2].reason->label == "funds");
+    CHECK_FALSE(hits[2].name_matched);
+    CHECK_FALSE(hits[2].content_matched);
+
+    const auto named = w.find("funds");  // ad ve içerikte yok: ilişkinin iki ucu
+    REQUIRE(RelatedWorld::paths_of(named) == Paths{"team.md", "budget.md"});  // eşit neden: en yeni önce
+    REQUIRE(named[0].reason.has_value());
+    CHECK(named[0].reason->kind == RelationReason::Kind::Relation);
+    CHECK(named[0].reason->direction == core::RelationDirection::Outgoing);
+    CHECK(named[1].reason->direction == core::RelationDirection::Incoming);
+}
+
+TEST_CASE("relation hits stay below direct hits under an explicit sort and give way to them at the limit") {
+    RelatedWorld w;
+    CHECK(RelatedWorld::paths_of(w.find("budget sort:-name")) == Paths{"plan.md", "budget.md", "team.md"});
+    CHECK(RelatedWorld::paths_of(w.find("budget", 1, 2)) == Paths{"budget.md", "plan.md"});
+}
+
+TEST_CASE("relation search off finds direct hits only; rel: and linked: still filter") {
+    RelatedWorld w;
+    CHECK(RelatedWorld::paths_of(w.find("budget", std::nullopt)) == Paths{"budget.md", "plan.md"});
+    const Paths related = RelatedWorld::paths_of(w.find("rel:funds", std::nullopt));
+    CHECK(std::ranges::is_permutation(related, Paths{"budget.md", "team.md"}));
+    CHECK(RelatedWorld::paths_of(w.find("linked:budget ekip", std::nullopt)) == Paths{"team.md"});
 }

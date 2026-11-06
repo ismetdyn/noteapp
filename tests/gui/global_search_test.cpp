@@ -103,6 +103,37 @@ TEST_CASE_FIXTURE(SearchFixture,
     CHECK(text.contains("plan yapıldı"));
 }
 
+// İlişki araması (SPEC-gui): ad ve içerikte bulunmayan not ilişkisiyle gelir, nedeni satırda ikincil metin.
+TEST_CASE_FIXTURE(SearchFixture,
+                  "a note found only through a tag or a relation draws its reason on the row") {
+    {
+        noteapp::core::NoteStore store(store_dir());
+        REQUIRE(store
+                    .add_relation(*noteapp::core::NotePath::parse("kod.py"),
+                                  *noteapp::core::NotePath::parse("plan.md"), {"uses", true})
+                    .has_value());
+    }
+    auto state = make_state();
+    auto view = make_view(*state);
+    settle(*view);
+    state->set_query("ev");  // ad modu: hiçbir yolda yok, notlar.md'nin #ev etiketi
+    REQUIRE(rows(*state) == Strings{"notlar.md"});
+    REQUIRE(state->model().row(0).reason.has_value());
+    {
+        RenderedText text;
+        settle(*view);
+        CHECK(text.contains("tag: #ev"));
+    }
+    state->set_search_mode(SearchMode::Global);
+    state->set_query("uses");  // ad ve içerikte yok: ilişkinin iki ucu
+    const Strings related = rows(*state);
+    CHECK(std::ranges::is_permutation(related, Strings{"kod.py", "plan.md"}));
+    RenderedText text;
+    settle(*view);
+    CHECK(text.contains("relation: uses → plan.md"));
+    CHECK(text.contains("relation: uses ← kod.py"));
+}
+
 TEST_CASE_FIXTURE(SearchFixture, "the tag picker lists tags; picking one filters by tag: in name mode") {
     auto state = make_state();
     state->set_search_mode(SearchMode::Content);

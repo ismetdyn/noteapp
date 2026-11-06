@@ -46,6 +46,8 @@ bool sync_restart_needed(const core::Config& before, const core::Config& after) 
 void adopt_live_limits(core::Config& live, const core::Config& on_disk) {
     live.limits.app.map_nodes = on_disk.limits.app.map_nodes;
     live.limits.app.map_depth = on_disk.limits.app.map_depth;
+    live.limits.search.relation_depth = on_disk.limits.search.relation_depth;
+    live.tuning.search_relations = on_disk.tuning.search_relations;
 }
 
 }  // namespace noteapp::app

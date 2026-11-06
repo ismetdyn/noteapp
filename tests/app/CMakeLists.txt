@@ -7,6 +7,7 @@ noteapp_add_test(app
     item_ops_test.cpp
     label_fold_test.cpp
     listing_test.cpp
+    map_explore_test.cpp
     map_relations_test.cpp
     notices_test.cpp
     settings_test.cpp

@@ -152,11 +152,13 @@ GuiState::GuiState(core::Config config)
     model_.listing().set_content_searcher([this](std::string_view text) {
         return content_index().search(text, config_.limits.search.content_results.cap());
     });
-    model_.listing().set_global_searcher(
-        [this, views](std::string_view query, std::span<const core::NoteMeta> notes) {
-            return search::search_all(query, notes, content_index(), config_.limits.search,
-                                      std::chrono::system_clock::now(), views);
-        });
+    model_.listing().set_edge_source([this] { return app::search_edges(store_); });
+    model_.listing().set_relation_depth(app::relation_depth(config_));
+    model_.listing().set_global_searcher([this, views](std::string_view query,
+                                                       std::span<const core::NoteMeta> notes,
+                                                       const search::GraphInput& graph) {
+        return search::search_all(query, notes, content_index(), config_.limits.search, views, graph);
+    });
     load_list_prefs();  // ilk seçim tercih edilen sıranın ilk satırı olsun
     rescan();
     load_gui_state();

@@ -3,6 +3,7 @@
 #include "app/item_ops.hpp"
 #include "app/listing.hpp"
 #include "app/note_map.hpp"
+#include "app/notices.hpp"
 #include "app/tabs.hpp"
 #include "core/file_icons.hpp"
 #include "core/folder_tree.hpp"
@@ -89,6 +90,9 @@ enum class Intent {
     ParkEditor,       // Ctrl+K (editör): sekme açık kalır, arama girdisine geçilir
     OpenMapNode,      // haritada Tab ile seçilen not açılır (map_selected)
     MapEdit,          // haritada kenar kur ya da kaldır (take_map_edit; app::map_relations)
+    MapNotice,        // haritanın sonucu alt satıra (take_map_notice): en kısa yol, bütün çizgede açma
+    MapRelationFilter,  // haritada `N`: ilişki adı süzgeci; adlar depodan (begin_map_relation_filter)
+    TrashMapNode,     // haritada `d`: hedef not seçilip onaysız çöpe (işaretler değil); `u` geri alır
     ImportFiles,      // palet `import`: altta dosya sistemi yolu girdisi, hedef app::new_note_folder
 };
 
@@ -132,6 +136,7 @@ struct Row {
     std::string label = {};       // klasör görünümünde gösterilen ad; boşsa tam yol
     std::size_t depth = 0;        // ağaçta girinti: geçerli klasörün çocukları 0
     std::size_t number = 0;       // gösterilen numara: kendi klasörü içinde, düz listede sıra
+    std::optional<search::RelationReason> reason = std::nullopt;  // yalnız ilişkiyle bulunan satırın nedeni
 
     std::string shown_text() const { return label.empty() ? path.string() : label; }
 };
@@ -185,6 +190,10 @@ public:
     // hiçbir notu geçirmez.
     void set_view_lookup(search::ViewLookup views) { listing_.set_view_lookup(std::move(views)); }
     void set_fuzzy_candidate_chars(std::size_t chars) { listing_.set_fuzzy_candidate_chars(chars); }
+    // İlişki araması (SPEC-search): kenarlar depodan arama başına bir kez, derinlik config'ten.
+    void set_edge_source(app::EdgeSource source) { listing_.set_edge_source(std::move(source)); }
+    // Ayarlar kaydında da çağrılır: açık arama yeni derinlikle yeniden süzülür.
+    void set_relation_depth(std::optional<std::size_t> depth);
     void set_views(std::vector<std::string> names);
     // İşçiden gelen senkron durumları (UI iş parçacığında): yeniden taramada da korunur. Değiştiyse true.
     bool set_sync_states(std::map<core::NotePath, core::SyncState> states);
@@ -240,8 +249,29 @@ public:
         std::optional<app::MapEdge> edge;                        // kenara sağ tık: kaldırılacak kenar
         bool choosing = false;                                   // not → not: `r` / `l` bekleniyor
         std::optional<std::pair<int, int>> drag = std::nullopt;  // fare sürüklüyor: işaretçinin tuval noktası
+        bool path = false;      // `R` (route) kipi: Enter en kısa yolu arar, hedef yalnız not (F2)
+        bool directed = false;  // yol kipinde `d`: kenarlar yönünde
     };
     const std::optional<MapLink>& map_link() const { return map_link_; }
+
+    // --- Harita keşfi (F2, SPEC-tui "Harita"; kural app::MapModel, GUI ile ortak) ---
+    // Hedef Tab'la seçilen not, yoksa gösterilen not: `x` komşuları aç/kapat (geçerli kenar süzgecinin türü ve
+    // adıyla), `X` bir adım daha, `P` sabitle/çöz, `U` hepsini çöz, `R` yol kipi, `d` çöpe, `n` yeni not. `e`
+    // kenar türü süzgeci, `#` etiket ve `N` ilişki adı satırı, `/` haritada bul.
+    enum class MapInputKind { Find, Tag, Relation };
+    const std::optional<MapInputKind>& map_input_kind() const { return map_input_kind_; }
+    const InputLine& map_input() const { return map_input_; }
+    // Intent::MapRelationFilter'ın işi: `names` (NoteStore::relation_names) Tab listesi olur.
+    void begin_map_relation_filter(std::span<const core::RelationName> names);
+    const std::vector<std::size_t>& map_found() const { return map_found_; }  // bul satırının eşleşmeleri
+    std::size_t map_found_at() const { return map_found_at_; }                // gösterilen eşleşme
+    struct MapNotice {
+        app::NoticeKind kind = app::NoticeKind::Info;
+        std::string text;  // yollar güvenilmez: alt satır terminal_safe'ten geçirir
+    };
+    std::optional<MapNotice> take_map_notice() { return std::exchange(map_notice_, std::nullopt); }
+    // `n`'nin satırından not oluştu: haritada kalır, panelin ortasına sabitlenir (GUI'de sağ tıklanan yer).
+    void map_note_created(const core::NotePath& path);
     // Intent::MapEdit'in işi; `kind` boşsa iki düğüm arasında kenar yok (ileti). Connect Related'da ad satırı
     // açılır (F1); Rename, Direct yalnız ilişkide (kimliğiyle).
     enum class MapEditAction { Connect, Remove, Rename, Direct };
@@ -530,6 +560,19 @@ private:
     void pan_map(float dx, float dy);
     void zoom_map(float factor);
     void step_map_selection(int delta);
+    // F2 keşif
+    std::optional<std::string> map_target() const;  // Tab'la seçilen, yoksa haritadaki gösterilen not
+    std::optional<Intent> handle_map_explore_key(std::string_view text);
+    Intent handle_map_input(Key key, std::string_view text);
+    void begin_map_input(MapInputKind kind, std::vector<std::string> candidates, std::string text);
+    void submit_map_input();
+    void refresh_map_found();
+    void step_map_found(int delta);
+    void center_map_on(std::size_t node);
+    void cycle_map_edges();
+    Intent toggle_map_pin();
+    Intent find_map_path();
+    Intent map_notice(app::NoticeKind kind, std::string text);
     std::optional<unsigned> command_context() const;
     const char* needs_block(CommandNeeds needs) const;
     const Command* bound_command(unsigned context, Key key, std::string_view text) const;
@@ -639,6 +682,13 @@ private:
     std::string map_selected_;                // Tab ile seçilen notun yolu
     std::optional<MapLink> map_link_;         // `C` kipi ya da fareyle sürükleme
     std::optional<MapEditRequest> map_edit_;  // Intent::MapEdit bekleyen iş
+    std::optional<MapInputKind> map_input_kind_;    // açık süzgeç ya da bul satırı
+    InputLine map_input_{InputKind::Find};          // metnin tamamı tek değerdir (sözcüklere bölünmez)
+    std::vector<std::size_t> map_found_;            // bul: eşleşen düğümler, harita sırasıyla
+    std::size_t map_found_at_ = 0;                  // bul: gösterilen eşleşme
+    std::size_t map_found_version_ = 0;             // eşleşmelerin kurulduğu harita sürümü (MapModel::version)
+    std::optional<MapNotice> map_notice_;           // Intent::MapNotice bekleyen ileti
+    std::optional<app::LayoutPoint> map_new_at_;    // `n`: oluşturulacak notun yeri
     std::optional<std::string> saved_spot_;   // düz listeye geçerken klasördeki seçim; dönüşte geri gelir
     mutable SharedInputSources relative_sources_;
     mutable std::string relative_sources_folder_;

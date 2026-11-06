@@ -19,6 +19,7 @@
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
 #include <iterator>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -131,6 +132,17 @@ TEST_CASE("TUI: per-keystroke filter with 5000 notes within 50 ms") {
     for (int run = 0; run < kRuns; ++run) {
         tui::TuiState state;
         state.set_notes(generated_notes("note-"));
+        // İlişki araması da tuş bütçesindedir: not başına bir bağlantı ve bir adlı ilişki (10.000 kenar).
+        auto edges = std::make_shared<std::vector<core::NoteEdge>>();
+        const auto metas = state.metas();
+        for (std::size_t n = 0; n < metas.size(); ++n) {
+            edges->push_back({metas[n].path, metas[(n * 7 + 1) % metas.size()].path});
+            edges->push_back({.from = metas[n].path,
+                              .to = metas[(n * 13 + 5) % metas.size()].path,
+                              .kind = core::EdgeKind::RelatedTo,
+                              .name = n % 2 == 0 ? "uses" : "cites"});
+        }
+        state.set_edge_source([edges] { return edges; });
         CHECK(render_text(state).find("5000 notes") != std::string::npos);
         state.handle(tui::Key::Char, "/");  // yazı yalnız Arama odağında süzer
         double worst = 0;

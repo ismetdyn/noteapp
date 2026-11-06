@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <doctest/doctest.h>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -153,4 +154,20 @@ TEST_CASE("an invalid query keeps rows index-safe when the notes or the folder c
     model.set_folder("b");
     REQUIRE(model.row_count() == 1);
     CHECK(model.display(0) == "b/z.md");
+}
+
+// İlişki adı güvenilmez: senkronla bozuk ad gelse de satırın nedeni tek satırlık görünür metindir.
+TEST_CASE("a relation reason is drawn without raw control characters") {
+    NoteListModel model;
+    model.set_notes({make_note("a.md", 1), make_note("b.md", 2)});
+    const auto edges = std::make_shared<const std::vector<noteapp::core::NoteEdge>>(
+        std::vector{noteapp::core::NoteEdge{*NotePath::parse("a.md"), *NotePath::parse("b.md"),
+                                            noteapp::core::EdgeKind::RelatedTo, "x\ny", true}});
+    model.listing().set_edge_source([edges] { return edges; });
+    model.set_query("x");
+    REQUIRE(model.row_count() == 2);
+    for (int row = 0; row < model.row_count(); ++row) {
+        CHECK(model.reason(row).find('\n') == std::string::npos);
+        CHECK(model.reason(row).find('x') != std::string::npos);
+    }
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/config.hpp"
 #include "core/folder_tree.hpp"
 #include "core/limits.hpp"
 #include "core/note_path.hpp"
@@ -8,6 +9,7 @@
 #include "search/fuzzy.hpp"
 #include "search/global_search.hpp"
 #include "search/query.hpp"
+#include "search/relation_search.hpp"
 
 #include <array>
 #include <cstddef>
@@ -15,6 +17,7 @@
 #include <expected>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <span>
@@ -60,8 +63,20 @@ enum class SearchMode { Name, Content, Global };
 
 // İçerik ve genel arama dışarıdan verilir: ContentIndex'in G/Ç'si ve tembel kurulumu listenin işi değil.
 using ContentSearcher = std::function<std::vector<search::ContentResult>(std::string_view text)>;
+// graph: listenin kenarları ve ilişki derinliği (set_edge_source, set_relation_depth); search_all'a geçer.
 using GlobalSearcher = std::function<std::expected<std::vector<search::GlobalHit>, search::QueryError>(
-    std::string_view query, std::span<const core::NoteMeta> notes)>;
+    std::string_view query, std::span<const core::NoteMeta> notes, const search::GraphInput& graph)>;
+// Arama başına bir kez istenen kenarlar (ilişki araması, `rel:`, `linked:`); nullptr: kenar yok.
+using EdgeSource = std::function<std::shared_ptr<const std::vector<core::NoteEdge>>()>;
+// Deponun paylaşılan kenarları (NoteStore::shared_edges). Okunamazsa uyarı loglanır ve nullptr döner: arama
+// kenarsız sürer (etiket yine eşleşir), depo hatasını açılış zaten gösterir.
+std::shared_ptr<const std::vector<core::NoteEdge>> search_edges(const core::NoteStore& store);
+// İlişki aramasının komşu adımı: tuning.search_relations kapalıysa nullopt, değilse
+// limits.search.relation_depth (0 sınırsız: SIZE_MAX).
+std::optional<std::size_t> relation_depth(const core::Config& config);
+// Satırın neden metni ("tag: #x", "relation: uses → b.md", "linked: b.md (uses)"); etkin dilde. Ad ve yol
+// güvenilmez: arayüz kendi temizliğinden geçirir.
+std::string reason_text(const search::RelationReason& reason);
 // `index` tembel kurulur (ilk aramada). Sonuç sınırı limits.search.content_results; 0 = tüm sonuçlar.
 ContentSearcher content_searcher(std::function<const search::ContentIndex&()> index, core::Limit results);
 
@@ -79,6 +94,8 @@ struct ListRow {
     std::size_t hit_count = 0;                // içerik eşleşmesi: eşleşen satır sayısı
     std::vector<search::Hit> hits = {};       // içerik: ilk eşleşen satırlar; genel: en iyi satır
     bool show_best_line = false;              // genel arama: en iyi satır yolun altında gösterilir
+    // Yalnız ilişkiyle bulunan satır (ad ve içerikte yok): nedeni; doğrudan satırların altında durur.
+    std::optional<search::RelationReason> reason = std::nullopt;
 };
 
 // Arama sonucu. Sorgu bozuksa `error` doludur ve satırlar son geçerli sorgunun bu listedeki sonucudur
@@ -103,6 +120,11 @@ public:
     void set_view_lookup(search::ViewLookup views) { views_ = std::move(views); }
     void set_content_searcher(ContentSearcher searcher) { content_searcher_ = std::move(searcher); }
     void set_global_searcher(GlobalSearcher searcher) { global_searcher_ = std::move(searcher); }
+    // Kenarlar yalnız gerektiğinde (metinli arama ilişki açıkken, `rel:`/`linked:`) arama başına bir kez
+    // istenir.
+    void set_edge_source(EdgeSource source) { edge_source_ = std::move(source); }
+    // relation_depth(config); verilmezse defaults.toml'daki değer (1).
+    void set_relation_depth(std::optional<std::size_t> depth) { relation_depth_ = depth; }
     // Kullanıcının tercih ettiği sıra: ağaç, Ayrıntılar ve metinsiz arama bu sırayla; `sort:` onu ezer.
     void set_sort(search::SortSpec sort) { sort_ = sort; }
     const search::SortSpec& sort() const { return sort_; }
@@ -144,9 +166,25 @@ public:
 
 private:
     // Geçerli sorgunun satırları; yalnız genel arama hata döndürebilir.
-    std::expected<std::vector<ListRow>, search::QueryError> rows_for(const search::ParsedQuery& parsed,
+    // `rel:`/`linked:` burada kenarlara bağlanır: parsed kopyadır.
+    std::expected<std::vector<ListRow>, search::QueryError> rows_for(search::ParsedQuery parsed,
                                                                      std::string_view query, SearchMode mode,
                                                                      std::string_view scope) const;
+    std::shared_ptr<const std::vector<core::NoteEdge>> edges_for(const search::ParsedQuery& parsed) const;
+    const search::RelationGraph*
+    index_of(const std::shared_ptr<const std::vector<core::NoteEdge>>& edges) const;
+    std::vector<std::size_t> scoped_meta_nodes(const search::RelationGraph* index, std::string_view scope,
+                                               const std::vector<std::size_t>& scoped_index) const;
+    std::vector<ListRow> content_rows(const search::ParsedQuery& parsed,
+                                      std::span<const core::NoteMeta> metas,
+                                      const search::GraphInput& graph) const;
+    std::vector<ListRow> name_rows(const search::ParsedQuery& parsed, std::span<const core::NoteMeta> metas,
+                                   const std::vector<std::size_t>* scoped_index,
+                                   const search::GraphInput& graph) const;
+    std::vector<ListRow> with_relation_rows(std::vector<ListRow> direct, const search::ParsedQuery& parsed,
+                                            std::span<const core::NoteMeta> metas,
+                                            std::span<const std::size_t> rest,
+                                            const search::GraphInput& graph) const;
     void append_children(const core::FolderNode& node, std::size_t depth, bool recurse,
                          std::vector<ListRow>& rows) const;
     void sort_rows(std::vector<ListRow>& rows, const search::SortSpec& sort) const;
@@ -163,7 +201,14 @@ private:
     search::ViewLookup views_;
     ContentSearcher content_searcher_;
     GlobalSearcher global_searcher_;
-    std::string last_valid_query_;  // bozuk sorguda satırlar bununla kurulur
+    EdgeSource edge_source_;
+    std::optional<std::size_t> relation_depth_ = 1;
+    // Son kenar listesinin arama dizini (index_of): liste aynı kaldıkça tuş başına yeniden kurulmaz. Liste
+    // tutulur: kimliği yeniden kullanılmış başka liste dizini eskitmesin.
+    mutable std::shared_ptr<const std::vector<core::NoteEdge>> indexed_edges_;
+    mutable std::shared_ptr<const search::RelationGraph> edge_index_;
+    mutable std::vector<std::size_t> meta_nodes_;  // metas_[i]'nin edge_index_ düğümü; boş: kurulmadı
+    std::string last_valid_query_;                 // bozuk sorguda satırlar bununla kurulur
     // Arayüz config'ten verir (set_fuzzy_candidate_chars); verilmezse defaults.toml'daki değer.
     std::size_t fuzzy_candidate_chars_ = search::kDefaultFuzzyCandidateChars;
 };

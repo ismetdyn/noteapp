@@ -175,7 +175,19 @@ tab_closed_missing = "Sekme kapandı: '{path}' artık yok"
 map_whole = "bütün çizge"
 map_depth = "derinlik {depth}"
 map_tags = " · etiketler"
-map_status = "{scope}{tags}  Tab seç  Enter aç  C bağla  oklar + - 0  w bütün  t etiket  1-{max} derinlik"
+map_status = "{scope}{tags}{filters}  Tab seç  Enter aç  x komşu  / bul  R yol  C bağla  P sabitle  e # N süz  w bütün  t etiket  1-{max} derinlik  oklar + - 0"
+map_filter_links = " · yalnız bağlantılar"
+map_filter_related = " · yalnız ilişkiler"
+map_filter_named = " · '{name}' ilişkisi"
+map_filter_tag = " · #{tag}"
+map_path_shown = " · yol {hops} adım"
+map_route = "yol {from} → {to}{directed}  Tab hedef  Enter bul  d yönlü  Esc vazgeç"
+map_route_directed = " (yönlü)"
+map_find_label = "Bul:"
+map_tag_label = "Etiket süzgeci:"
+map_relation_label = "İlişki süzgeci:"
+map_find_hints = "Enter Tab sonraki  ⇧Tab önceki  Esc kapat"
+map_filter_hints = "Enter uygula  Tab liste  boş = kapalı  Esc vazgeç"
 map_link = "{from} → {to}  Tab hedef  Enter bağla  d kenarı kaldır  Esc vazgeç"
 map_choose = "{from} → {to}  r ilişkili  l bağlantı ({from} içine [[wiki]])  Esc vazgeç"
 map_relation = "{from} {arrow} {to}  {name}  n ad  f yön çevir  u yönsüz  d kaldır  Esc vazgeç"
@@ -364,7 +376,19 @@ Harita (palet view.map; view.tree döner)
 Tab ⇧Tab      not seç, Enter açar
 w t           bütün çizge, etiket  1-9 derinlik
 gt            çöp (haritada t etikettir)
-/             arama eşleşen notları yakar
+/             haritada bul: Enter Tab sonraki,
+              ⇧Tab önceki, Esc eşleşmede kalır
+:search       liste araması notlarını yakar
+x X           seçili notun komşularını aç/kapat;
+              X: bir adım daha
+e N #         kenar süzgeci: bağlantı/ilişki;
+              ilişki adı; etiket (Tab listeler)
+R             seçili nottan en kısa yol: Tab
+              hedef, d yönlü, Enter bulur, Esc
+              yolu temizler
+P U           seçiliyi sabitle/çöz, hepsini çöz
+n d u         buraya yeni not, seçiliyi çöpe,
+              u geri getirir
 C             seçili nottan bağla: Tab hedef,
               Enter bağlar (not: r ilişkili,
               l [[bağlantı]]; etiket: ekler),
@@ -712,13 +736,21 @@ view_tree_tip = "Klasörler ve notlar tek ağaçta; oklar klasörü açar ve kap
 view_details = "Ayrıntılar"
 view_details_tip = "Yalnız geçerli klasör, boyut ve tarihlerle; çift tıklama ya da Enter klasöre girer"
 view_map = "Harita"
-view_map_tip = "Notlar bağlantı ve ilişkileriyle çizge olarak. Tıklama notu açar, çift tıklama ağaçta açar, sürükleme sabitler; tekerlek ya da +/- yakınlaştırır, oklar ya da sürükleme kaydırır, 0 sığdırır. Shift+sürükleme (ya da düğüme sağ tık → Bağla…, sonra hedefe tıklama) düğümü ötekine ilişkilendirir, bağlar ya da etiketler; kenara ya da düğüme sağ tık ilişkiyi kaldırır"
+view_map_tip = "Notlar bağlantı ve ilişkileriyle çizge olarak. Tıklama notu açar, çift tıklama komşularını açar ya da kapar, sürükleme ya da P sabitler (U hepsini çözer), Ctrl+F düğüm bulur; tekerlek ya da +/- yakınlaştırır, oklar ya da sürükleme kaydırır, 0 sığdırır. Shift+sürükleme (ya da düğüme sağ tık → Bağla…, sonra hedefe tıklama) düğümü ötekine ilişkilendirir, bağlar ya da etiketler; düğüme sağ tık menüsünü (aç, komşular, sabitle, en kısa yol, çöp), kenara sağ tık kaldırmayı, boşluğa sağ tık yeni notu açar"
 map_whole = "Tüm çizge"
 map_whole_tip = "Kapalı: yalnız gösterilen notun çevresi"
 map_depth = "Derinlik {depth}"
 map_depth_tip = "Gösterilen nottan kaç bağlantı uzağa kadar"
 map_tags = "Etiketler"
 map_tags_tip = "Etiketleri notlarına bağlı küçük kareler olarak göster"
+map_links = "Bağlantılar"
+map_links_tip = "[[Bağlantı]]ları göster; kapalı: gizli ve üzerinden gezilmez"
+map_related = "İlişkiler"
+map_related_tip = "İlişkileri (RELATED_TO) göster; kapalı: gizli ve üzerinden gezilmez"
+map_relation_any = "Tüm ilişkiler"
+map_relation_tip = "Yalnız bu adı taşıyan ilişkiler"
+map_tag_hint = "#etiket"
+map_tag_tip = "Yalnız bu etiketli notlar (aramadaki tag: gibi; gösterilen not kalır)"
 map_capped = "{total} düğümden {shown} tanesi gösteriliyor. Bir bölümü tam görmek için Tüm çizge'yi kapatın ya da derinliği düşürün."
 details_up = "Yukarı"
 details_up_tip = "Üst klasöre çık (Sol ok)"
@@ -883,8 +915,8 @@ show_usage = "Kullanım: note show SORGU"
 edit_usage = "Kullanım: note edit SORGU"
 export_usage = "Kullanım: note export --pdf SORGU|YOL [-o ÇIKTI] | note export --all DİZİN [--ignore-skipped]"
 exported = "Dışa aktarıldı: {path}"
-find_usage = "Kullanım: note find TERİM... [-n N] [--json]"
-find_no_match = "'{query}' geçen not yok"
+find_usage = "Kullanım: note find TERİM... [-n N] [-l] [--json]"
+find_no_match = "'{query}' geçen ya da onunla ilişkili not yok"
 invalid_limit = "--limit pozitif bir tam sayı ister, verilen: '{value}'"
 config_usage = "Kullanım: note config path | list | get ANAHTAR | set ANAHTAR DEĞER"
 config_unknown_key = "Bilinmeyen ayar: {key} ('note config list' ile bakın)"
@@ -950,7 +982,7 @@ help_tags = "Canlı notların #etiketlerini not sayılarıyla listeler (AD<TAB>S
 help_import = "Dosyaları bayt bayt not olarak içe alır (BOM, CRLF ve ikili korunur; ikili not salt okunurdur). Klasör kendi adıyla, alt klasörleriyle gelir. Ad dosya adından, tip uzantıdan gelir (--type yerine geçer; uzantı yoksa içerikten tespit). Dolu ad -2, -3 alır; --overwrite bunun yerine o notun üzerine yazar. --name tek YOL'u adlandırır. Bağlar izlenmez, klasör içindeki gizli girdiler dışarıda kalır, özgün dosyalar hiç değişmez. Atlanan ya da alınamayan varsa çıkış 1"
 help_view = "Kayıtlı Cypher görünümleri: salt okunur sorguyu adla kaydet (--force değiştirir), listele (AD<TAB>SORGU), note query çıktısıyla çalıştır, sil ya da yazdır. Görünümler notlar gibi senkronlanır; yazan sorgu kayıtta da çalıştırmada da reddedilir. Aramada view:AD notları görünümün döndürdüklerine süzer"
 help_relation = "Notlar arası adlı ilişkiler (RELATED_TO). add A ile B'yi ilişkilendirir: varsayılan adsız ve yönsüz, --name ad verir, --directed A'dan B'ye yönlendirir. Bir çiftte ad başına en çok bir ilişki ve bir adsız ilişki olur. rm çiftin tek ilişkisini ya da --name (boş: adsız) veya --id ile seçileni kaldırır; rename ESKİ adlı ilişkiyi (boş: adsız) YENİ ada (boş: adsız) çevirir. ls adları sayılarıyla (AD<TAB>SAYI), ls NOT notun ilişkilerini (YOL<TAB>AD<TAB>YÖN<TAB>KİMLİK) listeler. Başka cihazdan gelen adlar denetim ve görünmez karakter olmadan yazılır"
-help_find = "Not içeriklerinde arar (tüm terimler geçmeli); yol:satır: kesit yazar; --limit N gösterilen not sayısını sınırlar"
+help_find = "Not içeriklerinde arar (tüm terimler geçmeli); yol:satır: kesit yazar. Terminalde, -l ya da --json ile etiketi, ilişki adı ya da bağlı notu eşleşen notlar ardından nedenleriyle gelir (düz boru çıktısı yalnız içerik); --limit N gösterilen not sayısını sınırlar"
 help_show = "En iyi eşleşmeyi yazdırır (tam yol önceliklidir; seçilen yol stderr'e yazılır)"
 help_edit = "En iyi eşleşmeyi editörde açar"
 help_rm = "Notu siler (yalnız tam yol); onay ister, terminal dışında -y gerekir"
@@ -1077,6 +1109,7 @@ opt_editor = "Editörü her durumda aç"
 opt_help = "Yardımı göster"
 opt_version = "Sürümü göster"
 opt_limit = "En çok bu kadar not göster"
+opt_find_long = "Etiket ya da ilişkiyle bulunan notun nedeni de yazılır"
 opt_long = "Zaman, boyut, tür ve yol sütunlarda"
 opt_print0 = "Her yolu NUL baytıyla bitir (xargs -0 için)"
 opt_yes = "Sormadan sil"
@@ -1184,6 +1217,35 @@ rename_relation = "Yeniden adlandır…"
 flip_relation = "Yönü çevir"
 make_undirected = "Yönsüz yap"
 make_directed = "Yönlü yap: {from} → {to}"
+# F2 keşif (app::MapModel; GUI menüleri ve TUI tuşları ortak). Yollar güvenilmez.
+open = "Aç"
+expand = "Komşuları aç"
+expand_all = "Tümü"
+expand_links = "Bağlantılar"
+expand_related = "İlişkiler"
+expand_named = "'{name}' ilişkisi"
+collapse = "Komşuları kapat"
+whole_graph_open = "Bütün çizgede her komşu zaten görünür"
+pin = "Sabitle"
+unpin = "Sabitlemeyi kaldır"
+unpin_all = "Tüm sabitlemeleri kaldır"
+pinned = "{path} sabitlendi"
+unpinned = "{path} serbest"
+unpinned_all = "Bütün düğümler serbest"
+path = "En kısa yol…"
+path_directed = "Yönlü en kısa yol…"
+path_pending = "{from} → yolun sonundaki düğüme tıklayın; Esc vazgeçer"
+path_found = "En kısa yol {from} → {to}: {hops} adım"
+path_none = "{from} ile {to} arasında yol yok"
+path_none_directed = "{from} → {to} yönünde yol yok"
+path_hidden = "En kısa yol {from} → {to}: {hops} adım, ama limits.app.map_nodes onu çizmeye yer bırakmıyor"
+trash_needs_selection = "Önce Tab ile bir not seçin: d seçili notu çöpe atar"
+clear_path = "Yolu temizle"
+new_note = "Buraya yeni not…"
+trash = "Çöpe at"
+find_hint = "Haritada bul"
+find_count = "{at}/{count}"
+find_none = "eşleşme yok"
 
 [graph]
 cypher_syntax = "Sorgu söz dizimi hatası, satır {line}, sütun {col}: {what}"
@@ -1300,3 +1362,11 @@ tab_new = "Yeni sekme"
 tab_close = "Sekmeyi kapat"
 tab_next = "Sonraki sekme"
 tab_previous = "Önceki sekme"
+
+# Yalnız ilişkiyle bulunan arama satırının nedeni (app::reason_text; TUI, GUI, `note find -l`). Ad ve yol güvenilmez.
+[search]
+reason_tag = "etiket: #{tag}"
+reason_relation = "ilişki: {name} {arrow} {path}"
+reason_linked = "bağlı: {path}"
+reason_linked_named = "bağlı: {path} ({name})"
+reason_linked_far = "bağlı: {path}, {hops} adım"

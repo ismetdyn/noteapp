@@ -3,6 +3,7 @@
 // çözüldü (sıralama tercihe göre, bozuk sorguda son geçerli sorgu bu listede yeniden kurulur).
 #include "app/listing.hpp"
 #include "core/config.hpp"
+#include "core/i18n.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 
@@ -10,6 +11,8 @@
 #include <cstdint>
 #include <doctest/doctest.h>
 #include <map>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -375,7 +378,7 @@ TEST_CASE("search: global mode passes the whole query and the scope's notes; row
     std::string seen_query;
     Strings seen_notes;
     listing.set_global_searcher(
-        [&](std::string_view query, std::span<const NoteMeta> notes)
+        [&](std::string_view query, std::span<const NoteMeta> notes, const noteapp::search::GraphInput&)
             -> std::expected<std::vector<noteapp::search::GlobalHit>, noteapp::search::QueryError> {
             seen_query = query;
             seen_notes.clear();
@@ -408,7 +411,7 @@ TEST_CASE("search: a global searcher error is reported and the last valid rows a
     Listing listing;
     listing.set_notes(trio());
     listing.set_global_searcher(
-        [](std::string_view query, std::span<const NoteMeta> notes)
+        [](std::string_view query, std::span<const NoteMeta> notes, const noteapp::search::GraphInput&)
             -> std::expected<std::vector<noteapp::search::GlobalHit>, noteapp::search::QueryError> {
             if (query == "zzz")
                 return std::unexpected(noteapp::search::QueryError{
@@ -446,4 +449,140 @@ TEST_CASE("content_searcher caps results by limits.search.content_results and 0 
     CHECK(app::content_searcher([&]() -> const search::ContentIndex& { return index; },
                                 config.limits.search.content_results)("kelime")
               .size() == 3);
+}
+
+namespace {
+
+using noteapp::core::EdgeKind;
+using noteapp::core::NoteEdge;
+using Kind = noteapp::search::RelationReason::Kind;
+using Edges = std::shared_ptr<const std::vector<NoteEdge>>;
+
+NotePath np(std::string_view path) {
+    return *NotePath::parse(path);
+}
+
+// budget.md adla bulunur; tagged.md etiketiyle, team.md "funds" ilişkisiyle budget.md'ye bağlı.
+struct RelatedListing {
+    Listing listing;
+    Edges edges = std::make_shared<const std::vector<NoteEdge>>(
+        std::vector{NoteEdge{np("team.md"), np("budget.md"), EdgeKind::RelatedTo, "funds", true}});
+    int asked = 0;
+    RelatedListing() {
+        listing.set_notes({make_note("budget.md", 1), make_note("team.md", 2),
+                           tagged("tagged.md", 3, {"budget-2026"}), make_note("other.md", 4)});
+        listing.set_edge_source([this] {
+            ++asked;
+            return edges;
+        });
+    }
+};
+
+}  // namespace
+
+TEST_CASE("search: name mode lists relation rows with their reason below the name matches") {
+    RelatedListing r;
+    const auto rows = r.listing.search("budget", SearchMode::Name).rows;
+    REQUIRE(paths(rows) == Strings{"budget.md", "tagged.md", "team.md"});
+    CHECK_FALSE(rows[0].reason.has_value());
+    REQUIRE(rows[1].reason.has_value());
+    CHECK(rows[1].reason->kind == Kind::Tag);
+    REQUIRE(rows[2].reason.has_value());
+    CHECK(rows[2].reason->kind == Kind::Linked);
+    CHECK(rows[2].reason->label == "funds");
+    CHECK(rows[2].number == 3);
+    CHECK(r.asked == 1);  // arama başına bir okuma
+}
+
+TEST_CASE("search: content mode appends relation rows; a content hit is not repeated as a relation") {
+    RelatedListing r;
+    r.listing.set_content_searcher([](std::string_view) {
+        return std::vector<noteapp::search::ContentResult>{{np("other.md"), 1, {}}, {np("tagged.md"), 1, {}}};
+    });
+    const auto rows = r.listing.search("budget", SearchMode::Content).rows;
+    REQUIRE(paths(rows) == Strings{"other.md", "tagged.md", "team.md"});
+    CHECK_FALSE(rows[1].reason.has_value());
+    CHECK(rows[2].reason.has_value());
+}
+
+TEST_CASE("search: relation search off keeps direct rows only and reads no edges; rel: still filters") {
+    RelatedListing r;
+    r.listing.set_relation_depth(std::nullopt);
+    CHECK(paths(r.listing.search("budget", SearchMode::Name).rows) == Strings{"budget.md"});
+    CHECK(r.asked == 0);
+    CHECK(paths(r.listing.search("rel:funds", SearchMode::Name).rows) == Strings{"team.md", "budget.md"});
+    CHECK(paths(r.listing.search("linked:budget", SearchMode::Name).rows) == Strings{"team.md"});
+}
+
+TEST_CASE("search: the global searcher receives the edges and the relation depth") {
+    RelatedListing r;
+    r.listing.set_relation_depth(SIZE_MAX);
+    std::size_t edge_count = 0;
+    std::optional<std::size_t> depth;
+    r.listing.set_global_searcher(
+        [&](std::string_view, std::span<const NoteMeta> notes, const noteapp::search::GraphInput& graph)
+            -> std::expected<std::vector<noteapp::search::GlobalHit>, noteapp::search::QueryError> {
+            edge_count = graph.edges.size();
+            depth = graph.depth;
+            std::vector<noteapp::search::GlobalHit> hits;
+            noteapp::search::GlobalHit hit{0, notes[0].path};
+            hit.reason = noteapp::search::RelationReason{.kind = Kind::Tag, .label = "x"};
+            hits.push_back(std::move(hit));
+            return hits;
+        });
+    const auto rows = r.listing.search("budget", SearchMode::Global).rows;
+    CHECK(edge_count == 1);
+    CHECK(depth == SIZE_MAX);
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].reason.has_value());
+}
+
+TEST_CASE("reason_text names the tag, the relation with its direction and the linked note") {
+    noteapp::core::init_i18n("en");
+    using noteapp::app::reason_text;
+    using noteapp::core::RelationDirection;
+    using noteapp::search::RelationReason;
+    CHECK(reason_text({.kind = Kind::Tag, .label = "proje/alt"}) == "tag: #proje/alt");
+    CHECK(reason_text({.kind = Kind::Relation,
+                       .label = "uses",
+                       .other = "b.md",
+                       .direction = RelationDirection::Outgoing}) == "relation: uses → b.md");
+    CHECK(reason_text({.kind = Kind::Relation,
+                       .label = "uses",
+                       .other = "a.md",
+                       .direction = RelationDirection::Incoming}) == "relation: uses ← a.md");
+    CHECK(reason_text({.kind = Kind::Relation, .label = "uses", .other = "a.md"}) == "relation: uses — a.md");
+    CHECK(reason_text({.kind = Kind::Linked, .label = "funds", .other = "b.md", .hops = 1}) ==
+          "linked: b.md (funds)");
+    CHECK(reason_text({.kind = Kind::Linked, .other = "b.md", .hops = 1}) == "linked: b.md");
+    CHECK(reason_text({.kind = Kind::Linked, .other = "b.md", .hops = 3}) == "linked: b.md, 3 steps");
+}
+
+TEST_CASE("relation_depth follows the config and search_edges reads the store's edges") {
+    using namespace noteapp;
+    core::Config config = core::parse_config("").config;
+    CHECK(app::relation_depth(config) == 1);
+    REQUIRE(core::set_config_value(config, "limits.search.relation_depth", "0"));
+    CHECK(app::relation_depth(config) == SIZE_MAX);
+    config.tuning.search_relations = false;
+    CHECK_FALSE(app::relation_depth(config).has_value());
+
+    const test::TempDir dir;
+    test::upsert_note(dir.path(), "a.md", "[[b]]\n");
+    test::upsert_note(dir.path(), "b.md", "b\n");
+    const core::NoteStore store(dir.path());
+    const auto edges = app::search_edges(store);
+    REQUIRE(edges != nullptr);
+    CHECK(edges->size() == 1);
+}
+
+// Kenar dizini liste başına bir kez kurulur; depo yeni liste verince (yeni görüntü) eskisi kullanılmaz.
+TEST_CASE("search: a new edge list from the source replaces the cached relation index") {
+    RelatedListing r;
+    REQUIRE(paths(r.listing.search("budget", SearchMode::Name).rows) ==
+            Strings{"budget.md", "tagged.md", "team.md"});
+    r.edges = std::make_shared<const std::vector<NoteEdge>>(
+        std::vector{NoteEdge{np("other.md"), np("budget.md"), EdgeKind::LinksTo}});
+    CHECK(paths(r.listing.search("budget", SearchMode::Name).rows) ==
+          Strings{"budget.md", "tagged.md", "other.md"});
 }

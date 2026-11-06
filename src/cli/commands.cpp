@@ -1,13 +1,14 @@
 #include "cli/commands.hpp"
 
+#include "app/listing.hpp"
 #include "cli/command_table.hpp"
 #include "cli/confirm.hpp"
 #include "cli/highlight.hpp"
 #include "cli/suggest.hpp"
 #include "cli/term.hpp"
 #include "core/editor.hpp"
-#include "core/file_stat.hpp"
 #include "core/error.hpp"
+#include "core/file_stat.hpp"
 #include "core/i18n.hpp"
 #include "core/json_text.hpp"
 #include "core/note_store.hpp"
@@ -18,6 +19,7 @@
 #include "search/content_index.hpp"
 #include "search/fuzzy.hpp"
 #include "search/query.hpp"
+#include "search/relation_search.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -30,6 +32,7 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
@@ -600,11 +603,17 @@ int run_ls(const ParsedArgs& args, const core::Config& config) {
 
     // Sorgu argümanları (`tag:`, `type:`...) TUI ile aynı kuraldır; kalan metin ada göre sıralar.
     core::NoteStore store = core::NoteStore::for_config(config);
-    const auto query =
-        search::parse_query(parsed->query, [&store](std::string_view name) { return core::view_notes(store, name); });
+    auto query = search::parse_query(
+        parsed->query, [&store](std::string_view name) { return core::view_notes(store, name); });
     if (!query) {
         std::cerr << sanitize_for_terminal(core::format_error(query.error().error)) << '\n';
         return kExitUsage;
+    }
+    if (search::has_graph_filter(query->filters)) {  // `rel:`, `linked:`: kenarlar bir kez okunur
+        const auto edges = app::search_edges(store);
+        search::bind_graph_filters(query->filters,
+                                   search::GraphInput{edges ? std::span<const core::NoteEdge>(*edges)
+                                                            : std::span<const core::NoteEdge>{}});
     }
     std::vector<core::NoteMeta> metas = store.list_meta();
     std::erase_if(metas, [&](const core::NoteMeta& n) { return !n.path.string().starts_with(prefix); });
@@ -693,9 +702,13 @@ int run_edit(const ParsedArgs& args, const core::Config& config) {
 
 namespace {
 
-// [{"path","line","snippet","ranges"}]: eşleşen satır başına bir kayıt; ranges kesitteki [başlangıç, bitiş)
-// bayt aralıklarıdır. Düz biçimdeki `yol:satır: kesit` ayrıştırmasının ':' belirsizliği yok.
-std::string find_json(const std::vector<search::ContentResult>& results) {
+// [{"path","line","snippet","ranges","reason":"content"}]: eşleşen satır başına bir kayıt; ranges kesitteki
+// [başlangıç, bitiş) bayt aralıklarıdır. Düz biçimdeki `yol:satır: kesit` ayrıştırmasının ':' belirsizliği
+// yok. Ardından ilişkiyle bulunan not başına {"path","reason","label"} ve nedenin alanları: relation "other",
+// "direction"; linked "other", "hops" (SPEC-cli).
+std::string find_json(const std::vector<search::ContentResult>& results,
+                      const std::vector<search::RelationHit>& related,
+                      std::span<const core::NoteMeta> metas) {
     std::string out = "[";
     for (const search::ContentResult& result : results) {
         for (const search::Hit& hit : result.first_hits) {
@@ -707,10 +720,99 @@ std::string find_json(const std::vector<search::ContentResult>& results) {
             for (std::size_t i = 0; i < hit.ranges.size(); ++i)
                 out += (i == 0 ? "[" : ",[") + std::to_string(hit.ranges[i].first) + ',' +
                        std::to_string(hit.ranges[i].second) + ']';
-            out += "]}";
+            out += "],\"reason\":\"content\"}";
         }
     }
+    using Kind = search::RelationReason::Kind;
+    for (const search::RelationHit& hit : related) {
+        const search::RelationReason& reason = hit.reason;
+        out += out.size() > 1 ? ",{\"path\":" : "{\"path\":";
+        append_json_string(out, metas[hit.index].path.string());
+        out += reason.kind == Kind::Tag        ? ",\"reason\":\"tag\""
+               : reason.kind == Kind::Relation ? ",\"reason\":\"relation\""
+                                               : ",\"reason\":\"linked\"";
+        out += ",\"label\":";
+        append_json_string(out, reason.label);
+        if (!reason.other.empty()) {
+            out += ",\"other\":";
+            append_json_string(out, reason.other);
+        }
+        if (reason.kind == Kind::Relation)
+            out += reason.direction == core::RelationDirection::Outgoing   ? ",\"direction\":\"outgoing\""
+                   : reason.direction == core::RelationDirection::Incoming ? ",\"direction\":\"incoming\""
+                                                                           : ",\"direction\":\"undirected\"";
+        if (reason.kind == Kind::Linked)
+            out += ",\"hops\":" + std::to_string(reason.hops);
+        out += '}';
+    }
     return out + "]\n";
+}
+
+// İçerikte bulunmayan notların ilişki eşleşmeleri (SPEC-search "İlişki araması"), en çok `room` tane. İlişki
+// araması kapalıysa ya da yer yoksa boş; depo bir kez okunur.
+std::vector<search::RelationHit> find_related(const core::NoteStore& store, const core::Config& config,
+                                              std::string_view query,
+                                              const std::vector<search::ContentResult>& results,
+                                              std::vector<core::NoteMeta>& metas, std::size_t room) {
+    const auto depth = app::relation_depth(config);
+    if (!depth || room == 0)
+        return {};
+    metas = store.list_meta();
+    std::set<core::NotePath> found;
+    for (const search::ContentResult& result : results)
+        found.insert(result.path);
+    std::vector<std::size_t> rest;
+    for (std::size_t i = 0; i < metas.size(); ++i)
+        if (!found.contains(metas[i].path))
+            rest.push_back(i);
+    const auto edges = app::search_edges(store);
+    auto related = search::relation_hits(query, metas, rest,
+                                         search::GraphInput{edges ? std::span<const core::NoteEdge>(*edges)
+                                                                  : std::span<const core::NoteEdge>{},
+                                                            depth});
+    related.resize(std::min(related.size(), room));
+    return related;
+}
+
+}  // namespace
+
+namespace {
+
+// Boruya/dosyaya baytlar aynen gider; terminalde not baytları temizlenir (yol adı da C1 taşıyabilir).
+// Vurgu yalnız renk açıkken (color_enabled: NO_COLOR, TERM=dumb, NOTEAPP_COLOR); renk kapalıyken bilgi
+// kaybolmaz, eşleşme satırda zaten görünür.
+void print_content_hits(const std::vector<search::ContentResult>& results) {
+    const bool tty = stdout_is_tty();
+    const bool color = color_enabled(Stream::Out);
+    for (const search::ContentResult& result : results) {
+        const std::string path = result.path.string();
+        for (const search::Hit& hit : result.first_hits) {
+            const std::string snippet = color ? highlight_ranges(hit.snippet, hit.ranges)
+                                        : tty ? sanitize_for_terminal(hit.snippet)
+                                              : hit.snippet;
+            std::cout << (tty ? sanitize_for_terminal(path) : path) << ':' << hit.line << ": " << snippet
+                      << '\n';
+        }
+    }
+}
+
+// İlişki satırı: terminalde yol + iki boşluk + neden; boruda yalnız -l ile `YOL<TAB>NEDEN` (düz boru çıktısı
+// eskisi gibi kalsın diye ilişki satırı hiç yazılmaz, bkz. related_room).
+void print_related(const std::vector<search::RelationHit>& related, std::span<const core::NoteMeta> metas) {
+    const bool tty = stdout_is_tty();
+    for (const search::RelationHit& hit : related) {
+        const std::string path = metas[hit.index].path.string();
+        const std::string reason = single_line(app::reason_text(hit.reason));
+        std::cout << (tty ? sanitize_for_terminal(path) + "  " + sanitize_for_terminal(reason)
+                          : path + '\t' + reason)
+                  << '\n';
+    }
+}
+
+// İlişki satırlarının yeri: yalnız terminalde, -l ile ya da --json'da `room`, yoksa 0. Düz boru çıktısı ve
+// çıkış kodu eskisi gibi içeriğe bağlıdır (betikler `yol:satır: kesit` bekler).
+std::size_t related_room(bool json, bool long_format, std::size_t room) {
+    return json || long_format || stdout_is_tty() ? room : 0;
 }
 
 }  // namespace
@@ -718,6 +820,7 @@ std::string find_json(const std::vector<search::ContentResult>& results) {
 int run_find(const ParsedArgs& args, const core::Config& config) {
     std::size_t limit = std::numeric_limits<std::size_t>::max();
     bool json = false;
+    bool long_format = false;  // ilişki satırının nedeni
     std::string query;
     bool only_terms = false;  // `--` sonrası her şey terimdir
     for (std::size_t i = 0; i < args.rest.size(); ++i) {
@@ -728,6 +831,8 @@ int run_find(const ParsedArgs& args, const core::Config& config) {
             only_terms = true;
         } else if (arg == "--json") {
             json = true;
+        } else if (arg == "--long" || arg == "-l") {
+            long_format = true;
         } else if (arg == "--limit" || arg == "-n") {
             if (i + 1 >= args.rest.size())
                 return missing_value_error("find", arg);
@@ -748,29 +853,20 @@ int run_find(const ParsedArgs& args, const core::Config& config) {
                                config.limits.search.content_hits.cap());
     index.refresh();
     const auto results = index.search(query, limit);
+    std::vector<core::NoteMeta> metas;
+    const std::vector<search::RelationHit> related = find_related(
+        store, config, query, results, metas, related_room(json, long_format, limit - results.size()));
     if (json)
-        std::cout << find_json(results);
-    if (results.empty()) {
+        std::cout << find_json(results, related, metas);
+    if (results.empty() && related.empty()) {
         std::cerr << sanitize_for_terminal(core::tr("cli.find_no_match", {{"query", query}})) << '\n';
         return kExitUser;
     }
     if (json)
         return kExitOk;
 
-    // Boruya/dosyaya baytlar aynen gider; terminalde not baytları temizlenir (yol adı da C1 taşıyabilir).
-    // Vurgu yalnız renk açıkken (color_enabled: NO_COLOR, TERM=dumb, NOTEAPP_COLOR); renk kapalıyken bilgi
-    // kaybolmaz, eşleşme satırda zaten görünür.
-    const bool tty = stdout_is_tty();
-    const bool color = color_enabled(Stream::Out);
-    for (const search::ContentResult& result : results) {
-        const std::string path = result.path.string();
-        for (const search::Hit& hit : result.first_hits) {
-            const std::string snippet = color ? highlight_ranges(hit.snippet, hit.ranges)
-                                        : tty ? sanitize_for_terminal(hit.snippet)
-                                              : hit.snippet;
-            std::cout << (tty ? sanitize_for_terminal(path) : path) << ':' << hit.line << ": " << snippet << '\n';
-        }
-    }
+    print_content_hits(results);
+    print_related(related, metas);
     return kExitOk;
 }
 

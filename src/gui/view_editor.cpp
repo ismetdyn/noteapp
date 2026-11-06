@@ -295,7 +295,7 @@ void View::draw_link_row(const core::LinkLine& line) {
     const std::string text =
         related ? tui::terminal_safe(app::related_row_text(state_.links().related[line.index])) : printable(raw);
     if (const core::NotePath* path = core::link_path(state_.links(), line)) {
-        const bool clicked = plain_selectable(text, false, {}, state_.icon_style(), nullptr, false, raw);
+        const bool clicked = plain_selectable(text, false, {}, state_.icon_style(), {.icon_path = raw});
         if (new_tab_click(clicked))
             queue_open(*path, true);
         else if (clicked)

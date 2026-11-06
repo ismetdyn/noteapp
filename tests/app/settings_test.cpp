@@ -1,4 +1,5 @@
 #include "app/settings.hpp"
+#include "core/config.hpp"
 #include "core/i18n.hpp"
 
 #include <doctest/doctest.h>
@@ -33,4 +34,16 @@ TEST_CASE("sync_restart_needed is true only for the fields AutoSync reads at sta
     CHECK(changed([](core::Config& c) { c.sync.branch = "other"; }));
     CHECK(changed([](core::Config& c) { c.sync.idle_seconds += 1; }));
     CHECK(changed([](core::Config& c) { c.notes_dir /= "sub"; }));
+}
+
+// Uygulama açıkken `note config set limits.search.relation_depth` ya da `tuning.search_relations`: Kaydet
+// çalışan config'e taşır, arayüz listeye uygular.
+TEST_CASE("adopt_live_limits also carries the relation search settings from the file") {
+    noteapp::core::Config live = noteapp::core::parse_config("").config;
+    noteapp::core::Config disk = live;
+    REQUIRE(noteapp::core::set_config_value(disk, "limits.search.relation_depth", "0"));
+    disk.tuning.search_relations = false;
+    noteapp::app::adopt_live_limits(live, disk);
+    CHECK(live.limits.search.relation_depth.unlimited());
+    CHECK_FALSE(live.tuning.search_relations);
 }

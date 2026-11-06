@@ -425,6 +425,8 @@ void View::handle_shortcuts() {
     // alır.
     // Editörün bul satırında Ctrl+P/Ctrl+N önceki/sonraki eşleşmedir (TUI): editor_keys alır.
     const auto search_line_key = [this](ImGuiKeyChord chord) {
+        if (map_focused_ && chord == (ImGuiMod_Ctrl | ImGuiKey_F))  // F2: tuvalde haritada bul (view_map)
+            return true;
         const bool previous_next = chord == (ImGuiMod_Ctrl | ImGuiKey_P) || chord == (ImGuiMod_Ctrl | ImGuiKey_N);
         if (editor_active_ && state_.editor().mode() != NoteEditor::Mode::Editing)
             return previous_next;
@@ -527,10 +529,12 @@ void View::draw_left_pane() {
         remember_item_center("search_error");
     }
     draw_migration_banner();
-    if (map)
+    if (map) {
         draw_map();
-    else
+    } else {
+        map_focused_ = false;
         draw_note_list();
+    }
     ImGui::EndChild();
     remember_item_center("left_pane");
 }

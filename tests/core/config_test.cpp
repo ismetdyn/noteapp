@@ -828,6 +828,20 @@ TEST_CASE("limits.search.content_results defaults to 1000 and accepts 0 as unlim
     CHECK(quoted.config.limits.search.content_results == Limit{25, "25"});
 }
 
+// İlişki araması: komşu adımı sınırdır (0 sınırsız), kapatmak ayrı bir tuning anahtarıdır.
+TEST_CASE("relation search defaults to one hop, 0 is unlimited and search_relations turns it off") {
+    const Config defaults = parse_config("").config;
+    CHECK(defaults.limits.search.relation_depth == Limit{1, "1"});
+    CHECK(defaults.tuning.search_relations);
+
+    const LoadedConfig changed =
+        parse_config("[limits.search]\nrelation_depth = 0\n[tuning]\nsearch_relations = false\n");
+    CHECK(changed.warnings.empty());
+    CHECK(changed.config.limits.search.relation_depth.unlimited());
+    CHECK_FALSE(changed.config.tuning.search_relations);
+    CHECK_FALSE(parse_config("[tuning]\nsearch_relations = 3\n").warnings.empty());
+}
+
 // L3: çekirdek, arama ve senkron sınırları.
 TEST_CASE("L3 limits keep today's defaults, accept 0 as unlimited and reject a wrong unit") {
     const Limits defaults = parse_config("").config.limits;

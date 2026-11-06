@@ -52,10 +52,23 @@ std::string status_text(const app::MapModel& model, int columns) {
                                   ? core::tr("tui.map_whole")
                                   : core::tr("tui.map_depth", {{"depth", std::to_string(options.depth)}});
     constexpr int kDigitKeys = 9;  // derinlik tek haneli tuşla seçilir
+    const app::NoteMap& map = model.map();
+    // Süzgeçler ve yol (F2) kapsamın yanında: haritanın neden eksik göründüğü okunur. Ad ve etiket güvenilmez.
+    std::string filters;
+    if (options.show_links != options.show_related)
+        filters += core::tr(options.show_links ? "tui.map_filter_links" : "tui.map_filter_related");
+    if (options.relation)
+        filters += core::tr("tui.map_filter_named",
+                            {{"name", options.relation->empty() ? core::tr("tui.relation_unnamed")
+                                                                : terminal_safe(*options.relation)}});
+    if (!options.tag.empty())
+        filters += core::tr("tui.map_filter_tag", {{"tag", terminal_safe(options.tag)}});
+    if (map.path.size() > 1)
+        filters += core::tr("tui.map_path_shown", {{"hops", std::to_string(map.path.size() - 1)}});
     std::string text = core::tr("tui.map_status", {{"scope", scope},
                                                    {"tags", options.show_tags ? core::tr("tui.map_tags") : ""},
+                                                   {"filters", filters},
                                                    {"max", std::to_string(std::min(model.max_depth(), kDigitKeys))}});
-    const app::NoteMap& map = model.map();
     if (map.capped())
         text = core::tr("tui.map_capped",
                         {{"shown", std::to_string(map.nodes.size())}, {"total", std::to_string(map.total)}}) +
@@ -68,6 +81,12 @@ std::string status_text(const app::MapModel& model, int columns) {
 std::string link_text(const TuiState& state, const TuiState::MapLink& link, int columns) {
     const auto name = [](const app::MapNode& node) { return label_text(node, kLabelMaxCells); };
     const std::string target = link.target ? name(*link.target) : "?";
+    if (link.path)
+        return fit_hints(core::tr("tui.map_route",
+                                  {{"from", name(link.source)},
+                                   {"to", target},
+                                   {"directed", link.directed ? core::tr("tui.map_route_directed") : ""}}),
+                         columns);
     const std::optional<TuiState::MapLinkEdge> edge = link.choosing ? std::nullopt : state.map_link_edge();
     if (!edge || edge->edge.kind != app::MapEdgeKind::Related)
         return fit_hints(core::tr(link.choosing ? "tui.map_choose" : "tui.map_link",
@@ -82,6 +101,23 @@ std::string link_text(const TuiState& state, const TuiState::MapLink& link, int 
                                {"to", name(edge->to)},
                                {"name", relation.empty() ? core::tr("tui.relation_unnamed") : "'" + relation + "'"}}),
                      columns);
+}
+
+// Süzgeç ve bul satırı (F2) kapsam satırının yerindedir; bulda sayaç kaçıncı eşleşmede olunduğunu söyler.
+ftxui::Element input_status(const TuiState& state, int columns) {
+    using Kind = TuiState::MapInputKind;
+    const Kind kind = state.map_input_kind().value_or(Kind::Find);
+    const InputLine& line = state.map_input();
+    const bool find = kind == Kind::Find;
+    std::string counter;
+    if (find && !line.text().empty())
+        counter = state.map_found().empty()
+                      ? core::tr("map.find_none")
+                      : core::tr("map.find_count", {{"at", std::to_string(state.map_found_at() + 1)},
+                                                    {"count", std::to_string(state.map_found().size())}});
+    const char* label = find ? "tui.map_find_label" : kind == Kind::Tag ? "tui.map_tag_label" : "tui.map_relation_label";
+    return input_line_bar(core::tr(label), line, {}, line.ghost(),
+                          core::tr(find ? "tui.map_find_hints" : "tui.map_filter_hints"), columns, counter);
 }
 
 // Liang–Barsky: kenar tuvale kırpılır; yakınlaştırınca binlerce noktalık çizgi tuval dışında yürünmez.
@@ -159,8 +195,10 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
     const app::MapModel& model = state.map_model();
     const app::NoteMap& map = model.map();
     const std::optional<TuiState::MapLink>& link = state.map_link();
-    Element status =
-        link ? text(link_text(state, *link, columns)) | color(Color::Cyan) : text(status_text(model, columns)) | dim;
+    Element status = link ? text(link_text(state, *link, columns)) | color(Color::Cyan)
+                          : text(status_text(model, columns)) | dim;
+    if (state.map_input_kind())
+        status = input_status(state, columns);
     if (map.nodes.empty())
         return vbox({std::move(status), paragraph(core::tr("tui.map_empty")) | dim, filler()});
     const int canvas_rows = std::max(rows - 1, 1);
@@ -168,7 +206,20 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
     const MapCamera camera = state.map_camera();
     const std::vector<app::LayoutPoint>& positions = model.layout().positions();
     const std::vector<char>& matches = model.matches();
-    const auto lit = [&](std::size_t node) { return node >= matches.size() || matches[node] != 0; };
+    // Bul satırı açıkken yalnız eşleşmeler yanar (arama süzgecinin üstüne).
+    std::vector<char> found;
+    if (state.map_input_kind() == TuiState::MapInputKind::Find && !state.map_input().text().empty()) {
+        found.assign(map.nodes.size(), 0);
+        for (const std::size_t node : state.map_found())
+            if (node < found.size())
+                found[node] = 1;
+    }
+    const auto lit = [&](std::size_t node) {
+        return (node >= matches.size() || matches[node] != 0) && (found.empty() || found[node] != 0);
+    };
+    std::vector<char> on_path(map.nodes.size(), 0);
+    for (const std::size_t node : map.path)
+        on_path[node] = 1;
     const auto dot = [&](std::size_t node) {
         return std::pair(static_cast<int>(std::lround(camera.x + positions[node].x * camera.zoom)),
                          static_cast<int>(std::lround(camera.y + positions[node].y * camera.zoom)));
@@ -184,12 +235,19 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
             canvas.DrawPointLine(static_cast<int>(std::lround(x1)), static_cast<int>(std::lround(y1)),
                                  static_cast<int>(std::lround(x2)), static_cast<int>(std::lround(y2)), color);
     };
-    for (const app::MapEdge& edge : map.edges) {
+    const auto on_path_edge = [&](std::size_t e) { return e < map.path_edges.size() && map.path_edges[e] != 0; };
+    for (std::size_t e = 0; e < map.edges.size(); ++e) {
+        const app::MapEdge& edge = map.edges[e];
         Color color = edge.kind == app::MapEdgeKind::Related ? Color::Magenta : Color::GrayLight;
         if (edge.kind == app::MapEdgeKind::Tag || !lit(edge.from) || !lit(edge.to))
             color = Color::GrayDark;
-        line(dot(edge.from), dot(edge.to), color);
+        if (!on_path_edge(e))
+            line(dot(edge.from), dot(edge.to), color);
     }
+    // En kısa yol (F2) en üstte, yeşil: başka kenar onu örtmesin.
+    for (std::size_t e = 0; e < map.edges.size(); ++e)
+        if (on_path_edge(e))
+            line(dot(map.edges[e].from), dot(map.edges[e].to), Color::Green);
     // İlişki kurulurken kaynaktan hedefe (sürüklerken işaretçiye) çizgi; hedef köşeli parantezde.
     const auto node_of = [&](const app::MapNode& wanted) -> std::optional<std::size_t> {
         const auto found = std::ranges::find_if(map.nodes, [&](const app::MapNode& node) {
@@ -231,7 +289,9 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
 
     // Önce gösterilen ve seçilen not: sıkışık haritada da adları yazılır.
     std::vector<std::size_t> order;
-    for (const auto node : {link_source, link_target, current_node, selected_node})
+    const std::optional<std::size_t> path_start = map.path.empty() ? std::nullopt : std::optional(map.path.front());
+    const std::optional<std::size_t> path_end = map.path.empty() ? std::nullopt : std::optional(map.path.back());
+    for (const auto node : {link_source, link_target, current_node, selected_node, path_start, path_end})
         if (node && std::ranges::find(order, *node) == order.end())
             order.push_back(*node);
     if (app::GraphLayout::kIdealEdge * camera.zoom >= kLabelSpacingDots)
@@ -253,13 +313,17 @@ ftxui::Element map_pane(const TuiState& state, int columns, int rows) {
         const bool is_current = current_node == i;
         const bool is_source = link_source == i;
         const bool is_lit = lit(i);
+        const bool is_path = on_path[i] != 0;
         canvas.DrawText(cell_x * kMapDotsPerCellX, cell_y * kMapDotsPerCellY, label,
-                        [is_current, is_selected, is_source, is_lit](Cell& cell) {
+                        [is_current, is_selected, is_source, is_lit, is_path](Cell& cell) {
                             if (is_source) {
                                 cell.foreground_color = Color::Cyan;
                                 cell.bold = true;
                             } else if (is_current) {
                                 cell.foreground_color = Color::Yellow;
+                                cell.bold = true;
+                            } else if (is_path) {
+                                cell.foreground_color = Color::Green;
                                 cell.bold = true;
                             } else if (!is_lit) {
                                 cell.foreground_color = Color::GrayDark;

@@ -473,12 +473,13 @@ graph::Result<std::optional<LoadedNote>> load_note(graph::ReadTxn& txn, const No
 }  // namespace
 
 graph::Result<Snapshot> build_snapshot(graph::ReadTxn& txn, const std::array<std::byte, 16>& device,
-                                       std::size_t folder_path_bytes) {
+                                       std::size_t folder_path_bytes, std::size_t name_bytes) {
     auto folders = load_folders(txn, folder_path_bytes);
     if (!folders)
         return std::unexpected(folders.error());
     Snapshot snapshot;
     snapshot.folder_path_bytes = folder_path_bytes;
+    snapshot.name_bytes = name_bytes;
     for (const auto& [id, node] : *folders)
         if (const std::optional<std::string>& path = folder_path(*folders, id); path)
             snapshot.folders[*path].push_back(id);
@@ -547,7 +548,7 @@ std::expected<std::shared_ptr<const Snapshot>, Error> NoteStore::Impl::refresh_i
         return std::unexpected(from_graph(version.error(), path_utf8(database())));
     if (snapshot && *version == snapshot_version)
         return snapshot;
-    auto built = build_snapshot(txn, opened_graph().device(), folder_path_bytes);
+    auto built = build_snapshot(txn, opened_graph().device(), folder_path_bytes, relation_name_bytes);
     if (!built)
         return std::unexpected(from_graph(built.error(), path_utf8(database())));
     snapshot = std::make_shared<const Snapshot>(std::move(*built));

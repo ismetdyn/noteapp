@@ -1,6 +1,7 @@
 #include "tui/tui_state.hpp"
 
 #include "app/map_relations.hpp"
+#include "core/i18n.hpp"
 #include "search/query.hpp"
 
 #include <algorithm>
@@ -77,7 +78,8 @@ Row to_row(app::ListRow&& row) {
                .is_folder = row.is_folder,
                .label = std::move(label),
                .depth = row.depth,
-               .number = row.number};
+               .number = row.number,
+               .reason = std::move(row.reason)};
 }
 
 // Argümanlı ya da bozuk sorgu metin değildir. `view:` bakılmadan da argüman sayılır (bozuk ya da süzgeç).
@@ -172,6 +174,11 @@ void TuiState::set_notes(std::vector<core::NoteInfo> notes) {
     refilter(false);  // içerik araması aynı listede de yeniden koşar (indeks değişmiş olabilir)
 }
 
+void TuiState::set_relation_depth(std::optional<std::size_t> depth) {
+    listing_.set_relation_depth(depth);
+    refilter(false);
+}
+
 void TuiState::set_views(std::vector<std::string> names) {
     if (names == views_)
         return;
@@ -245,14 +252,16 @@ std::vector<Row> TuiState::rows_in_folder() {
 
 void TuiState::set_details_view(bool details) {
     details_view_ = details;
-    map_view_ = false;
-    map_link_.reset();
+    set_map_view(false);
     refilter(false);
 }
 
 void TuiState::set_map_view(bool map) {
     map_view_ = map;
     map_link_.reset();
+    map_input_kind_.reset();
+    map_found_.clear();
+    map_new_at_.reset();
 }
 
 namespace {
@@ -272,6 +281,21 @@ bool same_node(const app::MapNode& a, const app::MapNode& b) {
     return a.kind == b.kind && a.key == b.key;
 }
 
+std::optional<std::size_t> map_note_index(const app::NoteMap& map, const std::string& key) {
+    const auto found = std::ranges::find_if(map.nodes, [&](const app::MapNode& node) {
+        return node.kind == app::MapNodeKind::Note && node.key == key;
+    });
+    return found == map.nodes.end() ? std::nullopt
+                                    : std::optional(static_cast<std::size_t>(found - map.nodes.begin()));
+}
+
+std::string trimmed(std::string_view text) {
+    constexpr std::string_view kBlank = " \t";
+    const std::size_t first = text.find_first_not_of(kBlank);
+    return first == std::string_view::npos ? std::string()
+                                           : std::string(text.substr(first, text.find_last_not_of(kBlank) - first + 1));
+}
+
 }  // namespace
 
 void TuiState::update_map(const app::MapModel::EdgeReader& read,
@@ -282,6 +306,12 @@ void TuiState::update_map(const app::MapModel::EdgeReader& read,
     if (map_.generation() != map_fitted_generation_) {
         map_fitted_generation_ = map_.generation();
         map_camera_.reset();  // çizge değişti: yeni düğümler görünsün (GUI gibi)
+    }
+    // Bul açıkken harita değiştiyse eşleşmeler yeni düğüm sırasıyla yeniden kurulur (kamera yerinde kalır).
+    if (map_input_kind_ == MapInputKind::Find && map_found_version_ != map_.version()) {
+        map_found_version_ = map_.version();
+        map_found_ = app::find_map_nodes(map_.map(), map_input_.text());
+        map_found_at_ = std::min(map_found_at_, map_found_.empty() ? 0 : map_found_.size() - 1);
     }
     // Arama süzgeci listeyle aynıdır: süzgeçten geçen notlar yanar. Sürüm listenin her kuruluşunda artar.
     map_.refresh_matches(!query().empty(), work_.rebuilds, [this] {
@@ -364,10 +394,17 @@ void TuiState::step_map_selection(int delta) {
 // Enter seçileni açar, `w` bütün çizge, `t` etiketler, `1`-`9` derinlik (en çok limits.app.map_depth). Diğer
 // tuşlar tabloya düşer.
 std::optional<Intent> TuiState::handle_map_key(Key key, std::string_view text) {
+    if (map_input_kind_)
+        return handle_map_input(key, text);
     if (map_link_)
         if (const auto intent = handle_map_link_key(key, text))
             return intent;
     switch (key) {
+    case Key::Escape:
+        if (!map_.scope().path)
+            return std::nullopt;  // liste: süzgeci temizler
+        map_.clear_path();
+        return Intent::None;
     case Key::Left:
         pan_map(-1.0F, 0.0F);
         return Intent::None;
@@ -393,6 +430,8 @@ std::optional<Intent> TuiState::handle_map_key(Key key, std::string_view text) {
     default:
         return std::nullopt;
     }
+    if (const auto intent = handle_map_explore_key(text))
+        return intent;
     app::MapOptions options = map_.options();
     if (text == "+" || text == "=") {
         zoom_map(kMapZoomStep);
@@ -431,11 +470,19 @@ std::optional<Intent> TuiState::handle_map_link_key(Key key, std::string_view te
             step_map_target(key == Key::Tab ? 1 : -1);
         return Intent::None;
     case Key::Enter:
+        if (link.path)
+            return find_map_path();
         return link.choosing ? Intent::None : confirm_map_link();
     case Key::Char:
         break;
     default:
         return std::nullopt;
+    }
+    if (link.path) {  // yol kipi (F2): `d` yönü açıp kapar, başka harf haritaya düşer
+        if (text != "d")
+            return std::nullopt;
+        link.directed = !link.directed;
+        return Intent::None;
     }
     if (link.choosing) {
         if (text == "r")
@@ -491,24 +538,27 @@ Intent TuiState::handle_map_edge_key(std::string_view text) {
 
 // Kaynak Tab'la seçilen not, yoksa gösterilen not (çevrenin merkezi); haritada yoksa kip açılmaz.
 void TuiState::begin_map_link() {
-    std::optional<core::NotePath> source = map_selected();
-    if (!source)
-        source = map_.center();
-    if (!source)
-        return;
-    app::MapNode node{app::MapNodeKind::Note, source->string()};
-    if (std::ranges::none_of(map_.map().nodes,
-                             [&](const app::MapNode& shown) { return same_node(shown, node); }))
-        return;
-    map_link_ = MapLink{std::move(node), std::nullopt, std::nullopt};
+    if (auto source = map_target())
+        map_link_ = MapLink{{app::MapNodeKind::Note, std::move(*source)}, std::nullopt, std::nullopt};
 }
 
-// Hedef kaynak dışındaki her düğümdür (not ve etiket), haritanın sırasıyla; sondan başa döner.
+// Hedef Tab'la seçilen not; yoksa gösterilen not (çevrenin merkezi), haritadaysa.
+std::optional<std::string> TuiState::map_target() const {
+    if (const auto selected = map_selected())
+        return selected->string();
+    const std::optional<core::NotePath>& center = map_.center();
+    if (!center || !map_note_index(map_.map(), center->string()))
+        return std::nullopt;
+    return center->string();
+}
+
+// Hedef kaynak dışındaki her düğümdür (not ve etiket; yol kipinde yalnız not), haritanın sırasıyla; sondan başa
+// döner.
 void TuiState::step_map_target(int delta) {
     MapLink& link = *map_link_;
     std::vector<const app::MapNode*> targets;
     for (const app::MapNode& node : map_.map().nodes)
-        if (!same_node(node, link.source))
+        if (!same_node(node, link.source) && (!link.path || node.kind == app::MapNodeKind::Note))
             targets.push_back(&node);
     if (targets.empty())
         return;
@@ -634,6 +684,196 @@ void TuiState::open_map_edge(int column, int row) {
     focus_ = Focus::List;
     const app::MapEdge& hit = map.edges[*edge];
     map_link_ = MapLink{map.nodes[hit.from], map.nodes[hit.to], hit};
+}
+
+// Keşif tuşları (F2, SPEC-tui "Harita"). Harfler İngilizce adlardan: (e)X(pand), e(dges), N(ame), P(in),
+// U(npin), R(oute), n(ew), d(elete → çöp). Listenin `x` `X` `e` `/` tuşları haritada gölgelenir; liste görünmez.
+std::optional<Intent> TuiState::handle_map_explore_key(std::string_view text) {
+    if (text == "/") {
+        begin_map_input(MapInputKind::Find, {}, {});
+        return Intent::None;
+    }
+    if (text == "#") {
+        begin_map_input(MapInputKind::Tag, input_sources()->tags, map_.options().tag);
+        return Intent::None;
+    }
+    if (text == "N")
+        return Intent::MapRelationFilter;
+    if (text == "e") {
+        cycle_map_edges();
+        return Intent::None;
+    }
+    if (text == "U") {
+        map_.layout().unpin_all();
+        return map_notice(app::NoticeKind::Info, core::tr("map.unpinned_all"));
+    }
+    if (text == "R") {
+        begin_map_link();
+        if (map_link_)
+            map_link_->path = true;
+        return Intent::None;
+    }
+    if (text == "n") {  // var olan ad satırı (quick.add); not, panelin ortasına sabitlenir
+        const auto [columns, rows] = map_cells();
+        map_new_at_ = map_point(columns / 2, rows / 2);
+        return Intent::NewRow;
+    }
+    if (text == "P")
+        return toggle_map_pin();
+    if (text == "d") {
+        // Yalnız Tab'la açıkça seçilen not çöpe gider: seçim yoksa (süzgeç sildi, ya da `C` kipindeki `d` kenarı
+        // kaldırdıktan sonraki ikinci `d`) gösterilen notu sessizce atmak yerine ileti. Seçilen not liste
+        // seçimi olur: var olan yol (trash_selected) ve `u`.
+        const std::optional<core::NotePath> selected = map_selected();
+        if (!selected)
+            return map_notice(app::NoticeKind::Info, core::tr("map.trash_needs_selection"));
+        return select_note(*selected) ? Intent::TrashMapNode : Intent::None;
+    }
+    if (text != "x" && text != "X")
+        return std::nullopt;
+    const std::optional<std::string> target = map_target();
+    if (!target)
+        return Intent::None;
+    if (map_.options().whole_graph)
+        return map_notice(app::NoticeKind::Info, core::tr("map.whole_graph_open"));
+    const app::MapExpansion spec = app::expansion_for(map_.options());
+    if (text == "x")
+        map_.toggle_neighbours(*target, spec);
+    else
+        map_.expand(*target, spec);
+    return Intent::None;
+}
+
+// Bağlantı ve ilişki → yalnız bağlantı → yalnız ilişki → ikisi (ad süzgeci ayrı: `N`).
+void TuiState::cycle_map_edges() {
+    app::MapOptions options = map_.options();
+    const bool both = options.show_links && options.show_related;
+    const bool links_only = options.show_links && !options.show_related;
+    options.show_related = !both;
+    options.show_links = !links_only;
+    map_.set_options(options);
+}
+
+Intent TuiState::toggle_map_pin() {
+    const std::optional<std::string> target = map_target();
+    const auto node = target ? map_note_index(map_.map(), *target) : std::nullopt;
+    if (!node)
+        return Intent::None;
+    app::GraphLayout& layout = map_.layout();
+    if (layout.pinned(*node)) {
+        layout.unpin(*node);
+        return map_notice(app::NoticeKind::Info, core::tr("map.unpinned", {{"path", *target}}));
+    }
+    layout.pin(*node, layout.positions()[*node]);
+    return map_notice(app::NoticeKind::Info, core::tr("map.pinned", {{"path", *target}}));
+}
+
+Intent TuiState::find_map_path() {
+    const MapLink link = *std::exchange(map_link_, std::nullopt);
+    if (!link.target)
+        return Intent::None;
+    const std::string& from = link.source.key;
+    const std::string& to = link.target->key;
+    const app::MapPathResult result = map_.find_path(listing_.metas(), from, to, link.directed);
+    return map_notice(result.status == app::MapPathResult::Status::Found ? app::NoticeKind::Success
+                                                                          : app::NoticeKind::Info,
+                      app::map_path_text(result, from, to, link.directed));
+}
+
+Intent TuiState::map_notice(app::NoticeKind kind, std::string text) {
+    map_notice_ = MapNotice{kind, std::move(text)};
+    return Intent::MapNotice;
+}
+
+void TuiState::begin_map_relation_filter(std::span<const core::RelationName> names) {
+    std::vector<std::string> displays;
+    displays.reserve(names.size());
+    for (const core::RelationName& name : names)
+        displays.push_back(name.display);
+    const std::optional<std::string>& current = map_.options().relation;
+    // Adsız ilişki adıyla yazılamaz: satırda "(adsız)" metni onu seçer.
+    begin_map_input(MapInputKind::Relation, std::move(displays),
+                    !current ? std::string() : current->empty() ? core::tr("tui.relation_unnamed") : *current);
+}
+
+void TuiState::begin_map_input(MapInputKind kind, std::vector<std::string> candidates, std::string text) {
+    map_link_.reset();
+    map_input_kind_ = kind;
+    map_input_ = InputLine(InputKind::Find);
+    map_input_.set_sources(word_input_sources(std::move(candidates)));
+    map_input_.set_text(std::move(text));
+    map_found_.clear();
+}
+
+// Girdi açıkken her tuş onundur. Bul satırında Enter/Tab sonraki, Shift+Tab önceki eşleşme; süzgeç satırında
+// Enter uygular, Tab adları listeler.
+Intent TuiState::handle_map_input(Key key, std::string_view text) {
+    const bool find = map_input_kind_ == MapInputKind::Find;
+    const bool listing = map_input_.popup() != nullptr;
+    if (key == Key::Escape && !listing) {
+        map_input_kind_.reset();
+        map_found_.clear();  // seçim eşleşmede kalır: Enter onu açar
+        return Intent::None;
+    }
+    if (find && (key == Key::Enter || key == Key::Tab || key == Key::ShiftTab)) {
+        step_map_found(key == Key::ShiftTab ? -1 : 1);
+        return Intent::None;
+    }
+    if (!find && key == Key::Enter && !listing) {
+        submit_map_input();
+        return Intent::None;
+    }
+    if (map_input_.handle(key, text) == InputLine::Result::Edited && find)
+        refresh_map_found();
+    return Intent::None;
+}
+
+void TuiState::submit_map_input() {
+    const std::string value = trimmed(map_input_.text());
+    app::MapOptions options = map_.options();
+    if (map_input_kind_ == MapInputKind::Tag)
+        options.tag = value;
+    else if (value.empty())
+        options.relation.reset();
+    else
+        options.relation = value == core::tr("tui.relation_unnamed") ? std::string() : value;
+    map_input_kind_.reset();
+    map_.set_options(options);
+}
+
+void TuiState::refresh_map_found() {
+    map_found_version_ = map_.version();
+    map_found_ = app::find_map_nodes(map_.map(), map_input_.text());
+    map_found_at_ = 0;
+    if (!map_found_.empty())
+        center_map_on(map_found_.front());
+}
+
+void TuiState::step_map_found(int delta) {
+    if (map_found_.empty())
+        return;
+    map_found_at_ = app::cycled_tab(map_found_at_, delta, map_found_.size());
+    center_map_on(map_found_[map_found_at_]);
+}
+
+// Eşleşme panelin ortasına gelir (yakınlık kalır); not ise Tab seçimi olur (Enter açar, `x` `P` `R` onu alır).
+void TuiState::center_map_on(std::size_t node) {
+    const app::NoteMap& map = map_.map();
+    if (node >= map.nodes.size())
+        return;
+    if (map.nodes[node].kind == app::MapNodeKind::Note)
+        map_selected_ = map.nodes[node].key;
+    const auto [columns, rows] = map_cells();
+    MapCamera camera = map_camera();
+    const app::LayoutPoint at = map_.layout().positions()[node];
+    camera.x = static_cast<float>(columns * kMapDotsPerCellX) / 2.0F - at.x * camera.zoom;
+    camera.y = static_cast<float>(rows * kMapDotsPerCellY) / 2.0F - at.y * camera.zoom;
+    map_camera_ = camera;
+}
+
+void TuiState::map_note_created(const core::NotePath& path) {
+    if (const auto at = std::exchange(map_new_at_, std::nullopt); at && map_view())
+        map_.keep(path.string(), *at);
 }
 
 std::string TuiState::name_prefix_for(std::string_view folder) const {
@@ -1409,6 +1649,9 @@ void TuiState::scroll_preview(int delta) {
 
 Intent TuiState::handle(Key key, std::string_view text) {
     preview_selection_.reset();
+    // Haritadan `n`in yeri yalnız açtığı ad satırınındır: satır açıkken tuşlar buraya gelmez (main satıra verir),
+    // gelen tuş satırın kapandığını (Esc ya da kayıt) söyler. Sonraki ilgisiz not o yere sabitlenmesin.
+    map_new_at_.reset();
     // Editörde her tuş metne aittir (Ctrl-C kopyalar, F2 kaydedilmemiş metni sorar); yalnız yardım ve
     // tablonun editör satırları (sekmeler, Ctrl+K) araya girer. Harf hiçbir zaman: metne gider.
     if (focus_ == Focus::Editor) {

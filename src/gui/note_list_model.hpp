@@ -43,6 +43,8 @@ public:
     const core::NoteInfo& note_at(int row) const;
     // Satırın metni: yol; içerik ve genel aramada eşleşen satır varsa "yol  (N)".
     std::string display(int row) const;
+    // Yalnız ilişkiyle bulunan satırın nedeni (app::reason_text); öbür satırlarda boş.
+    std::string reason(int row) const;
     // Yol metnindeki vurgulanacak kod noktalarının bayt ofsetleri (artan).
     const std::vector<std::size_t>& highlights(int row) const { return this->row(row).positions; }
     // Yol listede yoksa -1.

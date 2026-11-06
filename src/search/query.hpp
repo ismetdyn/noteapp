@@ -27,17 +27,19 @@ struct SortSpec {
 
 // Tek filtre; bir sorgudaki filtrelerin hepsi sağlanmalı (AND). Yalnız kind'ın kullandığı alanlar anlamlıdır.
 struct Filter {
-    enum class Kind { Type, Folder, Size, Updated, Created, Origin, Sync, Tag, View };
+    enum class Kind { Type, Folder, Size, Updated, Created, Origin, Sync, Tag, View, Relation, Linked };
     enum class Compare { Less, Greater, Within };
 
     Kind kind{};
-    Compare compare = Compare::Greater;               // Size, Updated, Created
-    std::string text = {};                            // katlanmış: Type, Folder ("work/"), Origin, Tag
+    Compare compare = Compare::Greater;  // Size, Updated, Created
+    // katlanmış: Type, Folder ("work/"), Origin, Tag, Relation (ilişki adı), Linked (komşunun yolu ya da adı)
+    std::string text = {};
     std::uintmax_t bytes = 0;                         // Size
     std::chrono::sys_days day = {};                   // Updated/Created, Less/Greater
     std::chrono::days age = {};                       // Updated/Created, Within
     core::SyncState sync = core::SyncState::SyncOff;  // Sync
     // View: görünümün döndürdüğü notlar; text ham ad. Arama bağlanmadan ayrıştırıldıysa boş: not geçmez.
+    // Relation, Linked: kenarlardan kurulur (bind_graph_filters); kurulmadıysa boş, not geçmez.
     std::shared_ptr<const std::set<core::NotePath>> notes = nullptr;
 };
 
@@ -59,10 +61,11 @@ struct QueryError {
     core::Error error;
 };
 
-// Ayrıştırıcı; tek G/Ç views'tur. Bilinen anahtarlar: sort type in size updated created origin sync tag view.
-// Anahtarlar ve değerler search'ün katlama kurallarıyla karşılaştırılır. Bilinmeyen anahtar (foo:bar,
-// http://x) düz metindir; bilinen anahtarın geçersiz değeri metne düşmez, QueryError döner. views verilmezse
-// `view:` yalnız ad kuralından geçer (girdi boyama), süzgeci hiçbir notu geçirmez. Biçimler için SPEC-search.
+// Ayrıştırıcı; tek G/Ç views'tur. Bilinen anahtarlar: sort type in size updated created origin sync tag view
+// rel linked. Anahtarlar ve değerler search'ün katlama kurallarıyla karşılaştırılır. Bilinmeyen anahtar
+// (foo:bar, http://x) düz metindir; bilinen anahtarın geçersiz değeri metne düşmez, QueryError döner. views
+// verilmezse `view:` yalnız ad kuralından geçer (girdi boyama), süzgeci hiçbir notu geçirmez. Biçimler için
+// SPEC-search.
 std::expected<ParsedQuery, QueryError> parse_query(std::string_view query, const ViewLookup& views = {});
 
 // Bilinen anahtar adları (iki noktasız), parse_query'nin tanıdığı sırayla; kabuk tamamlama (`note __complete

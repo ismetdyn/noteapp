@@ -294,20 +294,30 @@ bool draw_fitted_row_text(ImVec2 position, const std::string& text, float width,
 // `best_line` verilirse satır iki satır boyundadır, ikincisi notun en iyi eşleşen satırı (genel arama, TUI
 // gibi); yalnız adı eşleşen satır tek satırdır.
 bool plain_selectable(const std::string& text, bool selected, const std::vector<std::size_t>& highlights,
-                      core::IconStyle icon_style, const search::Hit* best_line, bool marked,
-                      std::string_view icon_path) {
+                      core::IconStyle icon_style, const RowExtras& extras) {
+    const search::Hit* best_line = extras.best_line;
+    const std::string& secondary = extras.secondary;
     ImVec2 position = ImGui::GetCursorScreenPos();
     float width = ImGui::GetContentRegionAvail().x;
     const float line_height = ImGui::GetTextLineHeightWithSpacing();
     const bool clicked = ImGui::Selectable(
         "##row", selected, ImGuiSelectableFlags_None,
         ImVec2(0.0F, best_line != nullptr ? line_height + ImGui::GetTextLineHeight() : 0.0F));
-    if (marked)
+    if (extras.marked)
         draw_mark_background();
-    const float icon_width =
-        draw_icon(position, core::file_icon(icon_path.empty() ? std::string_view(text) : icon_path), icon_style, selected);
+    const float icon_width = draw_icon(
+        position, core::file_icon(extras.icon_path.empty() ? std::string_view(text) : extras.icon_path),
+        icon_style, selected);
     position.x += icon_width;
     width -= icon_width;
+    if (!secondary.empty()) {
+        // Sağa yaslı, en çok yarı genişlik: yol her zaman okunur kalır.
+        const float gap = ImGui::GetFontSize();
+        const float room = std::min(text_width(secondary), width / 2.0F);
+        draw_fitted_row_text(ImVec2(position.x + width - room, position.y), secondary, room, {},
+                             ImGui::GetColorU32(ImGuiCol_TextDisabled));
+        width -= room + gap;
+    }
     if (draw_fitted_row_text(position, text, width, highlights))
         full_text_tooltip(text);
     if (best_line != nullptr)

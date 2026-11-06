@@ -64,6 +64,7 @@ graph_batch_ops = 30000       # bir graf işlemindeki işlem bütçesi; aşan i�
 completion_min_prefix_bytes = 2   # TUI editöründe gölge öneri için yazılmış en kısa sözcük öneki (bayt)
 notice_ms = 4000              # işlem bildirimi (toast) bu kadar görünür, "4s" yazılabilir; hata kapatılana dek kalır; 0 = kendiliğinden kapanmaz
 tui_list_share = 0.33         # TUI ilk açılışta sol listenin pencereye oranı (0..1); sürüklenen genişlik geçer
+search_relations = true       # aramalar etiket, ilişki adı ve bağlı notun adını da tarar; false: yalnız ad ve içerik
 
 # Kapasite sınırları: anahtar `limits.<modül>.<ad>`, 0 = sınırsız. Boyut "512KiB"/"64MiB"/"10MB", süre
 # "250ms"/"5s"/"2min"/"1h" yazılabilir; düz sayı taban birimdir (bayt, ms). `note config set limits.… 0` ile
@@ -91,6 +92,9 @@ content_hits = 3              # içerik sonucunda not başına gösterilen eşle
 # fuzzy eşleşmenin vurgu konumu ürettiği en uzun aday (kod noktası). Bellek sorgu x aday x 16 bayt: 0'da
 # 4.000 karakterlik yol ve sorgu ~256 MB ister. Uzun aday yine eşleşir, yalnız vurgusuz ve sona yakın sıralanır.
 fuzzy_candidate_chars = 1024
+# Aramada adı eşleşen notun kaç adım uzağındaki bağlı notlar da bulunur (TUI, GUI, `note find`). 0: sınırsız;
+# bağlı bileşenin tamamı gezilir (her not bir kez), iş not + kenar sayısıyla doğrusaldır.
+relation_depth = 1
 
 [limits.sync]
 # Üç yönlü birleştirmenin en büyük girdisi; aşan çakışma kopya not olur (içerik kaybı yok). Birleştirme yazma

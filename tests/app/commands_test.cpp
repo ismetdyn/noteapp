@@ -52,7 +52,9 @@ TEST_CASE("find_command returns the registry row, nullptr for an unknown id") {
     REQUIRE(paste != nullptr);
     CHECK(paste->needs == app::CommandNeeds::Yank);
     CHECK(app::find_command("no.such.command") == nullptr);
-    static_assert(app::find_command("new") != nullptr);
+    // Adres-nullptr karşılaştırması değil: UBSan'ın -fno-delete-null-pointer-checks'i onu sabit ifade olmaktan çıkarır.
+    // nullptr'ı izlemek derlemede hatadır, bu yüzden bu satır yine "derlemede bulunur" denetimidir.
+    static_assert(app::find_command("new")->id == "new");
 }
 
 TEST_CASE("rank_palette keeps candidates matching the id or the translated label, best score first") {

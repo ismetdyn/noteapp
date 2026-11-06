@@ -1,4 +1,5 @@
 #include "app/map_relations.hpp"
+#include "app/tabs.hpp"
 #include "core/i18n.hpp"
 #include "edit/display_text.hpp"
 #include "gui/view_internal.hpp"
@@ -9,6 +10,7 @@
 #include <cmath>
 #include <imgui.h>
 #include <imgui_impl_sdlrenderer3.h>
+#include <imgui_stdlib.h>
 #include <limits>
 #include <utility>
 
@@ -48,6 +50,8 @@ constexpr float kMapLabelBackgroundAlpha = 0.8F;
 // Düğüm bağlantı sayısıyla büyür (Obsidian kalıbı): r = taban × (1 + 0,25 √derece), en çok 2 × taban.
 constexpr float kMapDegreeGrowth = 0.25F;
 constexpr float kMapMaxRadiusShare = 2.0F;
+constexpr float kMapFilterEms = 8.0F;  // ilişki adı seçicisi ve etiket kutusu (F2)
+constexpr float kMapFoundRingEms = 0.45F;  // haritada bul: gösterilen eşleşmenin halkası (geçerli notunkinden geniş)
 
 ImU32 with_alpha(ImU32 color, float alpha) {
     ImVec4 value = ImGui::ColorConvertU32ToFloat4(color);
@@ -156,10 +160,13 @@ std::string map_label(const MapNode& node) {
 void View::draw_map() {
     const NoteMap& map = state_.note_map();
     draw_map_controls(map);
+    draw_quick_add();  // F2 "Buraya yeni not…": hızlı ekleme satırı haritada da açılır
+    draw_map_find(map);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::current().canvas);  // zemin Begin'de çizilir
     ImGui::BeginChild("##map", ImVec2(0.0F, 0.0F), theme::kPaneChildFlags,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleColor();
+    map_focused_ = ImGui::IsWindowFocused();
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const ImVec2 size(std::max(ImGui::GetContentRegionAvail().x, 1.0F),
                       std::max(ImGui::GetContentRegionAvail().y, 1.0F));
@@ -197,6 +204,7 @@ void View::draw_map() {
         map_pressed_.reset();
         map_link_from_.reset();  // dizin yeni çizgede başka düğüm olurdu
         map_connect_from_.reset();
+        map_focus_node_.reset();
     }
     // Kenar adları haritanın her değişiminde (ad ya da yön değişimi kuşağı artırmaz): eski ad kalmasın.
     if (const std::size_t version = state_.map_version(); version != map_cache_.edges_version) {
@@ -229,6 +237,8 @@ void View::draw_map() {
     map_animating_ = state_.map_layout().step(kMapIterationsPerFrame);
     if (map_camera_.auto_fit)
         fit_camera(map_camera_, positions, size);
+    if (const auto node = std::exchange(map_focus_node_, std::nullopt); node && *node < positions.size())
+        focus_map_node(map, *node, size);
     draw_map_graph(map, origin, hovered);
     draw_map_menus();
     ImGui::EndChild();
@@ -261,8 +271,11 @@ void View::open_map_edge_menu(const NoteMap& map, ImVec2 origin) {
                               (mouse.y - origin.y - camera.offset_y) / camera.zoom};
     const float reach = kMapEdgeHitEms * ImGui::GetFontSize() / camera.zoom;
     const auto edge = app::map_edge_at(map, state_.map_layout().positions(), at, reach);
-    if (!edge)
+    if (!edge) {  // F2: boşlukta tuval menüsü (yeni not, sabitlemeler, yol)
+        map_canvas_menu_ = at;
+        ImGui::OpenPopup("##map_canvas_menu");
         return;
+    }
     const MapEdge& hit = map.edges[*edge];
     map_edge_menu_ = MapPair{map.nodes[hit.from], map.nodes[hit.to], hit.kind, hit.relation, hit.name, hit.directed};
     ImGui::OpenPopup("##map_edge_menu");
@@ -271,6 +284,7 @@ void View::open_map_edge_menu(const NoteMap& map, ImVec2 origin) {
 // Düğüm menüsü: Bağla… ve düğümün kaldırılabilir kenarları (ilişki, etiket). Bağlantı notun metnindedir,
 // listede yoktur (kenar menüsü nerede silineceğini söyler).
 void View::open_map_node_menu(const NoteMap& map, std::size_t node) {
+    map_relation_names_ = state_.map_relation_names();  // "Komşuları aç" alt menüsünün adları, açılışta bir kez
     MapNodeMenu menu{.generation = map_cache_.generation, .node = node, .subject = map.nodes[node], .removable = {}};
     for (const MapEdge& edge : map.edges) {
         if ((edge.from == node || edge.to == node) && app::map_edge_removable(edge.kind))
@@ -285,18 +299,98 @@ void View::start_map_connect(const NoteMap& map, std::size_t from) {
     if (from >= map.nodes.size())
         return;
     map_connect_from_ = from;
+    map_pick_ = MapPick::Connect;
     ImGui::SetWindowFocus();  // Esc ve `C` tuvalde çalışsın
+}
+
+// Düğüm menüsünün keşif öğeleri (F2): aç, komşular, sabitleme, en kısa yol, çöp. Etiket düğümünde yalnız
+// sabitleme. Menü açıkken çizge yeniden kurulduysa dizin başka düğümdür: dizinli işler kuşağı denetler.
+void View::draw_map_node_items(const MapNode& subject, std::size_t node, std::size_t generation) {
+    const bool note = subject.kind == MapNodeKind::Note;
+    std::optional<core::NotePath> parsed;
+    if (note) {
+        if (auto path = core::NotePath::parse(subject.key))
+            parsed = std::move(*path);
+    }
+    if (parsed) {
+        if (ImGui::MenuItem((core::tr("map.open") + "###map_node_open").c_str()))
+            queue([this, path = *parsed] { state_.open_map_note(path); });
+        remember_item_center("map_node_open");
+    }
+    if (note) {
+        const bool whole = state_.map_options().whole_graph;  // bütün çizgede her komşu görünür
+        ImGui::BeginDisabled(whole);
+        if (ImGui::BeginMenu((core::tr("map.expand") + "###map_node_expand").c_str())) {
+            const auto item = [&](const std::string& label, const std::string& id, const app::MapExpansion& spec) {
+                if (ImGui::MenuItem((label + "###" + id).c_str()))
+                    queue([this, subject, spec] { state_.expand_map_node(subject, spec); });
+                remember_item_center(id);
+            };
+            item(core::tr("map.expand_all"), "map_expand_all", {});
+            item(core::tr("map.expand_links"), "map_expand_links", {.kind = MapEdgeKind::Link});
+            item(core::tr("map.expand_related"), "map_expand_related", {.kind = MapEdgeKind::Related});
+            for (const core::RelationName& name : map_relation_names_)
+                item(core::tr("map.expand_named", {{"name", menu_name(name.display)}}), "map_expand_named:" + name.key,
+                     {.kind = MapEdgeKind::Related, .name = name.key});
+            ImGui::EndMenu();
+        }
+        remember_item_center("map_node_expand");
+        if (ImGui::MenuItem((core::tr("map.collapse") + "###map_node_collapse").c_str()))
+            queue([this, subject] { state_.collapse_map_node(subject); });
+        remember_item_center("map_node_collapse");
+        ImGui::EndDisabled();
+        if (whole)
+            ImGui::SetItemTooltip("%s", core::tr("map.whole_graph_open").c_str());
+    }
+    const GraphLayout& layout = state_.map_layout();
+    const bool pinned = generation == map_cache_.generation && node < layout.size() && layout.pinned(node);
+    if (ImGui::MenuItem((core::tr(pinned ? "map.unpin" : "map.pin") + "###map_node_pin").c_str()))
+        queue([this, node, generation] {
+            if (map_cache_.generation == generation)
+                state_.toggle_map_pin(node);
+        });
+    remember_item_center("map_node_pin");
+    if (note) {
+        const auto pick = [this, node, generation](MapPick kind) {
+            queue([this, node, generation, kind] {
+                if (map_cache_.generation != generation)
+                    return;
+                map_connect_from_ = node;
+                map_pick_ = kind;
+            });
+        };
+        if (ImGui::MenuItem((core::tr("map.path") + "###map_node_path").c_str()))
+            pick(MapPick::Path);
+        remember_item_center("map_node_path");
+        if (ImGui::MenuItem((core::tr("map.path_directed") + "###map_node_path_directed").c_str()))
+            pick(MapPick::DirectedPath);
+        remember_item_center("map_node_path_directed");
+    }
+    if (state_.map_scope().path) {
+        if (ImGui::MenuItem((core::tr("map.clear_path") + "###map_node_clear_path").c_str()))
+            queue([this] { state_.clear_map_path(); });
+        remember_item_center("map_node_clear_path");
+    }
+    if (parsed) {
+        if (ImGui::MenuItem((core::tr("map.trash") + "###map_node_trash").c_str()))
+            queue([this, path = *parsed] { state_.trash_map_note(path); });
+        remember_item_center("map_node_trash");
+    }
+    ImGui::Separator();
 }
 
 // Esc ve dışarı tıklama ImGui'nin açılır pencere kuralıyla kapatır. Adlar güvenilmez: biçim dizgisine girmez.
 void View::draw_map_menus() {
     if (map_node_menu_ && ImGui::BeginPopup("##map_node_menu")) {
         const MapNodeMenu menu = *map_node_menu_;
+        draw_map_node_items(menu.subject, menu.node, menu.generation);
         if (ImGui::MenuItem((core::tr("map.connect") + "###map_node_connect").c_str()))
             queue([this, menu] {
                 // Menü açıkken çizge yeniden kurulduysa dizin başka düğümdür: kip açılmaz.
-                if (map_cache_.generation == menu.generation)
-                    map_connect_from_ = menu.node;
+                if (map_cache_.generation != menu.generation)
+                    return;
+                map_connect_from_ = menu.node;
+                map_pick_ = MapPick::Connect;
             });
         remember_item_center("map_node_connect");
         if (!menu.removable.empty() && ImGui::BeginMenu((core::tr("map.remove_relations") + "###map_node_remove").c_str())) {
@@ -367,6 +461,24 @@ void View::draw_map_menus() {
             ImGui::SetItemTooltip("%s", core::tr("map.link_in_text", {{"from", printable(edge.from.key)},
                                                                       {"to", printable(edge.to.key)}})
                                             .c_str());
+        ImGui::EndPopup();
+    }
+    // F2 tuval menüsü: boşluğa sağ tık. Yeni not var olan hızlı ekleme satırından, tıklanan yere sabitlenir.
+    if (map_canvas_menu_ && ImGui::BeginPopup("##map_canvas_menu")) {
+        const app::LayoutPoint at = *map_canvas_menu_;
+        if (ImGui::MenuItem((core::tr("map.new_note") + "###map_canvas_new_note").c_str()))
+            queue([this, at] { state_.begin_map_note(at); });
+        remember_item_center("map_canvas_new_note");
+        ImGui::BeginDisabled(!state_.map_layout().has_pins());
+        if (ImGui::MenuItem((core::tr("map.unpin_all") + "###map_canvas_unpin_all").c_str()))
+            queue([this] { state_.unpin_map(); });
+        remember_item_center("map_canvas_unpin_all");
+        ImGui::EndDisabled();
+        if (state_.map_scope().path) {
+            if (ImGui::MenuItem((core::tr("map.clear_path") + "###map_canvas_clear_path").c_str()))
+                queue([this] { state_.clear_map_path(); });
+            remember_item_center("map_canvas_clear_path");
+        }
         ImGui::EndPopup();
     }
 }
@@ -459,16 +571,61 @@ void View::draw_map_controls(const NoteMap& map) {
     const std::string tags = core::tr("gui.map_tags");
     flow_after_previous(button_width(tags), row_start_x, row_width);
     chip("map_tags", tags, options.show_tags, "gui.map_tags_tip");
+
+    // F2 süzgeçler: kenar türü çipleri, ilişki adı seçicisi (NoteStore::relation_names), etiket kutusu (`tag:`).
+    const std::string links = core::tr("gui.map_links");
+    flow_after_previous(button_width(links), row_start_x, row_width);
+    chip("map_links", links, options.show_links, "gui.map_links_tip");
+    const std::string related = core::tr("gui.map_related");
+    flow_after_previous(button_width(related), row_start_x, row_width);
+    chip("map_related", related, options.show_related, "gui.map_related_tip");
+    const float font = ImGui::GetFontSize();
+    const std::string preview = !options.relation          ? core::tr("gui.map_relation_any")
+                                : options.relation->empty() ? core::tr("map.unnamed_relation")
+                                                            : menu_name(*options.relation);
+    flow_after_previous(kMapFilterEms * font, row_start_x, row_width);
+    ImGui::SetNextItemWidth(kMapFilterEms * font);
+    if (ImGui::BeginCombo("##map_relation", preview.c_str())) {
+        if (ImGui::IsWindowAppearing())  // depo açılışta bir kez okunur, kare başına değil
+            map_relation_names_ = state_.map_relation_names();
+        const auto choose = [&](const std::string& label, const std::string& id,
+                                const std::optional<std::string>& value) {
+            if (ImGui::Selectable((label + "###" + id).c_str(), options.relation == value)) {
+                options.relation = value;
+                changed = true;
+            }
+            remember_item_center(id);
+        };
+        choose(core::tr("gui.map_relation_any"), "map_relation_any", std::nullopt);
+        choose(core::tr("map.unnamed_relation"), "map_relation_unnamed", std::string());
+        for (const core::RelationName& name : map_relation_names_)
+            choose(menu_name(name.display), "map_relation:" + name.key, name.key);
+        ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip("%s", core::tr("gui.map_relation_tip").c_str());
+    remember_item_center("map_relation");
+    flow_after_previous(kMapFilterEms * font, row_start_x, row_width);
+    ImGui::SetNextItemWidth(kMapFilterEms * font);
+    if (ImGui::InputTextWithHint("##map_tag", core::tr("gui.map_tag_hint").c_str(), &map_tag_filter_)) {
+        const std::size_t first = map_tag_filter_.find_first_not_of(" \t");
+        options.tag = first == std::string::npos
+                          ? std::string()
+                          : map_tag_filter_.substr(first, map_tag_filter_.find_last_not_of(" \t") - first + 1);
+        changed = true;
+    }
+    ImGui::SetItemTooltip("%s", core::tr("gui.map_tag_tip").c_str());
+    remember_item_center("map_tag");
     if (changed)
         queue([this, options] { state_.set_map_options(options); });
 
     // İlişki kurmanın yolu görünür olsun (MAP-R keşfedilmiyordu): kipteyken kaynağı ve vazgeçmeyi söyler.
     ImGui::PushFont(nullptr, kSmallFontPixels);
     ImGui::PushTextWrapPos(0.0F);
+    const bool picking = map_connect_from_ && *map_connect_from_ < map.nodes.size();
     const std::string hint =
-        map_connect_from_ && *map_connect_from_ < map.nodes.size()
-            ? core::tr("map.connect_pending", {{"from", map_label(map.nodes[*map_connect_from_])}})
-            : core::tr("map.connect_hint");
+        !picking ? core::tr("map.connect_hint")
+                 : core::tr(map_pick_ == MapPick::Connect ? "map.connect_pending" : "map.path_pending",
+                            {{"from", map_label(map.nodes[*map_connect_from_])}});
     ImGui::TextDisabled("%s", hint.c_str());
     ImGui::PopTextWrapPos();
     ImGui::PopFont();
@@ -524,8 +681,14 @@ void View::handle_map_input(const NoteMap& map, ImVec2 origin, ImVec2 size, int 
         if (map_link_from_) {
             drop_map_link(map, *map_link_from_, hovered);
         } else if (map_connect_from_ && !map_dragged_) {
-            // Bağla kipinde tıklama hedefi seçer; boşluk ya da aynı düğüm vazgeçer (map_drop None).
-            drop_map_link(map, *map_connect_from_, map_pressed_ ? static_cast<int>(*map_pressed_) : -1);
+            // Bağla kipinde tıklama hedefi seçer; boşluk ya da aynı düğüm vazgeçer (map_drop None). Yol kipinde
+            // (F2) tıklanan düğüm yolun sonudur.
+            if (map_pick_ == MapPick::Connect) {
+                drop_map_link(map, *map_connect_from_, map_pressed_ ? static_cast<int>(*map_pressed_) : -1);
+            } else if (map_pressed_ && *map_pressed_ != *map_connect_from_ && *map_connect_from_ < map.nodes.size()) {
+                queue([this, from = map.nodes[*map_connect_from_], to = map.nodes[*map_pressed_],
+                       directed = map_pick_ == MapPick::DirectedPath] { state_.find_map_path(from, to, directed); });
+            }
             map_connect_from_.reset();
         } else if (map_pressed_ && !map_dragged_) {
             if (const auto path = note_path(*map_pressed_)) {
@@ -538,7 +701,7 @@ void View::handle_map_input(const NoteMap& map, ImVec2 origin, ImVec2 size, int 
         map_pressed_.reset();
         map_link_from_.reset();
     }
-    // Sağ tık: düğümde düğüm menüsü (Bağla…, ilişkileri kaldır), boşlukta yakındaki kenarın menüsü.
+    // Sağ tık: düğümde düğüm menüsü, boşlukta yakındaki kenarın menüsü, kenar yoksa tuval menüsü (F2).
     if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         map_connect_from_.reset();
         if (hovered >= 0)
@@ -546,19 +709,17 @@ void View::handle_map_input(const NoteMap& map, ImVec2 origin, ImVec2 size, int 
         else
             open_map_edge_menu(map, origin);
     }
-    if (map_connect_from_ && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
-        map_connect_from_.reset();
-    // Shift basılıyken ikinci basış yeni bir sürüklemedir, çift tıklama sayılmaz (notu açıp Ağaç'a geçerdi).
-    if (!map_link_from_ && hovered >= 0 && ImGui::IsItemHovered() &&
-        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-        if (const auto path = note_path(static_cast<std::size_t>(hovered))) {
-            queue([this, path = *path] {
-                state_.open_map_note(path);
-                if (state_.current_path() == path)  // kayıttan vazgeçildiyse görünüm de kalır
-                    state_.set_browser_view(BrowserView::Tree);
-            });
-        }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        if (map_connect_from_)
+            map_connect_from_.reset();
+        else if (ImGui::IsWindowFocused() && state_.map_scope().path)  // F2: yol temizlenir
+            queue([this] { state_.clear_map_path(); });
     }
+    // F2: çift tıklama komşuları açar ya da kapar (Neo4j Browser gibi); ilk tıklama notu açmıştır. Shift
+    // basılıyken ikinci basış yeni bir sürüklemedir, çift tıklama sayılmaz.
+    if (!map_link_from_ && hovered >= 0 && ImGui::IsItemHovered() &&
+        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        queue([this, node = map.nodes[static_cast<std::size_t>(hovered)]] { state_.toggle_map_neighbours(node); });
     if (ImGui::IsItemHovered() && io.MouseWheel != 0.0F)
         zoom_map(origin, io.MousePos, std::pow(kMapWheelZoomStep, io.MouseWheel));
 
@@ -582,16 +743,87 @@ void View::handle_map_input(const NoteMap& map, ImVec2 origin, ImVec2 size, int 
                  std::pow(kMapKeyZoomStep, static_cast<float>(zoom_steps)));
     if (ImGui::IsKeyPressed(ImGuiKey_0, false) || ImGui::IsKeyPressed(ImGuiKey_Keypad0, false))
         camera.auto_fit = true;
+    const auto shown_node = [&]() -> std::optional<std::size_t> {
+        const auto current = state_.current_path();
+        if (!current)
+            return std::nullopt;
+        const auto found = std::ranges::find_if(map.nodes, [&](const MapNode& node) {
+            return node.kind == MapNodeKind::Note && node.key == current->string();
+        });
+        return found == map.nodes.end() ? std::nullopt
+                                        : std::optional(static_cast<std::size_t>(found - map.nodes.begin()));
+    };
     // TUI `C` (connect): gösterilen nottan bağla kipi.
     if (ImGui::IsKeyChordPressed(ImGuiKey_C)) {
-        if (const auto current = state_.current_path()) {
-            const auto found = std::ranges::find_if(map.nodes, [&](const MapNode& node) {
-                return node.kind == MapNodeKind::Note && node.key == current->string();
-            });
-            if (found != map.nodes.end())
-                start_map_connect(map, static_cast<std::size_t>(found - map.nodes.begin()));
-        }
+        if (const auto node = shown_node())
+            start_map_connect(map, *node);
     }
+    // F2, TUI ile aynı harfler: P(in) üstündeki düğümü (yoksa gösterilen notu) sabitler/çözer, U(npin) hepsini
+    // çözer, Ctrl+F haritada bul (not içi bul değil: View::handle_shortcuts tuvaldeyken geçer).
+    if (ImGui::IsKeyChordPressed(ImGuiKey_P)) {
+        if (const auto node = hovered >= 0 ? std::optional(static_cast<std::size_t>(hovered)) : shown_node())
+            queue([this, node = *node] { state_.toggle_map_pin(node); });
+    }
+    if (ImGui::IsKeyChordPressed(ImGuiKey_U))
+        queue([this] { state_.unpin_map(); });
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_F)) {
+        map_find_open_ = true;
+        map_find_focus_ = true;
+    }
+}
+
+// Haritada bul (F2): yazdıkça eşleşmeler yanar, ilki ortalanır; Enter sonraki (Shift+Enter önceki), Esc kapatır.
+// Eşleşme kuralı app::find_map_nodes (TUI `/` ile aynı).
+void View::draw_map_find(const NoteMap& map) {
+    if (!map_find_open_)
+        return;
+    if (std::exchange(map_find_focus_, false))
+        ImGui::SetKeyboardFocusHere();
+    const std::string counter =
+        map_find_.empty()     ? std::string()
+        : map_found_.empty() ? core::tr("map.find_none")
+                             : core::tr("map.find_count", {{"at", std::to_string(map_found_at_ + 1)},
+                                                           {"count", std::to_string(map_found_.size())}});
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    ImGui::SetNextItemWidth(std::max(ImGui::GetContentRegionAvail().x - text_width(counter) - spacing, 1.0F));
+    const bool entered = ImGui::InputTextWithHint("##map_find", core::tr("map.find_hint").c_str(), &map_find_,
+                                                  ImGuiInputTextFlags_EnterReturnsTrue);
+    remember_item_center("map_find");
+    const bool edited = ImGui::IsItemEdited();
+    const bool escape = ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    if (!counter.empty()) {
+        ImGui::SameLine(0.0F, spacing);
+        ImGui::TextUnformatted(counter.c_str());
+    }
+    if (escape) {
+        map_find_open_ = false;
+        map_find_.clear();
+        map_found_.clear();
+        return;
+    }
+    if (edited || map_found_version_ != state_.map_version()) {  // harita değişince dizinler yenilenir
+        map_found_ = app::find_map_nodes(map, map_find_);
+        map_found_version_ = state_.map_version();
+        map_found_at_ = edited ? 0 : std::min(map_found_at_, map_found_.empty() ? 0 : map_found_.size() - 1);
+        if (edited && !map_found_.empty())
+            map_focus_node_ = map_found_.front();
+    }
+    if (entered && !map_found_.empty()) {
+        map_found_at_ = app::cycled_tab(map_found_at_, ImGui::GetIO().KeyShift ? -1 : 1, map_found_.size());
+        map_focus_node_ = map_found_[map_found_at_];
+    }
+    if (entered)
+        map_find_focus_ = true;  // Enter girdiyi bırakır: sonraki Enter da eşleşmeyi değiştirsin
+}
+
+// Düğüm tuvalin ortasına gelir, yakınlık kalır; kendiliğinden sığdırma kapanır (yoksa sonraki kare geri sığardı).
+void View::focus_map_node(const NoteMap& map, std::size_t node, ImVec2 size) {
+    const auto& positions = state_.map_layout().positions();
+    if (node >= positions.size() || node >= map.nodes.size())
+        return;
+    map_camera_.auto_fit = false;
+    map_camera_.offset_x = size.x / 2.0F - positions[node].x * map_camera_.zoom;
+    map_camera_.offset_y = size.y / 2.0F - positions[node].y * map_camera_.zoom;
 }
 
 // `anchor` altındaki yerleşim noktası yerinde kalır.
@@ -637,8 +869,17 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
                 near_hovered[edge.from] = 1;
         }
     }
+    // Haritada bul açıkken (F2) yalnız eşleşmeler yanar; maske yalnız o sırada, eşleşme listesinden.
+    std::vector<char> found;
+    if (map_find_open_ && !map_find_.empty()) {
+        found.assign(map.nodes.size(), 0);
+        for (const std::size_t node : map_found_)
+            if (node < found.size())
+                found[node] = 1;
+    }
     const auto lit = [&](std::size_t node) {
-        return (!filtering || matches[node] != 0) && (near_hovered.empty() || near_hovered[node] != 0);
+        return (!filtering || matches[node] != 0) && (near_hovered.empty() || near_hovered[node] != 0) &&
+               (found.empty() || found[node] != 0);
     };
     const auto edge_lit = [&](const MapEdge& edge) {
         return lit(edge.from) && lit(edge.to) &&
@@ -682,6 +923,18 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
             batch_of(edge).coords.insert(batch_of(edge).coords.end(), {a.x, a.y, b.x, b.y});
     }
     draw->AddCallback(draw_map_lines, &map_lines_);  // düğüm ve oklardan önce: onlar çizgilerin üstünde
+    // En kısa yol (F2): vurgu renginde kalın çizgi, ince kenarın üstünde. Yol kısadır: ImGui çizgisi yeter.
+    const ImU32 accent = theme::current().accent;
+    const float thick = kMapRingThickness * ui_scale_;
+    const std::size_t path_edges = map.path.empty() ? 0 : std::min(map.edges.size(), map.path_edges.size());
+    for (std::size_t e = 0; e < path_edges; ++e) {  // yol yokken kare başına kenar taraması yok
+        if (map.path_edges[e] == 0)
+            continue;
+        const ImVec2 a = screen(map.edges[e].from);
+        const ImVec2 b = screen(map.edges[e].to);
+        if (visible(a, b))
+            draw->AddLine(a, b, accent, thick);
+    }
     for (const MapEdge& edge : map.edges) {          // ok yalnız yakınken: görünen kenar az
         const bool pointed = edge.kind == MapEdgeKind::Link || (edge.kind == MapEdgeKind::Related && edge.directed);
         if (!arrows || !pointed)
@@ -694,7 +947,14 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
 
     const auto current = state_.current_path();
     const std::string current_key = current ? current->string() : std::string{};
-    const ImU32 accent = theme::current().accent;
+    std::vector<char> on_path;  // yol yokken boş: kare başına ayırma yok
+    if (!map.path.empty())
+        on_path.assign(map.nodes.size(), 0);
+    for (const std::size_t node : map.path)
+        if (node < on_path.size())
+            on_path[node] = 1;
+    const std::optional<std::size_t> shown_match =
+        !found.empty() && map_found_at_ < map_found_.size() ? std::optional(map_found_[map_found_at_]) : std::nullopt;
     std::vector<std::size_t> labelled;
     for (std::size_t i = 0; i < map.nodes.size(); ++i) {
         const ImVec2 at = screen(i);
@@ -710,11 +970,14 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
         else
             draw->AddCircleFilled(at, r, color, 0);  // 0: ImGui'nin önbellekli tessellasyonu, küçükte az köşe
         const bool is_current = !tag && map.nodes[i].key == current_key;
-        if (is_current)
-            draw->AddCircle(at, r + kMapRingGapEms * font, accent, 0, kMapRingThickness * ui_scale_);
+        if (is_current || (!on_path.empty() && on_path[i] != 0))
+            draw->AddCircle(at, r + kMapRingGapEms * font, accent, 0, thick);
+        if (shown_match == i)
+            draw->AddCircle(at, r + kMapFoundRingEms * font, accent, 0, 2.0F * thick);
         item_rects_[map_cache_.names[i]] = {at.x - r, at.y - r, at.x + r, at.y + r};
-        // Sıkışık görünümde yalnız geçerli ve üstündeki not adlanır: aramada eşleşenler renkle seçilir.
-        const bool priority = is_current || static_cast<int>(i) == hovered;
+        // Sıkışık görünümde yalnız geçerli ve üstündeki not adlanır (bulunan eşleşme de): aramada eşleşenler
+        // renkle seçilir.
+        const bool priority = is_current || static_cast<int>(i) == hovered || shown_match == i;
         if (priority)
             labelled.insert(labelled.begin(), i);
         else if (all_labels)

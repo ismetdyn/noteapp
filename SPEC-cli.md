@@ -14,8 +14,8 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `… \| note [bayraklar]` | stdin TTY değilse ve metin argümanı yoksa içerik stdin'den |
 | `note [bayraklar]` | Metin de stdin de yoksa editör açılır (aşağıda) |
 | `note -e [bayraklar] [METİN…]` | Editörü her durumda açar; METİN varsa ön içerik olur (ör. başlık yazıp devam etmek) |
-| `note ls [SORGU] [-f KLASÖR] [-n N] [-l \| -0 \| --json]` | Notları listeler: sorgu varsa fuzzy sıra, yoksa mtime azalan. Sorgu SPEC-search argümanlarını alır (`tag:proje`, `view:iş`, `type:md`, `sort:-size`…); geçersiz argüman değeri, bilinmeyen ya da yazan görünüm çıkış 2 |
-| `note find TERİM… [-n N] [--json]` | İçerik araması; `yol:satır: kesit` (renk açıkken vurgulu) |
+| `note ls [SORGU] [-f KLASÖR] [-n N] [-l \| -0 \| --json]` | Notları listeler: sorgu varsa fuzzy sıra, yoksa mtime azalan. Sorgu SPEC-search argümanlarını alır (`tag:proje`, `view:iş`, `rel:uses`, `linked:b`, `type:md`, `sort:-size`…); geçersiz argüman değeri, bilinmeyen ya da yazan görünüm çıkış 2 |
+| `note find TERİM… [-n N] [-l] [--json]` | İçerik araması; `yol:satır: kesit` (renk açıkken vurgulu). Terminalde, `-l` ile ya da `--json`'da ardından içerikte bulunmayan ama etiketi, ilişki adı ya da bağlı notunun adı eşleşen notlar nedenleriyle (SPEC-search "İlişki araması"); düz boru çıktısı eskisi gibi yalnız içerik |
 | `note show SORGU` | En iyi eşleşmenin içeriğini yazdırır |
 | `note edit SORGU` | En iyi eşleşmeyi editörde açar |
 | `note rm YOL [-y] [-q]` | **Yalnız tam yol**; onay ister (TTY değilse `-y`/`--yes` zorunlu) |
@@ -131,9 +131,15 @@ olarak komuttur; kalan argümanlar o komutun ayrıştırıcısına aynen gider (
   `GÜNCELLEME  BOYUT  TÜR  YOL` (yerel `YYYY-MM-DD HH:MM`, boyut sağa, tür sola yaslı; başlık yok, TTY ve boru aynı).
   `-0/--print0`: kayıt ayırıcı NUL. `--limit/-n N`: en çok N satır (pozitif tam sayı, değilse çıkış 2; varsayılan
   sınırsız). `--json` `-l`/`-0`'dan önce gelir.
-- `note find --json`: `[{"path","line","snippet","ranges":[[başlangıç,bitiş]…]}]` (kesitte bayt aralıkları);
-  eşleşme yoksa `[]` ve çıkış 1.
-- Varsayılan çıktılar (`ls`, `find`, `tags`, `query`, `view`, `config`, `show`) ve mevcut `--json` şemaları değişmez.
+- `note find --json`: `[{"path","line","snippet","ranges":[[başlangıç,bitiş]…],"reason":"content"}]` (kesitte bayt
+  aralıkları), ardından ilişkiyle bulunan not başına `{"path","reason","label"}` ve nedenin alanları: `"reason":"tag"`
+  (`label` etiket), `"relation"` (`label` ilişki adı, `other` öbür uç, `direction` `outgoing|incoming|undirected`), `"linked"`
+  (`other` adı eşleşen komşu, `hops`, `label` tek adımda kenarın adı, yoksa `""`); eşleşme yoksa `[]` ve çıkış 1.
+- `note find` düz çıktısı: içerik satırları aynı. İlişki satırları yalnız terminalde (`YOL  NEDEN`), `-l/--long` ile
+  (boruda `YOL<TAB>NEDEN`; neden tek satırdır, satır sonu ve sekme boşluk olur) ya da `--json`'da yazılır: düz boru çıktısı
+  ve çıkış kodu eskisi gibi içeriğe bağlıdır. `--limit N` not sayısıdır, önce içerik eşleşmeleri.
+- Varsayılan çıktılar (`ls`, `find`, `tags`, `query`, `view`, `config`, `show`) boruda değişmez; `find` terminalde ve `-l` ile
+  ilişki satırı ekler, `find --json` her kayda `reason` ekler.
 
 ## Ortam değişkenleri
 | Değişken | Etki |
@@ -232,7 +238,7 @@ Tablo her zaman terminal için temizlenir (hücrede `\n` ve `\t` görünür kaç
 ## Çıkış kodları
 | Kod | Anlam | Örnek |
 |---|---|---|
-| 0 | başarı | not kaydedildi, `find` eşleşme buldu |
+| 0 | başarı | not kaydedildi, `find` eşleşme buldu (düz boruda içerik; terminalde, `-l` ve `--json`'da ilişki de) |
 | 1 | kullanıcı kaynaklı sonuç | bulunamadı (`show zzzz`), `find` eşleşme yok, iptal/onay verilmedi, `rm` TTY'siz `-y`'siz, var olan ada yazma, kısmi içe alma |
 | 2 | kullanım hatası | bilinmeyen komut/fiil/seçenek, eksik değer, geçersiz yol/ad/sorgu, geçersiz `--limit` |
 | 3 | G/Ç ya da iç hata | yazılamayan çıktı, bellek yetersiz |
@@ -346,3 +352,11 @@ Etkileşimli seçici (fzf benzeri seçim TUI'nin işi), `mkdir/rmdir` komutları
 ## Değişiklik 2026-11-06 (F1 adlı ilişki, CLI)
 - **ADDED** `note relation add|rm|rename|ls` ve kabul 21. Neden: kullanıcı isteği "ilişki kurulurken edge'e isim verilebilsin" (plan-graph-map F1); GUI/TUI ile aynı kural ve iletiler (`app::map_relations`).
 - **MODIFIED** Ayrılmış sözcükler: `relation`. Daha önce `note relation` bilinmeyen komuttu (çıkış 2).
+
+## Değişiklik 2026-11-06 (ilişki araması, CLI)
+- **MODIFIED** `note find` (`-s`): içerik satırlarından sonra etiket, ilişki adı ya da bağlı notun adıyla bulunan notlar yalnız yollarıyla gelir;
+  terminalde, `-l` ve `--json`'da yalnız ilişkiyle bulunan sonuç da çıkış 0'dır; düz boru çıktısı ve çıkış kodu eskisi gibidir
+  (inceleme kararı: betikler bozulmaz). Neden: kullanıcı isteği "arama yalnız içerik ya da not araması olmasın, graftaki ilişkiler de
+  dikkate alınsın" (TUI/GUI ile aynı kural, `search::relation_hits`). Eski içerik satırları ve sıraları aynı.
+- **ADDED** `note find -l/--long` (nedeni yazar) ve `--json`'da `reason` alanı (içerik kaydında `"content"`).
+- **ADDED** `note ls` sorgusunda `rel:` ve `linked:` (SPEC-search).

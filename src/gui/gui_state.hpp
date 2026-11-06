@@ -428,6 +428,25 @@ public:
                          const core::RelationId& relation, const std::optional<core::NotePath>& source);
     std::size_t map_reads() const { return map_.reads(); }  // test kancası: NoteStore::edges çağrısı
 
+    // --- Harita keşfi (F2; kural app::MapModel, TUI ile ortak). Oturumluktur. ---
+    const app::MapScope& map_scope() const { return map_.scope(); }
+    // Çift tıklama: açılmamışsa geçerli kenar süzgeciyle bir adım açar, açılmışsa kapatır. Bütün çizgede ileti.
+    void toggle_map_neighbours(const MapNode& node);
+    void expand_map_node(const MapNode& node, const app::MapExpansion& spec);  // menü: aynı açılış bir adım ekler
+    void collapse_map_node(const MapNode& node);
+    // En kısa yol: sonuç (uzunluk ya da yol yok) durum satırında ve bildirimde; yol haritada vurgulanır.
+    void find_map_path(const MapNode& from, const MapNode& to, bool directed);
+    void clear_map_path();
+    // Düğümü bulunduğu yere sabitler ya da çözer (sürüklemeyle sabitlemenin açık hâli).
+    void toggle_map_pin(std::size_t node);
+    void unpin_map();
+    // Haritadan yeni not: hızlı ekleme satırı açılır; oluşan not haritada kalır ve `at`a sabitlenir.
+    void begin_map_note(app::LayoutPoint at);
+    // Var olan çöp yolu (TrashOps): Geri al teklifi ve undo_trash. Gösterilen notsa trash_note'un kendisi.
+    void trash_map_note(const core::NotePath& path);
+    // İlişki adı seçicisi (NoteStore::relation_names); hata durum satırına, liste boş döner.
+    std::vector<core::RelationName> map_relation_names();
+
     // --- Editör ---
     // Etkin sekmenin editörü (EditorBuffer üstünde, TUI ile aynı düzenleme kuralları). Metni değiştiren her
     // şey aşağıdaki editor_* yollarından geçer: kirli durum, otomatik kayıt ve sekme koruması orada yürür.
@@ -832,6 +851,7 @@ private:
     // harita (seçenek ya da merkez değişince). Konumlar GraphLayout'ta anahtarla korunur. Model TUI ile
     // ortak.
     app::MapModel map_{config_.limits.app.map_nodes, config_.limits.app.map_depth};  // config_ önce kurulur
+    std::optional<app::LayoutPoint> map_new_at_;  // begin_map_note: hızlı eklemeyle oluşacak notun yeri
     std::uint64_t data_version_ = 0;
     bool rows_stale_ = true;
     std::size_t browser_rebuilds_ = 0;

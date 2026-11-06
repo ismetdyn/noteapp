@@ -17,6 +17,7 @@ noteapp_add_test(tui
     folder_nav_test.cpp
     import_test.cpp
     map_test.cpp
+    map_explore_test.cpp
     map_relations_test.cpp
     markdown_view_test.cpp
     paste_parser_test.cpp

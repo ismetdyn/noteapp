@@ -1,5 +1,6 @@
 #include "tui/view.hpp"
 
+#include "app/listing.hpp"
 #include "app/map_relations.hpp"
 #include "core/file_stat.hpp"
 #include "core/i18n.hpp"
@@ -490,6 +491,17 @@ std::string hit_count_text(const TuiState& state, const Row& row) {
     return "  (" + std::to_string(row.hit_count) + ")";
 }
 
+// Yalnız ilişkiyle bulunan satırın nedeni (SPEC-tui "İlişki araması"); ad ve yol güvenilmez.
+std::string reason_suffix(const Row& row) {
+    return row.reason ? "  " + terminal_safe(app::reason_text(*row.reason)) : std::string{};
+}
+
+// Yolun ve eşleşme sayısının arkasında kalan hücre (sağ sütun ve neden bunu paylaşır).
+int cells_after_name(const TuiState& state, const Row& row, const ListCells& cells) {
+    return cells.inner_width - row_prefix_cells(cells) - row_indent_cells(row, cells.inner_width) - 1 -
+           ftxui::string_width(row.shown_text()) - ftxui::string_width(hit_count_text(state, row));
+}
+
 // Boş dönerse sütun çizilmez; yol en az kMinPathCells hücre tutar.
 std::string fitted_column(const TuiState& state, const Row& row, const ListCells& cells) {
     const ListColumn column = state.list_column();
@@ -497,9 +509,9 @@ std::string fitted_column(const TuiState& state, const Row& row, const ListCells
         return {};
     const int after_prefix =
         cells.inner_width - row_prefix_cells(cells) - row_indent_cells(row, cells.inner_width) - 1;
-    const int free = after_prefix - ftxui::string_width(row.shown_text()) -
-                     ftxui::string_width(hit_count_text(state, row));
-    const int squeezed = after_prefix - kMinPathCells;
+    const int free = cells_after_name(state, row, cells) - ftxui::string_width(reason_suffix(row));
+    // Nedenli satırda sütun yalnız boş yere girer: yol ve neden sütun için kısalmaz.
+    const int squeezed = row.reason ? free : after_prefix - kMinPathCells;
     if (row.is_folder) {
         const FolderNode* node = state.folder_tree().find(row.path.string());
         const std::string items = count_text("tui.count_items", node ? node->item_count() : 0);
@@ -540,8 +552,15 @@ ftxui::Element list_row(const TuiState& state, const Row& row, std::size_t index
     cells.push_back(marked ? std::move(name) | color(Color::Yellow) : std::move(name));
     if (std::string hits = hit_count_text(state, row); !hits.empty())
         cells.push_back(text(std::move(hits)) | dim);
+    const std::string column = fitted_column(state, row, list);
+    // Neden yoldan sonra gelir: dar listede yol değil neden "…" ile kısalır.
+    if (std::string reason =
+            head_ellipsis(reason_suffix(row), cells_after_name(state, row, list) -
+                                                  (column.empty() ? 0 : ftxui::string_width(column) + 1));
+        !reason.empty())
+        cells.push_back(text(std::move(reason)) | dim);
     cells.push_back(filler());  // seçili satırın tersi tüm genişliği kaplasın
-    if (const std::string column = fitted_column(state, row, list); !column.empty())
+    if (!column.empty())
         cells.push_back(text(" " + column) | dim);
     Element line = hbox(std::move(cells));
     if (!is_selected)
@@ -1359,6 +1378,8 @@ const InputLine::Popup* open_input_popup(const TuiState& state, const NewRowStat
         return rename->line().popup();
     if (new_row)
         return new_row->line().popup();
+    if (state.map_view() && state.map_input_kind())  // haritanın süzgeç satırı (F2)
+        return state.map_input().popup();
     return state.focus() == Focus::Search ? state.search_line().popup() : nullptr;
 }
 

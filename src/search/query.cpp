@@ -24,7 +24,7 @@ constexpr int kMaxYear = 2200;
 constexpr int kMaxAgeDays = 36500;
 constexpr std::size_t kDateChars = 10;  // YYYY-MM-DD
 
-enum class Key { Sort, Type, In, Size, Updated, Created, Origin, Sync, Tag, View };
+enum class Key { Sort, Type, In, Size, Updated, Created, Origin, Sync, Tag, View, Rel, Linked };
 
 // Geçersiz değerin gerekçesi: i18n "reason.<ad>".
 using Reason = std::string_view;
@@ -67,7 +67,7 @@ std::vector<Token> tokenize(std::string_view query) {
     return tokens;
 }
 
-constexpr std::array<std::pair<std::string_view, Key>, 10> kKeys{{{"sort", Key::Sort},
+constexpr std::array<std::pair<std::string_view, Key>, 12> kKeys{{{"sort", Key::Sort},
                                                                   {"type", Key::Type},
                                                                   {"in", Key::In},
                                                                   {"size", Key::Size},
@@ -76,7 +76,9 @@ constexpr std::array<std::pair<std::string_view, Key>, 10> kKeys{{{"sort", Key::
                                                                   {"origin", Key::Origin},
                                                                   {"sync", Key::Sync},
                                                                   {"tag", Key::Tag},
-                                                                  {"view", Key::View}}};
+                                                                  {"view", Key::View},
+                                                                  {"rel", Key::Rel},
+                                                                  {"linked", Key::Linked}}};
 
 std::optional<Key> known_key(std::string_view name) {
     const std::string folded = fold_to_utf8(name);
@@ -245,6 +247,13 @@ std::expected<Filter, Reason> parse_filter(Key key, std::string_view raw, std::s
         return parse_time(Filter::Kind::Created, folded);
     case Key::Sync:
         return parse_sync(folded);
+    case Key::Rel:
+    case Key::Linked: {
+        // Notları kenarlardan bind_graph_filters kurar (relation_search.hpp).
+        Filter filter{key == Key::Rel ? Filter::Kind::Relation : Filter::Kind::Linked};
+        filter.text = folded;
+        return filter;
+    }
     case Key::Origin:
     case Key::Sort:
     case Key::View:
@@ -352,6 +361,8 @@ bool matches(const Filter& filter, const core::NoteMeta& note, fs::file_time_typ
     case Filter::Kind::Tag:
         return matches_tag(note.tags, filter.text);
     case Filter::Kind::View:
+    case Filter::Kind::Relation:
+    case Filter::Kind::Linked:
         return filter.notes && filter.notes->contains(note.path);
     case Filter::Kind::Sync:
         break;

@@ -366,6 +366,8 @@ private:
     std::size_t trash_count();
     tui::StoreScan scan();
     noteapp::search::ContentIndex& ensure_content_index();
+    // İçerik, genel ve ilişki aramasını depoya bağlar (depo erişimi liste kilidiyle).
+    void connect_search();
     void show_sync();
     void notify_changed();
     void start_auto_sync();
@@ -523,18 +525,7 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
     if (issue)
         status_.message = noteapp::tui::terminal_safe(core::format_error(*issue));
 
-    state_.set_content_searcher(tui::content_searcher(
-        [this]() -> const noteapp::search::ContentIndex& { return ensure_content_index(); },
-        config_.limits.search.content_results));
-    view_lookup_ = [this](std::string_view name) {
-        const std::scoped_lock lock(list_mutex_);
-        return core::view_notes(store(), name);
-    };
-    state_.set_view_lookup(view_lookup_);
-    state_.set_global_searcher([this](std::string_view query, std::span<const core::NoteMeta> notes) {
-        return noteapp::search::search_all(query, notes, ensure_content_index(), config_.limits.search,
-                                           std::chrono::system_clock::now(), view_lookup_);
-    });
+    connect_search();
     tui::load_list_prefs(state_);
     // Geri gelen sekmelerin içeriği ilk etkinleşmede okunur; açılış Listede kalır.
     tabs_.restore(state_.list_prefs().tabs,
@@ -703,6 +694,27 @@ std::size_t TuiSession::trash_count() {
 tui::StoreScan TuiSession::scan() {
     const std::scoped_lock lock(list_mutex_);
     return tui::scan_store(store());
+}
+
+void TuiSession::connect_search() {
+    state_.set_content_searcher(tui::content_searcher(
+        [this]() -> const noteapp::search::ContentIndex& { return ensure_content_index(); },
+        config_.limits.search.content_results));
+    view_lookup_ = [this](std::string_view name) {
+        const std::scoped_lock lock(list_mutex_);
+        return core::view_notes(store(), name);
+    };
+    state_.set_view_lookup(view_lookup_);
+    state_.set_edge_source([this] {
+        const std::scoped_lock lock(list_mutex_);
+        return noteapp::app::search_edges(store());
+    });
+    state_.set_relation_depth(noteapp::app::relation_depth(config_));
+    state_.set_global_searcher([this](std::string_view query, std::span<const core::NoteMeta> notes,
+                                      const noteapp::search::GraphInput& graph) {
+        return noteapp::search::search_all(query, notes, ensure_content_index(), config_.limits.search,
+                                           view_lookup_, graph);
+    });
 }
 
 noteapp::search::ContentIndex& TuiSession::ensure_content_index() {
@@ -958,6 +970,10 @@ void TuiSession::apply_settings(const core::Config& next) {
     config_.limits.app.map_depth = next.limits.app.map_depth;
     state_.set_map_node_limit(config_.limits.app.map_nodes);
     state_.set_map_depth_limit(config_.limits.app.map_depth);
+    // Tarama iş parçacığı tuning'in başka alanlarını okur; bu alan yalnız UI iş parçacığındadır.
+    config_.limits.search.relation_depth = next.limits.search.relation_depth;
+    config_.tuning.search_relations = next.tuning.search_relations;
+    state_.set_relation_depth(noteapp::app::relation_depth(config_));
     core::init_i18n(config_.language);
     spell_ = make_spell_checker();
     // AutoSync süreleri ve depo yolu kurulurken okunur: ilgili ayar değiştiyse yeniden kurulur;

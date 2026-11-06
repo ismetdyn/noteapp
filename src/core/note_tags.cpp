@@ -351,7 +351,8 @@ WriteContext::neighbor_edges(const NodeId& id, graph::Direction direction,
     }
 }
 
-graph::Result<std::vector<std::string>> read_note_tags(graph::ReadTxn& txn, const NodeId& id) {
+graph::Result<std::vector<std::string>> read_note_tags(graph::ReadTxn& txn, const NodeId& id,
+                                                       std::size_t max_name_bytes) {
     auto cursor = txn.neighbors(id, graph::Direction::Out, kTagged);
     if (!cursor)
         return std::unexpected(cursor.error());
@@ -369,7 +370,8 @@ graph::Result<std::vector<std::string>> read_note_tags(graph::ReadTxn& txn, cons
         const std::string* key = std::get_if<std::string>(&*name);
         const std::string* shown = std::get_if<std::string>(&*display);
         if (key != nullptr)
-            tags.try_emplace(*key, shown != nullptr ? *shown : *key);
+            tags.try_emplace(shown_name(*key, max_name_bytes),
+                             shown_name(shown != nullptr ? *shown : *key, max_name_bytes));
     }
     std::vector<std::string> out;
     out.reserve(tags.size());
@@ -397,12 +399,14 @@ graph::Result<void> load_tags(graph::ReadTxn& txn, Snapshot& snapshot) {
         auto notes = txn.neighbors(tag, graph::Direction::In, kTagged);
         if (!name || !display || !notes)
             return std::unexpected(!name ? name.error() : !display ? display.error() : notes.error());
-        const std::string* key = std::get_if<std::string>(&*name);
-        if (key == nullptr)
+        const std::string* raw_key = std::get_if<std::string>(&*name);
+        if (raw_key == nullptr)
             continue;
-        TagCount count{*key, *key, 0};
+        const std::string cleaned = shown_name(*raw_key, snapshot.name_bytes);
+        const std::string* key = &cleaned;
+        TagCount count{cleaned, cleaned, 0};
         if (const std::string* shown = std::get_if<std::string>(&*display))
-            count.display = *shown;
+            count.display = shown_name(*shown, snapshot.name_bytes);
         while (true) {
             auto next = notes->next();
             if (!next)

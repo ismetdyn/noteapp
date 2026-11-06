@@ -153,6 +153,8 @@ TEST_CASE("gui links: clicking a row opens that note") {
 
 TEST_CASE("gui links: a jump flushes the buffer and clears the filter hiding the target") {
     LinksScene scene;
+    // İlişki araması açıkken "a.md" araması bağlı b.md'yi de listeler; süzgeç hedefi gizlesin diye kapalı.
+    scene.fixture.config.tuning.search_relations = false;
     scene.open();
     scene.state->set_query("a.md");
     settle(*scene.view);

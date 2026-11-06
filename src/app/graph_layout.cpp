@@ -226,4 +226,22 @@ double GraphLayout::energy() const {
     return total;
 }
 
+void GraphLayout::unpin(std::size_t node) {
+    if (pinned_[node] == 0)
+        return;
+    pinned_[node] = 0;
+    temperature_ = std::max(temperature_, kWarmTemperature);
+}
+
+void GraphLayout::unpin_all() {
+    if (!has_pins())
+        return;
+    std::ranges::fill(pinned_, 0);
+    temperature_ = std::max(temperature_, kWarmTemperature);
+}
+
+bool GraphLayout::has_pins() const {
+    return std::ranges::any_of(pinned_, [](char pinned) { return pinned != 0; });
+}
+
 }  // namespace noteapp::app

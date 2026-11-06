@@ -1800,5 +1800,41 @@ check "the completed name is stored with it" relation_listed ra.md $'rc.md\tuses
 keys q
 wait_exit >/dev/null
 
+# F2: harita keşfi. `/` bul eşleşmeyi seçip ortalar, `R` yol kipi (Tab hedef, Enter) en kısa yolu söyler,
+# `x` komşuları açar ve kapar, `P` sabitler.
+clear_notes
+printf '[[fb]]\n' | put_note fa.md
+printf '[[fc]]\n' | put_note fb.md
+printf 'fc\n' | put_note fc.md
+start_app
+literal ':'
+wait_screen "Commands"
+literal 'view.map'
+wait_screen " view.map "
+keys Enter
+wait_screen "depth 2"
+literal 'w'
+literal '/'
+wait_screen "Find:"
+literal 'fc'
+wait_screen "1/1"
+check "find selects its only match" screen_has "[fc.md]"
+keys Escape
+sleep 0.2
+literal 'R'
+wait_screen "path fc.md"
+keys Tab
+sleep 0.2
+keys Enter
+wait_screen "Shortest path fc.md"
+check "R and Enter report the length of the shortest path" screen_has "length"
+keys Escape
+sleep 0.2
+literal 'P'
+wait_screen "Pinned fc.md"
+check "P pins the selected note" screen_has "Pinned fc.md"
+keys q
+wait_exit >/dev/null
+
 echo "passed=$passed failed=$failed"
 [[ "$failed" -eq 0 ]]
