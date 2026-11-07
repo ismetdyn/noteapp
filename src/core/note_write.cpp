@@ -665,24 +665,8 @@ std::expected<NotePath, Error> WriteContext::conflict_copy_path(const NodeId& id
     return NotePath::parse(folder.empty() ? fallback : folder + "/" + fallback);
 }
 
-// Kaybeden head bir geçiş yazması ve aynı baytları başka cihaz da geçirdiyse o bir düzenleme değil, ortak
-// tabandır: başka cihazın gerçek düzenlemesi onu geçmiştir. Kopya üretmek bayat içeriği geri getirirdi.
-std::expected<bool, Error> WriteContext::is_stale_import(const NodeId& id, const graph::Version& version) {
-    auto digests = txn.versions(id, kMigratedSha);
-    if (!digests)
-        return std::unexpected(from_graph(digests.error(), "conflict"));
-    const auto own = std::ranges::find_if(*digests, [&](const graph::Version& digest) {
-        return digest.device == version.device && digest.seq == version.seq;
-    });
-    if (own == digests->end())
-        return false;
-    return std::ranges::any_of(*digests, [&](const graph::Version& digest) {
-        return digest.value == own->value && (digest.device != version.device || digest.seq != version.seq);
-    });
-}
-
-// Yazmanın zamanı: aynı çerçevedeki updated_at, yoksa HLC. Geçiş çerçevesinin HLC'si en düşüktür, zaman
-// taşımaz.
+// Yazmanın zamanı: aynı çerçevedeki updated_at, yoksa HLC. En düşük öncelikli çerçevenin
+// (set_lowest_priority) HLC'si zaman taşımaz.
 std::expected<std::int64_t, Error> WriteContext::version_time(const NodeId& id,
                                                               const graph::Version& version) {
     auto times = txn.versions(id, kUpdatedAt);
@@ -827,17 +811,11 @@ WriteContext::common_base(const NodeId& id, std::span<const graph::Version* cons
 std::expected<std::optional<std::string>, Error>
 WriteContext::try_merge(const NodeId& id, std::span<const graph::Version> versions,
                         const TextMerger& merger) {
-    // Sıra (cihaz, seq): iki cihaz aynı head'lerden aynı baytı üretir. Aynı baytlı head tek girdidir, bayat
-    // geçiş girdi değil.
+    // Sıra (cihaz, seq): iki cihaz aynı head'lerden aynı baytı üretir. Aynı baytlı head tek girdidir.
     std::vector<const graph::Version*> inputs;
     for (const graph::Version& version : versions) {
         if (std::ranges::any_of(inputs,
                                 [&](const graph::Version* known) { return known->value == version.value; }))
-            continue;
-        auto stale = is_stale_import(id, version);
-        if (!stale)
-            return std::unexpected(stale.error());
-        if (*stale)
             continue;
         if (!is_mergeable_text(version.value))
             return std::optional<std::string>{};
@@ -929,11 +907,6 @@ WriteContext::resolve_conflict_step(const NodeId& id, const TextMerger& merger) 
         if (version.value == winner.value)
             continue;
         differ = true;
-        auto stale = is_stale_import(id, version);
-        if (!stale)
-            return std::unexpected(stale.error());
-        if (*stale)
-            continue;
         auto copied = copy_losing_head(id, version);
         if (!copied)
             return std::unexpected(copied.error());
@@ -965,122 +938,6 @@ std::expected<std::vector<NotePath>, Error> WriteContext::resolve_body_conflict(
         if (!step->more)
             return copies;
     }
-}
-
-namespace {
-
-std::string import_key(const ImportedNote& note) {
-    return (note.deleted_at ? "trash/" : "live/") + note.path.string();
-}
-
-graph::Bytes digest_of(std::string_view bytes) {
-    const auto digest = graph::sha256(as_bytes(bytes));
-    return graph::Bytes{std::string(reinterpret_cast<const char*>(digest.data()), digest.size())};
-}
-
-NodeId import_id(const ImportedNote& note) {
-    return graph::derive_node_id("migrated-note", as_bytes(import_key(note)));
-}
-
-NodeId import_copy_id(const ImportedNote& note, const graph::Bytes& digest) {
-    return graph::derive_node_id("migrated-conflict", as_bytes(import_key(note) + digest.data));
-}
-
-}  // namespace
-
-std::array<std::string, 2> imported_note_ids(const ImportedNote& note) {
-    return {id_hex(import_id(note)), id_hex(import_copy_id(note, digest_of(note.bytes)))};
-}
-
-std::expected<bool, Error> verify_import(graph::ReadTxn& txn, const ImportedNote& note) {
-    const std::string path = note.path.string();
-    const graph::Bytes digest = digest_of(note.bytes);
-    for (const NodeId& id : {import_id(note), import_copy_id(note, digest)}) {
-        auto body = txn.property(id, kBody);
-        if (!body)
-            return std::unexpected(from_graph(body.error(), path));
-        const graph::Bytes* stored = std::get_if<graph::Bytes>(&*body);
-        if (stored != nullptr && stored->data == note.bytes)
-            return true;
-        auto base = txn.property(id, kMigratedSha);
-        if (!base)
-            return std::unexpected(from_graph(base.error(), path));
-        if (const graph::Bytes* sha = std::get_if<graph::Bytes>(&*base); sha != nullptr && *sha == digest)
-            return true;
-    }
-    return false;
-}
-
-std::expected<void, Error> WriteContext::import_existing(const ImportedNote& note, const NodeId& id,
-                                                         ImportOutcome& outcome) {
-    const std::string path = note.path.string();
-    const graph::Bytes digest = digest_of(note.bytes);
-    auto base = txn.property(id, kMigratedSha);
-    auto body = txn.property(id, kBody);
-    if (!base || !body)
-        return std::unexpected(from_graph(!base ? base.error() : body.error(), path));
-    const graph::Bytes* current = std::get_if<graph::Bytes>(&*body);
-    const graph::Bytes* imported_base = std::get_if<graph::Bytes>(&*base);
-    const bool same_bytes = current != nullptr && current->data == note.bytes;
-    const bool same_base = imported_base != nullptr && *imported_base == digest;
-    if (same_bytes || same_base) {
-        ++outcome.unchanged;
-        return {};
-    }
-    // Grafta başka içerik var (başka cihaz düzenlemiş): dosyanın sürümü ezmez, yanına kopya olur.
-    const NodeId copy = import_copy_id(note, digest);
-    auto has_copy = txn.has_node(copy);
-    if (!has_copy)
-        return std::unexpected(from_graph(has_copy.error(), path));
-    if (*has_copy) {
-        ++outcome.unchanged;
-        return {};
-    }
-    const std::int64_t at = to_ms(note.updated_at.value_or(std::chrono::system_clock::now()));
-    NoteParts parts = split_note_path(path);
-    std::string file = conflict_name(parts.name, parts.type, at);
-    if (!parts.type.empty())
-        file += "." + parts.type;
-    auto copy_path = NotePath::parse(parts.folder.empty() ? file : parts.folder + "/" + file);
-    if (!copy_path)
-        return std::unexpected(copy_path.error());
-    NOTEAPP_TRY(init_note(copy, *copy_path, note.bytes, at, at, kOriginUnknown));
-    NOTEAPP_TRY_GRAPH(txn.set_property(copy, kMigratedSha, graph::Value{digest}), path);
-    outcome.conflict_copies.push_back(*copy_path);
-    return {};
-}
-
-std::expected<void, Error> WriteContext::import_one(const ImportedNote& note, ImportOutcome& outcome) {
-    const std::string path = note.path.string();
-    const NodeId id = import_id(note);
-    auto exists = txn.has_node(id);
-    if (!exists)
-        return std::unexpected(from_graph(exists.error(), path));
-    if (*exists)
-        return import_existing(note, id, outcome);
-    const std::int64_t updated = to_ms(note.updated_at.value_or(std::chrono::system_clock::now()));
-    const std::int64_t created = note.created_at ? to_ms(*note.created_at) : updated;
-    if (note.deleted_at) {
-        // Çöpün yolu kTrashedFrom'dadır: düğüm kökte durur, canlı ağaçta boş klasör doğmaz; geri alma kurar.
-        auto leaf = NotePath::parse(path.substr(path.rfind('/') + 1));
-        if (!leaf)
-            return std::unexpected(leaf.error());
-        NOTEAPP_TRY(init_note(id, *leaf, note.bytes, created, updated, kOriginUnknown));
-        NOTEAPP_TRY(mark_trashed(id, path, *note.deleted_at));
-    } else {
-        NOTEAPP_TRY(init_note(id, note.path, note.bytes, created, updated, kOriginUnknown));
-    }
-    NOTEAPP_TRY_GRAPH(txn.set_property(id, kMigratedSha, graph::Value{digest_of(note.bytes)}), path);
-    ++outcome.imported;
-    return {};
-}
-
-std::expected<ImportOutcome, Error> WriteContext::import_notes(std::span<const ImportedNote> notes,
-                                                               std::size_t& consumed) {
-    ImportOutcome outcome;
-    for (consumed = 0; consumed < notes.size() && (consumed == 0 || !over_budget()); ++consumed)
-        NOTEAPP_TRY(import_one(notes[consumed], outcome));
-    return outcome;
 }
 
 }  // namespace noteapp::core

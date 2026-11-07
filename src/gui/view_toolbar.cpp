@@ -283,8 +283,9 @@ void View::draw_picker() {
         ImGui::SetNextWindowPos(ImVec2(anchor.min_x, anchor.max_y));
         ImGui::OpenPopup("##picker");
     }
-    const char* title_key = kind == Picker::View ? app::find_command("search.view")->label_key
-                                                 : app::find_command("search.tag")->label_key;
+    const char* title_key = kind == Picker::View         ? app::find_command("search.view")->label_key
+                            : kind == Picker::RemoveView ? app::find_command("view.remove")->label_key
+                                                         : app::find_command("search.tag")->label_key;
     const std::string title = core::tr(title_key);
     // Satır metni çizim listesine yazılır, pencereyi genişletmez: en uzun etiket sığsın.
     float widest = text_width(title);

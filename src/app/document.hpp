@@ -57,6 +57,13 @@ struct FolderContext {
 };
 std::string new_note_folder(const FolderContext& context);
 
+// Notu `klasör/ad.tip`e taşır: yeniden adlandırma, klasör ya da tip değişimi (TUI taşıma diyaloğu, GUI farklı
+// kaydet/taşı). Hedef aynıysa hiçbir şey yapmaz, kaynağı döner; hedef varsa NoteStore::move AlreadyExists ile
+// reddeder (ezme yok); geçersiz yol hata döner.
+std::expected<core::NotePath, core::Error> move_note(core::NoteStore& store, const core::NotePath& from,
+                                                     std::string_view folder, std::string_view name,
+                                                     std::string_view type);
+
 // Bir taslağın ilk kayıtta alacağı yer ve ad.
 struct DraftName {
     std::string folder;
@@ -126,6 +133,8 @@ public:
     const core::Revision& revision() const { return revision_; }
     bool changed_on_disk() const { return changed_on_disk_; }
     bool deleted_on_disk() const { return deleted_on_disk_; }
+    // Dış değişiklik bayrağının durum metni (TUI durum satırı ve GUI durum çubuğu aynı); bayrak yoksa boş.
+    std::string disk_notice() const;
     // Otomatik kayıt yalnız diskle uyumlu bilinen, yazılabilir kayıtlı notta: soru sormaz, not yaratmaz.
     bool autosaves() const { return path_ && writable() && !changed_on_disk_ && !deleted_on_disk_; }
 
@@ -136,6 +145,10 @@ public:
     // Yalnız yazılabilir kayıtlı notta çağrılır (ihlal bug'dır: durur). Conflict ve Gone'da hiçbir şey
     // yazılmaz; karar arayüzün (ConflictChoice, yeni not).
     std::expected<Saved, core::Error> save(core::NoteStore& store, std::string_view text);
+    // Otomatik kayıt (TUI ve GUI aynı): soru açmaz, not yaratmaz. Çakışma ya da silinmiş not bayrağa yazılır
+    // (changed_on_disk, deleted_on_disk), karar açık kayıtta. Yazıldıysa true. save() gibi yalnız
+    // autosaves() doğruyken çağrılır.
+    std::expected<bool, core::Error> autosave(core::NoteStore& store, std::string_view text);
     // Kullanıcı bilerek ezer: diskteki güncel revizyon okunur, metin yazılır.
     std::expected<void, core::Error> overwrite(core::NoteStore& store, std::string_view text);
     // Diskteki sürümü yükler; editörün yeni metnini döner.

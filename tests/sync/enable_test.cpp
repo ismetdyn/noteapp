@@ -1,7 +1,6 @@
 #include "core/error.hpp"
 #include "core/file_stat.hpp"
 #include "core/i18n.hpp"
-#include "core/migration.hpp"
 #include "core/paths.hpp"
 #include "sync/lock.hpp"
 #include "sync/sync_service.hpp"
@@ -257,18 +256,6 @@ TEST_CASE("enable row 4: notes and an empty remote: init, carriers, this device'
     CHECK(read_file(a / ".gitignore") == kGitignore);
 }
 
-TEST_CASE("enable with old files waiting for migration sets up the repository but commits no plain file") {
-    const SyncFixture fx;
-    const fs::path a = fx.root() / u8"A notları";
-    write_file(a / "eski.md", "eski\n");
-    const auto result = enable(a, utf8(fx.remote()));
-    REQUIRE_MESSAGE(result.has_value(), describe(result));
-    CHECK(tree_files(a, "HEAD") == std::set<std::string>{".gitattributes", ".gitignore"});
-    CHECK(read_file(a / "eski.md") == "eski\n");
-    CHECK(SyncService(SyncFixture::config_for(a)).sync_now().error().code ==
-          noteapp::core::Error::Code::MigrationRequired);
-}
-
 TEST_CASE("enable row 5: notes on both sides is sync.both_non_empty and nothing changes") {
     const SyncFixture fx;
     seed_remote(fx);
@@ -428,9 +415,6 @@ TEST_CASE("remote symlinks are checked out as plain files holding the link text;
     SyncService sync_b(SyncFixture::config_for(b));
     const auto enabled = sync_b.enable(utf8(fx.remote()));
     REQUIRE_MESSAGE(enabled.has_value(), describe(enabled));
-    // Uzakta düz dosya var (bag.md, not.md): önce geçiş; bağ metni not olur, hedefi okunmaz.
-    const auto migrated = noteapp::core::migrate_legacy_notes(b, noteapp::core::data_dir());
-    REQUIRE_MESSAGE(migrated.has_value(), describe(migrated));
     put_note("yeni.md", "yeni\n");
     const auto synced = sync_b.sync_now();
     REQUIRE_MESSAGE(synced.has_value(), describe(synced));

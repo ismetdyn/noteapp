@@ -98,7 +98,7 @@ inline constexpr std::array kExport{
     O{"--pdf", "", K::None, "cli.opt_pdf"},
     kOutput,
     O{"--all", "", K::Directory, "cli.opt_all"},
-    O{"--ignore-skipped", "", K::None, "cli.opt_ignore_skipped"},
+    O{"--force", "", K::None, "cli.opt_export_force"},
 };
 inline constexpr std::array kQuery{
     O{"--write", "", K::None, "cli.opt_write"},
@@ -113,10 +113,6 @@ inline constexpr std::array kImport{
     kNoSync,
 };
 inline constexpr std::array kSyncInit{O{"--replace", "", K::None, "cli.opt_replace"}};
-inline constexpr std::array kGraphMigrate{O{"--new", "", K::None, "cli.opt_new"},
-                                          O{"--skip-failed", "", K::None, "cli.opt_skip_failed"}};
-inline constexpr std::array kGraphStatus{O{"--ignore-skipped", "", K::None, "cli.opt_ignore_skipped"},
-                                         O{"--clear-skipped", "", K::None, "cli.opt_clear_skipped"}};
 inline constexpr std::array kGraphExport{O{"--format", "", K::Text, "cli.opt_format"}, kOutput};
 inline constexpr std::array kOverwrite{O{"--overwrite", "", K::None, "cli.opt_overwrite"}};
 inline constexpr std::array kViewSave{O{"--force", "", K::None, "cli.opt_force"}};
@@ -133,8 +129,6 @@ inline constexpr std::array kConfig{
     V{"set", "cli.desc_config_set", {}, K::ConfigKey},
 };
 inline constexpr std::array kGraph{
-    V{"migrate", "cli.desc_graph_migrate", kGraphMigrate, K::None},
-    V{"status", "cli.desc_graph_status", kGraphStatus, K::None},
     V{"export", "cli.desc_graph_export", kGraphExport, K::None},
     V{"import", "cli.desc_graph_import", kOverwrite, K::File},
 };

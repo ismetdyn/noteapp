@@ -290,7 +290,8 @@ std::expected<void, Error> save_view(NoteStore& store, std::string_view name, st
     });
 }
 
-std::expected<void, Error> remove_view(NoteStore& store, std::string_view name) {
+std::expected<void, Error> remove_view(NoteStore& store, std::string_view name,
+                                       const std::optional<SavedView>& expected) {
     NOTEAPP_TRY(find_view(store, name));  // yokken yazma açılmasın: boş depoda graph.db kurulmaz
     const std::string key = view_key(name);
     return store.impl().write<void>([&](WriteContext& context) -> std::expected<void, Error> {
@@ -300,6 +301,10 @@ std::expected<void, Error> remove_view(NoteStore& store, std::string_view name) 
         const auto existing = views->find(key);
         if (existing == views->end())
             return std::unexpected(view_not_found(name));
+        if (const SavedView& now = existing->second.view;
+            expected && (now.query != expected->query || now.updated_at != expected->updated_at))
+            return std::unexpected(Error{
+                Error::Code::ModifiedExternally, "error.view_changed_since_confirm", {{"name", now.name}}});
         NOTEAPP_TRY(context.delete_node(existing->second.id, name));  // kenarı çoksa işlemlere bölünür
         return {};
     });

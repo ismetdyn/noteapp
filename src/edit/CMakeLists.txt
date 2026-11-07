@@ -6,8 +6,8 @@ add_library(noteapp_edit
     child_process.cpp
     clipboard.cpp
     completion.cpp
-    display_text.cpp
     editor_buffer.cpp
+    editor_modes.cpp
     editor_session.cpp
     input_line.cpp
     language_servers.cpp

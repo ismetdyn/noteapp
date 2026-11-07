@@ -2,6 +2,7 @@
 #include "core/i18n.hpp"
 #include "edit/language_servers.hpp"
 #include "edit/server_settings.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 #include "tui/editor_view.hpp"
@@ -422,13 +423,21 @@ TEST_CASE("Env and Properties notes never reach a server, whatever language id i
 TEST_CASE("a diagnostics flood posts a single redraw until the next update") {
     Editor editor(fake_servers("diagnostic-flood"));
     editor.open("a.py", "x = 1\n");
+    const auto redraws_reach = [&](int count) {
+        const auto deadline = Clock::now() + kArrival;
+        while (editor.redraws.load() < count && Clock::now() < deadline)
+            std::this_thread::sleep_for(5ms);
+        return editor.redraws.load();
+    };
+    // Yansıtmanın ilk eşitlemesi kendi çizimini ister ve o bitmeden belge açılmaz; update'ten önce beklenir.
+    // Beklenmezse sıra yarışa kalır: eşitleme update'ten önce biterse sel ikinci çizim sayılır, sonra biterse
+    // sel hiç başlamaz ve test boş geçer.
+    REQUIRE(redraws_reach(1) == 1);
     editor.update();  // belge açılır: sunucu tek seferde yüzlerce bildirim yollar
-    const auto deadline = Clock::now() + kArrival;
-    while (editor.redraws.load() == 0 && Clock::now() < deadline)
-        std::this_thread::sleep_for(5ms);
-    REQUIRE(editor.redraws.load() == 1);
+    // Bundan sonra çizimi yalnız selin tanıları isteyebilir: öneri istenmedi, sunucu durmaz.
+    REQUIRE(redraws_reach(2) == 2);
     std::this_thread::sleep_for(500ms);
-    CHECK(editor.redraws.load() == 1);
+    CHECK(editor.redraws.load() == 2);
     // Çizim (update) bayrağı indirir; bundan sonraki bildirim yine en çok bir çizim ister.
     REQUIRE(editor.pump_until([&] { return editor.session.diagnostic_at_cursor() != nullptr; }));
     CHECK(editor.session.diagnostics().size() == 1);
@@ -864,7 +873,7 @@ TEST_CASE("no server starts before the first mirror sync has removed stale files
     const test::TempDir bin;
     const fs::path out = bin.path() / "record.jsonl";
     Editor editor(core::LspConfig{.enabled = false, .servers = {}, .settings = {}});
-    std::vector<core::ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     constexpr std::size_t kNotes = 2000;  // ilk eşitleme saniyeler sürsün: sunucu o arada başlamamalı
     for (std::size_t i = 0; i < kNotes; ++i)
         notes.push_back(

@@ -1,11 +1,12 @@
 // Senkron oplog üzerinde (G5): iki klon, gerçek günlük dosyaları, gerçek git (yerel bare uzak). Her cihazın
 // kendi NOTEAPP_HOME'u ve graph.db'si vardır. Senaryo eşlemesi: tasks/g5-test-map.md.
 #include "core/file_stat.hpp"
-#include "core/migration.hpp"
+#include "core/note_export.hpp"
 #include "core/note_store.hpp"
 #include "core/note_sync.hpp"
 #include "graph/graph.hpp"
 #include "graph/oplog.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 #include "sync/git_runtime.hpp"
@@ -670,20 +671,6 @@ TEST_CASE("git bytes stay exact: a global autocrlf changes nothing in a note bod
     CHECK(b.body("lf.md") == "bir\niki\n");
 }
 
-TEST_CASE("sync refuses while old notes wait for migration and leaves everything alone") {
-    const SyncFixture fx;
-    const Device a(fx, "A");
-    write_file(a.notes / "eski.md", "eski\n");
-    const auto refused = a.sync();
-    REQUIRE_FALSE(refused.has_value());
-    CHECK(refused.error().code == core::Error::Code::MigrationRequired);
-    CHECK(commit_count(a.notes) == 0);
-    CHECK(read_file(a.notes / "eski.md") == "eski\n");
-    const auto status = a.status();
-    REQUIRE(status.last_error.has_value());
-    CHECK(status.last_error->message_key == "error.migration_required");
-}
-
 TEST_CASE("note status: new, modified, synced, conflict_copy and sync_off from frames") {
     const SyncFixture fx;
     const Device a(fx, "A");
@@ -753,128 +740,6 @@ TEST_CASE("is_conflict_copy_name follows the copy naming rule on the file name o
     CHECK_FALSE(is_conflict_copy_name("x (conflict 2026-10-28 1430)/not.md"));
 }
 
-TEST_CASE("two-clone migration: both devices migrate old files, identical bytes become one note") {
-    const SyncFixture fx;
-    const Device a(fx, "A");
-    const Device b(fx, "B", false);
-    // Eski sürümün deposu: düz dosyalar git'te, iki cihazda aynı.
-    write_file(a.notes / "ortak.md", std::string("ortak\r\n\0x", 9));
-    write_file(a.notes / "work" / "a.md", "a\n");
-    fs::create_directories(a.notes / "bos");
-    write_file(a.notes / "bos" / ".keep", "");
-    write_file(a.notes / ".trash" / "cop.md", "çöp\n");
-    {
-        const Repository repo = open_repository(a.notes);
-        git_index* index = nullptr;
-        REQUIRE_GIT(git_repository_index(&index, repo.get()));
-        REQUIRE_GIT(git_index_add_all(index, nullptr, GIT_INDEX_ADD_DEFAULT, nullptr, nullptr));
-        REQUIRE_GIT(git_index_write(index));
-        git_oid tree_id;
-        REQUIRE_GIT(git_index_write_tree(&tree_id, index));
-        git_index_free(index);
-        git_tree* tree = nullptr;
-        REQUIRE_GIT(git_tree_lookup(&tree, repo.get(), &tree_id));
-        git_signature* who = nullptr;
-        REQUIRE_GIT(git_signature_now(&who, "Eski", "eski@noteapp.invalid"));
-        git_oid commit_id;
-        REQUIRE_GIT(git_commit_create(&commit_id, repo.get(), "HEAD", who, who, nullptr, "eski surum", tree,
-                                      0, nullptr));
-        git_signature_free(who);
-        git_tree_free(tree);
-        git_remote* origin = nullptr;
-        REQUIRE_GIT(git_remote_lookup(&origin, repo.get(), "origin"));
-        char refspec[] = "refs/heads/main:refs/heads/main";
-        char* refspecs[] = {refspec};
-        const git_strarray list{refspecs, 1};
-        REQUIRE_GIT(git_remote_push(origin, &list, nullptr));
-        git_remote_free(origin);
-    }
-    // B eski dosyalarla klonlar: git yalnız taşır.
-    {
-        git_repository* raw = nullptr;
-        REQUIRE_GIT(git_clone(&raw, utf8(fx.remote()).c_str(), utf8(b.notes).c_str(), nullptr));
-        git_repository_free(raw);
-    }
-    CHECK(read_file(b.notes / "work" / "a.md") == "a\n");
-
-    // Geçişten önce yazma ve senkron reddedilir.
-    REQUIRE_FALSE(a.sync().has_value());
-    {
-        const EnvGuard home("NOTEAPP_HOME", a.home);
-        NoteStore gated = NoteStore::for_config(a.config());
-        CHECK(gated.create(core::NewNote{"", "x", "md", "y"}).error().code ==
-              core::Error::Code::MigrationRequired);
-    }
-
-    // A geçer ve yollar; B henüz geçmemişken A'nın notları git'le gelir.
-    const auto migrated_a = core::migrate_legacy_notes(a.notes, a.home / "data");
-    REQUIRE_MESSAGE(migrated_a.has_value(), describe(migrated_a));
-    CHECK(migrated_a->complete);
-    CHECK(migrated_a->imported == 3);
-    CHECK(fs::exists(a.notes / "ortak.md"));  // eski dosya silinmez
-    must_sync(a);
-
-    const auto migrated_b = core::migrate_legacy_notes(b.notes, b.home / "data");
-    REQUIRE_MESSAGE(migrated_b.has_value(), describe(migrated_b));
-    CHECK(migrated_b->complete);
-    must_sync(b);
-    must_sync(a);
-
-    for (const Device* device : {&a, &b}) {
-        CHECK(paths_of(*device) == std::vector<std::string>{"ortak.md", "work/a.md"});
-        CHECK(device->body("ortak.md") == std::string("ortak\r\n\0x", 9));
-        CHECK(trash_of(*device) == std::vector<std::string>{"cop.md"});
-        const auto folders = device->store().folders();
-        CHECK(std::ranges::find(folders, "bos") != folders.end());
-        for (const core::NoteMeta& meta : device->store().list_meta())
-            CHECK(meta.origin == "unknown");
-    }
-    // Eski dosyalar her iki depoda duruyor, senkron onlara dokunmaz.
-    CHECK(read_file(b.notes / "work" / "a.md") == "a\n");
-
-    // A'nın geçiş sonrası düzenlemesi, B'nin eski dosyasıyla çakışmaz.
-    a.put("work/a.md", "a düzenlendi\n");
-    exchange(a, b);
-    CHECK(b.body("work/a.md") == "a düzenlendi\n");
-    CHECK(paths_of(b) == std::vector<std::string>{"ortak.md", "work/a.md"});
-}
-
-TEST_CASE(
-    "migration after the other device edited: a stale old file does not become a copy, a changed one does") {
-    const SyncFixture fx;
-    const Device a(fx, "A");
-    const Device b(fx, "B", false);
-    write_file(a.notes / "ayni.md", "taban\n");
-    write_file(a.notes / "degisik.md", "taban\n");
-    REQUIRE(core::migrate_legacy_notes(a.notes, a.home / "data").has_value());
-    must_sync(a);
-    a.put("ayni.md", "A düzenledi\n");
-    must_sync(a);
-
-    // B: aynı taban + B'nin gönderilmemiş eski dosya düzenlemesi; önce günlükleri alır, sonra geçer.
-    {
-        git_repository* raw = nullptr;
-        REQUIRE_GIT(git_clone(&raw, utf8(fx.remote()).c_str(), utf8(b.notes).c_str(), nullptr));
-        git_repository_free(raw);
-    }
-    write_file(b.notes / "ayni.md", "taban\n");
-    write_file(b.notes / "degisik.md", "B'nin eski düzenlemesi\n");
-    {
-        NoteStore store = b.store();
-        std::vector<fs::path> logs;
-        for (const auto& entry : fs::directory_iterator(b.notes / "graph"))
-            logs.push_back(entry.path());
-        REQUIRE(core::ingest_note_logs(store, logs).has_value());
-    }
-    const auto migrated = core::migrate_legacy_notes(b.notes, b.home / "data");
-    REQUIRE_MESSAGE(migrated.has_value(), describe(migrated));
-    CHECK(migrated->complete);
-    CHECK(migrated->conflict_copies.size() == 1);
-    CHECK(b.body("ayni.md") == "A düzenledi\n");  // bayat dosya A'yı ezmedi, kopya da doğurmadı
-    CHECK(b.body("degisik.md") == "taban\n");
-    CHECK(b.body(migrated->conflict_copies.front().string()) == "B'nin eski düzenlemesi\n");
-}
-
 // Depoda kalan düz dosyaya git'le dokunan olursa birleştirme hâlâ kayıpsızdır: yerel sürüm yerinde, uzak
 // sürüm kopyada.
 TEST_CASE("old files changed on both sides are merged by git without loss and the sync goes on") {
@@ -927,135 +792,6 @@ TEST_CASE("after a lost graph.db the new device identity starts from nothing pus
         notes, [](const core::NoteMeta& note) { return note.path.string() == "yeni.md"; });
     REQUIRE(fresh != notes.end());
     CHECK(fresh->sync_status == SyncState::New);
-}
-
-namespace {
-
-void clone_into(const SyncFixture& fx, const Device& device) {
-    git_repository* raw = nullptr;
-    REQUIRE_GIT(git_clone(&raw, utf8(fx.remote()).c_str(), utf8(device.notes).c_str(), nullptr));
-    git_repository_free(raw);
-}
-
-// Eski sürüm: düz dosyalar git'te, uzakta.
-void old_version_commits(const Device& device) {
-    const Repository repo = open_repository(device.notes);
-    git_index* index = nullptr;
-    REQUIRE_GIT(git_repository_index(&index, repo.get()));
-    REQUIRE_GIT(git_index_add_all(index, nullptr, GIT_INDEX_ADD_DEFAULT, nullptr, nullptr));
-    REQUIRE_GIT(git_index_write(index));
-    git_oid tree_id;
-    REQUIRE_GIT(git_index_write_tree(&tree_id, index));
-    git_index_free(index);
-    git_tree* tree = nullptr;
-    REQUIRE_GIT(git_tree_lookup(&tree, repo.get(), &tree_id));
-    git_signature* who = nullptr;
-    REQUIRE_GIT(git_signature_now(&who, "Eski", "eski@noteapp.invalid"));
-    git_oid commit_id;
-    REQUIRE_GIT(
-        git_commit_create(&commit_id, repo.get(), "HEAD", who, who, nullptr, "eski surum", tree, 0, nullptr));
-    git_signature_free(who);
-    git_tree_free(tree);
-    git_remote* origin = nullptr;
-    REQUIRE_GIT(git_remote_lookup(&origin, repo.get(), "origin"));
-    char refspec[] = "refs/heads/main:refs/heads/main";
-    char* refspecs[] = {refspec};
-    const git_strarray list{refspecs, 1};
-    REQUIRE_GIT(git_remote_push(origin, &list, nullptr));
-    git_remote_free(origin);
-}
-
-}  // namespace
-
-// Gerçek sıra: B senkrondan önce geçmek zorunda (kapı), A'nın düzenlemesini görmeden eski metni içe aktarır.
-// B'nin saati daha geç olsa da bayat içerik gerçek düzenlemeyi geçemez.
-TEST_CASE(
-    "real migration order: A migrates, edits, syncs; B migrates its old text and syncs; A's edit stays") {
-    const SyncFixture fx;
-    const Device a(fx, "A");
-    const Device b(fx, "B", false);
-    write_file(a.notes / "not.md", "eski metin\n");
-    write_file(a.notes / "dokunulmayan.md", "aynı\n");
-    old_version_commits(a);
-    clone_into(fx, b);
-
-    REQUIRE(core::migrate_legacy_notes(a.notes, a.home / "data").has_value());
-    a.put("not.md", "A'nın düzenlemesi\n");
-    must_sync(a);
-
-    std::this_thread::sleep_for(
-        std::chrono::milliseconds(20));  // B'nin saati A'nın düzenlemesinden kesin sonra
-    CHECK(b.sync().error().code == core::Error::Code::MigrationRequired);
-    REQUIRE(core::migrate_legacy_notes(b.notes, b.home / "data").has_value());
-    must_sync(b);
-    must_sync(a);
-    must_sync(b);
-
-    for (const Device* device : {&a, &b}) {
-        CHECK(device->body("not.md") == "A'nın düzenlemesi\n");
-        CHECK(paths_of(*device) == std::vector<std::string>{"dokunulmayan.md", "not.md"});
-    }
-}
-
-TEST_CASE(
-    "real migration order: B's old file really differs: A's edit stays and B's text survives as a copy") {
-    const SyncFixture fx;
-    const Device a(fx, "A");
-    const Device b(fx, "B", false);
-    write_file(a.notes / "not.md", "eski metin\n");
-    old_version_commits(a);
-    clone_into(fx, b);
-    write_file(b.notes / "not.md", "B'nin göndermediği düzenleme\n");
-
-    REQUIRE(core::migrate_legacy_notes(a.notes, a.home / "data").has_value());
-    a.put("not.md", "A'nın düzenlemesi\n");
-    must_sync(a);
-    REQUIRE(core::migrate_legacy_notes(b.notes, b.home / "data").has_value());
-    must_sync(b);
-    must_sync(a);
-    must_sync(b);
-
-    for (const Device* device : {&a, &b}) {
-        CHECK(device->body("not.md") == "A'nın düzenlemesi\n");
-        const auto paths = paths_of(*device);
-        REQUIRE(paths.size() == 2);
-        const auto copy = std::ranges::find_if(paths, is_copy);
-        REQUIRE(copy != paths.end());
-        CHECK(device->body(*copy) == "B'nin göndermediği düzenleme\n");
-    }
-}
-
-// Yeni kurulum eski düzen değildir: uzaktan gelen tek dosya yazmayı kilitleyemez, not da sayılmaz.
-TEST_CASE("a plain file arriving from the remote does not trigger migration on a device that had none") {
-    const SyncFixture fx;
-    const Device a(fx, "A");
-    a.put("gercek.md", "x\n");
-    must_sync(a);
-    const Device b(fx, "B", false);
-    REQUIRE(b.enable(utf8(fx.remote())).has_value());
-    must_sync(b);
-    commit_entries(fx.remote(), {{"zararli.md", "uzaktan\n"}});
-    must_sync(b);  // dosya şimdi çalışma ağacında
-    CHECK(read_file(b.notes / "zararli.md") == "uzaktan\n");
-    b.put("yerel.md", "y\n");
-    const auto again = b.sync();
-    REQUIRE_MESSAGE(again.has_value(), describe(again));
-    {
-        const EnvGuard home("NOTEAPP_HOME", b.home);
-        NoteStore gated = NoteStore::for_config(b.config());
-        CHECK_FALSE(gated.health().has_value());
-        CHECK(gated.create(core::NewNote{"", "n", "md", "x"}).has_value());
-    }
-    CHECK_FALSE(b.store().read(np("zararli.md")).has_value());
-}
-
-TEST_CASE("a clone over an empty folder with remote plain files is not old layout either") {
-    const SyncFixture fx;
-    commit_entries(fx.remote(), {{"eski.md", "eski\n"}});
-    const Device b(fx, "B", false);
-    REQUIRE(b.enable(utf8(fx.remote())).has_value());
-    const auto synced = b.sync();
-    REQUIRE_MESSAGE(synced.has_value(), describe(synced));
 }
 
 TEST_CASE("a remote commit replacing the graph folder with a file is reported clearly and notes are kept") {
@@ -1254,10 +990,10 @@ TEST_CASE("three devices edit different lines and converge on one note in random
 
 TEST_CASE("no common ancestor: two separately migrated different files stay as note and copy") {
     Mesh mesh(2);
-    const core::ImportedNote on_a{np("not.md"), "a\nortak\n"};
-    const core::ImportedNote on_b{np("not.md"), "ortak\nb\n"};
-    REQUIRE(mesh.stores[0].import_notes(std::span(&on_a, 1)).has_value());
-    REQUIRE(mesh.stores[1].import_notes(std::span(&on_b, 1)).has_value());
+    const noteapp::test::ImportedNote on_a{np("not.md"), "a\nortak\n"};
+    const noteapp::test::ImportedNote on_b{np("not.md"), "ortak\nb\n"};
+    REQUIRE(noteapp::test::import_notes(mesh.stores[0], std::span(&on_a, 1)).has_value());
+    REQUIRE(noteapp::test::import_notes(mesh.stores[1], std::span(&on_b, 1)).has_value());
     std::mt19937 rng(7);
     mesh.shuffle_rounds(rng, 3);
     CHECK(mesh.stores[0].list().size() == 2);

@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace noteapp::graph;
@@ -23,12 +24,22 @@ const DeviceId kDevice = [] {
     return device;
 }();
 
-const std::vector<std::string> kPayloads = {"first", std::string("se\0cond\r\n", 9), "third payload"};
+// Grup kimliği çerçevenin ilk 8 baytıdır: okuyan onu kaydın seq'iyle karşılaştırır.
+std::string with_seq(std::uint64_t seq, std::string_view rest) {
+    std::string out;
+    for (std::size_t i = 0; i < sizeof seq; ++i)
+        out.push_back(static_cast<char>(seq >> (i * 8U)));
+    out += rest;
+    return out;
+}
+
+const std::vector<std::string> kPayloads = {with_seq(1, "first"), with_seq(2, std::string("se\0cond\r\n", 9)),
+                                            with_seq(3, "third payload")};
 
 std::string sample_log() {
     std::string log = encode_log_header(kDevice);
     for (const std::string& payload : kPayloads)
-        log += encode_log_frame(payload);
+        log += noteapp::graph::test::whole_record(payload);
     return log;
 }
 
@@ -102,9 +113,7 @@ TEST_CASE("log_header_is_magic_version_device") {
     const std::string header = encode_log_header(kDevice);
     REQUIRE(header.size() == kLogHeaderBytes);
     CHECK(header.substr(0, 4) == "NGOL");
-    // Varsayılan v1: bölünmesi gereken çerçeve yoksa eski sürümler de okur.
-    CHECK(static_cast<std::uint8_t>(header[4]) == kLogVersionWhole);
-    CHECK(static_cast<std::uint8_t>(encode_log_header(kDevice, kLogVersionParts)[4]) == kLogVersion);
+    CHECK(static_cast<std::uint8_t>(header[4]) == kLogVersion);
     CHECK(std::memcmp(header.data() + 5, kDevice.data(), kDevice.size()) == 0);
 }
 
@@ -126,7 +135,7 @@ TEST_CASE("truncation_at_every_byte_gives_a_valid_prefix_and_no_error") {
     // Çerçeve sınırında kesilen dosya eksik değildir, yalnız kısadır.
     std::vector<std::size_t> boundaries = {kLogHeaderBytes};
     for (const std::string& payload : kPayloads)
-        boundaries.push_back(boundaries.back() + kFrameEnvelopeBytes + payload.size());
+        boundaries.push_back(boundaries.back() + kFrameEnvelopeBytes + kPartHeaderBytes + payload.size());
     std::size_t last_count = 0;
     for (std::size_t size = 0; size < log.size(); ++size) {
         INFO("size=" << size);
@@ -171,7 +180,7 @@ TEST_CASE("byte_flip_sweep_never_yields_altered_payload") {
 
 TEST_CASE("corrupt_frame_stops_the_log_and_keeps_the_prefix") {
     std::string log = sample_log();
-    const std::size_t second_frame = kLogHeaderBytes + kFrameEnvelopeBytes + kPayloads[0].size();
+    const std::size_t second_frame = kLogHeaderBytes + kFrameEnvelopeBytes + kPartHeaderBytes + kPayloads[0].size();
     REQUIRE(log.size() > second_frame + kFrameEnvelopeBytes);
     log[second_frame + kFrameEnvelopeBytes] ^= 0x01;
     const LogScan result = scan(log);
@@ -201,7 +210,7 @@ TEST_CASE("oversized_length_is_rejected_before_it_is_read") {
     CHECK(at_limit.partial_tail);
 }
 
-TEST_CASE("header_rejects_foreign_magic_and_newer_version") {
+TEST_CASE("header_rejects_foreign_magic_and_other_versions") {
     std::string foreign = sample_log();
     REQUIRE(foreign.size() > 4);
     foreign[0] = 'X';
@@ -214,6 +223,13 @@ TEST_CASE("header_rejects_foreign_magic_and_newer_version") {
     REQUIRE(scan(newer).error.has_value());
     CHECK(scan(newer).error->code == Error::Code::TooNew);
     CHECK(scan(newer).payloads.empty());
+
+    // Eski biçim okunmaz: bozuk sayılır, kendi günlüğüyse kenara alınıp yeniden yazılır.
+    std::string older = sample_log();
+    older[4] = static_cast<char>(kLogVersion - 1);
+    REQUIRE(scan(older).error.has_value());
+    CHECK(scan(older).error->code == Error::Code::BadFrame);
+    CHECK(scan(older).payloads.empty());
 }
 
 TEST_CASE("foreign_magic_in_a_short_file_is_an_error_not_a_partial_tail") {

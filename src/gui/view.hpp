@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/map_camera.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/save_dialog.hpp"
 
@@ -33,12 +34,10 @@ struct PreviewLayout;
 // gelince yıkıcı renkte), birincil (accent_fill) ve yıkıcı (danger_fill).
 enum class ButtonKind : std::uint8_t { Secondary, Ghost, GhostDanger, Primary, Danger };
 
-// Harita kamerası: ekran = tuval köşesi + offset + yerleşim konumu * zoom. auto_fit açıkken her kare çizge
-// tuvale sığdırılır; kullanıcı kaydırınca, yakınlaşınca ya da düğüm sürükleyince kapanır, `0` yeniden açar.
-struct MapCamera {
-    float zoom = 1.0F;
-    float offset_x = 0.0F;
-    float offset_y = 0.0F;
+// Harita kamerası (app::MapCamera, piksel): ekran = tuval köşesi + (x, y) + yerleşim konumu * zoom. auto_fit
+// açıkken her kare çizge tuvale sığdırılır; kullanıcı kaydırınca, yakınlaşınca ya da düğüm sürükleyince
+// kapanır, `0` yeniden açar.
+struct MapCamera : app::MapCamera {
     bool auto_fit = true;
 };
 
@@ -81,6 +80,7 @@ public:
     bool search_active() const { return search_active_; }
     bool editor_active() const { return editor_active_; }
     bool close_requested() const { return close_requested_; }
+    bool tooltip_visible() const;  // son karede gecikmeli ipucu ekranda (ilk ölçüm karesi gizlidir)
     // Son karede çizilen adlı öğeler (ekran koordinatı): testler fareyle tıklar ve çakışma arar. Ad sabit
     // kimliktir, etiket değil. Klasör satırı "folder:<yol>"; kök "folder:".
     struct ItemRect {
@@ -156,7 +156,6 @@ private:
     void draw_row_number(const std::string& name, std::size_t number, ImVec2 position, float width);
     void draw_note_list();
     void draw_empty_notes();       // hiç not yok: ortalanmış blok ve eylemler
-    void draw_migration_banner();  // eski düzende not: liste üstünde kopyalanabilir komut
     void draw_quick_add();
     void run_scope_commands(CommandScope scope);  // kapsamın tuşlarına basıldıysa komutu kuyruğa alır
     void draw_column_menu();
@@ -276,9 +275,10 @@ private:
                    std::optional<float> top_share = std::nullopt);
     template <typename Choice> Choice ask_choice(const ChoiceBox<Choice>& box);
     std::optional<SaveDetails> ask_save_details(const SaveDialogRequest& request);
-    // Tek satırlık ad istemi; alan etiketi verilmezse "Klasör adı".
+    // Tek satırlık ad istemi; alan etiketi verilmezse "Klasör adı". `trim`: baş/son boşluk atılır (klasör);
+    // kapalıysa ad olduğu gibi döner, kuralı çağıran uygular (görünüm adı). Boş ad vazgeçmedir.
     std::optional<std::string> ask_folder_name(const std::string& title, const std::string& initial,
-                                               const std::string& field_label = {});
+                                               const std::string& field_label = {}, bool trim = true);
     std::optional<std::string> ask_palette();  // seçilen komut kimliği
     // F1 ilişki adı ve "Yönlü" (deciders.relation); nullopt = vazgeçti.
     std::optional<core::RelationSpec> ask_relation(const RelationRequest& request);
@@ -393,9 +393,9 @@ private:
     // İçe alma: diyalog geri çağrısı başka iş parçacığından, View kapandıktan sonra da gelebilir (paylaşılan
     // kutu); bırakılan dosyalar kare dışında içe alınır (diyalog açıkken gelenler de beklemez, kaybolmaz).
     std::shared_ptr<ImportInbox> import_inbox_;
-    // Bekleyen ipucunun gecikmesinin dolduğu an ve ait olduğu ImGui öğesi (schedule_tooltip_wake).
+    // Bekleyen ipucunun gecikmesinin dolduğu an (schedule_tooltip_wake).
     std::optional<std::chrono::steady_clock::time_point> tooltip_at_;
-    unsigned int tooltip_item_ = 0;  // ImGuiID; başlık ImGui'yi içermez
+    int tooltip_frames_ = 0;  // gecikmesi dolan ipucunun art arda çizildiği kare (2'de durur; ilki gizli)
     // Sonraki yerel gece yarısı (core::next_local_midnight).
     std::chrono::system_clock::time_point day_ends_at_;
     std::vector<std::filesystem::path> dropped_;

@@ -2,6 +2,7 @@
 #include "gui/gui_state.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
 
 namespace noteapp::gui {
@@ -74,14 +75,11 @@ int GuiState::browser_row() {
     return found == rows.end() ? -1 : static_cast<int>(found - rows.begin());
 }
 
-std::optional<FolderSummary> GuiState::folder_summary() {
+std::optional<app::FolderSummary> GuiState::folder_summary() {
     if (!selected_folder_)
         return std::nullopt;
     ensure_browser();
-    const core::FolderNode* node = model_.listing().tree().find(*selected_folder_);
-    if (node == nullptr)
-        return FolderSummary{*selected_folder_, 0, 0};
-    return FolderSummary{node->path, node->note_count, node->folder_count};
+    return app::folder_summary(model_.listing(), *selected_folder_, std::chrono::system_clock::now());
 }
 
 void GuiState::set_expanded(const std::string& folder, bool expanded) {

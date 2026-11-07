@@ -1,7 +1,6 @@
 #include "sync/auth.hpp"
 
 #include "core/i18n.hpp"
-#include "core/log.hpp"
 #include "core/process.hpp"
 
 #include <algorithm>
@@ -98,14 +97,7 @@ std::expected<std::optional<std::string>, core::Error> vault_read(const std::str
     }
     std::string token(reinterpret_cast<const char*>(credential->CredentialBlob),
                       credential->CredentialBlobSize);
-    const bool roaming = credential->Persist != CRED_PERSIST_LOCAL_MACHINE;
     CredFree(credential);
-    // Eski sürümün dolaşan kaydı yerine yerel kayıt; olmazsa token yine kullanılır, sonraki okumada yeniden
-    // denenir.
-    if (roaming && !token.empty())
-        if (const auto migrated = vault_write(account, token); !migrated)
-            core::log_warn("sync: keychain entry could not be made local: " +
-                           core::format_error(migrated.error()));
     return token;
 }
 

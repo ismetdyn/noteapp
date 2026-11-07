@@ -1,21 +1,10 @@
 // Özellik denetçisi (F4; SPEC-gui "Özellik denetçisi"): model app::Inspector (TUI ile ortak), yazma kuralı
-// core/note_props (sorgu çubuğunun koruması). Etiket notun metnindedir: harita yolundan (edit_map) yazılır,
-// bekleyen düzenleme önce kaydedilir.
+// core/note_props (sorgu çubuğunun koruması). Etiket notun metnindedir: bekleyen düzenleme önce kaydedilir.
 #include "core/i18n.hpp"
 #include "core/text.hpp"
 #include "gui/gui_state.hpp"
 
 namespace noteapp::gui {
-
-namespace {
-
-std::string tag_of(std::string_view text) {
-    if (text.starts_with('#'))
-        text.remove_prefix(1);
-    return core::tag_key(text);
-}
-
-}  // namespace
 
 void GuiState::set_inspector_open(bool open) {
     inspector_open_ = open;
@@ -62,21 +51,30 @@ void GuiState::finish_inspector_write(const std::expected<std::string, core::Err
     notify(app::NoticeKind::Success, status_);
 }
 
+// Etiket gövdeyi yazar: harita kenarı, liste etiketleri ve temiz editör yeni metni alır.
+bool GuiState::finish_label_write(const std::expected<std::string, core::Error>& done) {
+    finish_inspector_write(done);
+    if (done) {
+        map_.edges_changed();
+        rescan();
+    }
+    reload_links();
+    return done.has_value();
+}
+
+// app::SavePending: etiketin notu gösteriliyorsa bekleyen düzenlemesi önce kaydedilir.
+bool GuiState::flush_if_shown(const core::NotePath& note) {
+    return !shown_ || new_note_ || shown_->path != note || flush_for(note);
+}
+
 bool GuiState::set_property(const std::string& key, const std::string& input,
                             std::optional<core::PropertyType> type) {
     const auto& target = inspector_.target();
     if (!target)
         return false;
-    if (key.starts_with('#')) {
-        if (target->kind != app::InspectTarget::Kind::Note || !target->note) {
-            fail(core::Error{core::Error::Code::InvalidPath, "inspector.labels_on_notes", {}});
-            return false;
-        }
-        const bool added = edit_map({MapNodeKind::Note, target->note->string()},
-                                    {MapNodeKind::Tag, tag_of(key)}, MapEdgeKind::Tag, true);
-        reload_links();
-        return added;
-    }
+    if (key.starts_with('#'))
+        return finish_label_write(inspector_.add_label(
+            store_, key, [this](const core::NotePath& note) { return flush_if_shown(note); }));
     const auto done = inspector_.set(store_, key, input, type);
     finish_inspector_write(done);
     return done.has_value();
@@ -86,13 +84,11 @@ void GuiState::remove_inspector_row(app::InspectorRow row) {
     const auto& target = inspector_.target();
     // Anahtar ve değer güvenilmezdir (senkron): soru temizlenmiş metinle.
     if (!target || row.read_only ||
-        !deciders.confirm_delete(core::terminal_safe(inspector_.confirm_remove_text(row))))
+        !deciders.confirm_delete(core::terminal_safe(inspector_.confirm_remove_text(row)), {}))
         return;
     if (row.kind == app::InspectorRow::Kind::Label) {
-        if (target->note)
-            edit_map({MapNodeKind::Note, target->note->string()}, {MapNodeKind::Tag, tag_of(row.key)},
-                     MapEdgeKind::Tag, false);
-        reload_links();
+        finish_label_write(inspector_.remove_label(
+            store_, row.key, [this](const core::NotePath& note) { return flush_if_shown(note); }));
         return;
     }
     finish_inspector_write(inspector_.remove(store_, row.key));

@@ -8,6 +8,7 @@
 #include "edit/clipboard.hpp"
 #include "edit/completion.hpp"
 #include "edit/editor_buffer.hpp"
+#include "edit/editor_modes.hpp"
 #include "edit/input_line.hpp"
 #include "edit/note_find.hpp"
 #include "edit/syntax.hpp"
@@ -19,7 +20,6 @@
 #include <expected>
 #include <filesystem>
 #include <functional>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -35,14 +35,6 @@ namespace noteapp::tui {
 using app::DraftName;
 using app::parse_draft_name;
 using app::sanitized_utf8;
-
-// Dil sunucusunun tanısı, tampondaki bayt aralığıyla; ileti sunucudan gelir ve ham kalır (çizim temizler).
-// `severity` hiçbir zaman Unspecified değildir.
-struct DiagnosticMark {
-    ByteRange range;
-    core::lsp::DiagnosticSeverity severity = core::lsp::DiagnosticSeverity::Error;
-    std::string message;
-};
 
 // Oturumun dış dünyası; testler sahte geri çağrılarla kurar, main gerçek olanlarla.
 struct EditorHost {
@@ -139,14 +131,15 @@ public:
     std::string display_name() const;
     const std::string& name_input() const { return name_line_.text(); }
     const std::string& name_folder() const { return name_folder_; }
-    std::span<const ByteRange> find_matches() const { return find_matches_; }
-    std::string find_label() const;
+    std::span<const ByteRange> find_matches() const { return modes_.find_matches(); }
+    std::string find_label() const { return modes_.find_label(); }
     const std::string& message() const { return message_; }
     bool message_is_error() const { return message_is_error_; }
     bool deleted_on_disk() const { return doc_.deleted_on_disk(); }
     bool changed_on_disk() const { return doc_.changed_on_disk(); }
-    const std::string& find_query() const { return find_line_.text(); }
-    const InputLine& find_line() const { return find_line_; }
+    std::string disk_notice() const { return doc_.disk_notice(); }  // GUI ile aynı metin
+    const std::string& find_query() const { return modes_.find_line().text(); }
+    const InputLine& find_line() const { return modes_.find_line(); }
     const InputLine& name_line() const { return name_line_; }
     LeaveChoice leave_choice() const { return leave_choice_; }
     ConflictChoice conflict_choice() const { return conflict_choice_; }
@@ -162,19 +155,19 @@ public:
     void click_at(int x, int y);
     bool has_bom() const { return doc_.has_bom(); }
     // Gölge öneri: imleçten sonra eklenecek metin; boşsa yok.
-    const std::string& ghost() const { return ghost_; }
-    const std::string& completion_query() const { return completion_query_; }
-    const std::vector<std::string>& completion_items() const { return completion_items_; }
-    std::size_t completion_selected() const { return completion_selected_; }
+    const std::string& ghost() const { return modes_.ghost(); }
+    const std::string& completion_query() const { return modes_.completion_query(); }
+    const std::vector<std::string>& completion_items() const { return modes_.completion_items(); }
+    std::size_t completion_selected() const { return modes_.completion_selected(); }
     // Her açılışta artar; dil sunucusu cevabı yalnız aynı açılışa eklenir.
-    std::uint64_t completion_generation() const { return completion_generation_; }
+    std::uint64_t completion_generation() const { return modes_.completion_generation(); }
     // Dil sunucusunun önerileri açık listeye, sözcük önerilerinin önüne eklenir. Liste kapandıysa ya da
     // `generation` eskiyse yok sayılır. Etiket temizlenip gösterilir; ekleme metni yalnız tek satır ve
     // denetim karaktersizse kullanılır, değilse temiz etiket eklenir.
     void add_completion_items(std::uint64_t generation, std::span<const core::lsp::CompletionItem> items);
     // Dil sunucusunun güncel tanıları; aralıklar bu tampona göre kısılmış olmalıdır.
-    void set_diagnostics(std::vector<DiagnosticMark> marks) { diagnostics_ = std::move(marks); }
-    std::span<const DiagnosticMark> diagnostics() const { return diagnostics_; }
+    void set_diagnostics(std::vector<DiagnosticMark> marks) { modes_.set_diagnostics(std::move(marks)); }
+    std::span<const DiagnosticMark> diagnostics() const { return modes_.diagnostics(); }
     // İmlecin üstündeki (ya da hemen sonundaki) tanı; yoksa nullptr.
     const DiagnosticMark* diagnostic_at_cursor() const;
     // Tek seferlik bilgi iletisi (ör. dil sunucusu durdu); sonraki tuş siler.
@@ -191,13 +184,8 @@ private:
     void handle_find(Key key, std::string_view text);
     void handle_leave(Key key);
     void handle_conflict(Key key);
-    bool apply_motion(Key key);
     void apply_edit(Key key, std::string_view text);
-    void update_ghost();
     std::shared_ptr<const WordTable> current_word_table() const;
-    void insert_completion();
-    void open_completion();
-    void refresh_completion();
     void handle_complete(Key key, std::string_view text);
     void copy_to_clipboard(std::string text);
     void paste_from_clipboard();
@@ -208,10 +196,7 @@ private:
     void cancel_pending_leave();
     void handle_name(Key key, std::string_view text);
     void start_draft(DraftName name);
-    void update_find();
-    void step_find(int delta);
-    void recompute_find(std::size_t from);
-    void select_current_match();
+    void show_find_result();
     void show_error(const core::Error& error);
     void show_info(std::string text);
 
@@ -224,6 +209,7 @@ private:
     std::expected<core::NotePath, core::Error> flush_write();
     SaveResult save_draft();
     SaveResult open_name_prompt();
+    SaveResult ask_new_place();
     void submit_name();
     std::string name_stem(const std::string& type) const;
     std::string note_type() const;
@@ -259,20 +245,9 @@ private:
     bool leave_pending_ = false;  // Kaydet seçildi, çakışma diyaloğu sonucu bekleniyor
     LeaveChoice leave_choice_ = LeaveChoice::Save;
     ConflictChoice conflict_choice_ = app::kDefaultConflictChoice;
-    std::string ghost_;
-    std::vector<std::string> completion_candidates_;
-    std::vector<std::string> completion_items_;
-    std::string completion_query_;
-    std::size_t completion_selected_ = 0;
-    std::uint64_t completion_generation_ = 0;
+    EditorModes modes_{host_.completion};  // bul, tamamlama, gölge öneri, tanılar (GUI ile ortak)
     std::uint64_t buffer_generation_ = 0;
-    std::map<std::string, std::string> completion_inserts_;  // dil sunucusu etiketi -> eklenecek metin
-    std::vector<DiagnosticMark> diagnostics_;
-    InputLine find_line_{InputKind::Find};
     InputLine name_line_{InputKind::Path};
-    std::size_t find_origin_ = 0;
-    std::vector<ByteRange> find_matches_;
-    std::size_t find_index_ = 0;
     std::string message_;
     bool message_is_error_ = false;
     std::string shown_type_;

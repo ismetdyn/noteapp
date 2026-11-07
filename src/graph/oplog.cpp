@@ -59,7 +59,7 @@ std::optional<Error> header_problem(std::span<const std::byte> file) {
     const auto version = std::to_integer<std::uint8_t>(file[kLogMagic.size()]);
     if (version > kLogVersion)
         return too_new({{"found", std::to_string(version)}, {"supported", std::to_string(kLogVersion)}});
-    if (version == 0)
+    if (version < kLogVersion)
         return bad_log("bad_version");
     return std::nullopt;
 }
@@ -71,9 +71,9 @@ bool digest_matches(std::span<const std::byte> payload, std::span<const std::byt
 
 }  // namespace
 
-std::string encode_log_header(const DeviceId& device, std::uint8_t version) {
+std::string encode_log_header(const DeviceId& device) {
     std::string out(kLogMagic);
-    out.push_back(static_cast<char>(version));
+    out.push_back(static_cast<char>(kLogVersion));
     out.append(reinterpret_cast<const char*>(device.data()), device.size());
     return out;
 }
@@ -149,7 +149,6 @@ LogReader::Status LogReader::read_header() {
         return damaged(std::move(*problem));
     if (available < header.size())
         return Status::PartialTail;
-    version_ = std::to_integer<std::uint8_t>(part[kLogMagic.size()]);
     offset_ = kLogHeaderBytes;
     return Status::Frame;
 }
@@ -178,25 +177,9 @@ LogReader::Status LogReader::read_record(std::uint64_t at, std::uint64_t& end) {
     return Status::Frame;
 }
 
-LogReader::Status LogReader::next() {
-    return version_ == kLogVersionWhole ? next_whole() : next_group();
-}
-
-LogReader::Status LogReader::next_whole() {
-    std::uint64_t end = 0;
-    if (const Status status = read_record(offset_, end); status != Status::Frame)
-        return status;
-    if (record_.size() > max_group_bytes_)
-        return damaged(bad_log("group_too_large"));
-    payload_.swap(record_);
-    parts_ = 1;
-    offset_ = end;
-    return Status::Frame;
-}
-
 // Grup, ardışık kayıtlardır: aynı seq, 0'dan artan index, sonuncusunda final. Son parça gelmeden hiçbir şey
 // verilmez; offset grubun başında kalır, sonraki çağrı (sonraki eşitleme) baştan okur.
-LogReader::Status LogReader::next_group() {
+LogReader::Status LogReader::next() {
     payload_.clear();
     std::uint64_t at = offset_;
     std::uint64_t group = 0;
@@ -276,29 +259,6 @@ std::string_view text_of(std::span<const std::byte> bytes) {
     return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
 
-// v1 kaydına sığmayan çerçeve: okuyan aynı sınırla bad_frame verirdi, parçalara bölünmelidir.
-bool needs_parts(std::span<const std::byte> payload, const FrameLimits& limits) {
-    return payload.size() > limits.bytes || peek_op_count(payload).value_or(0) > limits.ops;
-}
-
-// Bu cihazın `after`'dan sonraki çerçevelerinden biri bölünmeli mi: dosya o zaman v2 olarak yazılır.
-Result<bool> needs_parts_after(Store& store, std::uint64_t after) {
-    Result<Statement> rows = store.statement(StatementId::OpsOfDevice);
-    if (!rows)
-        return std::unexpected(rows.error());
-    rows->bind_blob(1, store.device()).bind_int(2, static_cast<std::int64_t>(after));
-    const FrameLimits limits = store.frame_limits();
-    while (true) {
-        const Result<bool> row = rows->step();
-        if (!row)
-            return std::unexpected(row.error());
-        if (!*row)
-            return false;
-        if (needs_parts(rows->column_blob(1), limits))
-            return true;
-    }
-}
-
 // Parçalar eşit boydadır; her biri ayrı kayıt olarak yazılır, bellekte çerçevenin kopyası tutulmaz.
 Result<void> write_parts(OutputFile& out, std::uint64_t seq, std::string_view payload,
                          const FrameLimits& limits) {
@@ -316,7 +276,7 @@ Result<void> write_parts(OutputFile& out, std::uint64_t seq, std::string_view pa
     return {};
 }
 
-Result<void> write_frames_after(Store& store, std::uint64_t after, std::uint8_t version, OutputFile& out) {
+Result<void> write_frames_after(Store& store, std::uint64_t after, OutputFile& out) {
     Result<Statement> rows = store.statement(StatementId::OpsOfDevice);
     if (!rows)
         return std::unexpected(rows.error());
@@ -330,22 +290,18 @@ Result<void> write_frames_after(Store& store, std::uint64_t after, std::uint8_t 
             return {};
         const auto seq = static_cast<std::uint64_t>(rows->column_int(0));
         const std::string_view payload = text_of(rows->column_blob(1));
-        const Result<void> written = version == kLogVersionWhole
-                                         ? write_string(out, encode_log_frame(payload))
-                                         : write_parts(out, seq, payload, limits);
-        if (!written)
+        if (const Result<void> written = write_parts(out, seq, payload, limits); !written)
             return written;
     }
 }
 
 // Sondaki yarım çerçeve hata değildir. ponytail: fsync yok. Dosya ops'tan yeniden üretilebilen taşıyıcıdır,
 // çökmede sonraki export onu onarır.
-Result<void> append_frames(Store& store, const std::filesystem::path& path, std::uint64_t after,
-                           std::uint8_t version) {
+Result<void> append_frames(Store& store, const std::filesystem::path& path, std::uint64_t after) {
     Result<OutputFile> out = OutputFile::open_append(path);
     if (!out)
         return std::unexpected(out.error());
-    if (const Result<void> written = write_frames_after(store, after, version, *out); !written)
+    if (const Result<void> written = write_frames_after(store, after, *out); !written)
         return written;
     return out->close();
 }
@@ -370,19 +326,15 @@ private:
 };
 
 // Özel geçici dosya + rename: okuyan ya eski ya yeni dosyayı görür. Rename hedefteki bağı izlemez, onu
-// değiştirir. Sürüm, bölünmesi gereken çerçeve varsa v2'dir; yoksa eski sürümler okuyabilsin diye v1.
+// değiştirir.
 Result<void> rewrite_log(Store& store, const std::filesystem::path& path) {
-    const Result<bool> parts = needs_parts_after(store, 0);
-    if (!parts)
-        return std::unexpected(parts.error());
-    const std::uint8_t version = *parts ? kLogVersionParts : kLogVersionWhole;
     TemporaryFile temporary(with_suffix(path, "."));
     Result<OutputFile> out = OutputFile::create_new(temporary.path());
     if (!out)
         return std::unexpected(out.error());
-    if (const Result<void> header = write_string(*out, encode_log_header(store.device(), version)); !header)
+    if (const Result<void> header = write_string(*out, encode_log_header(store.device())); !header)
         return header;
-    if (const Result<void> written = write_frames_after(store, 0, version, *out); !written)
+    if (const Result<void> written = write_frames_after(store, 0, *out); !written)
         return written;
     if (const Result<void> closed = out->close(); !closed)
         return closed;
@@ -399,11 +351,10 @@ struct LogState {
     enum class Kind { Missing, Prefix, PrefixWithTail, Alien } kind = Kind::Missing;
     std::uint64_t last_seq = 0;
     std::string reason;
-    std::uint8_t version = kLogVersionWhole;  // önek dosyanın sürümü: ekleme aynı biçimle yapılır
 };
 
 LogState alien(std::string reason) {
-    return LogState{LogState::Kind::Alien, 0, std::move(reason), kLogVersionWhole};
+    return LogState{LogState::Kind::Alien, 0, std::move(reason)};
 }
 
 std::string reason_of(const Error& error) {
@@ -419,9 +370,9 @@ Result<LogState> frames_against_ops(Store& store, LogReader& reader) {
     while (true) {
         switch (reader.next()) {
         case LogReader::Status::End:
-            return LogState{LogState::Kind::Prefix, seq, {}, reader.version()};
+            return LogState{LogState::Kind::Prefix, seq, {}};
         case LogReader::Status::PartialTail:
-            return LogState{LogState::Kind::PrefixWithTail, seq, {}, reader.version()};
+            return LogState{LogState::Kind::PrefixWithTail, seq, {}};
         case LogReader::Status::Damaged:
             return alien(reason_of(reader.error()));
         case LogReader::Status::Frame:
@@ -454,7 +405,7 @@ Result<LogState> inspect_log(Store& store, const std::filesystem::path& path) {
     LogReader& reader = **opened;
     switch (reader.read_header()) {
     case LogReader::Status::PartialTail:
-        return LogState{LogState::Kind::PrefixWithTail, 0, {}, kLogVersionWhole};
+        return LogState{LogState::Kind::PrefixWithTail, 0, {}};
     case LogReader::Status::Damaged:
         return alien(reason_of(reader.error()));
     default:
@@ -465,18 +416,6 @@ Result<LogState> inspect_log(Store& store, const std::filesystem::path& path) {
     return frames_against_ops(store, reader);
 }
 
-
-// v1 dosyasına bölünmesi gereken çerçeve eklenemez: dosya v2 olarak baştan yazılır, kenara alınmaz.
-Result<void> append_or_upgrade(Store& store, const std::filesystem::path& path, const LogState& state) {
-    if (state.version == kLogVersionWhole) {
-        const Result<bool> parts = needs_parts_after(store, state.last_seq);
-        if (!parts)
-            return std::unexpected(parts.error());
-        if (*parts)
-            return rewrite_log(store, path);
-    }
-    return append_frames(store, path, state.last_seq, state.version);
-}
 
 Result<std::filesystem::path> set_aside(const std::filesystem::path& path) {
     std::filesystem::path aside = with_suffix(path, ".aside-");
@@ -596,7 +535,7 @@ Result<ExportReport> write_log(Store& store, const std::filesystem::path& direct
     if (nothing_to_write || (state->kind == LogState::Kind::Prefix && state->last_seq == *own))
         return report;
     const Result<void> written = state->kind == LogState::Kind::Prefix
-                                     ? append_or_upgrade(store, path, *state)
+                                     ? append_frames(store, path, state->last_seq)
                                      : rewrite_log(store, path);
     if (!written)
         return std::unexpected(written.error());

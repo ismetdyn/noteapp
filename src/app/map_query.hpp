@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -56,6 +57,9 @@ std::string cell_text(std::string_view raw, std::size_t max_bytes);
 // `view`: sonuç kayıtlı görünümündür (özet adını söyler; görünüm yazılan metni gölgeleyebilir).
 QueryOutcome query_outcome(const core::UserQuery& query, bool wrote, std::size_t cell_bytes = SIZE_MAX,
                            std::string_view view = {});
+// Aynı hücreler (not yolu, `#etiket`, `(:Etiket kimlik)`, kenar uçlarıyla, UTC zaman), temizlenmemiş ve
+// kesilmemiş: CLI tablosu kendi terminal kuralıyla basar (`note query`, `view run`).
+QueryTable query_table(const core::UserQuery& query);
 // "nodes created: 2, properties set: 3"; değişiklik yoksa "no changes" (çoğul gerektirmeyen biçim).
 std::string query_changes_text(const core::QueryChanges& changes);
 
@@ -93,6 +97,14 @@ public:
     bool table_shown() const { return table_ && outcome_.has_value(); }
     void toggle_table() { table_ = !table_; }
 
+    // Gösterilen sonucun okuma sorgusu (görünüm ya da yazma değil); yoksa boş. `view.save` bunu kaydeder.
+    const std::string& read_query() const { return read_query_; }
+    // Kayıtlı görünüm (palet `view.save`, TUI haritada `K`, GUI çubuğun düğmesi): ad ve sorgu kuralı CLI
+    // `note view save` ile aynı (core::save_view: ad baş/son boşluk ve `/` taşımaz, sorgu salt-okunur
+    // olmalı). Aynı ad varsa ezilmez (AlreadyExists): önce silinir. Okuma sonucu yoksa InvalidQuery
+    // (error.view_needs_query).
+    std::expected<void, core::Error> save_view(core::NoteStore& store, std::string_view name) const;
+
 private:
     Step fail(const core::Error& error);
     Step finish(std::expected<core::UserQuery, core::Error> done, bool wrote, std::string_view view = {});
@@ -103,6 +115,7 @@ private:
     std::string confirm_text_;
     std::optional<QueryOutcome> outcome_;
     std::string error_;
+    std::string read_query_;
     bool table_ = false;
 };
 

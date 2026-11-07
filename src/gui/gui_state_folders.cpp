@@ -3,6 +3,7 @@
 #include "gui/gui_state.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace noteapp::gui {
@@ -97,9 +98,30 @@ void GuiState::delete_folder(const std::string& folder) {
     if (folder.empty())
         return;
     const std::size_t depth = trash_.undo_depth();
-    // Onaydan sonra, notlar atılmadan önce: gösterilen notun son hâli çöpe gitsin.
-    const auto save_shown = [&] { return !shown_in(folder) || flush(); };
-    const auto trashed = trash_.trash_folder(store_, model_.listing(), folder, trash_prompts(save_shown));
+    // Onaydan sonra, notlar atılmadan önce: gösterilen notun son hâli çöpe gitsin. Bu kaydın revizyonu onaylı
+    // sayılır (Prompts::written); soru açıkken senkronla değişen başka not klasörde kalır.
+    std::optional<std::pair<core::NotePath, core::Revision>> saved;
+    const auto save_shown = [&] {
+        if (!shown_in(folder))
+            return true;
+        const std::size_t before = writes_;
+        const std::optional<core::NotePath> note = shown_ ? std::optional(shown_->path) : std::nullopt;
+        if (!flush())
+            return false;
+        if (writes_ == before || !note)
+            return true;
+        // Kayıttan sonra not süzgeçten düşüp editör boşalmış olabilir: belge yoksa revizyon depodan, hemen.
+        if (doc_.path() == note)
+            saved.emplace(*note, doc_.revision());
+        else if (const auto written = store_.read(*note))
+            saved.emplace(*note, written->revision);
+        return true;
+    };
+    app::Prompts prompts = trash_prompts(save_shown);
+    prompts.written = [&saved](const core::NotePath& path) {
+        return saved && saved->first == path ? std::optional(saved->second) : std::nullopt;
+    };
+    const auto trashed = trash_.trash_folder(store_, model_.listing(), folder, prompts);
     if (!trashed)
         return;  // vazgeçildi ya da kayıt olmadı
     const bool undoable = trash_.undo_depth() != depth;

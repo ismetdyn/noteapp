@@ -56,8 +56,8 @@ TEST_CASE("gui info: the shown note has the TUI's detail fields plus type and ta
     CHECK(value_of(*state, "gui.info_size") == core::human_size(info.size));
     CHECK(value_of(*state, "gui.info_updated") == core::local_time_text(info.mtime));
     CHECK(value_of(*state, "gui.info_created") == core::local_time_text(*info.created_at));
-    CHECK(value_of(*state, "gui.info_sync") == core::tr("gui.sync_off"));  // senkron kapalı depo
-    CHECK(value_of(*state, "gui.info_origin") == (info.origin ? *info.origin : core::tr("gui.info_unknown")));
+    CHECK(value_of(*state, "gui.info_sync") == core::tr("app.sync_off"));  // senkron kapalı depo
+    CHECK(value_of(*state, "gui.info_origin") == (info.origin ? *info.origin : core::tr("app.note_unknown")));
     CHECK(value_of(*state, "gui.info_type") == "md");
     CHECK(value_of(*state, "gui.info_tags") == "#Proje");
 }
@@ -72,7 +72,7 @@ TEST_CASE("gui info: a save refreshes the size, a draft and a folder have no fie
     state->save_now();
     CHECK(value_of(*state, "gui.info_size") == core::human_size(4096));
     CHECK(value_of(*state, "gui.info_size") != before);
-    CHECK(value_of(*state, "gui.info_tags") == core::tr("gui.info_none"));
+    CHECK(value_of(*state, "gui.info_tags") == core::tr("app.note_none"));
 
     state->select_folder("");
     CHECK(state->note_info().empty());
@@ -112,4 +112,13 @@ TEST_CASE("gui info: the panel is closed at first, Ctrl+I and its header open an
     state->select_folder("");
     settle(*view);
     CHECK_FALSE(view->item_rects().contains("info_header"));
+}
+
+// Arama `sync:modified` yazar; durum metni de aynı sözcüğü kullanır (TUI ile tek metin).
+TEST_CASE("gui info: a modified note reads 'modified' like the TUI and the sync: search") {
+    core::init_i18n("en");
+    CHECK(noteapp::gui::sync_state_text(core::SyncState::Modified) == "modified");
+    core::init_i18n("tr");
+    CHECK(noteapp::gui::sync_state_text(core::SyncState::Modified) == "değişti");
+    core::init_i18n("en");
 }

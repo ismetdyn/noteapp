@@ -66,6 +66,21 @@ TEST_CASE("content: all terms must occur, on any lines") {
     CHECK(r[0].first_hits[1].line == 3);
 }
 
+// Süzgeç sınırdan önce: süzülen not sınırı harcamaz; kesit yalnız tutulan sonuç için (SD7 review, DoS).
+TEST_CASE("content: accept filters before the limit") {
+    Fixture f;
+    f.dir.write("a.md", "kelime\nkelime\nkelime\n");
+    f.dir.write("b.md", "kelime\nkelime\n");
+    f.dir.write("z.txt", "kelime\n");
+    f.index.refresh();
+    const auto only_txt = [](const core::NotePath& path) { return path.string().ends_with(".txt"); };
+    const auto r = f.index.search("kelime", 1, only_txt);
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].path.string() == "z.txt");
+    CHECK(r[0].first_hits.size() == 1);
+    CHECK(f.index.search("kelime", 1).front().path.string() == "a.md");
+}
+
 TEST_CASE("content: quoted phrase matches only adjacent words") {
     Fixture f;
     f.dir.write("adjacent.md", "x proje bütçe y\n");

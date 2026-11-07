@@ -1,5 +1,6 @@
 // T84: haritanın saf birimleri. Yerleşim (GraphLayout) ve kapsam (build_note_map) ImGui ve depo bilmez.
 #include "app/graph_layout.hpp"
+#include "app/map_camera.hpp"
 #include "app/note_map.hpp"
 #include "core/config.hpp"
 
@@ -395,4 +396,33 @@ TEST_CASE("note map: an edge whose kind changes between the same notes rebuilds 
     REQUIRE(model.map().edges.size() == 1);
     CHECK(model.map().edges.front().kind == MapEdgeKind::Related);
     CHECK(model.generation() == generation);  // düğüm önbelleği (ad, renk, boy) türden bağımsız
+}
+
+TEST_CASE("map camera: fit centres the graph inside the margin and clamps to the range") {
+    using noteapp::app::MapCamera;
+    const std::vector<LayoutPoint> points{{-100.0F, 0.0F}, {300.0F, 100.0F}};
+    const MapCamera camera = MapCamera::fit(points, 220.0F, 120.0F, 10.0F, 0.0F, {0.01F, 4.0F});
+    CHECK(camera.zoom == doctest::Approx(0.5F));  // oda 200 / genişlik 400
+    // Orta nokta tuvalin ortasında.
+    CHECK(camera.x + 100.0F * camera.zoom == doctest::Approx(110.0F));
+    CHECK(camera.y + 50.0F * camera.zoom == doctest::Approx(60.0F));
+    // Düğüm payı genişliği büyütür; aralık yakınlığı kırpar; düğüm yoksa varsayılan kamera.
+    CHECK(MapCamera::fit(points, 220.0F, 120.0F, 10.0F, 50.0F, {0.01F, 4.0F}).zoom == doctest::Approx(0.4F));
+    CHECK(MapCamera::fit(points, 220.0F, 120.0F, 10.0F, 0.0F, {0.01F, 0.3F}).zoom == doctest::Approx(0.3F));
+    CHECK(MapCamera::fit({}, 220.0F, 120.0F, 10.0F, 0.0F, {0.01F, 4.0F}).zoom == doctest::Approx(1.0F));
+}
+
+TEST_CASE("map camera: zoom_at keeps the point under the anchor and clamps the zoom") {
+    noteapp::app::MapCamera camera{.x = 10.0F, .y = -20.0F, .zoom = 1.0F};
+    const auto world_at = [&](float sx, float sy) {
+        return LayoutPoint{(sx - camera.x) / camera.zoom, (sy - camera.y) / camera.zoom};
+    };
+    const LayoutPoint before = world_at(50.0F, 40.0F);
+    camera.zoom_at(50.0F, 40.0F, 2.0F, {0.01F, 4.0F});
+    CHECK(camera.zoom == doctest::Approx(2.0F));
+    CHECK(world_at(50.0F, 40.0F).x == doctest::Approx(before.x));
+    CHECK(world_at(50.0F, 40.0F).y == doctest::Approx(before.y));
+    camera.zoom_at(50.0F, 40.0F, 100.0F, {0.01F, 4.0F});
+    CHECK(camera.zoom == doctest::Approx(4.0F));
+    CHECK(world_at(50.0F, 40.0F).x == doctest::Approx(before.x));
 }

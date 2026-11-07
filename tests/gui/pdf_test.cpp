@@ -108,6 +108,20 @@ TEST_CASE_FIXTURE(ExportFixture, "export does nothing for a binary note") {
     CHECK(out_empty());
 }
 
+// İkili denetimi CLI ve TUI ile aynı yerde (app::export_note_pdf) ve diskteki baytlarda: salt-okunur nedeni
+// "çok büyük" olan ikili not da PDF'e çevrilmez.
+TEST_CASE_FIXTURE(ExportFixture, "a binary note larger than max_note_bytes is not exported either") {
+    config.tuning.max_note_bytes = noteapp::core::Limit{16, "16B"};
+    add_note("blob.bin", std::string("ab\0cd", 5) + std::string(64, 'x'));
+    auto state = make_state();
+    wire(*state, out_path());
+
+    state->export_pdf();
+
+    CHECK(out_empty());
+    CHECK(contains(state->status(), "blob.bin"));
+}
+
 TEST_CASE_FIXTURE(ExportFixture, "export does nothing when no note is shown") {
     auto state = make_state();
     wire(*state, out_path());

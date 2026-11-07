@@ -1,10 +1,10 @@
 // G4b: düşmanca ya da sadece büyük veride depo durmaz; sınır aşımı raporlanır, kilitlenme ya da kayıp olmaz.
 #include "core/config.hpp"
 #include "core/file_stat.hpp"
-#include "core/migration.hpp"
 #include "core/note_store.hpp"
 #include "core/note_sync.hpp"
 #include "graph/graph.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 
@@ -25,14 +25,6 @@ namespace {
 
 NotePath np(const std::string& text) {
     return *NotePath::parse(text);
-}
-
-void write_plain(const fs::path& file, std::string_view bytes) {
-    fs::create_directories(file.parent_path());
-    std::ofstream out(file, std::ios::binary);
-    out << bytes;
-    out.flush();
-    REQUIRE_MESSAGE(out.good(), "cannot write test file: ", noteapp::test::utf8(file));
 }
 
 graph::Graph open_raw(const fs::path& dir) {
@@ -61,23 +53,27 @@ unsigned mode_of(const fs::path& path) {
 
 }  // namespace
 
-// İşlem başına sınır not sayısına değil işleme bağlıdır: yoksa bağlantılı 1000 not geçişi kalıcı olarak
-// kilitlerdi.
+// İşlem başına sınır not sayısına değil işleme bağlıdır: yoksa bağlantılı 1000 notun içe aktarılması kalıcı
+// olarak kilitlerdi.
 TEST_CASE(
-    "migration of 1000 notes with 70 links each finishes; folder removal and empty_trash also batch by ops") {
-    const TempDir notes;
+    "importing 1000 notes with 70 links each finishes; folder removal and empty_trash also batch by ops") {
     const TempDir data;
+    std::vector<noteapp::test::ImportedNote> notes;
     for (int n = 0; n < 1000; ++n) {
         std::string body;
         for (int link = 1; link <= 70; ++link)
             body += "[[n" + std::to_string((n + link) % 1000) + "]] ";
-        write_plain(notes.path() / "d" / ("n" + std::to_string(n) + ".md"), body);
+        notes.push_back(noteapp::test::ImportedNote{np("d/n" + std::to_string(n) + ".md"), body});
     }
-    const auto report = migrate_legacy_notes(notes.path(), data.path());
-    REQUIRE_MESSAGE(report.has_value(),
-                    (report ? "" : report.error().message_key + " " + report.error().args.back().second));
-    CHECK(report->complete);
-    CHECK(report->imported == 1000);
+    {
+        NoteStore importer(data.path());
+        const auto report = noteapp::test::import_notes(importer, notes);
+        REQUIRE_MESSAGE(report.has_value(),
+                        (report ? "" : report.error().message_key + " " + report.error().args.back().second));
+        CHECK(report->imported == 1000);
+        REQUIRE(noteapp::test::relink_notes(importer)
+                    .has_value());  // hedef, kaynaktan sonra içe alınmış olabilir
+    }
     {
         auto raw = open_raw(data.path());
         const auto links = raw.query("MATCH (a:Note)-[:LINKS_TO]->(b:Note) RETURN count(*) AS c");
@@ -344,49 +340,6 @@ TEST_CASE("a folder rename that pushes a descendant over the byte limit is refus
     CHECK(store.read(np("u/" + long_folder(4094) + "/m.md"))->text == "uzun");
 }
 
-// L3: derinlik tavanı yok; geçişte klasörü sınırlayan yalnız OS'un yol sınırıdır.
-TEST_CASE("migration imports a folder deeper than 128 levels where the OS can hold its path") {
-    const TempDir notes;
-    const TempDir data;
-    write_plain(notes.path() / "iyi.md", "iyi");
-    const std::string deep = deep_folder(129) + "/derin.md";
-    const fs::path deep_file = notes.path() / deep;
-    write_plain(deep_file, "derin");
-#ifndef _WIN32
-    const auto report = migrate_legacy_notes(notes.path(), data.path());
-    REQUIRE(report.has_value());
-    CHECK(report->complete);
-    CHECK(report->imported == 2);
-    CHECK(report->failed.empty());
-    const NoteStore store(data.path());
-    CHECK(store.read(np(deep))->text == "derin");
-    CHECK(store.unreachable().empty());
-#else
-    // MinGW _wopendir MAX_PATH'te durur (kaç düzey olduğu köke bağlı): dosya görülemez, atası raporlanır.
-    const auto covers_deep = [&](const SkippedFile& file) {
-        return deep.starts_with(file.path + "/") && file.reason == "unreadable_folder";
-    };
-    const auto stopped = migrate_legacy_notes(notes.path(), data.path());
-    REQUIRE(stopped.has_value());
-    CHECK_FALSE(stopped->complete);
-    CHECK(stopped->imported == 1);
-    CHECK(std::ranges::any_of(stopped->failed, covers_deep));
-    CHECK(legacy_notes_pending(notes.path(), data.path()));
-    {
-        const NoteStore store(data.path());
-        CHECK(store.read(np("iyi.md"))->text == "iyi");
-        CHECK(store.unreachable().empty());
-    }
-
-    const auto skipped = migrate_legacy_notes(notes.path(), data.path(), {.skip_failed = true});
-    REQUIRE(skipped.has_value());
-    CHECK(skipped->complete);
-    CHECK(std::ranges::any_of(skipped->failed, covers_deep));
-    CHECK(fs::exists(deep_file));
-    CHECK(NoteStore(data.path()).unreachable().empty());
-#endif
-}
-
 // L3: klasör yolunun bayt sınırı config'tedir (limits.core.folder_path_bytes); 0 sınırsızdır.
 TEST_CASE("limits.core.folder_path_bytes sets the folder path limit and 0 lifts it") {
     const TempDir home;
@@ -415,33 +368,6 @@ TEST_CASE("limits.core.folder_path_bytes sets the folder path limit and 0 lifts 
 TEST_CASE("an unconfigured store uses the folder path limit from defaults.toml") {
     CHECK(parse_config("").config.limits.core.folder_path_bytes.value == kDefaultFolderPathBytes);
     CHECK(parse_config("").config.limits.graph.relation_name_bytes.value == kDefaultRelationNameBytes);
-}
-
-// Bayt doğrulaması düğüme bakar, yola değil: düğüm güvenli yola çıkamıyorsa dosya geçmiş sayılmaz.
-TEST_CASE("migration reports a file whose verified node is unreachable instead of marking it done") {
-    const TempDir notes;
-    const TempDir data;
-    write_plain(notes.path() / "x.md", "metin");
-    {
-        auto raw = open_raw(data.path());
-        const std::string key = "live/x.md";
-        const graph::NodeId id = graph::derive_node_id("migrated-note", std::as_bytes(std::span(key)));
-        auto txn = raw.write();
-        REQUIRE(txn.has_value());
-        REQUIRE(txn->put_node(id).has_value());
-        REQUIRE(txn->add_label(id, "Note").has_value());
-        REQUIRE(txn->set_property(id, "name", graph::Value{std::string(".gizli")}).has_value());
-        REQUIRE(txn->set_property(id, "type", graph::Value{std::string("md")}).has_value());
-        REQUIRE(txn->set_property(id, "body", graph::Value{graph::Bytes{std::string("metin")}}).has_value());
-        REQUIRE(txn->commit().has_value());
-    }
-    const auto report = migrate_legacy_notes(notes.path(), data.path());
-    REQUIRE(report.has_value());
-    CHECK_FALSE(report->complete);
-    REQUIRE(report->failed.size() == 1);
-    CHECK(report->failed.front().path == "x.md");
-    CHECK(report->failed.front().reason == "invalid_name");
-    CHECK(legacy_notes_pending(notes.path(), data.path()));
 }
 
 namespace {
@@ -541,65 +467,4 @@ TEST_CASE(
         if (fs::exists(dir / name))
             CHECK_MESSAGE(mode_of(dir / name) == 0600U, name);
 }
-
-TEST_CASE("the migration backup is private however open the source files were") {
-    const TempDir notes;
-    const TempDir data;
-    write_plain(notes.path() / "alt" / "a.md", "a");
-    fs::permissions(notes.path() / "alt" / "a.md", static_cast<fs::perms>(0644), fs::perm_options::replace);
-    const auto report = migrate_legacy_notes(notes.path(), data.path());
-    REQUIRE(report.has_value());
-    CHECK(mode_of(report->backup) == 0700U);
-    for (const auto& entry : fs::recursive_directory_iterator(report->backup))
-        CHECK_MESSAGE(mode_of(entry.path()) == (entry.is_directory() ? 0700U : 0600U),
-                      noteapp::test::utf8(entry.path()));
-}
 #endif
-
-#ifdef __linux__
-#include <fcntl.h>
-#include <sys/stat.h>
-
-// Dosya sistemi doğum zamanı veriyorsa created_at odur; mtime ileri alınmış dosyada ikisi ayrılır. Geçiş anı
-// asla değil.
-TEST_CASE("migration takes created_at from the file's birth time where the filesystem has one") {
-    const TempDir notes;
-    const TempDir data;
-    const fs::path file = notes.path() / "n.md";
-    write_plain(file, "x");
-    const auto later = fs::file_time_type::clock::now() + std::chrono::hours(48);
-    fs::last_write_time(file, later);
-    struct statx info{};
-    REQUIRE(statx(AT_FDCWD, file.c_str(), AT_SYMLINK_NOFOLLOW, STATX_BTIME, &info) == 0);
-    const auto report = migrate_legacy_notes(notes.path(), data.path());
-    REQUIRE(report.has_value());
-    const auto metas = NoteStore(data.path()).list_meta();
-    REQUIRE(metas.size() == 1);
-    REQUIRE(metas[0].created_at.has_value());
-    const auto created = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::file_clock::to_sys(*metas[0].created_at).time_since_epoch());
-    if ((info.stx_mask & STATX_BTIME) != 0) {
-        CHECK(created.count() == info.stx_btime.tv_sec);
-        REQUIRE(metas[0].created_at.has_value());
-        CHECK(*metas[0].created_at < metas[0].updated_at);
-    } else {
-        MESSAGE("dosya sistemi doğum zamanı vermiyor: mtime'a düşer");
-        REQUIRE(metas[0].created_at.has_value());
-        CHECK(*metas[0].created_at == metas[0].updated_at);
-    }
-}
-#endif
-
-TEST_CASE("a backdated file: created_at is never after the last change and never the migration time") {
-    const TempDir notes;
-    const TempDir data;
-    const fs::path file = notes.path() / "eski.md";
-    write_plain(file, "x");
-    const auto old = fs::file_time_type::clock::now() - std::chrono::days(400);
-    fs::last_write_time(file, old);
-    REQUIRE(migrate_legacy_notes(notes.path(), data.path()).has_value());
-    const auto metas = NoteStore(data.path()).list_meta();
-    REQUIRE(metas.size() == 1);
-    REQUIRE(metas[0].created_at.has_value());
-    CHECK(*metas[0].created_at <= metas[0].updated_at);
-}

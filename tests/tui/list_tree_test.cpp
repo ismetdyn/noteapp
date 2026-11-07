@@ -1,6 +1,7 @@
 // T74: yerinde açılan klasör ağacı, `t` ile taşıma, satır görünümü, Nerd Font ikonları.
 #include "core/file_icons.hpp"
 #include "core/i18n.hpp"
+#include "core/paths.hpp"
 #include "edit/editor_session.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
@@ -13,6 +14,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <doctest/doctest.h>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/screen.hpp>
@@ -327,6 +331,95 @@ TEST_CASE("tree: a move rebuilds nothing and a frame walks only what is visible,
     s.handle(Key::Char, "G");
     frame_within_budget();
     CHECK(s.list_work().rebuilds == rebuilds + 1);
+}
+
+// Ağaç henüz kurulmadıysa (ilk tarama, açılamayan depo) kayıt açık klasörleri silmez.
+TEST_CASE("tree: saving before the tree is built keeps the open folders") {
+    Fixture f;
+    tui::ListPrefs prefs = by_name();
+    prefs.open_folders = {"work"};
+    f.state.set_list_prefs(prefs);
+    f.press("V");  // tercih yazımı
+    CHECK(f.state.list_prefs().open_folders.contains("work"));
+    std::ifstream in(core::state_dir() / "tui-state.toml");
+    const std::string text{std::istreambuf_iterator<char>(in), {}};
+    CHECK(tui::parse_list_prefs(text).open_folders.contains("work"));
+}
+
+// Okuma tarafı sır süzgeci (app::UiPrefsRules::keep_history): elle yazılmış sır geçmişe girmez.
+TEST_CASE("prefs: a secret-like search in tui-state.toml never reaches the history") {
+    Fixture f;
+    std::filesystem::create_directories(core::state_dir());
+    std::ofstream(core::state_dir() / "tui-state.toml") << "search_history = [\"API_KEY=abc123\", \"plan\"]\n";
+    tui::load_list_prefs(f.state);
+    CHECK(f.state.list_prefs().search_history == std::vector<std::string>{"plan"});
+}
+
+// Elle bozulmuş dosya ezilmeden kenara alınır (tek yedek): kullanıcının yazdığı kaybolmaz.
+TEST_CASE("prefs: a broken tui-state.toml is set aside before defaults are used") {
+    Fixture f;
+    std::filesystem::create_directories(core::state_dir());
+    const auto file = core::state_dir() / "tui-state.toml";
+    std::ofstream(file) << "sort = [\n";
+    const std::string notice = tui::load_list_prefs(f.state);
+    CHECK(notice.find("tui-state.toml.bad") != std::string::npos);  // kullanıcıya bir kez söylenir
+    std::ifstream kept(core::state_dir() / "tui-state.toml.bad");
+    CHECK(std::string(std::istreambuf_iterator<char>(kept), {}) == "sort = [\n");
+    CHECK_FALSE(std::filesystem::exists(file));
+}
+
+// Onay penceresi açıkken senkron klasöre not getirirse Evet yalnız onayda sayılan notları siler.
+TEST_CASE("delete: a note that arrives while the folder delete is asked survives the Yes") {
+    Fixture f;
+    f.put("work/a.md");
+    f.put("z.md");
+    f.load();
+    f.state.select_folder("work");
+    f.press("D");
+    REQUIRE(f.confirm.has_value());
+    f.put("work/new.md");  // senkron, onay açıkken
+    f.load();
+    f.confirm->handle(Key::Right);
+    REQUIRE(f.confirm->handle(Key::Enter) == tui::ConfirmState::Outcome::Confirmed);
+    f.actions.finish_delete(f.confirm);
+    CHECK_FALSE(f.exists("work/a.md"));
+    CHECK(f.exists("work/new.md"));
+}
+
+// Onay açıkken senkron işaretlileri silip işaretleri düşürse de Evet seçili satıra kaymaz; aynı yola gelen başka
+// not silinmez (hedef ve revizyon onay anında alınır).
+TEST_CASE("delete: Yes acts on the targets the confirmation counted, never on the live selection") {
+    Fixture f;
+    f.put("a.md");
+    f.put("b.md");
+    f.put("work/c.md");
+    f.load();
+    f.state.select_note(*core::NotePath::parse("a.md"));
+    f.press("vv");  // a, b işaretli
+    REQUIRE(f.state.marked_count() == 2);
+    f.press("D");
+    REQUIRE(f.confirm.has_value());
+    REQUIRE(f.store->remove(*core::NotePath::parse("a.md")));  // senkron, onay açıkken
+    REQUIRE(f.store->remove(*core::NotePath::parse("b.md")));
+    f.put("b.md", "another note at the same path");
+    f.load();
+    f.state.select_folder("work");  // canlı seçim artık klasör
+    f.confirm->handle(Key::Right);
+    REQUIRE(f.confirm->handle(Key::Enter) == tui::ConfirmState::Outcome::Confirmed);
+    f.actions.finish_delete(f.confirm);
+    CHECK(f.exists("b.md"));
+    CHECK(f.exists("work/c.md"));
+    f.state.handle(Key::Escape);  // atlanan öğelerin özet penceresi
+
+    REQUIRE(f.state.select_note(*core::NotePath::parse("b.md")));
+    f.press("D");
+    REQUIRE(f.confirm.has_value());
+    f.put("b.md", "changed by sync");
+    f.load();
+    f.confirm->handle(Key::Right);
+    REQUIRE(f.confirm->handle(Key::Enter) == tui::ConfirmState::Outcome::Confirmed);
+    f.actions.finish_delete(f.confirm);
+    CHECK(f.exists("b.md"));
 }
 
 TEST_CASE("tree: folders that no longer exist leave open_folders when saving") {

@@ -89,6 +89,16 @@ TEST_CASE_FIXTURE(ListScene,
     CHECK_FALSE(state->quick_add_open());
     REQUIRE(state->selected_folder().has_value());
     CHECK(*state->selected_folder() == "work/proje");
+
+    // TUI ile tek kural (app::quick_add): var olan klasör seçilir ve bunu söyler; ad kırpılır.
+    state->select_folder("work");
+    run_command(*state, "quick.add");
+    state->quick_add_buffer() = " proje/ ";
+    state->submit_quick_add();
+    CHECK_FALSE(state->quick_add_open());
+    REQUIRE(state->selected_folder().has_value());
+    CHECK(*state->selected_folder() == "work/proje");
+    CHECK(state->status().find("already exists") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(ListScene,

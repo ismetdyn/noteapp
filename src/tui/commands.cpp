@@ -38,7 +38,8 @@ std::span<const Command> TuiState::commands() {
     using enum app::CommandNeeds;
     static constexpr Command kCommands[] = {
         // Oluşturma ve düzenleme
-        // Harfler CLI kısa bayraklarıyla aynı (NY-T): -n adla ekle, -a düz ekle, -s ara, -S göster, -E düzenle,
+        // Harfler CLI kısa bayraklarıyla aynı (NY-T): -n adla ekle, -a düz ekle, -s ara, -S göster, -E
+        // düzenle,
         // -d çöpe, -m taşı, -x dışa aktar, -T etiketler, -i içe al.
         {"new", "a", kInList, emit<Intent::NewNote>},
         {"quick.add", "n", kInList, emit<Intent::NewRow>},
@@ -106,9 +107,12 @@ std::span<const Command> TuiState::commands() {
         // Arama ve gitme
         {"search", "/", kInList, act<&TuiState::begin_search, Mode::Name>},
         {"search.global", "s", kInList, act<&TuiState::begin_search, Mode::Global>},
-        {"search.global", "f", kInList, act<&TuiState::begin_search, Mode::Global>},  // eski harf; palet `s` gösterir
+        {"search.global", "f", kInList,
+         act<&TuiState::begin_search, Mode::Global>},  // eski harf; palet `s` gösterir
         {"search.tag", "T", kInList, act<&TuiState::begin_tag_search>},
         {"search.view", "", kInList, act<&TuiState::begin_view_search>},
+        {"view.save", "", kInList, emit<Intent::SaveView>},  // haritada `K`
+        {"view.remove", "", kInList, emit<Intent::RemoveView>},
         {"search.mode", "Tab", kInList, act<&TuiState::toggle_content_mode>, Nothing, Key::Tab},
         {"find", "/", kInReview, act<&TuiState::begin_preview_find>},
         {"find.next", "n", kInReview, act<&TuiState::find_step, true>},
@@ -221,25 +225,34 @@ const char* TuiState::command_block(const Command& command) const {
     return (command.contexts & kInTrash) != 0 ? "tui.cmd_why_trash" : "tui.cmd_why_editor";
 }
 
+// Karar GUI ile ortak (app::command_block); iletiler bu arayüzün tuşlarını söyler.
 const char* TuiState::needs_block(CommandNeeds needs) const {
-    const auto unless = [](bool satisfied, const char* reason) { return satisfied ? nullptr : reason; };
     // Çöpte seçim tek başına yetmez: görünen satır yoksa işlenecek bir şey de yoktur.
     const bool has_row = selected_entry() || (!trash_view_ && marked_count() > 0);
-    switch (needs) {
-    case CommandNeeds::Nothing:
+    const app::CommandState state{.note = selected_row() != nullptr,
+                                  .row = has_row,
+                                  .links = !links_.empty() && !links_hidden_,
+                                  .folder_view = in_folder_view(),
+                                  .yank = yank_.has_value(),
+                                  .paste_folder = in_folder_view(),
+                                  .sync = sync_enabled_};
+    switch (app::command_block(needs, state)) {
+    case app::CommandBlock::None:
         return nullptr;
-    case CommandNeeds::Note:
-        return unless(selected_row(), "tui.cmd_why_note");
-    case CommandNeeds::Row:
-        return unless(has_row, "tui.cmd_why_row");
-    case CommandNeeds::Links:
-        return unless(!links_.empty() && !links_hidden_, "tui.cmd_why_links");
-    case CommandNeeds::FolderView:
-        return unless(in_folder_view(), "tui.cmd_why_folder_view");
-    case CommandNeeds::Yank:
-        return yank_ ? unless(in_folder_view(), "tui.paste_needs_folder") : "tui.paste_nothing";
-    case CommandNeeds::Sync:
-        return unless(sync_enabled_, "tui.sync_disabled_hint");
+    case app::CommandBlock::NoNote:
+        return "tui.cmd_why_note";
+    case app::CommandBlock::NoRow:
+        return "tui.cmd_why_row";
+    case app::CommandBlock::NoLinks:
+        return "app.cmd_why_links";
+    case app::CommandBlock::NotFolderView:
+        return "tui.cmd_why_folder_view";
+    case app::CommandBlock::NothingYanked:
+        return "tui.paste_nothing";
+    case app::CommandBlock::PasteNeedsFolder:
+        return "tui.paste_needs_folder";
+    case app::CommandBlock::SyncOff:
+        return "tui.sync_disabled_hint";
     }
     return nullptr;
 }

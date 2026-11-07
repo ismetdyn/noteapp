@@ -82,7 +82,7 @@ TEST_CASE("toolbar Delete button moves the note to the trash without asking") {
     scene.fixture.add_note("a.md", "a\n");
     scene.open();
     int asked = 0;
-    scene.state->deciders.confirm_delete = [&](const std::string&) {
+    scene.state->deciders.confirm_delete = [&](const std::string&, const std::string&) {
         ++asked;
         return true;
     };
@@ -98,7 +98,7 @@ TEST_CASE("Shift+Del deletes permanently only after confirmation") {
     scene.open();
     std::string asked;
     bool answer = false;
-    scene.state->deciders.confirm_delete = [&](const std::string& message) {
+    scene.state->deciders.confirm_delete = [&](const std::string& message, const std::string&) {
         asked = message;
         return answer;
     };

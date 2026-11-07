@@ -30,6 +30,7 @@
 #include <expected>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <span>
@@ -97,6 +98,8 @@ enum class Intent {
     TrashMapNode,       // haritada `d`: hedef not seçilip onaysız çöpe (işaretler değil); `u` geri alır
     RunMapQuery,  // haritada `Q` satırında Enter: map_query_text() çalışır (app::MapQuery; yazmada onay)
     ImportFiles,  // palet `import`: altta dosya sistemi yolu girdisi, hedef app::new_note_folder
+    SaveView,     // palet `view.save`, haritada `K`: gösterilen okumanın sorgusu adla kayıtlı görünüm olur
+    RemoveView,   // palet `view.remove`: altta görünüm adı (Tab adlar), Enter iki kez: siler
     // Özellik denetçisi (F4; app::Inspector): satırlar depodan, yazma alt satırdaki girdiyle.
     InspectorLoad,    // `p`: konu seçildi, satırlar okunur
     InspectorAdd,     // denetçide `a`: anahtar satırı (ya da #etiket), sonra değer satırı
@@ -117,19 +120,13 @@ using Mode = app::SearchMode;
 // Tuşların kime gideceğini belirler: harfler aynı anda hem süzüp hem eylem yapamaz (SPEC-tui "Tuşlar").
 enum class Focus { List, Search, Preview, PreviewFind, Editor, SortMenu, Links, Inspector };
 
-// Listede sağ sütunun gösterdiği üst veri (`v`).
-// Sıra `v` döngüsüdür.
-enum class ListColumn { SizeAndDate, Size, Updated, Created, Sync, Origin, None };
+// Listede sağ sütunun gösterdiği üst veri (`v`; GUI Ayrıntılar ile aynı). Sıra `v` döngüsüdür.
+using app::ListColumn;
 
-// Kalıcı liste tercihleri; varsayılan: en yeni başta, boyut ve tarih.
-struct ListPrefs {
-    search::SortSpec sort{search::SortField::Updated, true};
-    ListColumn column = ListColumn::SizeAndDate;
-    std::vector<std::string> search_history = {};   // en yeni başta; yalnız yerel, senkrona girmez
-    std::set<std::string> open_folders = {};        // ağaçta yerinde açık klasörler
-    std::vector<std::string> recent_commands = {};  // palet: en yeni başta; bilinmeyen ad yok sayılır
-    app::SavedTabs tabs = {};  // açık editör sekmeleri (GUI gui-state.toml ile aynı anahtarlar)
-    std::optional<double> list_share = {};  // `<` `>` ya da sürüklemeyle seçilen liste genişliği (0..1)
+// Kalıcı liste tercihleri (`tui-state.toml`): GUI ile ortak alanlar app::UiPrefs'te, ek olarak `<` `>` ya da
+// sürüklemeyle seçilen liste genişliği (0..1).
+struct ListPrefs : app::UiPrefs {
+    std::optional<double> list_share = {};
 };
 
 // Listedeki bir satır. Ad modunda `positions` (yol içindeki bayt ofsetleri) vurgu içindir; içerik modunda
@@ -165,7 +162,6 @@ struct PreviewRange {
 };
 
 // Tek tanım src/app'tedir (app/listing.hpp); bu adlar mevcut çağıranlar ve testler için kalır.
-using app::content_searcher;
 using app::ContentSearcher;
 using app::GlobalSearcher;
 using app::same_listing;
@@ -204,9 +200,15 @@ public:
     void set_property_source(search::PropertyLookup source) {
         listing_.set_property_source(std::move(source));
     }
+    // Listenin depo bağları GUI ile tek yoldan (app::connect_store); depo okumaları `store_mutex` altında.
+    void connect_store(const core::NoteStore& store, const core::Config& config, app::ContentIndexSource index,
+                       std::mutex& store_mutex) {
+        app::connect_store(listing_, store, config, std::move(index), &store_mutex);
+    }
     // Ayarlar kaydında da çağrılır: açık arama yeni derinlikle yeniden süzülür.
     void set_relation_depth(std::optional<std::size_t> depth);
     void set_views(std::vector<std::string> names);
+    const std::vector<std::string>& views() const { return views_; }
     // İşçiden gelen senkron durumları (UI iş parçacığında): yeniden taramada da korunur. Değiştiyse true.
     bool set_sync_states(std::map<core::NotePath, core::SyncState> states);
     std::span<const core::NoteMeta> metas() const { return listing_.metas(); }
@@ -377,7 +379,7 @@ public:
     };
     const ListWork& list_work() const { return work_; }
     void note_row_drawn() const { ++work_.row_visits; }
-    static constexpr std::size_t kMetaLines = 5;
+    static constexpr std::size_t kMetaLines = 7;  // app::kNoteFields
     static constexpr std::size_t kFolderMetaLines = 4;
 
     const search::SortSpec& list_sort() const { return prefs_.sort; }
@@ -426,7 +428,11 @@ public:
     // Önizleme metni (PreviewCache'e ait; önbellekten uzun yaşamaz). Üretim değişince not içi eşleşmeler
     // yenilenir. `partial`: biçimli görünüm parça parça üretiliyor, devamı var. O sürece kaydırma son üretilen
     // satıra kenetlenmez (`G` sona gider); aynı üretimde uzayan metinde eşleşmeler yenilenir, seçim kalır.
-    void set_preview_lines(const std::vector<std::string>* lines, std::size_t generation, bool partial = false);
+    // Biçimli görünümde `styled` ve `wiki_targets` de verilir (Preview'un, aynı ömür): [[bağlantı]] ayraçsız
+    // çizildiğinden yeri ve hedefi onlardan okunur. Ham metinde nullptr: bağlantı satırda aranır.
+    void set_preview_lines(const std::vector<std::string>* lines, std::size_t generation,
+                           bool partial = false, const std::vector<std::vector<StyledSpan>>* styled = nullptr,
+                           const std::vector<std::string>* wiki_targets = nullptr);
     // Parça parça üretimin istekleri (PreviewCache okur): gösterilmesi beklenen kaynak satırı (EDIT dönüşü,
     // içerik araması) ve tüm görünümü isteyen not içi arama.
     std::optional<std::size_t> pending_source_line() const { return pending_source_line_; }
@@ -455,6 +461,8 @@ public:
     // nullopt. Seçim not, görünüm ya da metin değişince düşer.
     std::optional<std::string> selected_wiki_target() const;
     std::optional<ByteRange> wiki_selection_on_line(std::size_t line) const;
+    // Gösterilen metnin `line` satırındaki bağlantılar (ham ya da biçimli görünüm).
+    std::vector<WikiSpan> wiki_spans_on(std::size_t line) const;
     // Gösterilen metnin `line` satırında `offset` baytı bir bağlantının içindeyse onu seçer.
     bool select_wiki_link_at(std::size_t line, std::size_t offset);
     // Bağlantıyla gidilen not seçilir, REVIEW başından sürer (süzgeç gizliyorsa temizlenir). Yoksa false.
@@ -555,6 +563,7 @@ public:
     static constexpr std::string_view kPaletteKey = ":";
     // limits.app.recent_commands: son kullanılanlar bununla kısalır, yüklenen tercihler de (set_list_prefs).
     void set_recent_commands_limit(core::Limit limit) { recent_commands_limit_ = std::move(limit); }
+    const core::Limit& recent_commands_limit() const { return recent_commands_limit_; }
     // limits.tui.search_history ve search_entry_bytes: Enter ile hatırlanan aramalar ve yüklenen geçmiş.
     void set_search_history_limits(SearchHistoryLimits limits) { search_history_limits_ = limits; }
     const SearchHistoryLimits& search_history_limits() const { return search_history_limits_; }
@@ -757,6 +766,8 @@ private:
     std::size_t preview_lines_ = static_cast<std::size_t>(-1);  // bilinmiyor: üst sınır yok
     bool preview_partial_ = false;
     const std::vector<std::string>* preview_text_ = nullptr;
+    const std::vector<std::vector<StyledSpan>>* preview_styled_ = nullptr;  // yalnız biçimli görünümde
+    const std::vector<std::string>* preview_wiki_targets_ = nullptr;
     std::size_t preview_generation_ = 0;
     PreviewFind preview_find_;
     std::optional<PreviewPoint> wiki_link_;  // REVIEW'da seçili [[bağlantı]]: satır ve bayt aralığı

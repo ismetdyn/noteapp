@@ -186,3 +186,54 @@ TEST_CASE("wiki: in raw and rendered REVIEW a missing target is dim, the chosen 
         CHECK_FALSE(screen.PixelAt(gone, y).inverted);
     }
 }
+
+// Biçimli görünüm GUI gibi çizer (MD_FLAG_WIKILINKS): [[bağlantı]] ayraçsız metniyle, bağlantı görünüşünde.
+// Gezinme, izleme ve eksik hedefin soluk çizimi ham görünümle aynı kuralla (hedef core::link_target anahtarı);
+// kod içindeki ayraçlar bağlantı değildir.
+TEST_CASE("wiki: rendered REVIEW draws links by their text and walks, dims and follows them") {
+    Fixture f;
+    const tui::RenderedView view = tui::render_markdown(
+        "see [[b]] and [[gone]]\n\nthen [[c|the c note]] and `[[b]]`\n", kWidth, tui::terminal_cell_width);
+    tui::Preview preview = preview_of(view.lines, true);
+    preview.styled = view.spans;
+    preview.wiki_targets = view.wiki_targets;
+    REQUIRE(preview.lines.size() == 3);
+    REQUIRE(preview.lines[0] == "see b and gone");
+    REQUIRE(preview.lines[2] == "then the c note and [[b]]");
+    f.state.set_preview_lines(&preview.lines, 2, false, &preview.styled, &preview.wiki_targets);
+
+    f.state.handle(Key::Tab);
+    CHECK(f.state.selected_wiki_target() == "b");
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth), ftxui::Dimension::Fixed(kHeight));
+    ftxui::Render(screen, tui::render(f.state, preview, f.status, {kWidth, kHeight}));
+    const int y = kFirstPaneRow;
+    REQUIRE(row_of(screen, y).find("see b and gone") != std::string::npos);
+    CHECK_FALSE(screen.PixelAt(f.cell_x(0), y).dim);
+    CHECK_FALSE(screen.PixelAt(f.cell_x(0), y).underlined);
+    CHECK(screen.PixelAt(f.cell_x(4), y).inverted);  // "b"
+    CHECK(screen.PixelAt(f.cell_x(10), y).dim);      // "gone": hedefi yok
+    CHECK(screen.PixelAt(f.cell_x(10), y).underlined);
+    CHECK(screen.PixelAt(f.cell_x(13), y).dim);
+    CHECK_FALSE(screen.PixelAt(f.cell_x(10), y).inverted);
+    CHECK(screen.PixelAt(f.cell_x(5), y + 2).underlined);  // "the c note", boş satırdan sonra
+
+    f.state.handle(Key::Tab);
+    CHECK(f.state.selected_wiki_target() == "gone");
+    f.state.handle(Key::Tab);
+    CHECK(f.state.selected_wiki_target() == "c");  // etiket değil hedef
+    const auto chosen = f.state.wiki_selection_on_line(2);
+    REQUIRE(chosen.has_value());
+    CHECK(chosen->begin == 5);
+    CHECK(chosen->end == 15);
+    f.state.handle(Key::Tab);
+    CHECK(f.state.selected_wiki_target() == "c");  // koddaki [[b]] bağlantı değil: sonda durur
+
+    f.state.handle(Key::ShiftTab);
+    f.state.handle(Key::ShiftTab);
+    REQUIRE(f.state.selected_wiki_target() == "b");
+    const Intent intent = f.state.handle(Key::Enter);
+    CHECK(intent == Intent::FollowLink);
+    f.actions.run(intent, f.confirm);
+    REQUIRE(f.state.selected_row() != nullptr);
+    CHECK(f.state.selected_row()->path == np("b.md"));
+}

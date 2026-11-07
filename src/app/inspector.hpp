@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -41,6 +42,10 @@ struct InspectTarget {
         return {Kind::Relation, std::move(from), std::move(to), id, std::move(name), directed};
     }
 };
+
+// Etiket notun metnine yazılmadan önce o notun bekleyen düzenlemesini kaydeder (GUI flush_for, TUI sekmenin
+// park'ı). false: kayıt olmadı (soru açık ya da hata; arayüz gösterdi). Boş = bekleyen düzenleme yok.
+using SavePending = std::function<bool(const core::NotePath& note)>;
 
 struct InspectorRow {
     enum class Kind { Property, Label };
@@ -87,10 +92,13 @@ public:
                                                 std::optional<core::PropertyType> type = std::nullopt);
     std::expected<std::string, core::Error> remove(core::NoteStore& store, std::string_view key);
     // Etiket: notun metninin sonuna `#etiket` (connect_map_nodes Tag) ya da her yazımı çıkar (disconnect).
-    // Gövdeyi yazar: arayüz önce notun bekleyen düzenlemesini kaydeder. `#` yazılabilir. Yalnız not
-    // konusunda.
-    std::expected<std::string, core::Error> add_label(core::NoteStore& store, std::string_view tag);
-    std::expected<std::string, core::Error> remove_label(core::NoteStore& store, std::string_view tag);
+    // Gövdeyi yazar: önce `save_pending` notun bekleyen düzenlemesini kaydeder; kaydedemezse hiçbir şey
+    // yazılmaz ("inspector.save_first"), yoksa sonraki kayıt çakışma sorardı. `#` yazılabilir; eşleşme
+    // core::tag_key. Yalnız not konusunda.
+    std::expected<std::string, core::Error> add_label(core::NoteStore& store, std::string_view tag,
+                                                      const SavePending& save_pending);
+    std::expected<std::string, core::Error> remove_label(core::NoteStore& store, std::string_view tag,
+                                                         const SavePending& save_pending);
 
     // Silme onayının sorusu (ham); satır bir özellik ya da etiket.
     std::string confirm_remove_text(const InspectorRow& row) const;
@@ -98,6 +106,9 @@ public:
     std::string title() const;
 
 private:
+    std::expected<std::string, core::Error> write_label(core::NoteStore& store, std::string_view tag,
+                                                        const SavePending& save_pending, bool add);
+
     std::optional<InspectTarget> target_;
     std::vector<InspectorRow> rows_;
     std::string error_;

@@ -202,14 +202,14 @@ inline std::vector<DialogScene> dialog_scenes() {
          }},
         {"confirm",
          [](LayoutScene& scene) {
-             scene.state->deciders.confirm_delete(tr("gui.confirm_delete_note", {{"path", kLongNotePath}}));
+             scene.state->deciders.confirm_delete(tr("tui.confirm_delete", {{"path", kLongNotePath}}), {});
          }},
         {"confirm_tall",
          [](LayoutScene& scene) {
              std::string message;
              for (int line = 0; line < kTallMessageLines; ++line)
                  message += kLongNotePath + "\n";
-             scene.state->deciders.confirm_delete(message);
+             scene.state->deciders.confirm_delete(message, {});
          }},
         {"conflict", [](LayoutScene& scene) { scene.state->deciders.conflict(kLongNotePath); }},
         {"close_settings", [](LayoutScene& scene) { scene.state->deciders.close_unsaved_settings(); }},

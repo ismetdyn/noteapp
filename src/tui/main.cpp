@@ -10,7 +10,6 @@
 #include "core/graph_limits.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
-#include "core/migration.hpp"
 #include "core/note_store.hpp"
 #include "core/note_views.hpp"
 #include "core/paths.hpp"
@@ -88,40 +87,6 @@ constexpr auto kWordTableIdle = std::chrono::seconds(1);
 const ftxui::Event& redraw_event() {
     static const ftxui::Event event = ftxui::Event::Special("\x1B[noteapp-redraw");
     return event;
-}
-
-// İşçide koşar, kendi bağlantısıyla (UI deposunun kilidini tarama boyunca paylaşmaz). İstisna jthread'den
-// kaçarsa std::terminate olurdu: loglanır, ipucu vazgeçer. Kapanış (stop) taramayı dosya başında keser.
-// Bütçe limits.tui.stray_notice_*: bunu aşan köklerde ipucu gecikmez, yalnız `note graph status` söyler.
-// Ölçüm (2026-11-02, Debug, 4 KiB'lik 2000 dosya): tarama ~600 ms. Tuşu bekletmemesi için işçide koşar.
-// Depo config'le açılır: içe alınamayacak dosyanın kararı limits.core.folder_path_bytes'ı kullanır.
-void notify_stray_files(ftxui::App& app, noteapp::tui::StatusLine& status,
-                        const noteapp::core::Config& config, const std::stop_token& stop) noexcept {
-    try {
-        const noteapp::core::NoteStore store = noteapp::core::NoteStore::for_config(config);
-        const noteapp::core::TuiLimits& limits = config.limits.tui;
-        const std::uintmax_t max_bytes =
-            limits.stray_notice_bytes.unlimited() ? UINTMAX_MAX : limits.stray_notice_bytes.value;
-        const auto scan = noteapp::core::find_stray_files(
-            store, config.notes_dir, noteapp::core::data_dir(),
-            {.max_entries = limits.stray_notice_files.cap(), .max_bytes = max_bytes, .stop = stop});
-        if (!scan) {
-            noteapp::core::log_warn("event=stray_scan_failed detail=" +
-                                    noteapp::core::format_error(scan.error()));
-            return;
-        }
-        const std::size_t count = scan->files.size();
-        if (count == 0 || stop.stop_requested())
-            return;
-        app.Post([&status, count] {
-            status.notice = noteapp::core::tr("tui.stray_notice", {{"count", std::to_string(count)}});
-        });
-        app.Post(redraw_event());
-    } catch (const std::exception& error) {
-        noteapp::core::log_warn(std::string("event=stray_scan_failed detail=") + error.what());
-    } catch (...) {
-        noteapp::core::log_warn("event=stray_scan_failed detail=unknown_exception");
-    }
 }
 
 // Yamalı FTXUI'nin, limits.tui.paste_bytes'ı aşan yapıştırma yerine gönderdiği olay (baytlar tutulmadı).
@@ -345,7 +310,7 @@ struct Opening {
 };
 
 // TUI oturumu: üyeler bildirim sırasıyla kurulur, tersiyle yıkılır ve bu sıra yüklüdür. İş parçacıkları
-// (sync_status_, stray_probe_, auto_sync_, word_tables_, spell_, language_servers_, rescan_) dokundukları
+// (sync_status_, auto_sync_, word_tables_, spell_, language_servers_, rescan_) dokundukları
 // app_, status_, state_ ve store_'dan sonra bildirilir: onlardan önce durdurulup katılır. Üye eklerken sırayı
 // koru.
 class TuiSession {
@@ -417,7 +382,6 @@ private:
     // ödemez. Yalnız UI iş parçacığından dokunulur (ContentIndex tek iş parçacıklıdır).
     std::optional<noteapp::search::ContentIndex> content_index_;
     // `view:` görünümü depoda çalıştırır; sonucu deponun görüntüsü değişene dek saklanır (core::view_notes).
-    noteapp::search::ViewLookup view_lookup_;
     ftxui::App app_ = ftxui::App::Fullscreen();
     tui::FrameDiff frame_diff_;
     std::optional<std::chrono::steady_clock::time_point> wake_at_;  // render yazar, wake_due tüketir
@@ -427,8 +391,6 @@ private:
     // Durumlar işçide hesaplanır, tuş beklemez; sonuç UI iş parçacığına Post edilir. app_'ten sonra
     // bildirildiği için ondan önce yıkılır.
     app::SyncStatusWorker sync_status_;
-    // Açılışta bir kez. app_ ve status_'tan sonra bildirildiği için onlardan önce durdurulup katılır.
-    std::jthread stray_probe_;
     // Ayarlardaki bağlantı testi: tek senkron işçide; sonuç UI iş parçacığına Post edilir. app_'ten sonra
     // bildirildiği için ondan önce katılır (senkron kendi zaman aşımıyla biter). Yalnız UI iş parçacığı
     // `connection_testing_`e dokunur.
@@ -476,13 +438,13 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
     : config_(loaded.config), store_(core::NoteStore::for_config(config_)),
       preview_(tui::view_limits_of(config_.limits.tui), tui::syntax_limits_of(config_.limits.tui)),
       // Yükleme uyarıları (ör. bozuk config.toml -> varsayılanlar) açılışta alt çubukta görünür.
-      status_{.sync = core::tr("tui.sync_off"),
+      status_{.sync = core::tr("app.sync_off"),
               .message = tui::config_warnings_message(loaded.warnings),
               .notices = app::NoticeQueue(app::NoticeQueue::lifetime_of(loaded.config.tuning.notice_ms.value))},
-      sync_status_([this](app::SyncStates states) {
+      sync_status_([this](app::SyncStates states, std::uint64_t generation) {
           // Aynı durumlar (her kayıttan sonraki istek, senkron kapalıyken hep) çizim istemez.
-          app_.Post([this, states = std::move(states)]() mutable {
-              if (state_.set_sync_states(std::move(states)))
+          app_.Post([this, states = std::move(states), generation]() mutable {
+              if (sync_status_.current(generation) && state_.set_sync_states(std::move(states)))
                   app_.Post(redraw_event());
           });
       }),
@@ -500,7 +462,9 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
                   work();
                   app_.Post(redraw_event());
               });
-          }}),
+          },
+          // Yalnız etkin sekme kirli kalabilir: ayrılan sekme kendi notuna yazılır (leave_active).
+          [this](const core::NotePath& note) { return tabs_.active().path() != note || tabs_.active().park(); }}),
       tabs_([this](std::uint64_t id) { return make_editor(id); }, config_.limits.app.tabs),
       view_(ftxui::Renderer([this] { return render(); })),
       language_servers_(
@@ -517,20 +481,19 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
     state_.set_inspector_cell_bytes(config_.limits.app.query_cell_bytes.cap());
     state_.set_search_history_limits({.entries = config_.limits.tui.search_history.cap(),
                                       .entry_bytes = config_.limits.tui.search_entry_bytes.cap()});
-    state_.set_fuzzy_candidate_chars(config_.limits.search.fuzzy_candidate_chars.cap());
     auto listing = list_notes();
     const std::uint64_t listing_version = store().data_version();
     state_.set_notes(listing);
     state_.set_folders(list_folders());
     state_.set_views(tui::view_names(store()));  // sonrakileri yeniden tarama getirir (graph_version)
     state_.set_trash_count(trash_count());
-    // Geçiş bekleyen ya da açılamayan depoda liste boştur: kullanıcı bunu notların kaybı sanmasın.
-    const auto issue = store().health();
-    if (issue)
+    // Açılamayan depoda liste boştur: kullanıcı bunu notların kaybı sanmasın.
+    if (const auto issue = store().health())
         status_.message = noteapp::tui::terminal_safe(core::format_error(*issue));
 
     connect_search();
-    tui::load_list_prefs(state_);
+    if (std::string notice = tui::load_list_prefs(state_, config_.tuning.max_note_bytes); !notice.empty())
+        status_.message += (status_.message.empty() ? "" : "; ") + noteapp::tui::terminal_safe(notice);
     // Geri gelen sekmelerin içeriği ilk etkinleşmede okunur; açılış Listede kalır.
     tabs_.restore(state_.list_prefs().tabs,
                   [this](const core::NotePath& path) { return state_.meta_of(path) != nullptr; });
@@ -554,10 +517,6 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
         if (draw_log_.is_open())
             draw_log_ << (output.size() - before) << '\n' << std::flush;
     });
-    if (!issue)
-        stray_probe_ = std::jthread([this, config = config_](const std::stop_token& stop) {
-            notify_stray_files(app_, status_, config, stop);
-        });
 
     if (config_.sync.enabled)
         start_auto_sync();
@@ -625,7 +584,7 @@ void TuiSession::enter_editor() {
 
 void TuiSession::show_tab_result(tui::EditorTabs::Result result) {
     if (result == tui::EditorTabs::Result::Limit)
-        status_.message = core::tr("tui.tab_limit", {{"max", tabs_.limit().text}});
+        status_.message = core::tr("app.tab_limit", {{"max", tabs_.limit().text}});
 }
 
 // Not etkin sekmede ya da kurala göre yeni sekmede açılır; zaten açık sekme öne gelir.
@@ -663,7 +622,7 @@ void TuiSession::report_closed_tabs(const std::vector<tui::EditorTabs::Closed>& 
     for (const tui::EditorTabs::Closed& tab : closed)
         if (tab.id != focused)
             status_.message =
-                core::tr("tui.tab_closed_missing", {{"path", tui::terminal_safe(tab.path.string())}});
+                core::tr("app.tab_closed_missing", {{"path", tui::terminal_safe(tab.path.string())}});
 }
 
 // Her olaydan sonra: kapanan oturumların sekmeleri toplanır (Ctrl+W ise komşu öne gelir), liste eylemi notu
@@ -701,28 +660,10 @@ tui::StoreScan TuiSession::scan() {
 }
 
 void TuiSession::connect_search() {
-    state_.set_content_searcher(tui::content_searcher(
-        [this]() -> const noteapp::search::ContentIndex& { return ensure_content_index(); },
-        config_.limits.search.content_results));
-    view_lookup_ = [this](std::string_view name) {
-        const std::scoped_lock lock(list_mutex_);
-        return core::view_notes(store(), name);
-    };
-    state_.set_view_lookup(view_lookup_);
-    state_.set_edge_source([this] {
-        const std::scoped_lock lock(list_mutex_);
-        return noteapp::app::search_edges(store());
-    });
-    state_.set_property_source([this](std::string_view key) {
-        const std::scoped_lock lock(list_mutex_);
-        return noteapp::app::search_properties(store(), key);
-    });
-    state_.set_relation_depth(noteapp::app::relation_depth(config_));
-    state_.set_global_searcher([this](std::string_view query, std::span<const core::NoteMeta> notes,
-                                      const noteapp::search::GraphInput& graph) {
-        return noteapp::search::search_all(query, notes, ensure_content_index(), config_.limits.search,
-                                           view_lookup_, graph);
-    });
+    // GUI ile tek yol: içerik sonuç sınırı süzgeçten sonra; depo yeniden tarama iş parçacığıyla paylaşılır.
+    state_.connect_store(
+        store(), config_, [this]() -> const noteapp::search::ContentIndex& { return ensure_content_index(); },
+        list_mutex_);
 }
 
 noteapp::search::ContentIndex& TuiSession::ensure_content_index() {
@@ -735,7 +676,7 @@ noteapp::search::ContentIndex& TuiSession::ensure_content_index() {
 }
 
 void TuiSession::show_sync() {
-    status_.sync = sync_indicator_.text();
+    status_.sync = tui::sync_text(sync_indicator_);
     status_.sync_state = sync_indicator_.state();
     state_.set_sync_enabled(config_.sync.enabled);
 }
@@ -748,23 +689,21 @@ void TuiSession::notify_changed() {
 // AutoSync geri çağrısı İŞÇİ iş parçacığından gelir: durum UI iş parçacığına Post edilir. Kapatıldıktan
 // sonra gelen geç bildirim yok sayılır.
 void TuiSession::start_auto_sync() {
-    sync_indicator_.set_status(noteapp::sync::SyncService(config_).status(), false);
+    sync_indicator_.restore(noteapp::sync::SyncService(config_).status());
     show_sync();
     auto_sync_.emplace(config_, noteapp::sync::note_executable_beside_self(),
                        [this](const noteapp::sync::SyncStatus& result, bool running) {
                            app_.Post([this, result, running] {
                                if (!auto_sync_)
                                    return;
-                               const bool was_running =
-                                   sync_indicator_.state() == tui::SyncIndicator::State::Running;
-                               sync_indicator_.set_status(result, running);
+                               const auto notice = sync_indicator_.update(result, running);
                                sync_status_.request(config_, state_.metas());
                                show_sync();
-                               if (sync_indicator_.state() == tui::SyncIndicator::State::Failed)
-                                   status_.notify(app::NoticeKind::Error, sync_indicator_.error_text());
-                               else if (was_running && sync_indicator_.state() == tui::SyncIndicator::State::Ok)
-                                   status_.notices.post(app::NoticeKind::Success, core::tr("notice.sync_done"),
-                                                        std::chrono::steady_clock::now());
+                               // Hatanın tam metni ileti satırına da yazılır: üst çubuktaki kısadır.
+                               if (notice && notice->kind == app::NoticeKind::Error)
+                                   status_.notify(notice->kind, notice->text);
+                               else if (notice)
+                                   status_.notices.post(notice->kind, notice->text, std::chrono::steady_clock::now());
                            });
                            app_.Post(redraw_event());  // kapanış görevi çizimi tetiklemez
                        });
@@ -777,7 +716,8 @@ const tui::Preview& TuiSession::sync_preview() {
     // Beklerken eski notun satır sayısı yeni notun kaydırmasını kırpmasın; erteleme bitince çizim (render'ın
     // uyanma anı) son seçimi okur.
     if (!preview_.deferred())
-        state_.set_preview_lines(&shown.lines, preview_.generation(), shown.partial);
+        state_.set_preview_lines(&shown.lines, preview_.generation(), shown.partial,
+                                 shown.rendered ? &shown.styled : nullptr, &shown.wiki_targets);
     return shown;
 }
 
@@ -920,7 +860,8 @@ void TuiSession::handle_dialog_key(tui::SaveDialogState& dialog, const Key key, 
     case tui::SaveDialogState::Outcome::Submit: {
         const auto moved = [&] {
             const std::scoped_lock lock(list_mutex_);
-            return tui::move_note(store(), *target_, dialog.request());
+            const tui::SaveRequest& request = dialog.request();
+            return app::move_note(store(), *target_, request.folder, request.name, request.type);
         }();
         if (!moved) {
             dialog.set_error(core::format_error(moved.error()));
@@ -1055,8 +996,8 @@ void TuiSession::start_connection_test(core::Config candidate) {
             if (settings_)
                 settings_->finish_test(outcome);
             status_.notices.post(outcome ? app::NoticeKind::Success : app::NoticeKind::Error,
-                                 outcome ? core::tr("tui.test_ok")
-                                         : core::tr("tui.test_failed", {{"detail", core::format_error(outcome.error())}}),
+                                 outcome ? core::tr("app.test_ok")
+                                         : core::tr("app.test_failed", {{"detail", core::format_error(outcome.error())}}),
                                  std::chrono::steady_clock::now());
             if (outcome)
                 refresh_notes();  // çekilen notlar listeye yansısın

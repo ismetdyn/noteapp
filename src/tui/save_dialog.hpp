@@ -110,11 +110,6 @@ private:
 SaveDialogInit move_dialog_init(const core::NotePath& current, std::vector<std::string> folders,
                                 std::vector<std::string> types, std::size_t slug_max_length);
 
-// Taşıma/yeniden adlandırma/tip değiştirme. Hedef yol değişmediyse hiçbir şey yapmaz (kaynağı döner);
-// hedef varsa NoteStore::move AlreadyExists ile reddeder (ezme yok).
-std::expected<core::NotePath, core::Error> move_note(core::NoteStore& store, const core::NotePath& from,
-                                                     const SaveRequest& request);
-
 // Klasör ön değeri: seçili notun klasörü varsa o, yoksa config.default_folder.
 std::string initial_folder(const core::NotePath* selected, std::string_view default_folder);
 
@@ -193,10 +188,18 @@ public:
     struct PropertyLine {};
     RenameState(PropertyLine, std::string key, std::string initial);
 
+    // Kayıtlı görünümün adı (palet `view.save`, haritada `K`; `view.remove`): `query` doluysa onun kaydının
+    // adı, boşsa silinecek görünümün adı (Tab `names`). Ad kırpılmaz: kural core::validate_view_name'indir.
+    // `from()` yoktur.
+    struct ViewName {};
+    RenameState(ViewName, std::string query, std::vector<std::string> names);
+
     Outcome handle(Key key, std::string_view text = {});
 
     const core::NotePath& from() const { return from_.value(); }  // içe almada ve denetçide yok: çağrılmaz
     bool is_property() const { return is_property_; }
+    bool is_view() const { return is_view_; }
+    const std::string& view_query() const { return view_query_; }  // boş: silme
     const std::string& property_key() const { return property_key_; }
     const std::string& text() const { return line_.text(); }
     // Girdinin tam yolu: `base` + yazılan; klasörde sondaki `/` düşer.
@@ -228,6 +231,8 @@ private:
     bool is_import_ = false;
     bool is_property_ = false;
     std::string property_key_;
+    bool is_view_ = false;
+    std::string view_query_;
     std::optional<core::NotePath> relation_to_;
     std::optional<core::RelationId> renaming_;
     SharedRelationNames relation_names_;

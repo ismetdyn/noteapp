@@ -1,7 +1,6 @@
 // Gerçek `notes` sahte terminalde: tuş başına yazılan bayt üst sınırı (T75). Süre ölçülmez, yalnız bayt
 // sayılır; bir sonraki tuş önceki karenin bitişini (senkron güncelleme kapanışı) bekler, sonuç makine
 // hızından bağımsızdır.
-#include "core/migration.hpp"
 #include "support/note_seed.hpp"
 #include "support/run_process.hpp"
 #include "support/test_support.hpp"
@@ -190,29 +189,6 @@ TEST_CASE("moving through the list writes under the byte bound per key at 160x40
     // Ctrl+L aynı ekranı baştan çizer: yine kare biter, süreç ayaktadır.
     app.send("\x0C");
     CHECK(app.read_frame() > kMaxBytesPerKey);
-}
-
-TEST_CASE("a file dropped after migration shows one notice at open, gone after the first key") {
-    noteapp::test::TempDir home;
-    noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
-    const std::filesystem::path notes = home.path() / "notes";
-    std::filesystem::create_directories(notes);
-    std::ofstream(notes / "plan.md") << "plan\n";
-    REQUIRE(noteapp::core::migrate_legacy_notes(notes, home.path() / "data").has_value());
-    std::ofstream(notes / "denee.txt") << "yeni\n";
-
-    constexpr std::string_view kNotice = "note graph status";
-    constexpr int kMaxOpeningFrames = 20;
-    PtyApp app(NOTEAPP_NOTES_EXE);
-    bool shown = false;
-    for (int frame = 0; frame < kMaxOpeningFrames && !shown; ++frame)  // işçi sonucu sonraki karede gelir
-        shown = app.read_frame_text().find(kNotice) != std::string::npos;
-    REQUIRE(shown);
-
-    app.send("j");
-    CHECK(app.read_frame_text().find(kNotice) == std::string::npos);
-    app.send("\x0C");  // tam kare: ekranın tamamı
-    CHECK(app.read_frame_text().find(kNotice) == std::string::npos);
 }
 
 // FTXUI terminali bıraktıktan sonra stderr'e giden çıkış notu da güvenilmez yolu taşır: sağdan sola geçersiz

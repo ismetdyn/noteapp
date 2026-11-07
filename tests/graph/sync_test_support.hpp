@@ -113,13 +113,21 @@ private:
     std::optional<Graph> graph_;
 };
 
+// Tek parçalık kayıt: grup kimliği çerçevenin ilk 8 baytıdır (seq, little-endian).
+inline std::string whole_record(std::string_view frame) {
+    std::uint64_t seq = 0;
+    for (std::size_t i = 0; i < sizeof seq && i < frame.size(); ++i)
+        seq |= static_cast<std::uint64_t>(static_cast<unsigned char>(frame[i])) << (i * 8U);
+    return detail::encode_log_part(seq, 0, true, frame);
+}
+
 // Elle kurulmuş günlük: doğrulamadan geçer, içeriği kötü niyetli olabilir.
 inline std::filesystem::path write_log(const std::filesystem::path& directory, const detail::DeviceId& device,
                                        std::span<const std::string> frames) {
     std::filesystem::create_directories(directory);
     std::string bytes = detail::encode_log_header(device);
     for (const std::string& frame : frames)
-        bytes += detail::encode_log_frame(frame);
+        bytes += whole_record(frame);
     const std::filesystem::path path = directory / detail::log_file_name(device);
     write_file(path, bytes);
     return path;

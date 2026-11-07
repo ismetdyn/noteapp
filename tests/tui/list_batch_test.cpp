@@ -1,6 +1,7 @@
 // T71: çoklu seçim, kopya ve yapıştır, `g` öneki. Model saf; eylemler gerçek depoyla.
 #include "core/i18n.hpp"
 #include "core/note_store_impl.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 #include "tui/list_actions.hpp"
@@ -372,7 +373,7 @@ TEST_CASE("a collision gets -2 on copy, never overwrites and reports each") {
 TEST_CASE("a note copy finds a free name past a thousand taken numbered names") {
     Fixture f;
     f.put("a.md", "new");
-    std::vector<core::ImportedNote> taken;
+    std::vector<noteapp::test::ImportedNote> taken;
     for (int i = 1; i <= 1000; ++i) {
         const std::string path = i == 1 ? std::string("dest/a.md") : "dest/a-" + std::to_string(i) + ".md";
         taken.push_back({core::NotePath::parse(path).value(), "old", std::chrono::system_clock::now()});

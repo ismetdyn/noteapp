@@ -114,6 +114,22 @@ TEST_CASE("export of a txt note goes end to end through the plain text path") {
     CHECK(slurp(out.path() / "p.pdf") != slurp(out.path() / "m.pdf"));
 }
 
+// TUI ve GUI sorar; CLI soramaz: var olan dosya --force olmadan ezilmez (app::export_note_pdf).
+TEST_CASE("export refuses to replace an existing file unless --force is given") {
+    const Sandbox box;
+    box.put("a.md", "x");
+    const TempDir out;
+    const fs::path target = out.path() / "a.pdf";
+    put(target, "keep");
+    const auto refused = box.run({"export", "--pdf", "a.md", "-o", utf8(target)});
+    CHECK(refused.exit_code == 1);
+    CHECK_FALSE(refused.err.empty());
+    CHECK(slurp(target) == "keep");
+    const auto forced = box.run({"export", "--pdf", "a.md", "-o", utf8(target), "--force"});
+    CHECK_MESSAGE(forced.exit_code == 0, forced.err);
+    CHECK(slurp(target).rfind("%PDF-", 0) == 0);
+}
+
 TEST_CASE("export defaults to <stem>.pdf in the current directory") {
     const Sandbox box;
     box.put("k/günlük.md", "merhaba");

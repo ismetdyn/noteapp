@@ -106,7 +106,7 @@ int run_save(const ViewArgs& args, core::NoteStore& store, const core::Config& c
         std::cerr << sanitize_for_terminal(core::tr("cli.view_exists", saved.error().args)) << '\n';
         return kExitUser;
     }
-    std::cout << sanitize_for_terminal(core::tr("cli.view_saved", {{"name", name}})) << '\n';
+    std::cout << sanitize_for_terminal(core::tr("app.view_saved", {{"name", name}})) << '\n';
     start_background_sync(config, false);
     return kExitOk;
 }
@@ -131,7 +131,7 @@ int run_view(const ParsedArgs& args, const core::Config& config) {
         return usage();
     const std::string& name = parsed->positional.front();
     if (runs) {
-        const auto result = core::run_view(store, name);
+        const auto result = core::run_saved_view(store, name);  // TUI/GUI ile aynı: düğümler adlanır
         if (!result)
             return fail(result.error());
         std::cout << query_output(*result, parsed->json);
@@ -146,7 +146,7 @@ int run_view(const ParsedArgs& args, const core::Config& config) {
     }
     if (const auto removed = core::remove_view(store, name); !removed)
         return fail(removed.error());
-    std::cout << sanitize_for_terminal(core::tr("cli.view_removed", {{"name", name}})) << '\n';
+    std::cout << sanitize_for_terminal(core::tr("app.view_removed", {{"name", name}})) << '\n';
     start_background_sync(config, false);
     return kExitOk;
 }

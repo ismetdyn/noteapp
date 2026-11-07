@@ -469,6 +469,7 @@ TEST_CASE("remember_search refuses token-like values and note names but keeps ar
         CHECK_MESSAGE(tui::remember_search(history, fine, src.get()), fine);
 }
 
+
 TEST_CASE("search history round-trips through tui-state.toml and hostile lines are dropped") {
     const std::vector<std::string> history = {"say \"hi\"", "back\\slash", "çay 1", "sort:name plan",
                                               "type:md in:work/"};
@@ -480,7 +481,7 @@ TEST_CASE("search history round-trips through tui-state.toml and hostile lines a
     // Sütun ve sıra bozulmaz; geçmişsiz eski dosya ve yazımı boş geçmiş.
     CHECK(tui::parse_list_prefs(saved).column == tui::ListColumn::SizeAndDate);
     CHECK(tui::parse_list_prefs("column = \"size\"\n").search_history.empty());
-    CHECK(tui::format_list_prefs({}).find("search_history") == std::string::npos);
+    CHECK(tui::parse_list_prefs(tui::format_list_prefs({})).search_history.empty());
 
     CHECK(tui::parse_search_history(R"(["ok", "TOKEN=abc123", "a", "a", "\xFF", "kesik)") ==
           std::vector<std::string>{"ok", "a", "\\xFF"});

@@ -411,6 +411,24 @@ TEST_CASE("link panel: L adds a relation through the input with Tab completion, 
     CHECK(f.state.link_panel().links().related[0].path.string() == "c.md");
 }
 
+// SD11b: hedef GUI'deki gibi [[bağlantı]] kuralıyla çözülür (NoteStore::resolve_link): yalın ad ve uzantısız
+// yol da tam yol gibi kabul edilir.
+TEST_CASE("link panel: L resolves the typed target with the wiki link rule like the GUI") {
+    for (const std::string typed : {"c", "c.md"}) {
+        CAPTURE(typed);
+        StoreFixture f;
+        f.run(Intent::LinkNote);
+        REQUIRE(f.rename.has_value());
+        for (const char c : typed)
+            f.rename->handle(Key::Char, std::string(1, c));
+        f.actions.handle_rename_key(f.rename, Key::Enter, {});
+        REQUIRE(f.rename.has_value());
+        CHECK(f.rename->error().empty());
+        REQUIRE(f.rename->is_relation());
+        CHECK(f.rename->relation_to().string() == "c.md");
+    }
+}
+
 TEST_CASE("link panel: Esc in the L input writes nothing") {
     StoreFixture f;
     f.run(Intent::LinkNote);
@@ -465,8 +483,32 @@ TEST_CASE("link panel: a confirmed removal deletes the relation and notifies syn
     CHECK_FALSE(f.confirm.has_value());
     CHECK(f.store->links(np("a.md"))->related.empty());
     CHECK(f.changes == 1);
+    // GUI ile aynı ileti (app::unrelate_map_notes): iki uç da adıyla.
+    CHECK(f.status.message == core::tr("map.unrelated", {{"from", "a.md"}, {"to", "c.md"}}));
     f.load();
     CHECK(f.state.link_panel().links().related.empty());
+}
+
+// GUI ile tek yol (app::unrelate_map_notes): onay açıkken ilişki başka yerden silindiyse neden söylenir, başarı
+// sayılmaz.
+TEST_CASE("link panel: removing a relation that is already gone reports relation_not_found") {
+    StoreFixture f;
+    const auto added = f.store->add_relation(np("c.md"), np("a.md"));
+    REQUIRE(added.has_value());
+    f.refresh();
+    f.load();
+    f.state.handle(Key::Right);
+    f.state.handle(Key::Char, "b");
+    while (!f.state.link_panel().selected_path() ||
+           f.state.link_panel().selected_line()->group != core::LinkGroup::Related)
+        f.state.handle(Key::Down);
+    f.run(Intent::UnlinkSelected);
+    REQUIRE(f.confirm.has_value());
+    REQUIRE(f.store->remove_relation(f.state.link_panel().links().related.front().id).has_value());
+    f.actions.finish_delete(f.confirm);
+    CHECK(f.status.message ==
+          core::format_error(core::Error{core::Error::Code::NotFound, "error.relation_not_found", {}}));
+    CHECK(f.changes == 0);
 }
 
 // İnceleme bulgusu (veri kaybı): çiftin birden çok ilişkisi varken yalnız seçili satırın ilişkisi silinir,

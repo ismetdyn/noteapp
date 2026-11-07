@@ -103,6 +103,28 @@ TEST_CASE("document: save writes once, a conflict and a vanished note write noth
     CHECK_FALSE(s.exists("a.md"));
 }
 
+TEST_CASE("document: autosave writes, and only flags a conflict or a vanished note") {
+    Scene s;
+    s.put("a.md", "one");
+    Document doc;
+    REQUIRE(doc.open(s.store, path("a.md")));
+    CHECK(doc.autosave(s.store, "two") == true);
+    CHECK(s.bytes("a.md") == "two");
+    s.put("a.md", "outside");
+    CHECK(doc.autosave(s.store, "mine") == false);
+    CHECK(doc.changed_on_disk());
+    CHECK_FALSE(doc.autosaves());  // açık kayda dek bir daha denenmez
+    CHECK(s.bytes("a.md") == "outside");
+
+    Document gone;
+    s.put("b.md", "one");
+    REQUIRE(gone.open(s.store, path("b.md")));
+    noteapp::test::erase_note(s.dir.path(), "b.md");
+    CHECK(gone.autosave(s.store, "mine") == false);
+    CHECK(gone.deleted_on_disk());
+    CHECK_FALSE(s.exists("b.md"));  // otomatik kayıt not yaratmaz
+}
+
 TEST_CASE("document: conflict choices keep both versions, reload or overwrite on purpose") {
     Scene s;
     s.put("work/a.tar.gz", std::string(kBom) + "x\r\n");
@@ -126,6 +148,21 @@ TEST_CASE("document: conflict choices keep both versions, reload or overwrite on
     REQUIRE(doc.overwrite(s.store, "mine\n"));
     CHECK(s.bytes("work/a.tar.gz") == std::string(kBom) + "mine\r\n");
     CHECK(noteapp::app::kDefaultConflictChoice == noteapp::app::ConflictChoice::SaveCopy);
+}
+
+TEST_CASE("document: move_note renames, keeps the same target and never overwrites") {
+    Scene s;
+    s.put("a.md", "one");
+    s.put("b.md", "two");
+    CHECK(noteapp::app::move_note(s.store, path("a.md"), "", "a", "md") == path("a.md"));
+    const auto taken = noteapp::app::move_note(s.store, path("a.md"), "", "b", "md");
+    REQUIRE_FALSE(taken);
+    CHECK(taken.error().code == noteapp::core::Error::Code::AlreadyExists);
+    CHECK(s.bytes("b.md") == "two");
+    CHECK_FALSE(noteapp::app::move_note(s.store, path("a.md"), "../x", "a", "md"));
+    CHECK(noteapp::app::move_note(s.store, path("a.md"), "work", "c", "txt") == path("work/c.txt"));
+    CHECK(s.bytes("work/c.txt") == "one");
+    CHECK_FALSE(s.exists("a.md"));
 }
 
 TEST_CASE("document: a draft is created with its exact bytes and becomes the note") {

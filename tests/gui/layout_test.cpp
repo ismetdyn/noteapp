@@ -767,7 +767,7 @@ TEST_CASE("settings labels come from the catalog") {
     LayoutScene scene(1000, 650, 1.0F);
     gui_test::RenderedText rendered;
     scene.show_tab(Tab::Settings);
-    CHECK(rendered.contains("Senkron ve geçiş klasörü"));
+    CHECK(rendered.contains("Senkron klasörü"));
     CHECK_FALSE(rendered.contains("gui_setting"));
 }
 

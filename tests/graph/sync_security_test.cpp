@@ -343,7 +343,7 @@ TEST_CASE("forged_frames_in_the_local_log_are_set_aside_and_export_continues") {
         while (at < real.size()) {
             std::uint32_t size = 0;
             std::memcpy(&size, real.data() + at, sizeof size);
-            out.push_back(real.substr(at + kFrameEnvelopeBytes, size));
+            out.push_back(real.substr(at + kFrameEnvelopeBytes + kPartHeaderBytes, size - kPartHeaderBytes));
             at += kFrameEnvelopeBytes + size;
         }
         return out;
@@ -352,22 +352,22 @@ TEST_CASE("forged_frames_in_the_local_log_are_set_aside_and_export_continues") {
 
     SUBCASE("forged_last_frame") {
         forge_and_export(device,
-                         header + encode_log_frame(real_frames[0]) + encode_log_frame(real_frames[1]) +
-                             encode_log_frame(encode_frame(frame_of(3, {NodePut{kM}}))),
+                         header + test::whole_record(real_frames[0]) + test::whole_record(real_frames[1]) +
+                             test::whole_record(encode_frame(frame_of(3, {NodePut{kM}}))),
                          "device_forked");
     }
     SUBCASE("forged_middle_frame_with_a_real_last_frame") {
         forge_and_export(device,
-                         header + encode_log_frame(real_frames[0]) + encode_log_frame(forged_payload) +
-                             encode_log_frame(real_frames[2]),
+                         header + test::whole_record(real_frames[0]) + test::whole_record(forged_payload) +
+                             test::whole_record(real_frames[2]),
                          "device_forked");
     }
     SUBCASE("forged_frame_ahead_of_the_database") {
-        forge_and_export(device, real + encode_log_frame(encode_frame(frame_of(4, {NodePut{kM}}))),
+        forge_and_export(device, real + test::whole_record(encode_frame(frame_of(4, {NodePut{kM}}))),
                          "log_ahead_of_store");
     }
     SUBCASE("frames_of_another_device") {
-        forge_and_export(device, encode_log_header(kD2) + encode_log_frame(forged_payload), "foreign_device");
+        forge_and_export(device, encode_log_header(kD2) + test::whole_record(forged_payload), "foreign_device");
     }
     // Yerel yazma ve sonraki export sürer.
     device.commit([](WriteTxn& txn) { GRAPH_OK(txn.add_label(kN, "After")); });

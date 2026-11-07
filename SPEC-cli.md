@@ -14,13 +14,13 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `… \| note [bayraklar]` | stdin TTY değilse ve metin argümanı yoksa içerik stdin'den |
 | `note [bayraklar]` | Metin de stdin de yoksa editör açılır (aşağıda) |
 | `note -e [bayraklar] [METİN…]` | Editörü her durumda açar; METİN varsa ön içerik olur (ör. başlık yazıp devam etmek) |
-| `note ls [SORGU] [-f KLASÖR] [-n N] [-l \| -0 \| --json]` | Notları listeler: sorgu varsa fuzzy sıra, yoksa mtime azalan. Sorgu SPEC-search argümanlarını alır (`tag:proje`, `view:iş`, `rel:uses`, `linked:b`, `type:md`, `sort:-size`…); geçersiz argüman değeri, bilinmeyen ya da yazan görünüm çıkış 2 |
-| `note find TERİM… [-n N] [-l] [--json]` | İçerik araması; `yol:satır: kesit` (renk açıkken vurgulu). Terminalde, `-l` ile ya da `--json`'da ardından içerikte bulunmayan ama etiketi, ilişki adı ya da bağlı notunun adı eşleşen notlar nedenleriyle (SPEC-search "İlişki araması"); düz boru çıktısı eskisi gibi yalnız içerik |
+| `note ls [SORGU] [-f KLASÖR] [-n N] [-l \| -0 \| --json]` | Notları listeler: sorgu varsa fuzzy sıra, yoksa mtime azalan. Sorgu SPEC-search argümanlarını alır (`tag:proje`, `view:iş`, `rel:uses`, `linked:b`, `type:md`, `sort:-size`…); geçersiz argüman değeri, bilinmeyen ya da yazan görünüm çıkış 2. Arama TUI/GUI'nin listesiyle aynı hattır (`app::Listing`): terminalde, `-l` ile ya da `--json`'da ad eşleşmelerinin altında ilişkiyle bulunan notlar nedenleriyle (`find` gibi); düz boru ve `-0` çıktısı (`-l -0` dahil) yalnız ad eşleşmelerinin yolları. Bozuk argüman iletisi yerini söyler (`Column 11: …`, değerin sütunu, TUI gibi) |
+| `note find TERİM… [-n N] [-l] [--json]` | İçerik araması; `yol:satır: kesit` (renk açıkken vurgulu). Terminalde, `-l` ile ya da `--json`'da ardından içerikte bulunmayan ama etiketi, ilişki adı ya da bağlı notunun adı eşleşen notlar nedenleriyle (SPEC-search "İlişki araması"); düz boru çıktısı eskisi gibi yalnız içerik. Sorgu `ls` gibi SPEC-search argümanlarını alır (`tag:`, `type:`, `prop:`…); aranacak metin yoksa (`find tag:x`) çıkış 2; bilinmeyen anahtar (`a:b`, `http://x`) düz metindir |
 | `note show SORGU` | En iyi eşleşmenin içeriğini yazdırır |
 | `note edit SORGU` | En iyi eşleşmeyi editörde açar |
-| `note rm YOL [-y] [-q]` | **Yalnız tam yol**; onay ister (TTY değilse `-y`/`--yes` zorunlu) |
+| `note rm YOL [-y] [-q]` | **Yalnız tam yol**; onay ister (TTY değilse `-y`/`--yes` zorunlu). Soruda okunan revizyon silmeyle aynı depo işleminde denetlenir: onay beklerken senkron notu değiştirdiyse not kalır, `Silinmedi: … onaydan sonra değişti` (çıkış 1) |
 | `note mv KAYNAK HEDEF` | Taşı/yeniden adlandır; uzantı değişimi = tip değişimi; klasörler oluşur |
-| `note export --pdf YOL [-o ÇIKTI]` | PDF dışa aktar (aşağıda) |
+| `note export --pdf YOL [-o ÇIKTI] [--force]` | PDF dışa aktar (aşağıda) |
 | `note sync` · `sync status` · `sync on\|off` · `sync init REMOTE [--replace]` | Senkron yönetimi (aşağıda) |
 | `note sync login [HOST]` · `sync logout [HOST]` | Token'ı ekosuz stdin'den okuyup kasaya yazar / siler |
 | `note config path\|list\|get ANAHTAR\|set ANAHTAR DEĞER` | Config yönetimi; `limits.*` dahil (`0` = sınırsız, SPEC-core "Sınırlar") |
@@ -28,7 +28,6 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `note tags [--json]` | Canlı notların `#etiket`leri ve not sayıları, `Tag.name` sırasıyla: satır `gösterim<TAB>sayı`; `--json` `[{"name","display","count"}]` (SPEC-graph "Etiketler") |
 | `note view save AD CYPHER [--force]` · `view ls [--json]` · `view run AD [--json]` · `view rm AD` · `view show AD` | Kayıtlı Cypher görünümleri (T81, SPEC-graph "Görünümler"). `save` sorguyu çalıştırmadan denetler: yazan, `$parametre`li ya da bozuk sorgu çıkış 2, hiçbir şey kaydedilmez; var olan ad (`Work` = `work`) `--force` olmadan çıkış 1. `ls` satırı `ad<TAB>sorgu` (sorgunun satır sonu `\n`), `--json` `[{"name","query","created_at","updated_at"}]` (zaman unix ms). `run` çıktısı `note query`yle (`--json` dahil) bayt bayt aynıdır, her zaman salt okunur ve görünüm profiliyle (`limits.view.*`, SPEC-graph "Görünümler") çalışır; yazan görünüm (senkronla ya da `query --write` ile gelmiş) çıkış 2 ile reddedilir, graf değişmez. `show` sorguyu yazar. Bilinmeyen ad çıkış 1. Ad ve sorgu senkronla gelebilir: terminal temizliğinden geçer. `save` ve `rm` notlar gibi arka plan senkronunu başlatır |
 | `note relation add A B [--name AD] [--directed]` · `relation rm A B [--name AD \| --id KİMLİK]` · `relation rename A B ESKİ YENİ` · `relation ls [NOT] [--json]` | Adlı ilişkiler (F1, SPEC-graph "Adlı ilişkiler"). A ve B tam yoldur (`rm` gibi, fuzzy yok). `add` varsayılan adsız ve yönsüzdür; `--name` ad verir (kırpılır), `--directed` A→B yönlüdür; çiftte aynı ad anahtarı (yön ne olursa olsun) çıkış 1, geçersiz ad ya da kendine ilişki çıkış 2, olmayan not çıkış 1. `rm` çiftin tek ilişkisini, ya da `--name` (boş = adsız, `tag_key` ile) veya `--id` ile seçileni kaldırır; çiftte birden çok ilişki varken seçicisiz çağrı çıkış 1 ve ipucu; ikisi birden çıkış 2. `rename` ESKİ adlı ilişkiyi (boş = adsız) YENİ ada çevirir (boş = adsız), kimlik ve yön kalır. `ls` adları sayılarıyla verir (`gösterim<TAB>sayı`, `relation_names` sırası; `--json` `[{"name","display","count","directed"}]`; `count` adı taşıyan ilişki sayısı, `directed` bunların kaçının yönlü olduğu, bir sayı, bool değil); `ls NOT` notun ilişkilerini `yol<TAB>ad<TAB>yön<TAB>kimlik` (yön `undirected`/`outgoing`/`incoming`, kimlik 32 küçük hex; `--json` `[{"path","name","direction","id"}]`). İletiler TUI/GUI ile aynıdır (`app::map_relations`). Ad senkronla gelebilir: metin çıktısı terminal temizliğinden geçer, JSON kaçışlıdır. `add`, `rm`, `rename` arka plan senkronunu başlatır |
-| `note graph migrate [--skip-failed]` | Eski düz dosyaları içe aktar ([SPEC-graph.md](SPEC-graph.md)) |
 | `note import YOL… [--folder KLASÖR] [--type TİP] [--name AD] [--overwrite] [--json] [--no-sync]` | Dosya sisteminden not olarak içe alma; kural `app::import_paths`tedir, TUI ve GUI de onu çağırır (aşağıda "Dosya içe alma") |
 | `note graph export --format jsonl [-o DOSYA]`, `note graph import [--overwrite] DOSYA` | Tüm graph'ı JSON satırları olarak çıkar ya da yükle; satırın JSON kuralları ve sınırları SPEC-graph "Sınırlar" (bilinmeyen alanda `null` kabul). İçe aktarma satır aralarında işlemlere bölünür; bir satır tek işlemdir (ya hepsi ya hiç): çerçeveden (`limits.graph.frame_ops`, `frame_bytes`) büyük satır reddedilmez; yineleme işlem yazmaz |
 | `note export --all DİZİN` | Tüm notları bayt bayt düz dosya olarak çıkar |
@@ -129,6 +128,7 @@ olarak komuttur; kalan argümanlar o komutun ayrıştırıcısına aynen gider (
   satırları) bastırır; hatalar, sorun satırları ve `--json` aynen.
 - `note ls --json`: `[{"path","type","size","updated_at"}]` (zaman unix ms; `ls` sırası). `-l/--long`:
   `GÜNCELLEME  BOYUT  TÜR  YOL` (yerel `YYYY-MM-DD HH:MM`, boyut sağa, tür sola yaslı; başlık yok, TTY ve boru aynı).
+  İlişkiyle bulunan satır `--json`'da `find --json`'un nedeni alanlarını da taşır (`reason`, `label`, `other`, `direction`/`hops`); `-l` ile satırın sonunda neden (boruda `<TAB>NEDEN`, terminalde iki boşluk).
   `-0/--print0`: kayıt ayırıcı NUL. `--limit/-n N`: en çok N satır (pozitif tam sayı, değilse çıkış 2; varsayılan
   sınırsız). `--json` `-l`/`-0`'dan önce gelir.
 - `note find --json`: `[{"path","line","snippet","ranges":[[başlangıç,bitiş]…],"reason":"content"}]` (kesitte bayt
@@ -137,9 +137,10 @@ olarak komuttur; kalan argümanlar o komutun ayrıştırıcısına aynen gider (
   (`other` adı eşleşen komşu, `hops`, `label` tek adımda kenarın adı, yoksa `""`); eşleşme yoksa `[]` ve çıkış 1.
 - `note find` düz çıktısı: içerik satırları aynı. İlişki satırları yalnız terminalde (`YOL  NEDEN`), `-l/--long` ile
   (boruda `YOL<TAB>NEDEN`; neden tek satırdır, satır sonu ve sekme boşluk olur) ya da `--json`'da yazılır: düz boru çıktısı
-  ve çıkış kodu eskisi gibi içeriğe bağlıdır. `--limit N` not sayısıdır, önce içerik eşleşmeleri.
-- Varsayılan çıktılar (`ls`, `find`, `tags`, `query`, `view`, `config`, `show`) boruda değişmez; `find` terminalde ve `-l` ile
-  ilişki satırı ekler, `find --json` her kayda `reason` ekler.
+  ve çıkış kodu eskisi gibi içeriğe bağlıdır. `--limit N` süzgeçten sonraki not sayısıdır: önce içerik eşleşmeleri, kalan yer ilişki satırlarına
+  (ilişki satırları da sayılır). Terminalde, `-l` ve `--json`'da yalnız ilişkiyle bulunan sonuç da çıkış 0'dır.
+- Varsayılan çıktılar (`ls`, `find`, `tags`, `query`, `view`, `config`, `show`) boruda değişmez; `find` ve `ls` terminalde ve `-l` ile
+  ilişki satırı ekler, `find --json` her kayda `reason` ekler, `ls --json` ilişki satırına.
 
 ## Ortam değişkenleri
 | Değişken | Etki |
@@ -188,6 +189,8 @@ PDF yalnız bu baytlardan üretilir, dosya yeniden açılmaz. Okuma/yol hatasın
 Binary (ikili) not reddedilir, çıkış 1. `pdf::export_pdf` hatasında çıkış kodu hata türünden gelir (ör. yazılamayan
 çıktı: 3, yarım PDF bırakılmaz). Başarıda `cli.exported` satırı stdout'a yazılır.
 Varsayılan çıktı: geçerli dizinde `<ad>.pdf`; `-o` geçerli dizine göredir. `--pdf` zorunludur, yoksa kullanım hatası (2).
+Var olan çıktı (kırık bağ dahil) `--force` olmadan ezilmez: `cli.export_exists`, çıkış 1, hiçbir şey yazılmaz (TUI ve GUI
+aynı durumda sorar; kural `app::export_target_exists`).
 Kapsam: A4, 15 mm; Markdown (`.md`, `.markdown`) için başlık, kalın/italik, liste, kod, alıntı, bağlantı metni, GFM tablo; diğer
 tipler düz metin (eş aralıklı). Yalnız soldan sağa yazı: Arapça/İbranice ve karmaşık shaping yok, Türkçe tam desteklenir.
 Gömülü DejaVu'da olmayan glifler (CJK vb.) için PDF çıktısı doğrulanmadı; BMP dışı kod noktaları (emoji) `U+FFFD` olur; HTML varlığıyla yazılan BMP dışı karakter (`&#x1F600;`, NY-P) PDF'te boşluk olur (libharu yalnız BMP glifi yazar; önizlemeler onu gösterir). Görseller alt
@@ -200,8 +203,8 @@ metne (yoksa `pdf.image_placeholder`) iner; hiçbir görsel/bağlantı hedefine 
 - **Dosya:** baytlar aynen (BOM, CRLF, ikili; ikili not salt okunurdur, `note show` yazdırmaz). Ad dosya adından
   (`core::split_typed_name`: `a.tar.gz` -> `a.tar` + `gz`); tip uzantıdan, `--type` onun yerine geçer, uzantı yoksa içerik
   tespiti (yeni not gibi). `--name AD` yalnız tek YOL'la: dosyada not adıdır (yazılan uzantı tipi verir), klasörde hedefteki
-  klasörün adı. `created_at` dosyanın doğum zamanı (yoksa ya da mtime'dan yeniyse mtime), `updated_at` mtime: `note graph
-  migrate` kuralı (`core::file_created_time`).
+  klasörün adı. `created_at` dosyanın doğum zamanı (yoksa ya da mtime'dan yeniyse mtime), `updated_at` mtime
+  (`core::file_created_time`).
 - **Klasör:** kendi adıyla `--folder` altına, alt klasörleri ve boş klasörleriyle; hedefte aynı ad varsa birleşir.
 - **Ad doluysa** deponun `-2`, `-3`… adı (tavan yok); `--overwrite` bunun yerine o yoldaki notun baytlarını yazar. Asla
   sessiz ezme yok.
@@ -229,13 +232,16 @@ metne (yoksa `pdf.image_placeholder`) iner; hiçbir görsel/bağlantı hedefine 
 (`core::run_user_query`, SPEC-graph "Sorgu çubuğu"; F3 incelemesi, lead kararı): not gövdesi, yolu ve üst verisi,
 `[[bağlantı]]`, `#etiket`, klasör ve görünüm düğümleri/kenarları ile `RELATED_TO` kurmak reddedilir (çıkış 1, konumlu
 ileti; ilişki `note relation add` ile kurulur), kullanıcının kendi düğümleri, özellikleri ve var olan ilişkinin adı,
-yönü, silinmesi yazılır. Okuma değişmedi. Söz dizimi, desteklenmeyen öğe, eksik parametre, geçersiz
+yönü, silinmesi yazılır. Okuma da aynı çekirdekten geçer (salt okunur; TUI/GUI ile aynı). Söz dizimi, desteklenmeyen öğe, eksik parametre, geçersiz
 `--param`: 2. Çalışma anı hatası, korunan veri ve aşılan sınır: 1. Bozuk veya yeni sürüm dosya, G/Ç: 3. Dil: [SPEC-graph](SPEC-graph.md).
 Sınırlar kullanıcının profilidir: `limits.query.*` (satır, süre, bellek, metin, iç içelik…; `0` = sınırsız, SPEC-core
 "Sınırlar"). Görünüm (`note view run`, `view:`) bundan etkilenmez, `limits.view.*` ile çalışır. Graf `limits.graph.*`
 ile açılır (`note graph import`/`export` de).
 `--param k=v`: `null`, `true`, `false`, tam sayı, sonlu ondalık otomatik; `k="12"`, `inf`, `nan` ve aralık dışı sayı (`1e999`) metindir. Değer sorgu metnine girmez.
-Tablo her zaman terminal için temizlenir (hücrede `\n` ve `\t` görünür kaçış olur, `bytes` `<bytes:N>`). `--json`:
+Tablo her zaman terminal için temizlenir (hücrede `\n` ve `\t` görünür kaçış olur, `bytes` `<bytes:N>`). Hücreler
+haritanın sorgu tablosuyla aynıdır (`app::query_table`): not düğümü yolu, etiket `#ad`, başka düğüm `(:Etiket kimlik8)`,
+kenar uçlarıyla (`a.md -[LINKS_TO]-> b.md`), zaman UTC `YYYY-MM-DD HH:MM:SS.mmm`; kesilmez. Yazma adlandırılamazsa tablo
+yine basılır, hata stderr'e (çıkış 0: yazma commit edildi). `--json`:
 `{"columns":[…],"rows":[[…]]}`; denetim karakterleri `\uXXXX`, `bytes` `{"$bytes":"<base64>"}`, zaman
 `{"$timestamp":ms}`, düğüm ve kenar `{"$node":"<hex>"}`, `{"$edge":"<hex>"}`.
 
@@ -307,7 +313,7 @@ Windows Terminal'de renk ve ilerleme satırı (VT kipi), pager yokluğu.
   `note`, `folder`, `type` (config `types`), `tag`, `view`, `config-key` (`limits.*` dahil, `sync.token` yok), `query`
   (iki noktasız son sözcükte anahtar adları `search::query_key_names`, `tag:` `type:` `in:` `view:` sonrasında değerler;
   önceki sözcükler aynen kalır). Satır başına bir aday; denetim karakteri, satır sonu, bozuk UTF-8 taşıyan aday yazılmaz.
-  Salt okur: depo yoksa kurulmaz, eski notlar geçiş bekliyorsa açılmaz, türetilmiş dizin onarımı atlanır; açılamayan
+  Salt okur: depo yoksa kurulmaz, türetilmiş dizin onarımı atlanır; açılamayan
   depo boş çıktı ve çıkış 0. stderr'e hiçbir şey yazmaz. Bilinmeyen tür çıkış 2.
 - Dosya yolları (`import`, `-o`, `graph import`) kabuğun kendi tamamlamasıdır.
 - Kısa komut bayrakları ve `cat` ilk sözcükte önerilir (`note -<Tab>`: bayraklar ve hızlı ekleme seçenekleri); betik
@@ -372,3 +378,15 @@ Etkileşimli seçici (fzf benzeri seçim TUI'nin işi), `mkdir/rmdir` komutları
   - Çıkış: ayrılmış ya da geçersiz anahtar, geçersiz değer, bilinmeyen tür, bozuk kimlik, kullanım 2; olmayan not, ilişki ya da anahtar 1.
 - **ADDED** `note ls`/`find` sorgusunda `prop:anahtar` ve `prop:anahtar=değer` (SPEC-search).
 - **MODIFIED** Ayrılmış sözcükler: `prop`. Daha önce `note prop` metin olarak eklenirdi.
+
+## Değişiklik 2026-11-07 (SD9: tek çekirdek, CLI)
+- **MODIFIED** `note ls`: ad aramasında ilişkiyle bulunan notlar terminalde, `-l` ve `--json`'da nedenleriyle gelir; düz boru ve
+  `-0` çıktısı aynı. Neden: kullanıcı ilkesi "tek uygulama, üç arayüz" ve NY-S (aramada ilişkiler): CLI `ls` TUI/GUI'nin
+  `app::Listing` hattını kendisi yeniden yazıyordu ve ilişkiyi atlıyordu.
+- **MODIFIED** `note find`: aynı hat (`app::Listing`, içerik kipi); sorgu argümanları (`tag:`, `type:`, `prop:`…) süzer, bozuk değer
+  ve metinsiz sorgu çıkış 2. Daha önce argümanlar düz metin aranıyordu (yukarıdaki `find` `prop:` maddesi tutmuyordu).
+- **MODIFIED** `note query` okuma ve `note view run`: `core::run_user_query` / `core::run_saved_view` (TUI/GUI ile aynı); tablo
+  hücreleri `app::query_table`: not düğümü onaltılık kimlik yerine yolu, kenar uçlarıyla, zaman UTC metin (önce unix ms).
+  `--json`, çıkış kodları ve "depo yok" iletisi aynı.
+- **FIXED** (SD9 inceleme) `find -n N` süzgeçten sonra keser: önce kesildiğinde süzülen isabet yerini harcıyor, `find kelime type:txt -n 1`
+  .txt eşleşmesi varken boş dönüyordu. `ls -l -0` NUL akışına ilişki satırı yazmaz. Bozuk argüman iletisi sütunu söyler.

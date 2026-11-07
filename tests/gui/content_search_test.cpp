@@ -104,7 +104,7 @@ struct DroppedNoteFixture : ContentFixture {
             asked = request;
             return answer;
         };
-        state->deciders.confirm_delete = [](const std::string&) { return true; };
+        state->deciders.confirm_delete = [](const std::string&, const std::string&) { return true; };
         state->toggle_search_mode();
         state->set_query("istanbul");
         state->select_row(state->model().index_of(*noteapp::core::NotePath::parse("work/beta.md")));

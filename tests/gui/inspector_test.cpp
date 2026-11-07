@@ -48,7 +48,7 @@ struct Scene {
     }
     void open(const std::string& note = "a.md") {
         state = fixture.make_state();
-        state->deciders.confirm_delete = [this](const std::string& question) {
+        state->deciders.confirm_delete = [this](const std::string& question, const std::string&) {
             asked.push_back(question);
             return answer;
         };

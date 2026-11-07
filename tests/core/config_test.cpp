@@ -885,8 +885,6 @@ TEST_CASE("limits.tui and limits.lsp keep today's defaults, accept 0 as unlimite
     CHECK(tui.search_history.value == 200U);
     CHECK(tui.undo_bytes.value == 64U * 1024U * 1024U);
     CHECK(tui.save_suggestions.value == 5U);
-    CHECK(tui.stray_notice_files.value == 2000U);
-    CHECK(tui.stray_notice_bytes.value == 8U * 1024U * 1024U);
     CHECK(tui.paste_timeout.value == 1000U);  // ms; 0 = bitiş işaretini sonsuza dek bekler
     const LspLimits& lsp = defaults.limits.lsp;
     CHECK(lsp.note_bytes.value == 2U * 1024U * 1024U);
@@ -929,7 +927,6 @@ TEST_CASE("limits.tui and limits.lsp keep today's defaults, accept 0 as unlimite
     const auto listed = [&](std::string_view key) {
         return std::ranges::find(entries, key, &std::pair<std::string, std::string>::first) != entries.end();
     };
-    CHECK(listed("limits.tui.stray_notice_bytes"));
     CHECK(listed("limits.lsp.shutdown_timeout"));
 }
 

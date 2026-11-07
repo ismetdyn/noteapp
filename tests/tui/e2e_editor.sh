@@ -781,16 +781,6 @@ keys q
 wait_exit >/dev/null
 check "history is stored locally in tui-state.toml" grep -qF 'search_history = ["sort:size"' "$work/home/state/tui-state.toml"
 
-# 17. G6: eski düzen notları varken açılış nedenini söyler, liste boş kalsa da kullanıcı notların kaybolduğunu sanmaz.
-clear_notes
-rm -f "$work/home/data/migrated-notes-dirs"
-printf 'eski' >"$notes/eski.md"
-start_app "note graph migrate"
-check "old-layout notes: the status tells to migrate" screen_has "note graph migrate"
-keys q
-wait_exit >/dev/null
-rm -f "$notes/eski.md"
-
 # 18. T64: Türkçe; her genişlikte t, Space, o, V, s; satır işareti, çöp, F2, ayarlar, sayfalama. Gerçek ev dizini yok.
 clear_notes
 printf 'birinci metin\n' | put_note a.md
@@ -1468,17 +1458,9 @@ check "icons off shows no glyph" test "$(screen | grep -c "$(printf '\xf3\xb0\x8
 keys q
 wait_exit >/dev/null
 
-# 22. NOTEAPP_HOME: varsayılan notes_dir `home/notes`, depo `home/data`. Eski not yalnız notes_dir'de aranır.
+# 22. NOTEAPP_HOME: depo `home/data`, notes_dir'da değil.
 check "the store is under data_dir" test -s "$work/home/data/graph.db"
 check "no store in notes_dir" test ! -e "$notes/graph.db"
-printf 'language = "tr"\nicons = "off"\n' >"$work/home/config/config.toml"
-mkdir -p "$work/home/notes"
-rm -f "$work/home/data/migrated-notes-dirs"
-printf 'eski' >"$work/home/notes/eski-duz.md"
-start_app "note graph migrate"
-check "the default notes_dir sits under NOTEAPP_HOME" screen_has "note graph migrate"
-keys q
-wait_exit >/dev/null
 unset ready_text
 
 # 23. Fark çıktısı (T75): terminale yalnız değişen hücre yazılır. Uzun oturumdan sonra ekran, Ctrl+L ile baştan

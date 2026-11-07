@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -50,7 +51,10 @@ public:
     // Yalnız yeni veya (mtime, boyut) değişen notları yeniden okur; silinenleri, ikilileri ve büyükleri
     // düşürür.
     void refresh();
-    std::vector<ContentResult> search(std::string_view query, std::size_t limit) const;
+    // Eşleşen notlar sıralı; `accept` verilirse yalnız onun geçirdikleri sayılır (arama argümanları, liste).
+    // İlk `limit` tutulur, kesit yalnız onlar için üretilir: süzgeç sınırdan önce, kesit sınırdan sonra.
+    using Accept = std::function<bool(const core::NotePath&)>;
+    std::vector<ContentResult> search(std::string_view query, std::size_t limit, const Accept& accept = {}) const;
     // Tüm eşleşen notlar, sırasız: çağıran kendi sıralamasını yapar, kesiti yalnız gösterecekleri için ister.
     std::vector<ContentCount> count_matches(std::string_view query) const;
     // Notun en iyi satırı: en çok farklı terim, sonra en çok geçiş, sonra en erken satır. Eşleşme yoksa

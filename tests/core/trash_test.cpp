@@ -73,6 +73,33 @@ TEST_CASE("trash of a missing note or a folder is refused and changes nothing") 
     CHECK(trash_paths(store).empty());
 }
 
+// SD11b: onaydaki revizyon silme işleminin içinde denetlenir; arada değişen not (senkron) silinmez.
+TEST_CASE("remove and trash with an expected revision refuse a note that changed since") {
+    TempDir tmp;
+    NoteStore store(tmp.path());
+    put(store, "a.md", "old");
+    put(store, "b.md", "old");
+    const Revision shown_a = store.read(np("a.md"))->revision;
+    const Revision shown_b = store.read(np("b.md"))->revision;
+    REQUIRE(store.write(np("a.md"), "new", shown_a));
+    REQUIRE(store.write(np("b.md"), "new", shown_b));
+
+    const auto removed = store.remove(np("a.md"), shown_a);
+    REQUIRE_FALSE(removed);
+    CHECK(removed.error().code == Error::Code::ModifiedExternally);
+    CHECK(body(store, "a.md") == "new");
+    const auto trashed = store.trash(np("b.md"), shown_b);
+    REQUIRE_FALSE(trashed);
+    CHECK(trashed.error().code == Error::Code::ModifiedExternally);
+    CHECK(body(store, "b.md") == "new");
+    CHECK(trash_paths(store).empty());
+
+    // Güncel revizyonla ikisi de yürür.
+    CHECK(store.remove(np("a.md"), store.read(np("a.md"))->revision));
+    CHECK(store.trash(np("b.md"), store.read(np("b.md"))->revision));
+    CHECK(trash_paths(store) == Paths{"b.md"});
+}
+
 TEST_CASE("trash name collision uses a deterministic suffix and never overwrites") {
     TempDir tmp;
     NoteStore store(tmp.path());

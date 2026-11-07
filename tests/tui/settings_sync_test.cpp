@@ -227,7 +227,7 @@ TEST_CASE("typing a token masks it everywhere: row value, render, config file") 
     CHECK(has(screen, "Access token"));
     CHECK(s.changed());  // yazılmış token Esc'te sessizce atılmaz
     w.vault.tokens.clear();
-    REQUIRE(s.commit(c));
+    REQUIRE(s.submit(c));
     CHECK_FALSE(has(config_text(), "SECRET"));
 }
 
@@ -315,7 +315,7 @@ TEST_CASE("Enter on an empty token row just moves on") {
     CHECK(w.vault.calls.empty());
 }
 
-TEST_CASE("submit enables sync only when it turns on or the remote changes, and stores a typed token first") {
+TEST_CASE("submit enables sync when any sync field or notes_dir changes, and stores a typed token first") {
     World w;
     std::vector<std::string> log;
     const auto enabler = [&](const core::Config& next, bool replace) -> std::expected<void, core::Error> {
@@ -342,12 +342,29 @@ TEST_CASE("submit enables sync only when it turns on or the remote changes, and 
     log.clear();
     c.sync.enabled = true;
     {
-        auto s = w.form(c, enabler);  // zaten açık, remote aynı: enable yok
-        focus_key(s, "sync.branch");
+        auto s = w.form(c, enabler);  // zaten açık, senkron alanı değişmedi: enable yok
+        focus_key(s, "editor");
         type(s, "x");
         REQUIRE(s.submit(c));
         CHECK(log.empty());
     }
+    {
+        auto s = w.form(c, enabler);  // açıkken dal değişti: depo yeni ayarla kurulur (GUI ile tek kural)
+        focus_key(s, "sync.branch");
+        type(s, "x");
+        REQUIRE(s.submit(c));
+        REQUIRE(log.size() == 1);
+        CHECK(log[0] == "enable https://github.com/me/notes.git");
+    }
+    log.clear();
+    {
+        auto s = w.form(c, enabler);  // açıkken not dizini değişti: yeni dizinde depo kurulur
+        focus_key(s, "notes_dir");
+        type(s, "x");
+        REQUIRE(s.submit(c));
+        CHECK(log.size() == 1);
+    }
+    log.clear();
     {
         auto s = w.form(c, enabler);  // açıkken remote değişti: yeniden kurulum
         set_remote(s, "https://github.com/me/other.git");
@@ -395,6 +412,26 @@ TEST_CASE("an enable error stays inline on the form and nothing is saved") {
     CHECK_FALSE(fs::exists(w.notes / ".git"));
     CHECK(has(screen_text(s), s.error().substr(0, 20)));  // formda görünür
     CHECK(s.changed());                                   // form açık, değişiklikler duruyor
+}
+
+// Mevcut origin `.git/config`'ten gelir (güvenilmez): soru onu denetim karakterleri görünür işaretle çizer.
+TEST_CASE("the origin question draws the repository address without hidden controls") {
+    World w;
+    const auto enabler = [](const core::Config&, bool) -> std::expected<void, core::Error> {
+        return std::unexpected(core::Error{core::Error::Code::Io,
+                                           "sync.remote_mismatch",
+                                           {{"current", "https://old\xE2\x80\xAE.example.invalid/n.git"},
+                                            {"remote", "https://github.com/me/notes.git"}}});
+    };
+    auto c = w.config();
+    c.sync.remote = "https://github.com/me/notes.git";
+    auto s = w.form(c, enabler);
+    enable_toggle(s);
+    CHECK_FALSE(s.submit(c));
+    REQUIRE(s.replace_confirm() != nullptr);
+    const std::string screen = screen_text(s, 80, 24);
+    CHECK(has(screen, "example.invalid"));
+    CHECK_FALSE(has(screen, "\xE2\x80\xAE"));
 }
 
 TEST_CASE("an origin mismatch asks to replace it; declining changes nothing, accepting replaces origin") {
@@ -466,16 +503,16 @@ TEST_CASE("connection test: Enter on its slot asks to test; the worker enables a
     CHECK(outcome.has_value());
     s.finish_test(outcome);
     CHECK_FALSE(s.testing());
-    CHECK(s.test_result() == core::tr("tui.test_ok"));
+    CHECK(s.test_result() == core::tr("app.test_ok"));
     const std::string small = screen_text(s, 60, 15);
     CAPTURE(small);
     CHECK(has(small, core::tr("tui.settings_test")));
-    CHECK(has(screen_text(s, 80, 24), core::tr("tui.test_ok")));
+    CHECK(has(screen_text(s, 80, 24), core::tr("app.test_ok")));
     CHECK_FALSE(core::load_config().config.sync.enabled);  // test kaydetmez
 
     // Bekleyen test yokken gelen geç sonuç yok sayılır (form kapanıp yeniden açıldı).
     s.finish_test(std::unexpected(core::Error{core::Error::Code::Io, "sync.keychain_unavailable", {}}));
-    CHECK(s.test_result() == core::tr("tui.test_ok"));
+    CHECK(s.test_result() == core::tr("app.test_ok"));
 }
 
 // Sev-3 (T1+T2 review): test kasaya yazmazdı ama TUI yazıyordu; iptal edilen formda token kasada kalıyordu.
@@ -538,5 +575,5 @@ TEST_CASE("connection test: a failing enable is the result and no sync starts") 
     const std::string small = screen_text(s, 60, 15);
     CAPTURE(small);
     CHECK(has(small, core::tr("tui.settings_test")));
-    CHECK(has(small, core::tr("tui.settings_save")));
+    CHECK(has(small, core::tr("app.settings_save")));
 }

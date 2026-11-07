@@ -7,6 +7,7 @@
 #include "core/note_sync.hpp"
 #include "core/note_views.hpp"
 #include "graph/graph.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 
@@ -170,13 +171,13 @@ TEST_CASE("importing notes and folders beyond one transaction succeeds") {
     const TempDir dir;
     NoteStore store(dir.path());
     store.impl().txn_ops_limit = 64;  // not başına ~29 işlem: bir not sığar, beşi sığmaz
-    std::vector<ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     for (int i = 0; i < 5; ++i) {
         const std::string n = std::to_string(i);
-        notes.push_back(
-            ImportedNote{np("n" + n + ".md"), "#a" + n + " #b" + n + " #c" + n + " #d" + n + "\n"});
+        notes.push_back(noteapp::test::ImportedNote{np("n" + n + ".md"),
+                                                    "#a" + n + " #b" + n + " #c" + n + " #d" + n + "\n"});
     }
-    const auto outcome = store.import_notes(notes);
+    const auto outcome = noteapp::test::import_notes(store, notes);
     REQUIRE(outcome.has_value());
     CHECK(outcome->imported == 5);
     CHECK(store.list().size() == 5);
@@ -185,7 +186,7 @@ TEST_CASE("importing notes and folders beyond one transaction succeeds") {
     std::vector<std::string> folders;
     for (int i = 0; i < 40; ++i)
         folders.push_back("f" + std::to_string(100 + i));
-    REQUIRE(store.import_folders(folders).has_value());
+    REQUIRE(noteapp::test::import_folders(store, folders).has_value());
     CHECK(store.folders().size() == 40);
 }
 

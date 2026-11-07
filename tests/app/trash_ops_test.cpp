@@ -2,11 +2,13 @@
 // politikası (varsayılan Vazgeç) ve toplu işlem raporu burada; arayüz testleri yalnız bağlantıyı sınar.
 #include "app/listing.hpp"
 #include "app/trash_ops.hpp"
+#include "core/i18n.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 
 #include <algorithm>
 #include <doctest/doctest.h>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -168,7 +170,7 @@ TEST_CASE("permanent delete, purge and empty always ask and default to Cancel") 
     TrashOps ops;
     REQUIRE(ops.trash_note(s.store, path("b.md")));
 
-    CHECK(ops.remove(s.store, path("a.md"), Prompts{}) == false);
+    CHECK(ops.remove(s.store, s.listing(), path("a.md"), Prompts{}) == false);
     CHECK(ops.purge(s.store, path("b.md"), Prompts{}) == false);
     CHECK(ops.remove_folder(s.store, s.listing(), "work", Prompts{}) == false);
     CHECK(ops.empty_trash(s.store, Prompts{}) == false);
@@ -265,6 +267,91 @@ TEST_CASE("permanent folder delete removes only the shown notes; a note synced i
     }
 }
 
+// SD11b: çöpe atma da onaydaki (listedeki) revizyonla: onay açıkken değişen not yerinde kalır, klasör de.
+TEST_CASE("trashing a folder keeps a note that changed after the listing showed it") {
+    for (const bool batch : {false, true}) {
+        CAPTURE(batch);
+        Scene s;
+        s.put("work/a.md");
+        s.put("work/b.md");
+        s.listing();  // kullanıcı iki notu gördü
+        const auto shown = s.store.read(path("work/a.md"));
+        REQUIRE(shown);
+        REQUIRE(s.store.write(path("work/a.md"), "synced", shown->revision));  // senkron değiştirdi
+        s.answer = true;
+        TrashOps ops;
+        std::optional<noteapp::core::Error> failure;
+        if (batch) {
+            const auto report = ops.trash_items(s.store, s.shown(),
+                                                std::vector<TrashTarget>{{path("work"), true}}, s.prompts);
+            REQUIRE(report);
+            REQUIRE(report->lines.size() == 1);
+            failure = report->lines[0].error;
+        } else {
+            const auto trashed = ops.trash_folder(s.store, s.shown(), "work", s.prompts);
+            REQUIRE(trashed);
+            failure = trashed->failure;
+        }
+        REQUIRE(failure);
+        CHECK(failure->code == noteapp::core::Error::Code::ModifiedExternally);
+        CHECK(failure->message_key == "error.trash_changed_since_confirm");
+        CHECK(s.live("work/a.md"));  // değişen not çöpe gitmedi
+        CHECK(s.trashed("work/b.md"));
+        CHECK(s.folder("work"));
+    }
+}
+
+// SD11b review: revizyon sorudan önce alınır. Arayüzün soruda kendi kaydı (Prompts::written) onaylıdır, soru
+// açıkken senkronun değiştirdiği başka not çöpe gitmez.
+TEST_CASE("trashing a folder takes the UI's own save in the question but not a sync change meanwhile") {
+    Scene s;
+    s.put("work/a.md");
+    s.put("work/b.md");
+    s.listing();
+    std::optional<noteapp::core::Revision> own;
+    Prompts prompts{
+        .confirm =
+            [&](const Confirm&) {
+                const auto a = s.store.read(path("work/a.md"));
+                const auto b = s.store.read(path("work/b.md"));
+                REQUIRE(a);
+                REQUIRE(b);
+                own = *s.store.write(path("work/a.md"), "mine", a->revision);      // arayüzün kaydı
+                REQUIRE(s.store.write(path("work/b.md"), "synced", b->revision));  // senkron
+                s.listing();  // arayüz kayıttan sonra yeniden tarar
+                return true;
+            },
+        .written = [&](const NotePath& note) { return note == path("work/a.md") ? own : std::nullopt; }};
+    TrashOps ops;
+    const auto trashed = ops.trash_folder(s.store, s.shown(), "work", prompts);
+    REQUIRE(trashed);
+    CHECK(s.trashed("work/a.md"));
+    CHECK(s.live("work/b.md"));
+    REQUIRE(trashed->failure);
+    CHECK(trashed->failure->message_key == "error.trash_changed_since_confirm");
+    CHECK(s.folder("work"));
+}
+
+// SD11b review: kalıcı klasör silmede onaydan sonra değişen not kalır ve neden o söylenir (gösterilmeyen not
+// değil).
+TEST_CASE("permanent folder delete names a note changed after the confirmation as the reason it stays") {
+    Scene s;
+    s.put("work/a.md");
+    s.put("work/b.md");
+    s.listing();
+    const auto shown = s.store.read(path("work/a.md"));
+    REQUIRE(shown);
+    REQUIRE(s.store.write(path("work/a.md"), "synced", shown->revision));
+    s.answer = true;
+    TrashOps ops;
+    const auto removed = ops.remove_folder(s.store, s.shown(), "work", s.prompts);
+    REQUIRE_FALSE(removed);
+    CHECK(removed.error().message_key == "error.changed_since_confirm");
+    CHECK(s.live("work/a.md"));
+    CHECK_FALSE(s.live("work/b.md"));
+    CHECK(s.folder("work"));
+}
+
 // A3b: çöpte artık olmayan tek notluk adım yığını kilitlemez; eski adımlar geri alınabilir.
 TEST_CASE("undo drops a step whose note is gone from the trash and reaches the older step") {
     Scene s;
@@ -305,4 +392,16 @@ TEST_CASE("undo does not restore a different note that took the same trash path"
     CHECK(s.trashed("a.md"));  // başkasının notu çöpte kaldı
     CHECK_FALSE(s.live("a.md"));
     CHECK_FALSE(ops.can_undo());
+}
+
+// TUI ve GUI aynı onay metni ve başlığı: sayılar çoğullu, klasörde alt klasör sayısı.
+TEST_CASE("confirm_text: plural counts, subfolders and a title for folder and batch questions") {
+    noteapp::core::init_i18n("en");
+    const auto folder = noteapp::app::confirm_text({ConfirmKind::TrashFolder, "work", 0, 1, 2});
+    CHECK(folder.message.find("1 note ") != std::string::npos);
+    CHECK(folder.message.find("2 subfolders") != std::string::npos);
+    CHECK(folder.title == noteapp::core::tr("tui.folder_trash_title"));
+    const auto single = noteapp::app::confirm_text({ConfirmKind::Delete, "a.md"});
+    CHECK(single.message == noteapp::core::tr("tui.confirm_delete", {{"path", "a.md"}}));
+    CHECK(single.title.empty());  // arayüzün varsayılan başlığı
 }

@@ -1,4 +1,4 @@
-// libFuzzer: uzak günlük dosyasının okuyucusu (LogReader; v1 tam çerçeve, v2 parçalı grup). Girdi dosyanın
+// libFuzzer: uzak günlük dosyasının okuyucusu (LogReader; parçalı grup). Girdi dosyanın
 // tamamıdır. Değişmezler: süreç düşmez, birleştirilen çerçeve grup sınırını aşmaz, okuma dosyanın içinde
 // kalır, kabul edilen çerçeve yeniden kodlanınca aynı baytları verir.
 #include "graph/op.hpp"

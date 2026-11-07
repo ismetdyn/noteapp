@@ -1,3 +1,4 @@
+#include "app/export.hpp"
 #include "app/map_relations.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
@@ -117,14 +118,17 @@ void View::install_deciders() {
     };
     state_.deciders.close_unsaved = [this] { return ask_choice(make_close_box()); };
     state_.deciders.close_unsaved_settings = [this] { return ask_choice(make_close_settings_box()); };
-    state_.deciders.confirm_delete = [this](const std::string& message) {
-        return ask_choice(make_delete_box(message));
+    state_.deciders.confirm_delete = [this](const std::string& message, const std::string& title) {
+        return ask_choice(make_delete_box(message, title));
     };
     state_.deciders.folder_name = [this](const std::string& title, const std::string& initial) {
         return ask_folder_name(title, initial);
     };
     state_.deciders.link_target = [this](const std::string& title) {
         return ask_folder_name(title, {}, core::tr("gui.link_label"));
+    };
+    state_.deciders.view_name = [this](const std::string& title) {
+        return ask_folder_name(title, {}, core::tr("gui.view_name"), /*trim=*/false);
     };
     state_.deciders.relation = [this](const RelationRequest& request) { return ask_relation(request); };
     state_.deciders.palette = [this] { return ask_palette(); };
@@ -137,7 +141,7 @@ void View::install_deciders() {
         // Güvenli varsayılan: Enter ve Esc vazgeçer.
         return ask_choice(
             ChoiceBox<bool>{core::tr("gui.replace_origin_title"),
-                            message,
+                            tui::terminal_safe(message),  // mevcut origin `.git/config`'ten: güvenilmez
                             {{core::tr("gui.replace_origin"), true}, {core::tr("gui.cancel"), false}},
                             1,
                             1,
@@ -145,9 +149,9 @@ void View::install_deciders() {
     };
     state_.deciders.confirm_query = [this](const std::string& message) {
         // Güvenli varsayılan: Enter ve Esc vazgeçer; geri alma yok.
-        return ask_choice(ChoiceBox<bool>{core::tr("gui.query_confirm_title"),
+        return ask_choice(ChoiceBox<bool>{core::tr("app.query_confirm_title"),
                                           message,
-                                          {{core::tr("gui.query_apply"), true}, {core::tr("gui.cancel"), false}},
+                                          {{core::tr("app.query_apply"), true}, {core::tr("gui.cancel"), false}},
                                           1,
                                           1,
                                           0});
@@ -261,7 +265,7 @@ void View::run_modal(const std::string& title, const std::function<bool()>& body
 }
 
 std::optional<std::string> View::ask_folder_name(const std::string& title, const std::string& initial,
-                                                 const std::string& field_label) {
+                                                 const std::string& field_label, bool trim) {
     std::string name = initial;
     std::optional<std::string> result;
     bool first_frame = true;
@@ -284,7 +288,7 @@ std::optional<std::string> View::ask_folder_name(const std::string& title, const
         // Boş ad vazgeçmedir: hata gösterecek bir şey yok.
         const auto first = name.find_first_not_of(" \t");
         if (first != std::string::npos)
-            result = name.substr(first, name.find_last_not_of(" \t") - first + 1);
+            result = trim ? name.substr(first, name.find_last_not_of(" \t") - first + 1) : name;
         return true;
     });
     return result;
@@ -488,11 +492,9 @@ std::optional<std::string> View::ask_export_path(const std::string& suggested) {
     auto chosen = ask_path(core::tr("gui.export_dialog_title"), initial, PathKind::SaveFile);
     if (!chosen)
         return chosen;
-    // Elle yazılan yol da var olan dosyayı sormadan ezmesin (yerel diyalog kendisi de sorar). symlink_status:
-    // kırık bağ da var olan addır (TUI ile aynı kural).
-    std::error_code ignored;
-    if (!std::filesystem::exists(std::filesystem::symlink_status(
-            std::filesystem::path(std::u8string(chosen->begin(), chosen->end())), ignored)))
+    // Elle yazılan yol da var olan dosyayı sormadan ezmesin (yerel diyalog kendisi de sorar); kural TUI ve CLI
+    // ile ortak.
+    if (!app::export_target_exists(std::filesystem::path(std::u8string(chosen->begin(), chosen->end()))))
         return chosen;
     const bool replace =
         ask_choice(ChoiceBox<bool>{core::tr("gui.export_dialog_title"),
@@ -559,8 +561,8 @@ std::optional<SaveDetails> View::ask_save_details(const SaveDialogRequest& reque
         request.mode == SaveDialogRequest::Mode::Move ? "gui.move_dialog_title" : "gui.save_dialog_title");
     run_modal(title, [&]() -> bool {
         const float trailing_width =
-            std::max({text_width(core::tr("gui.field_name")), text_width(core::tr("gui.field_folder")),
-                      text_width(core::tr("gui.field_type"))});
+            std::max({text_width(core::tr("app.field_name")), text_width(core::tr("app.field_folder")),
+                      text_width(core::tr("app.field_type"))});
         ImGui::PushItemWidth(form_item_width(trailing_width, dialog_content_width()));
         bool submitted = false;
 
@@ -570,18 +572,18 @@ std::optional<SaveDetails> View::ask_save_details(const SaveDialogRequest& reque
         submitted |= ImGui::InputText("##name", &form.fields.name, ImGuiInputTextFlags_EnterReturnsTrue);
         remember_item_center("save_name");
         ImGui::SameLine();
-        ImGui::TextUnformatted(core::tr("gui.field_name").c_str());
+        ImGui::TextUnformatted(core::tr("app.field_name").c_str());
         ImGui::EndDisabled();
 
         if (first_frame && request.folder_only)
             ImGui::SetKeyboardFocusHere();
         const std::string root_hint = core::tr("gui.folder_root");
-        submitted |= combo_field("folder", core::tr("gui.field_folder"), form.fields.folder, request.folders,
+        submitted |= combo_field("folder", core::tr("app.field_folder"), form.fields.folder, request.folders,
                                  true, root_hint.c_str());
         remember_item_center("save_folder");
 
         ImGui::BeginDisabled(request.folder_only);
-        submitted |= combo_field("type", core::tr("gui.field_type"), form.fields.type, request.types, false);
+        submitted |= combo_field("type", core::tr("app.field_type"), form.fields.type, request.types, false);
         remember_item_center("save_type");
         ImGui::EndDisabled();
         ImGui::PopItemWidth();

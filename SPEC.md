@@ -213,7 +213,7 @@ private:
 ## 8. Ortak veri sözleşmeleri
 
 - **Not deposu:** `<veri dizini>/graph.db`. Veri dizini: `NOTEAPP_HOME/data`, `$XDG_DATA_HOME/noteapp` (`~/.local/share/noteapp`), macOS `~/Library/Application Support/noteapp`, Windows `%LOCALAPPDATA%\noteapp`. Durum ya da önbellek değildir: senkronsuz cihazda silinmesi notların kaybıdır.
-- **`notes_dir`** (varsayılan `~/notes`, Windows'ta `%USERPROFILE%\notes`): senkron deposu (`graph/<cihaz>.oplog`) ve geçiş kaynağı. Değiştirmek not listesini değiştirmez.
+- **`notes_dir`** (varsayılan `~/notes`, Windows'ta `%USERPROFILE%\notes`): senkron deposu (`graph/<cihaz>.oplog`). Değiştirmek not listesini değiştirmez.
   Nokta ile başlayan dosya/dizinler (`.git`, `.noteapp`, geçici dosyalar) not sayılmaz.
 - **Config:** `config.toml` — Windows `%APPDATA%\noteapp\`, Linux `$XDG_CONFIG_HOME/noteapp/` (`~/.config`),
   macOS `~/Library/Application Support/noteapp/`. `NOTEAPP_HOME` hepsini ezer. Şema: SPEC-core §Config.

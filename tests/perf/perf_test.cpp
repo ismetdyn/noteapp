@@ -29,6 +29,7 @@
 #include "gui/gui_state.hpp"
 #include "gui/note_list_model.hpp"
 #include "gui/view.hpp"
+#include "support/note_import.hpp"
 
 #include <imgui.h>
 #endif
@@ -96,9 +97,9 @@ TEST_CASE("quick add: note \"x\" writes the note within 200 ms (median of 7)") {
 // kadar duvar saatine uygulanır.
 TEST_CASE("TUI startup proxy: fresh process with 5000 notes on disk within 500 ms (median of 5)") {
     const test::Sandbox box;
-    std::vector<core::ImportedNote> seeded;
+    std::vector<noteapp::test::ImportedNote> seeded;
     for (int i = 0; i < kNotes; ++i)
-        seeded.push_back(core::ImportedNote{
+        seeded.push_back(noteapp::test::ImportedNote{
             core::NotePath::parse("folder" + std::to_string(i % 40) + "/note-" + std::to_string(i) + ".md")
                 .value(),
             "# note " + std::to_string(i) + "\n"});
@@ -259,14 +260,14 @@ TEST_CASE("content search: 5000 notes of ~5 KB, warm search within 100 ms") {
     }
     words[0] = "proje";
     words[1] = "bütçe";
-    std::vector<core::ImportedNote> seeded;
+    std::vector<noteapp::test::ImportedNote> seeded;
     for (int n = 0; n < kNotes; ++n) {
         std::string text;
         while (text.size() < 5000) {
             text += words[rng() % words.size()];
             text += (rng() % 12 == 0) ? '\n' : ' ';
         }
-        seeded.push_back(core::ImportedNote{
+        seeded.push_back(noteapp::test::ImportedNote{
             core::NotePath::parse("d" + std::to_string(n % 50) + "/n" + std::to_string(n) + ".md").value(),
             std::move(text)});
     }

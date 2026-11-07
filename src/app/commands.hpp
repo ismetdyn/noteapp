@@ -86,6 +86,8 @@ inline constexpr CommandSpec kCommandRegistry[] = {
     {"search.global", "command.search_global", kInList},
     {"search.tag", "command.search_tag", kInList},
     {"search.view", "command.search_view", kInList},
+    {"view.save", "command.view_save", kInList},  // harita sorgusunun okuması kayıtlı görünüm olur
+    {"view.remove", "command.view_remove", kInList},
     {"search.mode", "command.search_mode", kInList},
     {"find", "command.find", kInPreview},
     {"find.next", "command.find_next", kInPreview},
@@ -137,6 +139,20 @@ constexpr const CommandSpec* find_command(std::string_view id) {
 constexpr bool has_command(std::string_view id) {
     return std::ranges::find(kCommandRegistry, id, &CommandSpec::id) != std::end(kCommandRegistry);
 }
+
+// Komutun istediği durumun arayüzdeki karşılığı (seçim, bağlantı ve yank arayüzün modelindedir).
+struct CommandState {
+    bool note = false;         // seçili ya da gösterilen not var
+    bool row = false;          // işlenecek satır var (seçim ya da işaret)
+    bool links = false;        // bağlantı satırı var ve bölüm gizli değil
+    bool folder_view = false;  // klasör görünümü (TUI ağaç, GUI ağaç)
+    bool yank = false;         // yapıştırılacak öğe var
+    bool paste_folder = false;  // yapıştırma hedefi bir klasör (TUI klasör görünümü, GUI ağaç ya da Ayrıntılar)
+    bool sync = false;         // senkron açık
+};
+// Neden komut çalışamaz; metni arayüz seçer (iletide arayüzün tuş adları geçer).
+enum class CommandBlock { None, NoNote, NoRow, NoLinks, NotFolderView, NothingYanked, PasteNeedsFolder, SyncOff };
+CommandBlock command_block(CommandNeeds needs, const CommandState& state);
 
 // Paletin aday satırı: kimlik, etiket ve şu an çalışıp çalışamadığı (arayüz kararı).
 struct PaletteCandidate {

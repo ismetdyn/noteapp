@@ -5,8 +5,11 @@
 
 #include <algorithm>
 #include <doctest/doctest.h>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <optional>
+#include <regex>
 #include <set>
 #include <string>
 #include <toml++/toml.hpp>
@@ -120,9 +123,31 @@ TEST_CASE("every Error key and reason produced by core exists in the catalogs") 
                             "reason.link",
                             "reason.contains_link",
                             "reason.invalid_type",
-                            "reason.invalid_name",
-                            "reason.unreadable_folder"})
+                            "reason.invalid_name"})
         CHECK_MESSAGE(en.count(key) == 1, key);
+}
+
+// Koddaki sabit anahtar (`tr("sec.key")`, `tr("sec.key", {...})`) katalogda olmalı: eksik anahtar arayüzde
+// anahtarın kendisi olarak görünür. Birleştirilen anahtar (`tr("sec." + x)`) burada denetlenmez.
+TEST_CASE("every constant tr key in the sources exists in en and tr") {
+    const auto en = catalog_keys("i18n/en.toml");
+    const auto tr_keys = catalog_keys("i18n/tr.toml");
+    const std::regex call(R"re(\btr\("([a-z0-9_]+(\.[a-z0-9_]+)+)"\s*[,)])re");
+    std::size_t seen = 0;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(NOTEAPP_SOURCE_DIR)) {
+        const std::string ext = entry.path().extension().string();
+        if (!entry.is_regular_file() || (ext != ".cpp" && ext != ".hpp"))
+            continue;
+        std::ifstream in(entry.path(), std::ios::binary);
+        const std::string text{std::istreambuf_iterator<char>(in), {}};
+        for (std::sregex_iterator it(text.begin(), text.end(), call), end; it != end; ++it) {
+            const std::string key = (*it)[1].str();
+            ++seen;
+            CHECK_MESSAGE(en.contains(key), key << " missing in en (" << entry.path().filename().string() << ")");
+            CHECK_MESSAGE(tr_keys.contains(key), key << " missing in tr (" << entry.path().filename().string() << ")");
+        }
+    }
+    CHECK(seen > 100);  // tarama gerçekten kaynağı gördü
 }
 
 TEST_CASE("tr substitutes {name} placeholders and leaves unknown ones intact") {

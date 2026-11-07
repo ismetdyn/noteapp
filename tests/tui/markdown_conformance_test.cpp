@@ -30,10 +30,9 @@ using namespace noteapp;
 
 namespace {
 
-// İki arayüzün ortak sözdizimi (markdown_view.cpp, markdown_blocks.cpp); GUI ayrıca [[wiki]] bağlantısı ayrıştırır.
-constexpr unsigned kCommonFlags = MD_FLAG_TABLES | MD_FLAG_TASKLISTS | MD_FLAG_STRIKETHROUGH |
-                                  MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_NOHTML;
-constexpr unsigned kGuiFlags = kCommonFlags | MD_FLAG_WIKILINKS;
+// İki arayüzün ortak sözdizimi (markdown_view.cpp, markdown_blocks.cpp), [[wiki]] bağlantısı dahil.
+constexpr unsigned kPreviewFlags = MD_FLAG_TABLES | MD_FLAG_TASKLISTS | MD_FLAG_STRIKETHROUGH |
+                                   MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_NOHTML | MD_FLAG_WIKILINKS;
 constexpr int kTuiWidth = 1000;  // örnekler sarılmasın: fark yerleşimden değil biçimden gelsin
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -509,8 +508,10 @@ private:
 
 std::vector<std::string> gui_actual(std::string_view markdown) {
     std::vector<std::string> out;
+    std::string path;  // blok yolu farkla gelir: önceki yolun ilk nesting_kept kabı + nesting_opened
     for (const pdf::Block& block : pdf::parse_markdown(markdown, {.links = true})) {
-        const std::string& path = block.nesting;
+        path.resize(block.nesting_kept);
+        path += block.nesting_opened;
         const auto runs_of = [](const std::vector<pdf::Span>& spans) {
             Runs runs;
             for (const pdf::Span& span : spans) {
@@ -919,7 +920,7 @@ private:
             style.strike = true;
         else if (node.tag == "code")
             style.code = true;
-        else if (node.tag == "a")
+        else if (node.tag == "a" || node.tag == "x-wikilink")  // wiki: ayraçsız metin, adres yazılmaz
             style.link = true;
         inlines(node, style, runs);
         if (node.tag == "a") {
@@ -1022,10 +1023,11 @@ TEST_CASE("markdown conformance: GUI and TUI previews match md4c's HTML structur
     for (const Example& example : examples) {
         Tally& tally = tallies[example.category];
         ++tally.total;
-        const std::vector<std::string> gui_expected = GuiProjector().run(parse_html(reference_html(example.markdown, kGuiFlags)));
+        const std::vector<std::string> gui_expected =
+            GuiProjector().run(parse_html(reference_html(example.markdown, kPreviewFlags)));
         const std::vector<std::string> gui = gui_actual(example.markdown);
         const std::vector<TuiLine> tui_expected_lines =
-            TuiProjector().run(parse_html(reference_html(example.markdown, kCommonFlags)));
+            TuiProjector().run(parse_html(reference_html(example.markdown, kPreviewFlags)));
         const std::vector<std::string> tui_expected = normalized_lines(tui_expected_lines);
         const std::vector<std::string> tui = tui_compared(tui_actual(example.markdown), tui_expected_lines);
         const bool gui_differs = gui != gui_expected;

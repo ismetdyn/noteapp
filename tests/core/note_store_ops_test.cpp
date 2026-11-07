@@ -2,6 +2,7 @@
 #include "core/i18n.hpp"
 #include "core/note_store.hpp"
 #include "core/note_store_impl.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 
@@ -235,7 +236,8 @@ TEST_CASE("copy_folder copies the subtree, empty folders and exact bytes, in one
     NoteStore store(dir.path());
     noteapp::test::upsert_note(dir.path(), "work/a.md", std::string_view("A\r\n\0B", 5));
     noteapp::test::upsert_note(dir.path(), "work/sub/b.txt", "B");
-    REQUIRE(store.import_notes(std::vector{ImportedNote{NotePath::parse("work/Makefile").value(), "M"}}));
+    REQUIRE(noteapp::test::import_notes(
+        store, std::vector{noteapp::test::ImportedNote{NotePath::parse("work/Makefile").value(), "M"}}));
     REQUIRE(store.create_folder("work/empty"));
     REQUIRE(store.create_folder("dest"));
     REQUIRE(store.copy_folder("work", "dest/kopya"));
@@ -271,13 +273,13 @@ TEST_CASE("copy_folder splits a large copy across frames and copies every note o
     const noteapp::test::TempDir dir;
     NoteStore store(dir.path());
     constexpr int kNotes = 40;
-    std::vector<ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     const std::string big(2U * 1024U * 1024U, 'x');  // 80 MiB toplam: tek çerçeveye sığmaz
     for (int i = 0; i < kNotes; ++i)
-        notes.push_back(ImportedNote{NotePath::parse("work/n" + std::to_string(i) + ".md").value(),
-                                     big + std::to_string(i)});
-    for (const ImportedNote& note : notes)
-        REQUIRE(store.import_notes(std::span(&note, 1)));
+        notes.push_back(noteapp::test::ImportedNote{
+            NotePath::parse("work/n" + std::to_string(i) + ".md").value(), big + std::to_string(i)});
+    for (const noteapp::test::ImportedNote& note : notes)
+        REQUIRE(noteapp::test::import_notes(store, std::span(&note, 1)));
     REQUIRE(store.copy_folder("work", "copy"));
     CHECK(store.list().size() == 2 * kNotes);
     CHECK(noteapp::test::note_body(dir.path(), "copy/n39.md") == big + "39");
@@ -291,9 +293,9 @@ constexpr int kCopyNotes = 4;
 
 void seed_large_notes(NoteStore& store) {
     for (int i = 0; i < kCopyNotes; ++i) {
-        const ImportedNote note{np("work/n" + std::to_string(i) + ".md"),
-                                std::string(kCopyNoteBytes, 'x') + std::to_string(i)};
-        REQUIRE(store.import_notes(std::span(&note, 1)));
+        const noteapp::test::ImportedNote note{np("work/n" + std::to_string(i) + ".md"),
+                                               std::string(kCopyNoteBytes, 'x') + std::to_string(i)};
+        REQUIRE(noteapp::test::import_notes(store, std::span(&note, 1)));
     }
 }
 
@@ -317,9 +319,9 @@ TEST_CASE("copy_folder closes the frame before a note that would overflow it: 31
     NoteStore store(dir.path());
     const std::string first(31U * 1024U * 1024U, 'a');
     const std::string second(40U * 1024U * 1024U, 'b');
-    const std::vector<ImportedNote> notes{{np("work/a.md"), first}, {np("work/b.md"), second}};
-    for (const ImportedNote& note : notes)
-        REQUIRE(store.import_notes(std::span(&note, 1)));
+    const std::vector<noteapp::test::ImportedNote> notes{{np("work/a.md"), first}, {np("work/b.md"), second}};
+    for (const noteapp::test::ImportedNote& note : notes)
+        REQUIRE(noteapp::test::import_notes(store, std::span(&note, 1)));
     const auto copied = store.copy_folder("work", "copy");
     REQUIRE_MESSAGE(copied.has_value(), (copied ? std::string() : format_error(copied.error())));
     CHECK(noteapp::test::note_body(dir.path(), "copy/a.md") == first);

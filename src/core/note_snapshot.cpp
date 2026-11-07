@@ -1,6 +1,5 @@
 #include "core/file_stat.hpp"
 #include "core/log.hpp"
-#include "core/migration.hpp"
 #include "core/note_store_impl.hpp"
 #include "core/paths.hpp"
 
@@ -554,17 +553,6 @@ std::expected<std::shared_ptr<const Snapshot>, Error> NoteStore::Impl::refresh_i
     snapshot = std::make_shared<const Snapshot>(std::move(*built));
     snapshot_version = *version;
     return snapshot;
-}
-
-std::expected<void, Error> NoteStore::Impl::check_gate() {
-    if (gate_open || !legacy_notes_dir)
-        return {};
-    if (legacy_notes_pending(*legacy_notes_dir, directory))
-        return std::unexpected(Error{Error::Code::MigrationRequired,
-                                     "error.migration_required",
-                                     {{"path", path_utf8(*legacy_notes_dir)}}});
-    gate_open = true;
-    return {};
 }
 
 std::expected<void, Error> NoteStore::Impl::open_for_write() {

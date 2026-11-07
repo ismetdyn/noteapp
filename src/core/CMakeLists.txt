@@ -11,7 +11,7 @@ add_library(noteapp_core
     file_stat.cpp
     folder_tree.cpp
     graph_limits.cpp
-    migration.cpp
+    note_export.cpp
     note_links.cpp
     note_path.cpp
     note_props.cpp

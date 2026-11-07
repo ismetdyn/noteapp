@@ -184,7 +184,7 @@ TEST_CASE_FIXTURE(WindowFixture, "focus_search selects the existing query; setti
 TEST_CASE_FIXTURE(WindowFixture, "binary note shows the binary placeholder instead of its bytes") {
     add_note("blob.bin", std::string("ab\0cd", 5));
     auto state = make_state();
-    CHECK(state->buffer() == noteapp::core::tr("gui.binary_preview"));
+    CHECK(state->buffer() == noteapp::core::tr("app.binary_preview"));
 }
 
 TEST_CASE_FIXTURE(WindowFixture, "folder tree limits the list to the subtree") {
@@ -484,7 +484,7 @@ TEST_CASE_FIXTURE(WindowFixture, "Ctrl+M asks only for the folder, Del trashes, 
         return std::optional<SaveDetails>{};
     };
     int deletes = 0;
-    state->deciders.confirm_delete = [&](const std::string&) {
+    state->deciders.confirm_delete = [&](const std::string&, const std::string&) {
         ++deletes;
         return false;
     };
@@ -631,6 +631,27 @@ void idle_for(View& view, std::chrono::milliseconds duration) {
         view.idle_step(1);
 }
 
+// Fare olayı kuyruğa: imleç (x, y)'ye gelir.
+void move_mouse(float x, float y) {
+    int count = 0;
+    SDL_Window** windows = SDL_GetWindows(&count);
+    REQUIRE(count > 0);
+    const SDL_WindowID window = SDL_GetWindowID(windows[0]);
+    SDL_free(windows);
+    SDL_Event motion{};
+    motion.type = SDL_EVENT_MOUSE_MOTION;
+    motion.motion.windowID = window;
+    motion.motion.x = x;
+    motion.motion.y = y;
+    REQUIRE(SDL_PushEvent(&motion));
+}
+
+// Fare düğmenin ortasına gelir ve orada durur (sonraki olay yok).
+void rest_mouse_on(View& view, const char* button) {
+    const auto [x, y] = view.button_center(button);
+    move_mouse(x, y);
+}
+
 }  // namespace
 
 TEST_CASE_FIXTURE(WindowFixture, "a periodic rescan that finds no change draws no frames") {
@@ -706,7 +727,7 @@ std::size_t frames_in_idle_dialog(GuiState& state, View& view, std::chrono::mill
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
     });
-    CHECK_FALSE(state.deciders.confirm_delete("really?"));
+    CHECK_FALSE(state.deciders.confirm_delete("really?", {}));
     const std::size_t frames = view.frames() - before;
     closed = true;
     escape.join();
@@ -795,30 +816,81 @@ TEST_CASE_FIXTURE(WindowFixture,
     auto state = make_state();
     auto view = make_view(*state);
     settle(*view);
-    int count = 0;
-    SDL_Window** windows = SDL_GetWindows(&count);
-    REQUIRE(count > 0);
-    const SDL_WindowID window = SDL_GetWindowID(windows[0]);
-    SDL_free(windows);
-    const auto [x, y] = view->button_center("sort");
-    SDL_Event motion{};
-    motion.type = SDL_EVENT_MOUSE_MOTION;
-    motion.motion.windowID = window;
-    motion.motion.x = x;
-    motion.motion.y = y;
-    REQUIRE(SDL_PushEvent(&motion));
+    rest_mouse_on(*view, "sort");
     const gui_test::RenderedText rendered;
     const std::string tip = noteapp::core::tr("gui.sort_tip");
     const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    while (!rendered.contains(tip) && std::chrono::steady_clock::now() < until)
+    // RenderedText yetmez: ipucunun ilk (ölçüm) karesi gizlidir ama metni günlüğe düşer.
+    while (!(rendered.contains(tip) && view->tooltip_visible()) && std::chrono::steady_clock::now() < until)
         view->idle_step(1);
     CHECK(rendered.contains(tip));
-    for (int i = 0; i < 10; ++i)  // uyanmanın kalan kareleri (ipucu ilk karede ölçülür) tükensin
+    REQUIRE(view->tooltip_visible());
+    for (int i = 0; i < 10; ++i)  // olay ya da uyanmanın kalan kareleri tükensin
         view->idle_step(0);
     // İpucu açıldıktan sonra yine boşta kare yok.
     const auto frames = view->frames();
     idle_for(*view, std::chrono::milliseconds(800));
     CHECK(view->frames() == frames);
+}
+
+// Yük altında olay kareleri yavaşsa ImGui gecikmeyi (gerçek kareler arası süre) uyanmadan önce doldurur ve
+// ipucu o karelerde açılır; bekleyen uyanma sonra boşta kare çizmemeli. Yavaş kare uyku ile kurulur.
+// Gecikmeler sabittir; DelayNormal büyütülür: uyanmayı en uzun gecikmeye kuran eski hata, kare süresinden
+// bağımsız olarak sabitlenme karelerinden sonra, ölçüm aralığında uyanırdı.
+// Fare önce pencerenin dışındadır: konumu bilinmeyen fare düğmede "belirince" ImGui onu hareket saymaz, durma
+// süresi açılıştan beri birikir; ipucunun açıldığı kare o zaman kurulum karelerinin hızına bağlı olurdu.
+TEST_CASE_FIXTURE(WindowFixture, "a tooltip already shown by slow frames leaves no wake behind") {
+    add_note("alpha.md", "a");
+    auto state = make_state();
+    auto view = make_view(*state);
+    ImGuiStyle& style = ImGui::GetStyle();
+    constexpr float kTooltipDelaySeconds = 0.15F;  // SetItemTooltip: Stationary + DelayShort
+    constexpr float kLongHoverDelaySeconds = 1.0F;
+    style.HoverStationaryDelay = kTooltipDelaySeconds;
+    style.HoverDelayShort = kTooltipDelaySeconds;
+    style.HoverDelayNormal = kLongHoverDelaySeconds;
+    move_mouse(-1.0F, -1.0F);
+    settle(*view);
+    rest_mouse_on(*view, "sort");
+    const gui_test::RenderedText rendered;
+    const std::string tip = noteapp::core::tr("gui.sort_tip");
+    view->idle_step(1);  // olay karesi: fare düğmeye hareket etti, durma süresi sıfırlandı
+    std::this_thread::sleep_for(std::chrono::duration<float>(2.0F * kTooltipDelaySeconds));
+    view->idle_step(1);  // yavaş kare: gecikme ve durma süresi doldu
+    view->idle_step(1);  // durma kilidi bu karenin başında açılır: ipucu ölçülür
+    view->idle_step(1);  // ipucu görünür
+    CHECK(rendered.contains(tip));
+    REQUIRE(view->tooltip_visible());
+    for (int i = 0; i < 10; ++i)  // olaydan sonraki sabitlenme kareleri tükensin
+        view->idle_step(0);
+    const auto frames = view->frames();
+    idle_for(*view, std::chrono::milliseconds(1500));  // uyanma (olay karesi + 1 sn + 50 ms) bunun içinde
+    CHECK(view->frames() == frames);
+}
+
+// Başka bir ipucu penceresi (editörün tamamlama listesi) açıkken de fare duran düğmenin ipucu, olay
+// gelmeden, gecikmesi dolunca açılır.
+TEST_CASE_FIXTURE(WindowFixture, "a tooltip appears on a resting mouse while the completion list is open") {
+    add_note("söz.md", "alpine alpaca\n");
+    auto state = make_state();
+    auto view = make_view(*state);
+    state->edit_selected();
+    state->request_focus(FocusRequest::Editor);
+    settle(*view);
+    REQUIRE(view->editor_active());
+    press(*view, ImGuiMod_Ctrl | ImGuiKey_End);
+    type_text(*view, "al");
+    press(*view, ImGuiMod_Ctrl | ImGuiKey_Space);
+    settle(*view);
+    REQUIRE(view->item_rects().contains("editor_completion"));
+    rest_mouse_on(*view, "sort");
+    const gui_test::RenderedText rendered;
+    const std::string tip = noteapp::core::tr("gui.sort_tip");
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!(rendered.contains(tip) && view->tooltip_visible()) && std::chrono::steady_clock::now() < until)
+        view->idle_step(1);
+    CHECK(rendered.contains(tip));
+    CHECK(view->tooltip_visible());
 }
 
 TEST_CASE_FIXTURE(WindowFixture, "closing during a modal is deferred until the modal is answered") {
@@ -841,15 +913,6 @@ TEST_CASE_FIXTURE(WindowFixture, "closing during a modal is deferred until the m
     press(*view, ImGuiMod_Ctrl | ImGuiKey_S);
     CHECK(view->close_requested());
     CHECK(state->buffer() == "mine");
-}
-
-TEST_CASE_FIXTURE(WindowFixture, "old-layout notes: the window says how to migrate and refuses to save") {
-    std::ofstream(full_path("eski.md"), std::ios::binary) << "eski";
-    auto state = make_state();
-    state->show_config_warnings({});
-    CHECK(state->status().find("note graph migrate") != std::string::npos);
-    CHECK(state->model().row_count() == 0);
-    CHECK(noteapp::test::slurp(full_path("eski.md")) == "eski");
 }
 
 // G5 (K2): üst Notlar/Ayarlar sekme satırı yok; Ayarlar araç çubuğundaki ⚙ ile ve Ctrl+, ile açılır, `←
@@ -878,42 +941,4 @@ TEST_CASE_FIXTURE(WindowFixture, "the gear button opens Settings and the back bu
     gui_test::click_button(*view, "settings_back");
     CHECK(state->tab() == Tab::Notes);
     CHECK(view->item_rects().contains("toolbar_new_note"));
-}
-
-// G14: geçiş iletisi durum çubuğunda kırpılmasın: liste üstünde şerit, komut seçilebilir ve Kopyala panoya
-// koyar.
-TEST_CASE_FIXTURE(WindowFixture,
-                  "old-layout notes: a banner above the list offers the migrate command to copy") {
-    std::ofstream(full_path("eski.md"), std::ios::binary) << "eski";
-    auto state = make_state();
-    state->show_config_warnings({});
-    std::string copied;
-    auto view = make_view(*state);
-    state->deciders.copy_text = [&](const std::string& text) {
-        copied = text;
-        return true;
-    };
-    settle(*view);
-    const auto& rects = view->item_rects();
-    REQUIRE(rects.contains("migrate_banner"));
-    REQUIRE(rects.contains("migrate_command"));
-    CHECK(rects.at("migrate_banner").max_y <= rects.at("note_list").min_y + 1.0F);  // listenin üstünde
-    gui_test::click_button(*view, "migrate_copy");
-    CHECK(copied == "note graph migrate");
-    CHECK(noteapp::test::slurp(full_path("eski.md")) == "eski");  // davranış aynı: dosyaya dokunulmaz
-}
-
-// İnceleme 2: pano yazılamazsa (SDL_SetClipboardText false) Kopyala bunu durum çubuğunda söyler.
-TEST_CASE_FIXTURE(WindowFixture,
-                  "old-layout notes: the banner says so when the clipboard cannot be written") {
-    std::ofstream(full_path("eski.md"), std::ios::binary) << "eski";
-    auto state = make_state();
-    state->show_config_warnings({});
-    auto view = make_view(*state);
-    state->deciders.copy_text = [](const std::string&) { return false; };
-    settle(*view);
-    REQUIRE(view->item_rects().contains("migrate_copy"));
-    gui_test::click_button(*view, "migrate_copy");
-    CHECK(state->status() == noteapp::core::tr("gui.copy_failed"));
-    CHECK(state->status_is_error());
 }

@@ -3,6 +3,7 @@
 #include "gui/browser_rows.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/save_dialog.hpp"
+#include "support/note_import.hpp"
 #include "window_fixture.hpp"
 
 #include <chrono>
@@ -59,7 +60,7 @@ struct BrowserFixture : WindowFixture {
 
     void wire(GuiState& state) {
         state.deciders.folder_name = [this](const std::string&, const std::string&) { return folder_answer; };
-        state.deciders.confirm_delete = [](const std::string&) { return true; };
+        state.deciders.confirm_delete = [](const std::string&, const std::string&) { return true; };
     }
     bool dir_exists(const std::string& relative) const {
         return noteapp::test::folder_exists(store_dir(), relative);
@@ -211,11 +212,18 @@ TEST_CASE_FIXTURE(BrowserFixture, "a selected folder shows its summary instead o
     const auto summary = state->folder_summary();
     REQUIRE(summary.has_value());
     CHECK(summary->path == "work");
-    CHECK(summary->notes == 2);
-    CHECK(summary->folders == 1);
+    // SD11b: TUI'nin özetiyle aynı (app::folder_summary): sayılar, boyut, son güncelleme, en yeni notlar.
+    CHECK(summary->counts == "2 items · 2 notes · 1 folder");
+    REQUIRE(summary->recent.size() == 2);
+    CHECK(summary->recent[0].name == "a.md");  // en yeni (yaş 0) başta, klasöre göre ad
+    CHECK(summary->recent[1].name == "sub/b.md");
     const gui_test::RenderedText rendered;
     view->draw_frame();
-    CHECK(rendered.contains(tr("gui.folder_summary_counts", {{"notes", "2"}, {"folders", "1"}})));
+    CHECK(rendered.contains(summary->counts));
+    CHECK(rendered.contains(tr("tui.folder_total_size", {{"value", summary->size}})));
+    CHECK(rendered.contains(tr("tui.meta_updated", {{"value", summary->updated}})));
+    CHECK(rendered.contains(tr("tui.folder_recent")));
+    CHECK(rendered.contains("sub/b.md"));
 }
 
 TEST_CASE_FIXTURE(BrowserFixture,
@@ -635,12 +643,12 @@ TEST_CASE_FIXTURE(BrowserFixture,
 // kurulumu. Süre raporlanır (Debug/sanitizer yapısında eşik oynak olurdu); doğruluk satır sayısıyla.
 TEST_CASE_FIXTURE(BrowserFixture, "measure: browser rows for 5000 notes in one folder") {
     constexpr int kNotes = 5000;
-    std::vector<noteapp::core::ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     notes.reserve(kNotes);
     for (int i = 0; i < kNotes; ++i)
         notes.push_back(
             {*noteapp::core::NotePath::parse("work/Not-" + std::to_string(kNotes - i) + ".md"), "x\n"});
-    REQUIRE(noteapp::core::NoteStore(store_dir()).import_notes(notes).has_value());
+    REQUIRE(noteapp::test::import_notes(noteapp::core::NoteStore(store_dir()), notes).has_value());
     auto state = make_state();
     state->set_expanded("work", true);
     using Clock = std::chrono::steady_clock;

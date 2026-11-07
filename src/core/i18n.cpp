@@ -167,6 +167,10 @@ std::string tr(std::string_view key, const Args& args) {
     return result;
 }
 
+std::string count_text(std::string_view key, std::size_t count) {
+    return tr(std::string(key) + (count == 1 ? "_one" : ""), {{"count", std::to_string(count)}});
+}
+
 std::string format_error(const Error& error) {
     Args args = error.args;
     for (auto& [name, value] : args) {

@@ -63,25 +63,12 @@ ImU32 with_alpha(ImU32 color, float alpha) {
 void fit_camera(MapCamera& camera, const std::vector<LayoutPoint>& positions, ImVec2 size) {
     if (positions.empty())
         return;
-    LayoutPoint low = positions.front();
-    LayoutPoint high = positions.front();
-    for (const LayoutPoint p : positions) {
-        low = {std::min(low.x, p.x), std::min(low.y, p.y)};
-        high = {std::max(high.x, p.x), std::max(high.y, p.y)};
-    }
     // Düğüm derecesiyle iki katına dek büyür (G13): kenardaki büyük düğüm de tuvale sığsın, sınırlar o kadar
     // açılır.
     constexpr float kLargestNode = kMapNodeWorldRadius * kMapMaxRadiusShare;
-    low = {low.x - kLargestNode, low.y - kLargestNode};
-    high = {high.x + kLargestNode, high.y + kLargestNode};
-    const float margin = kMapFitMarginEms * ImGui::GetFontSize();
-    const float room_x = std::max(size.x - 2.0F * margin, 1.0F);
-    const float room_y = std::max(size.y - 2.0F * margin, 1.0F);
-    const float span_x = std::max(high.x - low.x, GraphLayout::kIdealEdge);
-    const float span_y = std::max(high.y - low.y, GraphLayout::kIdealEdge);
-    camera.zoom = std::clamp(std::min(room_x / span_x, room_y / span_y), kMapMinZoom, kMapMaxZoom);
-    camera.offset_x = size.x / 2.0F - (low.x + high.x) / 2.0F * camera.zoom;
-    camera.offset_y = size.y / 2.0F - (low.y + high.y) / 2.0F * camera.zoom;
+    static_cast<app::MapCamera&>(camera) =
+        app::MapCamera::fit(positions, size.x, size.y, kMapFitMarginEms * ImGui::GetFontSize(), kLargestNode,
+                            {kMapMinZoom, kMapMaxZoom});
 }
 
 // Kenarlar SDL çizgisiyle çizilir, ImGui üçgeniyle değil. ImGui'nin her dolgusu doku örnekler: SDL'nin
@@ -228,8 +215,8 @@ void View::draw_map() {
         const float font = ImGui::GetFontSize();
         float best = std::numeric_limits<float>::max();  // en yakın düğüm kazanır
         for (std::size_t i = 0; i < positions.size(); ++i) {
-            const float dx = origin.x + map_camera_.offset_x + positions[i].x * map_camera_.zoom - mouse.x;
-            const float dy = origin.y + map_camera_.offset_y + positions[i].y * map_camera_.zoom - mouse.y;
+            const float dx = origin.x + map_camera_.x + positions[i].x * map_camera_.zoom - mouse.x;
+            const float dy = origin.y + map_camera_.y + positions[i].y * map_camera_.zoom - mouse.y;
             const float reach = hit_radius(map.nodes[i].kind == MapNodeKind::Tag, map_cache_.sizes[i],
                                            map_camera_.zoom, font);
             const float distance = (dx * dx) + (dy * dy);
@@ -273,8 +260,8 @@ void View::drop_map_link(const NoteMap& map, std::size_t from_node, int hovered)
 void View::open_map_edge_menu(const NoteMap& map, ImVec2 origin) {
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     const MapCamera& camera = map_camera_;
-    const app::LayoutPoint at{(mouse.x - origin.x - camera.offset_x) / camera.zoom,
-                              (mouse.y - origin.y - camera.offset_y) / camera.zoom};
+    const app::LayoutPoint at{(mouse.x - origin.x - camera.x) / camera.zoom,
+                              (mouse.y - origin.y - camera.y) / camera.zoom};
     const float reach = kMapEdgeHitEms * ImGui::GetFontSize() / camera.zoom;
     const auto edge = app::map_edge_at(map, state_.map_layout().positions(), at, reach);
     if (!edge) {  // F2: boşlukta tuval menüsü (yeni not, sabitlemeler, yol)
@@ -684,19 +671,18 @@ void View::handle_map_input(const NoteMap& map, ImVec2 origin, ImVec2 size, int 
     } else if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         camera.auto_fit = false;
         if (map_pressed_) {
-            state_.map_layout().pin(*map_pressed_,
-                                    {(io.MousePos.x - origin.x - camera.offset_x) / camera.zoom,
-                                     (io.MousePos.y - origin.y - camera.offset_y) / camera.zoom});
+            state_.map_layout().pin(*map_pressed_, {(io.MousePos.x - origin.x - camera.x) / camera.zoom,
+                                                    (io.MousePos.y - origin.y - camera.y) / camera.zoom});
             map_dragged_ = true;
         } else {
-            camera.offset_x += io.MouseDelta.x;
-            camera.offset_y += io.MouseDelta.y;
+            camera.x += io.MouseDelta.x;
+            camera.y += io.MouseDelta.y;
         }
     }
     if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
         camera.auto_fit = false;
-        camera.offset_x += io.MouseDelta.x;
-        camera.offset_y += io.MouseDelta.y;
+        camera.x += io.MouseDelta.x;
+        camera.y += io.MouseDelta.y;
     }
     if (ImGui::IsItemDeactivated()) {
         if (map_link_from_) {
@@ -755,8 +741,8 @@ void View::handle_map_input(const NoteMap& map, ImVec2 origin, ImVec2 size, int 
     for (const auto& [key, shift] : arrows) {
         if (ImGui::IsKeyPressed(key)) {
             camera.auto_fit = false;
-            camera.offset_x += shift.x;
-            camera.offset_y += shift.y;
+            camera.x += shift.x;
+            camera.y += shift.y;
         }
     }
     if (zoom_steps != 0)
@@ -886,10 +872,11 @@ void View::draw_map_query() {
 
     const std::string run = core::tr("gui.map_query_run");
     const std::string table = core::tr("gui.map_query_table");
+    const std::string save = core::tr("gui.map_query_save");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(
-        std::max(ImGui::GetContentRegionAvail().x - button_width(run) - button_width(table) - 2.0F * spacing,
-                 kMapFilterEms * font));
+    ImGui::SetNextItemWidth(std::max(ImGui::GetContentRegionAvail().x - button_width(run) -
+                                         button_width(table) - button_width(save) - 3.0F * spacing,
+                                     kMapFilterEms * font));
     if (std::exchange(map_query_focus_, false))
         ImGui::SetKeyboardFocusHere();
     ImGui::PushID(static_cast<int>(state_.map_query_generation()));  // boşalan metin kutuya yeniden okunur
@@ -914,6 +901,12 @@ void View::draw_map_query() {
     ImGui::PopStyleColor();
     ImGui::EndDisabled();
     ImGui::SetItemTooltip("%s", core::tr("gui.map_query_table_tip").c_str());
+    ImGui::SameLine();
+    ImGui::BeginDisabled(state_.map_query().read_query().empty());  // görünüm yalnız okumanın sorgusudur
+    if (button("map_query_save", save, ButtonKind::Ghost))
+        queue([this] { state_.save_map_view(); });
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("%s", core::tr("gui.map_query_save_tip").c_str());
     if (const std::string& error = state_.map_query().error(); !error.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, colors.danger);
         ImGui::PushTextWrapPos(0.0F);
@@ -933,7 +926,7 @@ void View::draw_map_query_table() {
     ImGui::TextUnformatted(tui::terminal_safe(outcome.summary).c_str());
     const app::QueryTable& table = outcome.table;
     if (table.columns.empty()) {
-        ImGui::TextDisabled("%s", core::tr("gui.map_query_no_columns").c_str());
+        ImGui::TextDisabled("%s", core::tr("app.map_query_no_columns").c_str());
         return;
     }
     constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
@@ -998,20 +991,14 @@ void View::focus_map_node(const NoteMap& map, std::size_t node, ImVec2 size) {
     if (node >= positions.size() || node >= map.nodes.size())
         return;
     map_camera_.auto_fit = false;
-    map_camera_.offset_x = size.x / 2.0F - positions[node].x * map_camera_.zoom;
-    map_camera_.offset_y = size.y / 2.0F - positions[node].y * map_camera_.zoom;
+    map_camera_.x = size.x / 2.0F - positions[node].x * map_camera_.zoom;
+    map_camera_.y = size.y / 2.0F - positions[node].y * map_camera_.zoom;
 }
 
 // `anchor` altındaki yerleşim noktası yerinde kalır.
 void View::zoom_map(ImVec2 origin, ImVec2 anchor, float factor) {
-    MapCamera& camera = map_camera_;
-    const float zoom = std::clamp(camera.zoom * factor, kMapMinZoom, kMapMaxZoom);
-    const float world_x = (anchor.x - origin.x - camera.offset_x) / camera.zoom;
-    const float world_y = (anchor.y - origin.y - camera.offset_y) / camera.zoom;
-    camera.offset_x = anchor.x - origin.x - world_x * zoom;
-    camera.offset_y = anchor.y - origin.y - world_y * zoom;
-    camera.zoom = zoom;
-    camera.auto_fit = false;
+    map_camera_.zoom_at(anchor.x - origin.x, anchor.y - origin.y, factor, {kMapMinZoom, kMapMaxZoom});
+    map_camera_.auto_fit = false;
 }
 
 // Tuval dışındaki kenar ve düğüm çizilmez. Etiketler düğümlerden sonra: çizgilerin üstünde okunur. Ad
@@ -1029,8 +1016,8 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
     const MapCamera& camera = map_camera_;
     const float font = ImGui::GetFontSize();
     const auto screen = [&](std::size_t node) {
-        return ImVec2(origin.x + camera.offset_x + positions[node].x * camera.zoom,
-                      origin.y + camera.offset_y + positions[node].y * camera.zoom);
+        return ImVec2(origin.x + camera.x + positions[node].x * camera.zoom,
+                      origin.y + camera.y + positions[node].y * camera.zoom);
     };
     // Üzerine gelinen düğüm ve komşuları tam opak, ötekiler aramadaki eşleşmeyenler gibi soluk (G13).
     // Komşular yalnız üzerine gelinirken, kenar listesinden (doğrusal) bulunur.
@@ -1257,8 +1244,8 @@ void View::draw_map_graph(const NoteMap& map, ImVec2 origin, int hovered) {
 void View::draw_relation_tooltip(const NoteMap& map, ImVec2 origin) {
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     const MapCamera& camera = map_camera_;
-    const app::LayoutPoint at{(mouse.x - origin.x - camera.offset_x) / camera.zoom,
-                              (mouse.y - origin.y - camera.offset_y) / camera.zoom};
+    const app::LayoutPoint at{(mouse.x - origin.x - camera.x) / camera.zoom,
+                              (mouse.y - origin.y - camera.y) / camera.zoom};
     const float reach = kMapEdgeHitEms * ImGui::GetFontSize() / camera.zoom;
     const auto hit = app::map_edge_at(map, state_.map_layout().positions(), at, reach);
     if (!hit || map.edges[*hit].kind != MapEdgeKind::Related)

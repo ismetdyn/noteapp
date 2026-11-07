@@ -1,5 +1,6 @@
 noteapp_add_test(pdf markdown_blocks_test.cpp pdf_export_test.cpp)
-target_link_libraries(pdf_tests PRIVATE noteapp_core)
+# md4c: parse_md4c'nin exception sözleşmesi doğrudan sınanır (md4c_parse.hpp md4c.h'yi içerir).
+target_link_libraries(pdf_tests PRIVATE noteapp_core md4c)
 # Türkçe geri okuma ve yerleşim doğrulaması gerçek PDF okuyucuyla yapılır; Fedora imajı poppler-utils'i kurar.
 # Eksikse durulur: testleri sessizce derlememek yanlış yeşil verirdi.
 find_program(NOTEAPP_PDFTOTEXT pdftotext)

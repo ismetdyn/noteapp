@@ -4,6 +4,7 @@
 #include "gui/gui_state.hpp"
 #include "gui/settings_page.hpp"
 #include "sync/git_runtime.hpp"
+#include "sync/sync_service.hpp"
 #include "window_fixture.hpp"
 
 #include <SDL3/SDL.h>
@@ -332,7 +333,7 @@ TEST_CASE_FIXTURE(SettingsFixture,
     add_note("a.md", "# a\n");
     const fs::path remote = make_bare("remote.git");
     auto state = make_state_wired();
-    CHECK(state->sync_label() == tr("gui.sync_off"));
+    CHECK(state->sync_label() == tr("app.sync_off"));
 
     enable_form(state->settings(), remote);
     state->settings().save();
@@ -372,6 +373,18 @@ TEST_CASE_FIXTURE(SettingsFixture, "an origin mismatch asks before replacing and
     CHECK(get("sync.enabled") == "true");
     CHECK(get("sync.remote") == second.string());
     CHECK(page.field_error("sync.remote").empty());
+}
+
+// TUI ile tek yer: enable hatası (uyuşmazlık dışı) formun altbilgisindedir, remote alanının altında değil.
+TEST_CASE_FIXTURE(SettingsFixture, "an enable failure shows in the footer and saves nothing") {
+    auto state = make_state_wired();
+    SettingsPage& page = state->settings();
+    enable_form(page, home.path() / "does-not-exist.git");
+    page.save();
+    CHECK_FALSE(page.global_error().empty());
+    CHECK(page.field_error("sync.remote").empty());
+    CHECK(get("sync.enabled") == "false");
+    CHECK(page.has_changes());
 }
 
 // enable token'ı kasadan okur: yazılmış token enable'dan önce kasaya gider ve enable düşse de orada kalır (TUI
@@ -420,7 +433,7 @@ TEST_CASE_FIXTURE(SettingsFixture,
     page.set_field("sync.author_name", "Test Yazar");
     page.set_field("sync.author_email", "test@noteapp.invalid");
     click_button(*view, "test");
-    CHECK(wait_for(*state, [&] { return !page.test_result().empty(); }));
+    CHECK(wait_for(*state, [&] { return !page.testing(); }));
     CHECK(page.test_result().starts_with(kCheckMark));
     CHECK(fs::exists(config.notes_dir / ".git"));
 
@@ -479,6 +492,71 @@ TEST_CASE_FIXTURE(SettingsFixture, "a typed token is dropped when the remote mov
     CHECK(std::ranges::find(stored_tokens, std::string(kSecretToken)) == stored_tokens.end());
 }
 
+// TUI ile tek kural: kasa her yenilemede değil, Ayarlar açılınca ve host değişince sorulur; kayıt/silme
+// sonucu zaten bilinir.
+TEST_CASE_FIXTURE(SettingsFixture, "the keychain is asked when Settings opens and when the host changes") {
+    auto state = make_state_wired();
+    SettingsPage& page = state->settings();
+    int asked = 0;
+    const auto has = page.tokens.has;
+    page.tokens.has = [&asked, has](std::string_view host) {
+        ++asked;
+        return has(host);
+    };
+    page.set_field("sync.remote", "https://github.com/kisi/notlar.git");
+    CHECK(asked == 1);
+    page.set_field("sync.remote", "https://github.com/kisi/baska.git");  // aynı host
+    CHECK(asked == 1);
+    page.token = std::string(kSecretToken);
+    page.save_token();
+    CHECK(page.token_stored());
+    CHECK(asked == 1);
+    stored_hosts.clear();  // başka süreç (`note sync logout`) token'ı sildi
+    state->show_settings_tab();
+    CHECK(asked == 2);
+    CHECK_FALSE(page.token_stored());
+}
+
+// TUI ile tek metin: dosya adı ve sözdizimi hatasının yeri birlikte söylenir.
+TEST_CASE_FIXTURE(SettingsFixture, "a broken config refusal names the file and the syntax error") {
+    {
+        std::ofstream out(noteapp::core::config_file(), std::ios::binary | std::ios::trunc);
+        out << "editor = = bozuk\n";
+    }
+    auto state = make_state_wired();
+    SettingsPage& page = state->settings();
+    page.set_field("editor", "vim");
+    page.save();
+    CHECK(page.global_error().find(noteapp::core::config_file().filename().string()) != std::string::npos);
+    CHECK(page.global_error().find("at line ") != std::string::npos);
+}
+
+// TUI ile tek akış: bağlantı testi bozuk config'te başlamaz; başlayınca sürdüğü yazılır.
+TEST_CASE_FIXTURE(SettingsFixture,
+                  "the connection test refuses a broken config file and shows that it runs") {
+    add_note("a.md", "# a\n");
+    const fs::path remote = make_bare("remote.git");
+    auto state = make_state_wired();
+    SettingsPage& page = state->settings();
+    page.set_field("sync.remote", utf8(remote));
+    page.set_field("sync.author_name", "Test Yazar");
+    page.set_field("sync.author_email", "test@noteapp.invalid");
+    {
+        std::ofstream out(noteapp::core::config_file(), std::ios::binary | std::ios::trunc);
+        out << "editor = = bozuk\n";
+    }
+    page.test_connection();
+    CHECK_FALSE(page.testing());
+    CHECK_FALSE(page.global_error().empty());
+
+    REQUIRE(noteapp::core::save_config(config));
+    page.test_connection();
+    CHECK(page.testing());
+    CHECK(page.test_result() == tr("app.test_running"));
+    CHECK(wait_for(*state, [&] { return !page.testing(); }));
+    CHECK(page.test_result().starts_with(kCheckMark));
+}
+
 TEST_CASE_FIXTURE(SettingsFixture, "the status label shows off, running, last success and last error") {
     auto state = make_state_wired();
     noteapp::sync::SyncStatus status;
@@ -500,6 +578,46 @@ TEST_CASE_FIXTURE(SettingsFixture, "the status label shows off, running, last su
     state->show_sync_status(status, false);
     CHECK(state->sync_label().starts_with(kWarningSign));
     CHECK(state->sync_label().size() > 4);
+}
+
+TEST_CASE_FIXTURE(SettingsFixture,
+                  "with sync on the label opens on the last saved result, without a notice") {
+    config.sync.enabled = true;
+    noteapp::sync::SyncService(config).record_failure(
+        noteapp::core::Error{noteapp::core::Error::Code::Io, "sync.timeout", {}});
+    auto state = make_state();
+    // İlk senkronun ⟳'u işçiden gelir ve tick'te uygulanır: açılıştaki etiket kayıtlı durumdur.
+    CHECK(state->sync_label().starts_with(kWarningSign));
+    CHECK(state->notices().items().empty());
+}
+
+TEST_CASE_FIXTURE(SettingsFixture, "a sync error is notified once until the error changes or sync recovers") {
+    auto state = make_state_wired();
+    const auto errors = [&] {
+        std::size_t count = 0;
+        for (const auto& notice : state->notices().items())
+            if (notice.kind == noteapp::app::NoticeKind::Error)
+                count += notice.repeats;
+        return count;
+    };
+    const auto cycle = [&](const noteapp::sync::SyncStatus& result) {
+        state->show_sync_status({}, true);
+        state->show_sync_status(result, false);
+    };
+    noteapp::sync::SyncStatus failed;
+    failed.last_error = noteapp::core::Error{noteapp::core::Error::Code::Io, "sync.timeout", {}};
+    cycle(failed);
+    CHECK(errors() == 1);
+    cycle(failed);
+    CHECK(errors() == 1);
+    failed.last_error = noteapp::core::Error{noteapp::core::Error::Code::Io, "sync.not_initialized", {}};
+    cycle(failed);
+    CHECK(errors() == 2);
+    noteapp::sync::SyncStatus recovered;
+    recovered.last_success = std::chrono::system_clock::now();
+    cycle(recovered);
+    cycle(failed);
+    CHECK(errors() == 3);
 }
 
 TEST_CASE_FIXTURE(SettingsFixture, "F5 asks for a sync now and Ctrl+comma opens the settings tab") {
@@ -706,7 +824,7 @@ TEST_CASE_FIXTURE(SettingsFixture, "the token row states why it is locked and wh
         return rendered.contains(text);
     };
     const std::string stored = tr("gui.token_state", {{"state", tr("gui.token_stored")}});
-    const std::string none = tr("gui.token_state", {{"state", tr("gui.token_none")}});
+    const std::string none = tr("gui.token_state", {{"state", tr("app.token_none")}});
 
     page.set_field("sync.remote", "git@github.com:kisi/notlar.git");
     CHECK(drawn(tr("gui.token_https_only")));
@@ -1165,7 +1283,7 @@ TEST_CASE_FIXTURE(SettingsFixture,
 TEST_CASE_FIXTURE(SettingsFixture, "every write, move, delete and create notifies the sync") {
     add_note("work/a.md", "a", 10);
     auto state = make_state_wired();
-    state->deciders.confirm_delete = [](const std::string&) { return true; };
+    state->deciders.confirm_delete = [](const std::string&, const std::string&) { return true; };
     state->deciders.folder_name = [](const std::string&, const std::string&) {
         return std::optional<std::string>("yeni");
     };

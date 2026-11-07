@@ -57,6 +57,9 @@ inline constexpr GuiCommand kGuiCommands[] = {
      [](GuiState& s) { s.open_picker(Picker::Tag); }},
     {"search.view", ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_R, CommandScope::Global,
      [](GuiState& s) { s.open_picker(Picker::View); }},
+    // Kayıtlı görünüm: kaydetme harita sorgu çubuğunun düğmesinde de (TUI haritada `K`); silme seçiciden.
+    {"view.save", 0, CommandScope::Widget, [](GuiState& s) { s.save_map_view(); }},
+    {"view.remove", 0, CommandScope::Widget, [](GuiState& s) { s.open_picker(Picker::RemoveView); }},
     // Sekmeler: T(ab), W(indow) kapat; tarayıcı ve editörlerdeki yerleşik eşleşme.
     {"tab.new", ImGuiMod_Ctrl | ImGuiKey_T, CommandScope::Global, [](GuiState& s) { s.new_tab(); }},
     // Satır menüsü ve palet; listede Ctrl+Enter aynı işi görür (view_browser).
@@ -113,7 +116,8 @@ inline constexpr GuiCommand kGuiCommands[] = {
     // Dış editör (TUI `E`): Shift+E; kopya (TUI `c`): GUI'nin alışılmış Ctrl+C'si (C sütun döngüsünde).
     {"external", ImGuiMod_Shift | ImGuiKey_E, CommandScope::List, [](GuiState& s) { s.open_external(); }},
     {"external", ImGuiMod_Shift | ImGuiKey_E, CommandScope::Preview, [](GuiState& s) { s.open_external(); }},
-    // İncelemede düzenlemeye geçiş (TUI REVIEW `e` `Enter`); kilitli editörde aynı tuşlar GuiState::editor_key'de.
+    // İncelemede düzenlemeye geçiş (TUI REVIEW `e` `Enter`); kilitli editörde aynı tuşlar
+    // GuiState::editor_key'de.
     {"edit", ImGuiKey_E, CommandScope::Preview, [](GuiState& s) { s.edit_selected(); }},
     {"edit", ImGuiKey_Enter, CommandScope::Preview, [](GuiState& s) { s.edit_selected(); }},
     {"edit", ImGuiKey_KeypadEnter, CommandScope::Preview, [](GuiState& s) { s.edit_selected(); }},

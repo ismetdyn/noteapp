@@ -4,6 +4,7 @@
 #include "core/note_store_impl.hpp"
 #include "core/note_sync.hpp"
 #include "graph/graph.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 #include "sync/git_runtime.hpp"
@@ -397,7 +398,7 @@ TEST_CASE("relinking resumes by note id, a concurrent delete between batches ski
              query_texts(dir.path(), "MATCH (n:Note)-[:TAGGED]->(:Tag) RETURN DISTINCT n.name"))
             REQUIRE(other.remove(np(name + ".md")).has_value());
     };
-    REQUIRE(store.relink_notes().has_value());
+    REQUIRE(noteapp::test::relink_notes(store).has_value());
     CHECK(batches >= 1);
     const auto metas = store.list_meta();
     REQUIRE_FALSE(metas.empty());

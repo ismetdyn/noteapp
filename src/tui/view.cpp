@@ -12,10 +12,12 @@
 #include "tui/modals.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/screen/string.hpp>
+#include <iterator>
 #include <memory>
 #include <ranges>
 #include <span>
@@ -369,30 +371,6 @@ ftxui::Element framed_pane(ftxui::Element content, const std::optional<PaneMode>
     return dbox({std::move(framed), vbox({hbox(std::move(label)), filler()})});
 }
 
-std::string sync_state_text(core::SyncState state) {
-    switch (state) {
-    case core::SyncState::Synced:
-        return core::tr("tui.sync_state_synced");
-    case core::SyncState::Modified:
-        return core::tr("tui.sync_state_modified");
-    case core::SyncState::New:
-        return core::tr("tui.sync_state_new");
-    case core::SyncState::ConflictCopy:
-        return core::tr("tui.sync_state_conflict");
-    case core::SyncState::SyncOff:
-        break;
-    }
-    return core::tr("tui.sync_off");
-}
-
-// Eski depodan gelen notta created ya da origin olmayabilir: "bilinmiyor" dürüst cevaptır, boş sütun değil.
-std::string created_text(const core::NoteMeta& meta) {
-    return meta.created_at ? local_time_text(*meta.created_at) : core::tr("tui.meta_unknown");
-}
-
-std::string origin_text(const core::NoteMeta& meta) {
-    return meta.origin ? terminal_safe(*meta.origin) : core::tr("tui.meta_unknown");
-}
 
 // Sütun tüm çizim için aynı: saat satır başına okunmaz.
 struct ListCells {
@@ -465,25 +443,6 @@ std::string fitted_size_and_date(const core::NoteMeta& meta, const ListCells& ce
     return ftxui::string_width(size) <= std::max(free, squeezed) ? size : std::string{};
 }
 
-std::string column_text(const core::NoteMeta& meta, ListColumn column) {
-    switch (column) {
-    case ListColumn::Size:
-        return human_size(meta.size);
-    case ListColumn::Updated:
-        return local_time_text(meta.updated_at);
-    case ListColumn::Created:
-        return created_text(meta);
-    case ListColumn::Sync:
-        return sync_state_text(meta.sync_status);
-    case ListColumn::Origin:
-        return origin_text(meta);
-    case ListColumn::SizeAndDate:
-    case ListColumn::None:
-        break;
-    }
-    return {};
-}
-
 // İçerik modunda adın ardındaki eşleşme sayısı; sütun hesabı da onu sayar, yoksa ad kısalırdı.
 std::string hit_count_text(const TuiState& state, const Row& row) {
     if (state.mode() == Mode::Name || row.hit_count == 0)
@@ -522,7 +481,8 @@ std::string fitted_column(const TuiState& state, const Row& row, const ListCells
         return {};
     if (column == ListColumn::SizeAndDate)
         return fitted_size_and_date(*meta, cells, free, squeezed);
-    std::string shown = column_text(*meta, column);
+    // Değer GUI Ayrıntılar'la aynı (app::column_text); terminal tam tarihi gösterir. Kaynak cihaz güvenilmez.
+    std::string shown = terminal_safe(app::column_text(*meta, column));
     return ftxui::string_width(shown) <= std::max(free, squeezed) ? shown : std::string{};
 }
 
@@ -569,27 +529,17 @@ ftxui::Element list_row(const TuiState& state, const Row& row, std::size_t index
     return right_pane_focused(state.focus()) ? line | bgcolor(Color::GrayDark) : line | inverted;
 }
 
-std::string folder_counts_text(const FolderNode& node) {
-    return core::tr("tui.folder_counts", {{"items", count_text("tui.count_items", node.item_count())},
-                                          {"notes", count_text("tui.count_notes", node.note_count)},
-                                          {"folders", count_text("tui.count_folders", node.folder_count)}});
-}
-
-std::string folder_updated_text(const FolderNode& node) {
-    return node.updated_at ? local_time_text(*node.updated_at) : core::tr("tui.meta_unknown");
-}
-
 // Klasör ayrıntısı: yol, sayılar, toplam boyut, son güncelleme.
 void push_folder_details(ftxui::Elements& lines, const TuiState& state, const Row& row,
                          std::string_view indent) {
     using namespace ftxui;
     const std::string path = row.path.string();
-    const FolderNode* node = state.folder_tree().find(path);
+    const auto summary = app::folder_summary(state.listing(), path, std::chrono::system_clock::now());
     const std::string fields[TuiState::kFolderMetaLines] = {
         core::tr("tui.meta_path", {{"value", terminal_safe(path)}}),
-        node ? folder_counts_text(*node) : std::string{},
-        core::tr("tui.meta_size", {{"value", human_size(node ? node->size : 0)}}),
-        core::tr("tui.meta_updated", {{"value", node ? folder_updated_text(*node) : std::string{}}}),
+        summary ? summary->counts : std::string{},
+        core::tr("tui.meta_size", {{"value", summary ? summary->size : human_size(0)}}),
+        core::tr("tui.meta_updated", {{"value", summary ? summary->updated : std::string{}}}),
     };
     for (const std::string& field : fields)
         lines.push_back(text(std::string(indent) + field) | dim);
@@ -611,17 +561,17 @@ void push_row_details(ftxui::Elements& lines, const TuiState& state, const Row& 
         push_folder_details(lines, state, row, kDetailIndent);
         return;
     }
+    // Alanlar ve değerleri GUI Bilgi paneliyle aynı (app::note_fields); kaynak cihaz ve etiket güvenilmez.
     const core::NoteMeta* meta = state.meta_of(row.path);
-    const std::string unknown = core::tr("tui.meta_unknown");
-    const std::string fields[TuiState::kMetaLines] = {
-        core::tr("tui.meta_size", {{"value", meta ? human_size(meta->size) : unknown}}),
-        core::tr("tui.meta_updated", {{"value", meta ? local_time_text(meta->updated_at) : unknown}}),
-        core::tr("tui.meta_created", {{"value", meta ? created_text(*meta) : unknown}}),
-        core::tr("tui.meta_sync", {{"value", meta ? sync_state_text(meta->sync_status) : unknown}}),
-        core::tr("tui.meta_origin", {{"value", meta ? origin_text(*meta) : unknown}}),
-    };
-    for (const std::string& field : fields)
-        lines.push_back(text(kDetailIndent + field) | dim);
+    static constexpr std::array<const char*, app::kNoteFields.size()> kLabels = {
+        "tui.meta_size", "tui.meta_updated", "tui.meta_created", "tui.meta_sync",
+        "tui.meta_origin", "tui.meta_type",  "tui.meta_tags"};
+    static_assert(TuiState::kMetaLines == app::kNoteFields.size());
+    for (std::size_t i = 0; i < app::kNoteFields.size(); ++i) {
+        const std::string value =
+            meta ? terminal_safe(app::note_field_text(*meta, app::kNoteFields[i])) : core::tr("app.note_unknown");
+        lines.push_back(text(kDetailIndent + core::tr(kLabels[i], {{"value", value}})) | dim);
+    }
 }
 
 // `a`: listenin ilk satırı. Numara sütunu boş kalır, yol diğer satırlarla aynı hücrede başlar.
@@ -696,12 +646,12 @@ ftxui::Element look_styled(ftxui::Element element, const TextLook& look) {
 }
 
 // REVIEW'daki hedefi olmayan [[bağlantı]]lar: GUI gibi soluk. Eksik listesi önizlemeyle aynı okumadan gelir.
-std::vector<ByteRange> missing_links_on(const TuiState& state, std::string_view line) {
+std::vector<ByteRange> missing_links(const TuiState& state, const std::vector<WikiSpan>& links) {
     std::vector<ByteRange> ranges;
     const std::vector<std::string>& missing = state.link_panel().links().missing;
     if (missing.empty())
         return ranges;
-    for (const WikiSpan& span : wiki_spans(line))
+    for (const WikiSpan& span : links)
         if (std::ranges::find(missing, span.target) != missing.end())
             ranges.push_back({span.begin, span.end});
     return ranges;
@@ -772,7 +722,7 @@ ftxui::Element rendered_pane(const TuiState& state, const Preview& preview, int 
     for (std::size_t i = state.preview_scroll(); i < preview.lines.size() && lines.size() < wanted; ++i) {
         lines.push_back(paint_styled_line(
             preview.lines[i], preview.styled[i], preview_inverted(state, i, preview.lines[i].size()),
-            state.preview_find().ranges_on_line(i), missing_links_on(state, preview.lines[i])));
+            state.preview_find().ranges_on_line(i), missing_links(state, state.wiki_spans_on(i))));
     }
     return vbox(std::move(lines));
 }
@@ -781,6 +731,13 @@ ftxui::Element rendered_pane(const TuiState& state, const Preview& preview, int 
 // Seçim kopyası `selected_text` ile ham metindeki yoldan geçer.
 void append_rendered(Preview& out, RenderedView view, std::size_t first_line) {
     out.line_starts.reserve(out.line_starts.size() + view.lines.size());
+    // Parçanın bağlantı sıraları öncekilerin ardına kayar: tek geçişteki numaralamayla aynı.
+    const std::size_t links_before = out.wiki_targets.size();
+    for (std::vector<StyledSpan>& spans : view.spans)
+        for (StyledSpan& span : spans)
+            if (span.look.wiki_link != 0)
+                span.look.wiki_link += links_before;
+    std::ranges::move(view.wiki_targets, std::back_inserter(out.wiki_targets));
     for (std::size_t i = 0; i < view.lines.size(); ++i) {
         out.line_starts.push_back(out.text.size());
         out.text += view.lines[i];
@@ -803,24 +760,20 @@ Preview rendered_preview(RenderedView view, ViewKind kind) {
 // Klasör seçiliyken REVIEW: depo okunmaz, her şey bellekteki ağaçtan.
 ftxui::Element folder_summary(const TuiState& state, const Row& row) {
     using namespace ftxui;
-    const std::string path = row.path.string();
-    const FolderNode* node = state.folder_tree().find(path);
-    if (!node)
+    const auto summary =
+        app::folder_summary(state.listing(), row.path.string(), std::chrono::system_clock::now());
+    if (!summary)
         return emptyElement();
-    Elements lines = {text(terminal_safe(path)) | bold, text(folder_counts_text(*node)),
-                      text(core::tr("tui.folder_total_size", {{"value", human_size(node->size)}})),
-                      text(core::tr("tui.meta_updated", {{"value", folder_updated_text(*node)}}))};
-    if (!node->recent.empty()) {
+    Elements lines = {text(terminal_safe(summary->path)) | bold, text(summary->counts),
+                      text(core::tr("tui.folder_total_size", {{"value", summary->size}})),
+                      text(core::tr("tui.meta_updated", {{"value", summary->updated}}))};
+    if (!summary->recent.empty()) {
         lines.push_back(text(""));
         lines.push_back(text(core::tr("tui.folder_recent")) | dim);
     }
-    const auto now = std::chrono::system_clock::now();
-    for (const std::size_t index : node->recent) {
-        const core::NoteMeta& meta = state.metas()[index];
-        const std::string full = meta.path.string();
-        lines.push_back(hbox({text("  " + terminal_safe(std::string_view(full).substr(path.size() + 1))),
-                              filler(), text(" " + short_time_text(meta.updated_at, now)) | dim}));
-    }
+    for (const app::FolderSummary::Recent& note : summary->recent)
+        lines.push_back(
+            hbox({text("  " + terminal_safe(note.name)), filler(), text(" " + note.updated) | dim}));
     return vbox(std::move(lines));
 }
 
@@ -867,7 +820,7 @@ ftxui::Element preview_pane(const TuiState& state, const Preview& preview, int h
     case Preview::Kind::Empty:
         return emptyElement();
     case Preview::Kind::Binary:
-        return text(core::tr("tui.binary_preview")) | dim;
+        return text(core::tr("app.binary_preview")) | dim;
     case Preview::Kind::Error:
         return text(preview.error) | dim;
     case Preview::Kind::Text:
@@ -899,7 +852,7 @@ ftxui::Element preview_pane(const TuiState& state, const Preview& preview, int h
         }
         const std::vector<ByteRange> misspelled =
             spell && preview.spell_checked ? spell->misspelled(line) : std::vector<ByteRange>{};
-        const std::vector<ByteRange> missing = missing_links_on(state, line);
+        const std::vector<ByteRange> missing = missing_links(state, wiki_spans(line));
         std::optional<ByteRange> inverted;
         if (const auto range = preview_inverted(state, i, full.size()))
             if (const auto kept = shift_ranges({*range}, skip); !kept.empty())
@@ -966,9 +919,9 @@ ftxui::Element save_dialog_box(const SaveDialogState& dialog) {
     } else {
         using Field = SaveDialogState::Field;
         body.push_back(
-            dialog_field(core::tr("tui.field_name"), dialog.name(), dialog.focus() == Field::Name));
+            dialog_field(core::tr("app.field_name"), dialog.name(), dialog.focus() == Field::Name));
         body.push_back(
-            dialog_field(core::tr("tui.field_folder"), dialog.folder(), dialog.focus() == Field::Folder));
+            dialog_field(core::tr("app.field_folder"), dialog.folder(), dialog.focus() == Field::Folder));
         if (dialog.focus() == Field::Folder) {
             const auto& suggestions = dialog.suggestions();
             for (std::size_t i = 0; i < suggestions.size(); ++i) {
@@ -978,7 +931,7 @@ ftxui::Element save_dialog_box(const SaveDialogState& dialog) {
                 body.push_back(picked ? line | inverted : line | dim);
             }
         }
-        body.push_back(dialog_field(core::tr("tui.field_type"), dialog.type(), dialog.focus() == Field::Type,
+        body.push_back(dialog_field(core::tr("app.field_type"), dialog.type(), dialog.focus() == Field::Type,
                                     text(dialog.type_label()) | dim));
         if (!dialog.error().empty())
             body.push_back(paragraph(dialog.error()) |
@@ -1043,16 +996,17 @@ constexpr int kSettingsFixedLines = 6;           // kenarlık 2 + test + düğme
 ftxui::Element settings_row(const SettingsState::Row& row, bool focused) {
     using namespace ftxui;
     std::string shown;
+    // Değer config.toml'dan (ör. notes_dir yolu) gelir: denetim karakteri ham basılmaz.
     switch (row.kind) {
     case SettingsState::Kind::Toggle:
         shown = row.value == "true" ? "[x]" : "[ ]";
         break;
     case SettingsState::Kind::Choice:
-        shown = "‹ " + tail_cells(row.value, kSettingsValueCells) + " ›";
+        shown = "‹ " + tail_cells(terminal_safe(row.value), kSettingsValueCells) + " ›";
         break;
     case SettingsState::Kind::Text:
     case SettingsState::Kind::Token:  // değer modelde zaten maskelenmiş noktalardır
-        shown = tail_cells(row.value, kSettingsValueCells);
+        shown = tail_cells(terminal_safe(row.value), kSettingsValueCells);
         break;
     }
     if (focused && (row.kind == SettingsState::Kind::Text || row.kind == SettingsState::Kind::Token))
@@ -1121,7 +1075,9 @@ ftxui::Element rename_bar(const RenameState& rename, int width) {
                         : rename.is_move_to() ? "tui.move_to_label"
                         : rename.is_export()  ? "tui.export_label"
                         : rename.is_import()  ? "tui.import_label"
-                                              : "tui.rename_label";
+                        : rename.is_view()
+                            ? (rename.view_query().empty() ? "tui.view_remove_label" : "tui.view_save_label")
+                            : "tui.rename_label";
     return input_line_bar(core::tr(label), rename.line(), {}, rename.ghost(), core::tr("tui.rename_hints"),
                           width);
 }
@@ -1166,7 +1122,7 @@ std::string active_filter(const TuiState& state, int room) {
 std::string selection_text(const TuiState& state) {
     std::string out;
     if (state.marked_count() > 0)
-        out = core::tr("tui.marked_count", {{"count", std::to_string(state.marked_count())}});
+        out = core::tr("app.marked_count", {{"count", std::to_string(state.marked_count())}});
     if (const auto& yank = state.yank()) {
         if (!out.empty())
             out += kHintSeparator;
@@ -1273,12 +1229,14 @@ ftxui::Element settings_box(const SettingsState& settings, int window_height) {
     Elements body;
     if (const std::optional<app::CloseChoice> leave = settings.leave_prompt()) {
         body = {paragraph(core::tr("tui.settings_confirm_leave")) | bold, text(""),
-                hbox({discard_choice(core::tr("tui.settings_save"), *leave == app::CloseChoice::Save), text("   "),
+                hbox({discard_choice(core::tr("app.settings_save"), *leave == app::CloseChoice::Save), text("   "),
                       discard_choice(core::tr("tui.discard_yes"), *leave == app::CloseChoice::Discard), text("   "),
                       discard_choice(core::tr("tui.discard_no"), *leave == app::CloseChoice::Cancel)}) |
                     center};
     } else if (const ConfirmState* replace = settings.replace_confirm()) {
-        body = confirm_body(replace->message(), core::tr("tui.replace_yes"), replace->yes_selected());
+        // Mevcut origin `.git/config`'ten gelir: güvenilmez.
+        body = confirm_body(terminal_safe(replace->message()), core::tr("tui.replace_yes"),
+                            replace->yes_selected());
     } else {
         // Token satırı (varsa) 12 satırın ardındadır; odak/kaydırma aynı sıra numarasıyla yürür.
         std::vector<SettingsState::Row> rows = settings.rows();
@@ -1296,9 +1254,10 @@ ftxui::Element settings_box(const SettingsState& settings, int window_height) {
         Element test = text("[ " + core::tr("tui.settings_test") + " ]");
         body.push_back(hbox({settings.on_test() ? test | inverted : test, text(" "),
                              text(terminal_safe(settings.test_result())) | dim | xflex_shrink}));
-        Element save = text("[ " + core::tr("tui.settings_save") + " ]");
+        Element save = text("[ " + core::tr("app.settings_save") + " ]");
         body.push_back((settings.on_button() ? save | inverted : save) | center);
-        body.push_back(text(error) | color(Color::Red));
+        // Hata dosya yolunu ve toml++ ayrıntısını taşır: denetim karakteri ham basılmaz.
+        body.push_back(text(terminal_safe(error)) | color(Color::Red));
         body.push_back(
             text(core::tr(settings.on_token() ? "tui.settings_token_hints" : "tui.settings_hints")) | dim);
     }
@@ -1315,10 +1274,10 @@ constexpr int kPaletteTitleCells = 30;  // uzun yolun sonu görünür
 std::string palette_title(const TuiState& state) {
     std::string target;
     if (state.marked_count() > 0)
-        target = core::tr("tui.marked_count", {{"count", std::to_string(state.marked_count())}});
+        target = core::tr("app.marked_count", {{"count", std::to_string(state.marked_count())}});
     else if (const Row* row = state.selected_entry())
         target = tail_cells(terminal_safe(row->path.string()), kPaletteTitleCells);
-    const std::string title = core::tr("tui.palette_title");
+    const std::string title = core::tr("app.palette_title");
     return " " + (target.empty() ? title : title + ": " + target) + " ";
 }
 

@@ -1,16 +1,16 @@
 #include "tui/markdown_view.hpp"
 
 #include "core/i18n.hpp"
+#include "core/note_store.hpp"
 #include "core/text.hpp"
 #include "edit/display_text.hpp"
-#include "pdf/markdown_blocks.hpp"
+#include "pdf/md4c_parse.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <functional>
 #include <limits>
-#include <md4c.h>
 #include <utility>
 #include <vector>
 
@@ -19,11 +19,9 @@ namespace noteapp::tui {
 namespace {
 
 constexpr std::string_view kBom = "\xEF\xBB\xBF";
-constexpr std::string_view kReplacement = "\xEF\xBF\xBD";
 constexpr std::string_view kQuoteBar = "│ ";
 constexpr std::string_view kCodeIndent = "  ";
 constexpr int kTabCells = 4;  // EditorBuffer::kTabCells ile aynı: ham ve biçimli görünüm hizası tutsun
-constexpr const auto& kBullets = pdf::kListBullets;  // GUI önizlemesi ve PDF ile aynı imler
 
 TextLook bold_look() {
     TextLook look;
@@ -50,31 +48,6 @@ TextLook heading_look(int level) {
     return look;
 }
 
-std::string_view attribute_text(const MD_ATTRIBUTE& attribute) {
-    return {attribute.text, attribute.size};
-}
-
-// Öznitelik parçaları ham metin ve varlıktır; gösterim için çözülür, arındırma çağıranda.
-std::string decoded_attribute(const MD_ATTRIBUTE& attribute) {
-    const std::string_view raw = attribute_text(attribute);
-    std::string out;
-    for (std::size_t i = 0; attribute.substr_offsets[i] < attribute.size; ++i) {
-        const MD_OFFSET begin = attribute.substr_offsets[i];
-        const std::string_view part = raw.substr(begin, attribute.substr_offsets[i + 1] - begin);
-        if (attribute.substr_types[i] == MD_TEXT_ENTITY)
-            out += core::decode_html_entity(part);
-        else if (attribute.substr_types[i] == MD_TEXT_NULLCHAR)
-            out += kReplacement;
-        else
-            out += part;
-    }
-    return out;
-}
-
-CellAlign cell_align(MD_ALIGN align) {
-    return align == MD_ALIGN_RIGHT ? CellAlign::Right : align == MD_ALIGN_CENTER ? CellAlign::Center : CellAlign::Left;
-}
-
 // Kap öneki (girinti, `>`) atlanır; çit en az üç aynı karakter ve ardından yalnız boşluktur.
 bool is_closing_fence(std::string_view line, char fence) {
     constexpr std::size_t kMinFenceLength = 3;
@@ -96,7 +69,9 @@ public:
 
     RenderedView finish() && {
         close_leaf();
-        return std::move(view_).finish();
+        RenderedView view = std::move(view_).finish();
+        view.wiki_targets = std::move(wiki_targets_);
+        return view;
     }
 
     void enter_block(MD_BLOCKTYPE type, const void* detail) {
@@ -169,6 +144,9 @@ public:
         case MD_SPAN_A:
             enter_link(*static_cast<const MD_SPAN_A_DETAIL*>(detail));
             break;
+        case MD_SPAN_WIKILINK:
+            enter_wiki_link(*static_cast<const MD_SPAN_WIKILINK_DETAIL*>(detail));
+            break;
         case MD_SPAN_IMG:
             if (image_depth_++ == 0)
                 image_alt_.clear();
@@ -195,6 +173,9 @@ public:
         case MD_SPAN_A:
             leave_link();
             break;
+        case MD_SPAN_WIKILINK:
+            wiki_link_ = 0;  // md4c wiki bağlantısını iç içe açmaz
+            break;
         case MD_SPAN_IMG:
             if (--image_depth_ == 0)
                 add_image();
@@ -207,14 +188,14 @@ public:
     void text(MD_TEXTTYPE type, std::string_view value) {
         note_source(value);
         if (leaf_ == Leaf::Code) {
-            code_ += type == MD_TEXT_NULLCHAR ? kReplacement : value;
+            code_ += type == MD_TEXT_NULLCHAR ? pdf::kReplacementCharacter : value;
             return;
         }
         if (!table_ && leaf_ == Leaf::None)
             leaf_ = Leaf::Paragraph;
         const std::string shown = inline_text(type, value);
         if (image_depth_ > 0)
-            image_alt_ += shown;
+            image_alt_ += type == MD_TEXT_BR ? " " : shown;  // alt metin tek satırdır (HTML alt="...")
         else
             inline_.append(shown, current_look());
     }
@@ -277,7 +258,7 @@ private:
         case MD_BLOCK_TD:
             inline_ = {};
             if (in_table_head_)
-                open_table().aligns.push_back(cell_align(static_cast<const MD_BLOCK_TD_DETAIL*>(detail)->align));
+                open_table().aligns.push_back(pdf::align_of(static_cast<const MD_BLOCK_TD_DETAIL*>(detail)->align));
             return true;
         default:
             return false;
@@ -321,11 +302,11 @@ private:
         if (list.next_number > 0)
             number = std::to_string(list.next_number++ - 1) + ". ";
         else
-            number = kBullets[(lists_.size() - 1) % std::size(kBullets)];
-        const std::string task = !item.is_task ? "" : (item.task_mark == ' ' ? "[ ] " : "[x] ");
+            number = pdf::list_bullet(lists_.size());  // GUI önizlemesi ve PDF ile aynı imler
+        const std::string_view task = pdf::task_marker(item);
         // Dev numara (9 hane) ya da dar panel: öğe metnine yer kalsın.
         if (view_.cells(number) + view_.cells(task) > width_ / 4)
-            number = task.empty() ? std::string(kBullets[0]) : std::string{};
+            number = task.empty() ? std::string(pdf::list_bullet(1)) : std::string{};
         pending_marker_ = InlineText{};
         pending_marker_->append(number, dim_look());
         pending_marker_->append(task, token_look(TokenKind::Keyword));
@@ -369,7 +350,7 @@ private:
         leaf_ = Leaf::Code;
         code_.clear();
         code_fence_ = code.fence_char;
-        code_language_ = fence_language(attribute_text(code.lang));
+        code_language_ = fence_language(pdf::raw_attribute(code.lang));
     }
 
     void enter_link(const MD_SPAN_A_DETAIL& link) {
@@ -377,7 +358,7 @@ private:
         if (image_depth_ > 0)
             return;
         // Otomatik bağlantının metni adresin kendisidir: iki kez yazılmaz.
-        link_href_ = link.is_autolink != 0 ? std::string{} : display_safe(decoded_attribute(link.href));
+        link_href_ = link.is_autolink != 0 ? std::string{} : display_safe(pdf::decoded_attribute(link.href));
     }
 
     void leave_link() {
@@ -386,6 +367,17 @@ private:
             inline_.append(" (" + link_href_ + ")", dim_look());
         if (image_depth_ == 0)
             link_href_.clear();
+    }
+
+    // Hedef deponun anahtarıdır (core::link_target; GUI'nin resolve_link'i de aynı kuralı uygular): REVIEW'daki
+    // izleme ve eksik hedefin soluk çizimi onunla. Görsel alt metninde bağlantı yoktur (HTML alt="..." gibi).
+    void enter_wiki_link(const MD_SPAN_WIKILINK_DETAIL& link) {
+        const std::string raw = pdf::decoded_attribute(link.target);
+        const std::string_view target = core::link_target(raw);
+        if (image_depth_ > 0 || target.empty())
+            return;
+        wiki_targets_.emplace_back(target);
+        wiki_link_ = wiki_targets_.size();
     }
 
     void add_image() {
@@ -398,7 +390,7 @@ private:
     static std::string inline_text(MD_TEXTTYPE type, std::string_view value) {
         switch (type) {
         case MD_TEXT_NULLCHAR:
-            return std::string(kReplacement);
+            return std::string(pdf::kReplacementCharacter);
         case MD_TEXT_BR:
             return "\n";
         case MD_TEXT_SOFTBR:
@@ -415,10 +407,11 @@ private:
         look.bold = look.bold || bold_depth_ > 0 || in_table_head_;
         look.italic = italic_depth_ > 0;
         look.strike = strike_depth_ > 0;
-        if (link_depth_ > 0) {
+        if (link_depth_ > 0 || wiki_link_ != 0) {
             look.underline = true;
             look.token = TokenKind::Keyword;
         }
+        look.wiki_link = wiki_link_;
         if (code_depth_ > 0)
             look.token = TokenKind::Code;
         return look;
@@ -656,13 +649,11 @@ private:
     int link_depth_ = 0;
     int image_depth_ = 0;
     std::string link_href_;
+    std::size_t wiki_link_ = 0;  // açık [[bağlantı]]nın wiki_targets_ sırası (1 tabanlı), yoksa 0
+    std::vector<std::string> wiki_targets_;
     std::string image_alt_;
     std::size_t consumed_end_ = 0;
 };
-
-MarkdownRenderer& renderer_of(void* userdata) {
-    return *static_cast<MarkdownRenderer*>(userdata);
-}
 
 }  // namespace
 
@@ -670,32 +661,8 @@ RenderedView render_markdown(std::string_view source, int width, CellWidthFn cel
                              const ViewLimits& limits) {
     const std::string_view body = source.starts_with(kBom) ? source.substr(kBom.size()) : source;
     MarkdownRenderer renderer(body, width, cell_width, limits);
-    MD_PARSER parser{};
-    // PDF dışa aktarımıyla aynı sözdizimi. MD_FLAG_NOHTML sözleşmedir: HTML düz metin kalır, not güvenilmez.
-    parser.flags = MD_FLAG_TABLES | MD_FLAG_TASKLISTS | MD_FLAG_STRIKETHROUGH | MD_FLAG_PERMISSIVEAUTOLINKS |
-                   MD_FLAG_NOHTML;
-    parser.enter_block = [](MD_BLOCKTYPE type, void* detail, void* userdata) {
-        renderer_of(userdata).enter_block(type, detail);
-        return 0;
-    };
-    parser.leave_block = [](MD_BLOCKTYPE type, void*, void* userdata) {
-        renderer_of(userdata).leave_block(type);
-        return 0;
-    };
-    parser.enter_span = [](MD_SPANTYPE type, void* detail, void* userdata) {
-        renderer_of(userdata).enter_span(type, detail);
-        return 0;
-    };
-    parser.leave_span = [](MD_SPANTYPE type, void*, void* userdata) {
-        renderer_of(userdata).leave_span(type);
-        return 0;
-    };
-    parser.text = [](MD_TEXTTYPE type, const MD_CHAR* value, MD_SIZE size, void* userdata) {
-        renderer_of(userdata).text(type, std::string_view(value, size));
-        return 0;
-    };
-    // md4c yalnız bellek yetmezse hata verir: o ana kadarkiler gösterilir, görünüm bilgi amaçlıdır.
-    md_parse(body.data(), static_cast<MD_SIZE>(body.size()), &parser, &renderer);
+    // GUI önizlemesiyle aynı sözdizimi, [[wiki]] bağlantısı dahil (PDF'te o düz metindir).
+    pdf::parse_md4c(body, pdf::kMarkdownFlags | MD_FLAG_WIKILINKS, renderer);
     return std::move(renderer).finish();
 }
 

@@ -20,6 +20,8 @@ target_compile_definitions(core_tests PRIVATE NOTEAPP_FAKE_EDITOR="$<TARGET_FILE
 # Katalog eşliği testi gömülü TOML'u kendisi ayrıştırır.
 target_link_libraries(core_tests PRIVATE tomlplusplus::tomlplusplus)
 target_compile_definitions(core_tests PRIVATE TOML_EXCEPTIONS=0)
+# Koddaki sabit i18n anahtarları kaynaktan okunur (i18n_test).
+target_compile_definitions(core_tests PRIVATE NOTEAPP_SOURCE_DIR="${PROJECT_SOURCE_DIR}/src")
 
 # Graph üzerindeki NoteStore: core_tests'ten ayrı, motora doğrudan bakar.
 noteapp_add_test(note_graph note_graph_test.cpp note_limits_test.cpp note_links_test.cpp note_relations_test.cpp)

@@ -1269,7 +1269,7 @@ private:
             return false;
         }
         LogReader& reader = **opened;
-        // Başlık her açılışta yeniden okunur: kayıt biçimi (v1/v2) ondadır ve dosya arada değişmiş olabilir.
+        // Başlık her açılışta yeniden okunur: dosya arada değişmiş olabilir.
         if (const LogReader::Status header = reader.read_header(); header != LogReader::Status::Frame) {
             finished_by_status(log, reader, header);
             return false;

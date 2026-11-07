@@ -4,13 +4,14 @@
 #include "app/data_preview.hpp"
 #include "core/config.hpp"
 #include "core/note_store.hpp"
+#include "memory.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 #include "tui/editor_view.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
-#include "memory.hpp"
 #include "wine.hpp"
 
 #include <algorithm>
@@ -34,11 +35,11 @@ constexpr auto kKeyGap = std::chrono::milliseconds(1);
 
 void fill(const fs::path& dir) {
     constexpr int kSizes[] = {80, 900, 4000, 20000};
-    std::vector<core::ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     for (int i = 0; i < kNotes; ++i) {
-        notes.push_back(
-            core::ImportedNote{core::NotePath::parse("n" + std::to_string(10000 + i) + ".md").value(),
-                               std::string(static_cast<std::size_t>(kSizes[i % 4]), 'x')});
+        notes.push_back(noteapp::test::ImportedNote{
+            core::NotePath::parse("n" + std::to_string(10000 + i) + ".md").value(),
+            std::string(static_cast<std::size_t>(kSizes[i % 4]), 'x')});
     }
     test::bulk_seed(dir, notes);
 }
@@ -79,10 +80,10 @@ TEST_CASE("nav perf: entering and leaving folders fast reads no note until the m
     constexpr int kFolders = 50;
     constexpr int kNotesPerFolder = 100;
     const test::TempDir dir;
-    std::vector<core::ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     for (int folder = 0; folder < kFolders; ++folder)
         for (int note = 0; note < kNotesPerFolder; ++note)
-            notes.push_back(core::ImportedNote{
+            notes.push_back(noteapp::test::ImportedNote{
                 core::NotePath::parse("d" + std::to_string(folder) + "/n" + std::to_string(note) + ".txt")
                     .value(),
                 "metin"});
@@ -387,9 +388,9 @@ double paste_folder_of_2000_notes_ms() {
     const test::TempDir dir;
     const test::TempDir state_home;
     const test::ScopedEnv home{"NOTEAPP_HOME", test::utf8(state_home.path())};
-    std::vector<core::ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     for (int i = 0; i < 2000; ++i)
-        notes.push_back(core::ImportedNote{
+        notes.push_back(noteapp::test::ImportedNote{
             core::NotePath::parse("src/d" + std::to_string(i % 20) + "/n" + std::to_string(i) + ".md")
                 .value(),
             std::string(1024, 'x')});

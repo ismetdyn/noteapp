@@ -499,7 +499,7 @@ TEST_CASE("r: a typed extension wins over the Type field and is never appended t
     backspaces(d, 1);
     type(d, "deneme.cpp");
     REQUIRE(d.handle(Key::Enter) == Outcome::Submit);
-    const auto moved = tui::move_note(store, from, d.request());
+    const auto moved = app::move_note(store, from, d.request().folder, d.request().name, d.request().type);
     REQUIRE(moved);
     CHECK(moved->string() == "deneme.cpp");
 }
@@ -512,11 +512,11 @@ TEST_CASE("r: a multi-dot note opens with its whole name and stays the same on E
     SaveDialogState d(tui::move_dialog_init(from, {}, {"md", "txt"}, 60));
     CHECK(d.name() == "a.tar.gz");
     REQUIRE(d.handle(Key::Enter) == Outcome::Submit);
-    CHECK(tui::move_note(store, from, d.request()) == from);
+    CHECK(app::move_note(store, from, d.request().folder, d.request().name, d.request().type) == from);
     backspaces(d, 8);
     type(d, "b.zip.xyz");
     REQUIRE(d.handle(Key::Enter) == Outcome::Submit);
-    const auto moved = tui::move_note(store, from, d.request());
+    const auto moved = app::move_note(store, from, d.request().folder, d.request().name, d.request().type);
     REQUIRE(moved);
     CHECK(moved->string() == "b.zip.xyz");
 }
@@ -530,7 +530,7 @@ TEST_CASE("r: without a typed extension the Type field still decides") {
     backspaces(d, 1);
     type(d, "yeni");
     REQUIRE(d.handle(Key::Enter) == Outcome::Submit);
-    const auto moved = tui::move_note(store, from, d.request());
+    const auto moved = app::move_note(store, from, d.request().folder, d.request().name, d.request().type);
     REQUIRE(moved);
     CHECK(moved->string() == "yeni.md");
 }

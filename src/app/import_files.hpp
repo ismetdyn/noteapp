@@ -15,6 +15,7 @@
 #include <span>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -127,6 +128,13 @@ std::string import_progress_text(const ImportProgress& progress);
 
 // Config'in tespit ayarlarıyla seçenekler; `folder` hedef klasör (arayüzde app::new_note_folder).
 ImportOptions import_options(const core::Config& config, std::string folder);
+
+// Yeni notun tipi, ilk dolu olan: adda yazılan uzantı (core::split_typed_name), seçilen tip, kaynak dosyanın
+// uzantısı (içe alma; CLI hızlı eklemede boş), içerik tespiti. İçe alma ve CLI hızlı ekleme aynı sıra.
+// Seçilen tip boş metinse (`-t ""`) olduğu gibi döner: deponun geçersiz tip hatası kullanıcıya görünür.
+std::string new_note_type(std::string_view name_extension, const std::optional<std::string>& chosen,
+                          std::string_view file_extension, std::string_view content,
+                          const detect::Options& detect);
 
 // Raporun metni, sırayla: alınanlar, durdurulanların sayısı, atlananlar, alınamayanlar, gizli sayısı, özet.
 // `problem`: kullanıcı bakmalı (CLI stderr). Metin dosya sisteminden gelen yollar taşır: arayüz kendi

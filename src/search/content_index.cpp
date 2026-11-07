@@ -184,7 +184,8 @@ void ContentIndex::refresh() {
     entries_ = std::move(next);
 }
 
-std::vector<ContentResult> ContentIndex::search(std::string_view query, std::size_t limit) const {
+std::vector<ContentResult> ContentIndex::search(std::string_view query, std::size_t limit,
+                                                const Accept& accept) const {
     auto terms = parse_terms(query);
     if (terms.empty() || limit == 0)
         return {};
@@ -195,6 +196,8 @@ std::vector<ContentResult> ContentIndex::search(std::string_view query, std::siz
     };
     std::vector<Candidate> candidates;
     for (const auto& kv : entries_) {
+        if (accept && !accept(kv.first))
+            continue;
         auto occ = scan(kv.second.folded, terms);
         if (!occ.empty())
             candidates.push_back({&kv, count_hit_lines(kv.second, occ)});

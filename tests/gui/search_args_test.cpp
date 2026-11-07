@@ -47,6 +47,18 @@ TEST_CASE_FIXTURE(ArgsFixture, "gui search: tag: filters by tag and its nested t
     CHECK_FALSE(state->is_new_note());
 }
 
+// TUI kuralı (app::search_enter_action): boş sorguda Enter boş not açmaz; eşleşmesiz düz metin taslağın ilk
+// satırı olur.
+TEST_CASE_FIXTURE(WindowFixture, "gui search: Enter on an empty query with no row opens no note") {
+    auto state = make_state();
+    REQUIRE(state->model().row_count() == 0);
+    state->search_enter();
+    CHECK_FALSE(state->is_new_note());
+    state->set_query("fikir");
+    state->search_enter();
+    CHECK(state->is_new_note());
+}
+
 // T81: kayıtlı görünüm aynı arama kutusundan; bilinmeyen görünüm argüman hatasıdır.
 TEST_CASE_FIXTURE(ArgsFixture, "gui search: view: keeps the notes a saved view returns") {
     noteapp::core::init_i18n("en");

@@ -1,24 +1,23 @@
 #include "tui/list_actions.hpp"
 
+#include "app/export.hpp"
 #include "app/import_files.hpp"
 #include "app/map_relations.hpp"
+#include "app/settings.hpp"
+#include "app/ui_prefs.hpp"
 #include "core/atomic_file.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
+#include "core/note_views.hpp"
 #include "core/paths.hpp"
 #include "core/text.hpp"
 #include "edit/display_text.hpp"
-#include "pdf/pdf_export.hpp"
 #include "tui/settings.hpp"
 
 #include <algorithm>
-#include <array>
-#include <charconv>
 #include <cmath>
 #include <expected>
 #include <filesystem>
-#include <format>
-#include <fstream>
 #include <iterator>
 #include <memory>
 #include <ranges>
@@ -30,34 +29,7 @@ namespace noteapp::tui {
 namespace {
 
 constexpr std::string_view kPrefsFile = "tui-state.toml";
-constexpr std::string_view kPrefsVersion = "2";
-constexpr std::array<std::pair<ListColumn, std::string_view>, 7> kColumnNames = {{
-    {ListColumn::SizeAndDate, "size_and_date"},
-    {ListColumn::None, "none"},
-    {ListColumn::Size, "size"},
-    {ListColumn::Updated, "updated"},
-    {ListColumn::Created, "created"},
-    {ListColumn::Sync, "sync"},
-    {ListColumn::Origin, "origin"},
-}};
-
-template <typename Table, typename Value> std::string_view name_of(const Table& table, Value value) {
-    const auto found = std::ranges::find(table, value, [](const auto& entry) { return entry.first; });
-    return found == table.end() ? std::string_view{} : found->second;
-}
-
-template <typename Table, typename Value>
-void value_of(const Table& table, std::string_view name, Value& out) {
-    const auto found = std::ranges::find(table, name, [](const auto& entry) { return entry.second; });
-    if (found != table.end())
-        out = found->first;
-    else
-        core::log_warn("event=tui_state_value_ignored value=" + terminal_safe(name));
-}
-
-std::filesystem::path prefs_path() {
-    return core::state_dir() / std::filesystem::path(kPrefsFile);
-}
+constexpr std::string_view kListShare = "list_share";
 
 constexpr std::string_view kIconsNerd = "nerd";
 constexpr std::string_view kIconsOff = "off";
@@ -66,134 +38,63 @@ std::string safe(std::string_view raw) {
     return terminal_safe(raw);
 }
 
-std::string_view unquoted(std::string_view value) {
-    const std::size_t first = value.find_first_not_of(" \t\r\"");
-    if (first == std::string_view::npos)
-        return {};
-    return value.substr(first, value.find_last_not_of(" \t\r\"") - first + 1);
-}
-
 // `list_share`: 0..1 arası sonlu sayı; değilse yok sayılır, config'in oranı kalır.
-std::optional<double> parse_share(std::string_view value) {
-    double share = 0.0;
-    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), share);
-    if (error == std::errc{} && end == value.data() + value.size() && std::isfinite(share) && share >= 0.0 &&
-        share <= 1.0)
+std::optional<double> valid_share(std::optional<double> share) {
+    if (!share || (std::isfinite(*share) && *share >= 0.0 && *share <= 1.0))
         return share;
-    core::log_warn("event=tui_state_value_ignored value=" + terminal_safe(value));
+    core::log_warn("event=tui_state_value_ignored key=list_share");
     return std::nullopt;
 }
 
-std::vector<app::TrashTarget> trash_targets(const std::vector<ListItem>& items) {
-    std::vector<app::TrashTarget> targets;
-    targets.reserve(items.size());
-    for (const ListItem& item : items)
-        targets.push_back({item.path, item.is_folder});
-    return targets;
+app::UiPrefsRules prefs_rules(const SearchHistoryLimits& history, const core::Limit& recent_commands,
+                              const core::Limit& max_bytes) {
+    return {.keep_history = [history](std::vector<std::string> entries) {
+                return kept_search_history(std::move(entries), history);
+            },
+            .recent_commands = recent_commands,
+            .max_bytes = max_bytes};
+}
+
+ListPrefs list_prefs_of(app::UiPrefs read) {
+    ListPrefs prefs;
+    prefs.list_share = valid_share(app::pref_number(read, kListShare));
+    read.extra.erase(std::string(kListShare));
+    static_cast<app::UiPrefs&>(prefs) = std::move(read);
+    return prefs;
+}
+
+app::UiPrefs ui_prefs_of(const ListPrefs& prefs) {
+    app::UiPrefs out = prefs;
+    if (prefs.list_share)
+        out.extra[std::string(kListShare)] = *prefs.list_share;
+    return out;
 }
 
 app::Prompts confirmed() {
     return {[](const app::Confirm&) { return true; }};
 }
 
-// Onay metni ve başlığı; ne zaman sorulacağı app::TrashOps'ta.
+// Onay metni ve başlığı app::confirm_text'te (GUI ile aynı); ne zaman sorulacağı app::TrashOps'ta.
 ConfirmState confirm_state(const app::Confirm& request) {
-    const std::string path = terminal_safe(request.path);
-    const std::string notes = count_text("tui.count_notes", request.notes);
-    const std::string folders = count_text("tui.count_subfolders", request.folders);
-    const std::string items = count_text("tui.count_items", request.items);
-    switch (request.kind) {
-    case app::ConfirmKind::TrashFolder:
-        return ConfirmState(
-            core::tr("tui.confirm_trash_folder", {{"path", path}, {"notes", notes}, {"folders", folders}}),
-            core::tr("tui.folder_trash_title"));
-    case app::ConfirmKind::TrashBatch:
-        return ConfirmState(core::tr("tui.confirm_trash_batch", {{"items", items}, {"notes", notes}}),
-                            core::tr("tui.batch_trash_title"));
-    case app::ConfirmKind::Delete:
-        return ConfirmState(core::tr("tui.confirm_delete", {{"path", path}}));
-    case app::ConfirmKind::Purge:
-        return ConfirmState(core::tr("tui.confirm_purge", {{"path", path}}));
-    case app::ConfirmKind::DeleteFolder:
-        return ConfirmState(
-            core::tr("tui.confirm_delete_folder", {{"path", path}, {"notes", notes}, {"folders", folders}}),
-            core::tr("tui.folder_delete_title"));
-    case app::ConfirmKind::DeleteBatch:
-        return ConfirmState(core::tr("tui.confirm_delete_batch", {{"items", items}, {"notes", notes}}));
-    case app::ConfirmKind::EmptyTrash:
-        return ConfirmState(
-            core::tr("tui.confirm_empty_trash", {{"count", count_text("tui.count_notes", request.items)}}),
-            core::tr("tui.empty_trash_title"));
-    }
-    std::unreachable();
+    app::ConfirmText text = app::confirm_text(request);
+    return ConfirmState(terminal_safe(text.message), std::move(text.title));
 }
 
 }  // namespace
 
 std::string format_list_prefs(const ListPrefs& prefs) {
-    // Satır tabanlı dosya: denetim baytlı ad satırı bölmesin; o klasör kapalı açılır.
-    std::vector<std::string> open_folders;
-    for (const std::string& folder : prefs.open_folders)
-        if (std::ranges::none_of(folder, [](unsigned char c) { return c < 0x20; }))
-            open_folders.push_back(folder);
-    return "sort = \"" + std::string(name_of(app::kSortFieldNames, prefs.sort.field)) +
-           "\"\nsort_descending = " + (prefs.sort.descending ? "true" : "false") + "\ncolumn = \"" +
-           std::string(name_of(kColumnNames, prefs.column)) + "\"\nversion = " + std::string(kPrefsVersion) +
-           "\n" +
-           (prefs.search_history.empty()
-                ? std::string{}
-                : "search_history = " + format_search_history(prefs.search_history) + "\n") +
-           (open_folders.empty() ? std::string{}
-                                 : "open_folders = " + format_search_history(open_folders) + "\n") +
-           (prefs.recent_commands.empty()
-                ? std::string{}
-                : "recent_commands = " + format_search_history(prefs.recent_commands) + "\n") +
-           (prefs.list_share ? std::format("list_share = {}\n", *prefs.list_share) : std::string{}) +
-           app::format_saved_tabs(prefs.tabs);  // `[[tabs]]` tabloları: TOML'da en sonda
+    return app::format_ui_prefs(ui_prefs_of(prefs), {});
 }
 
 ListPrefs parse_list_prefs(std::string_view text, const SearchHistoryLimits& history) {
-    ListPrefs prefs;
-    prefs.tabs = app::parse_saved_tabs(text);  // satırları aşağıdaki döngü bilinmeyen anahtar sayar
-    bool versioned = false;
-    while (!text.empty()) {
-        const std::size_t end = text.find('\n');
-        const std::string_view line = text.substr(0, end);
-        text.remove_prefix(end == std::string_view::npos ? text.size() : end + 1);
-        const std::size_t equals = line.find('=');
-        if (equals == std::string_view::npos)
-            continue;
-        const std::string_view key = unquoted(line.substr(0, equals));
-        const std::string_view value = unquoted(line.substr(equals + 1));
-        if (key == "sort")
-            value_of(app::kSortFieldNames, value, prefs.sort.field);
-        else if (key == "sort_descending")
-            prefs.sort.descending = value == "true";
-        else if (key == "column")
-            value_of(kColumnNames, value, prefs.column);
-        else if (key == "version")
-            versioned = true;
-        else if (key == "search_history")
-            prefs.search_history = parse_search_history(line.substr(equals + 1), history);
-        else if (key == "open_folders")
-            std::ranges::move(parse_quoted_list(line.substr(equals + 1)),
-                              std::inserter(prefs.open_folders, prefs.open_folders.end()));
-        else if (key == "recent_commands")
-            prefs.recent_commands = parse_quoted_list(line.substr(equals + 1));  // sınır: set_list_prefs
-        else if (key == "list_share")
-            prefs.list_share = parse_share(value);
-    }
-    if (!versioned && prefs.column == ListColumn::None)
-        prefs.column = ListColumn::SizeAndDate;
-    return prefs;
+    return list_prefs_of(app::parse_ui_prefs(text, prefs_rules(history, {}, {})));
 }
 
-void load_list_prefs(TuiState& state) {
-    std::ifstream in(prefs_path(), std::ios::binary);
-    if (!in)
-        return;  // ilk çalıştırma
-    const std::string text{std::istreambuf_iterator<char>(in), {}};
-    state.set_list_prefs(parse_list_prefs(text, state.search_history_limits()));
+std::string load_list_prefs(TuiState& state, const core::Limit& max_bytes) {
+    app::LoadedUiPrefs loaded = app::load_ui_prefs(
+        kPrefsFile, prefs_rules(state.search_history_limits(), state.recent_commands_limit(), max_bytes));
+    state.set_list_prefs(list_prefs_of(std::move(loaded.prefs)));
+    return std::move(loaded.notice);
 }
 
 struct ListActions::BatchReport {
@@ -241,13 +142,18 @@ app::Prompts ListActions::ask_later(std::optional<ConfirmState>& confirm, std::f
     return {[this, &confirm, retry = std::move(retry)](const app::Confirm& request) {
         confirm.emplace(confirm_state(request));
         pending_ = retry;
+        // Onay modaldır; bu arada tarama (senkron) listeyi değiştirebilir. Evet, sorudaki sayıları üreten listeyle
+        // çalışır: gösterilmeyen not silinmez, çöpe gitmez.
+        asked_listing_.emplace(host_.state.listing());
         return false;
     }};
 }
 
 void ListActions::begin_trash(std::optional<ConfirmState>& confirm) {
     if (host_.state.marked_count() > 0) {
-        trash_marked(ask_later(confirm, [this] { trash_marked(confirmed()); }));
+        // Hedefler onay anında alınır: Evet canlı seçimi okumaz (senkron işaretleri düşürmüş olabilir).
+        std::vector<app::TrashTarget> targets = app::trash_targets(host_.state.action_items());
+        trash_marked(targets, ask_later(confirm, [this, targets] { trash_marked(targets, confirmed()); }));
     } else if (const Row* folder = host_.state.selected_folder_row()) {
         const std::string path = folder->path.string();
         trash_folder(path, ask_later(confirm, [this, path] { trash_folder(path, confirmed()); }));
@@ -261,7 +167,11 @@ void ListActions::begin_delete_action(std::optional<ConfirmState>& confirm) {
         begin_delete(confirm);
         return;
     }
-    delete_marked(ask_later(confirm, [this] { delete_marked(confirmed()); }));
+    // Hedefler ve görünüm onay anında alınır: Evet canlı seçimi okumaz (senkron işaretleri düşürmüş olabilir).
+    std::vector<app::TrashTarget> targets = app::trash_targets(host_.state.action_items());
+    const bool from_trash = host_.state.trash_view();
+    delete_marked(targets, from_trash,
+                  ask_later(confirm, [this, targets, from_trash] { delete_marked(targets, from_trash, confirmed()); }));
 }
 
 void ListActions::restore_action() {
@@ -272,13 +182,12 @@ void ListActions::restore_action() {
 }
 
 // Her öğe denenir: biri düşerse kalanlar sürer, atılanlar `u` ile döner.
-void ListActions::trash_marked(const app::Prompts& prompts) {
+void ListActions::trash_marked(const std::vector<app::TrashTarget>& targets, const app::Prompts& prompts) {
     const std::size_t index = host_.state.selected();
-    const std::vector<app::TrashTarget> targets = trash_targets(host_.state.action_items());
     const auto report = [&] {
         const std::scoped_lock lock(host_.store_mutex);
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
-        return trash_.trash_items(*host_.store, host_.state.listing(), targets, prompts);
+        return trash_.trash_items(*host_.store, shown_listing(), targets, prompts);
     }();
     if (!report)
         return;  // onay bekliyor
@@ -288,14 +197,13 @@ void ListActions::trash_marked(const app::Prompts& prompts) {
     publish(*report, "tui.batch_trashed");
 }
 
-void ListActions::delete_marked(const app::Prompts& prompts) {
+void ListActions::delete_marked(const std::vector<app::TrashTarget>& targets, bool from_trash,
+                                const app::Prompts& prompts) {
     const std::size_t index = host_.state.selected();
-    const bool from_trash = host_.state.trash_view();
-    const std::vector<app::TrashTarget> targets = trash_targets(host_.state.action_items());
     const auto report = [&] {
         const std::scoped_lock lock(host_.store_mutex);
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
-        return trash_.delete_items(*host_.store, host_.state.listing(), targets, from_trash, prompts);
+        return trash_.delete_items(*host_.store, shown_listing(), targets, from_trash, prompts);
     }();
     if (!report)
         return;  // onay bekliyor
@@ -303,7 +211,7 @@ void ListActions::delete_marked(const app::Prompts& prompts) {
     host_.refresh_notes();
     refresh_trash_view();
     host_.state.select_index(index);
-    publish(*report, "tui.batch_deleted");
+    publish(*report, "app.batch_deleted");
 }
 
 void ListActions::restore_marked() {
@@ -342,7 +250,7 @@ void ListActions::paste() {
         return app::paste_items(*host_.store, yank.items, dest);
     }();
     host_.refresh_notes();
-    publish(report, "tui.paste_done");
+    publish(report, "app.paste_done");
 }
 
 void ListActions::run(Intent intent, std::optional<ConfirmState>& confirm,
@@ -353,6 +261,8 @@ void ListActions::run(Intent intent, std::optional<ConfirmState>& confirm,
         begin_export(rename);
     else if (intent == Intent::RenameRelation)
         begin_relation_rename(rename);
+    else if (intent == Intent::SaveView || intent == Intent::RemoveView)
+        begin_view_name(rename, intent == Intent::SaveView);
     else
         run_intent(intent, confirm, &rename);
 }
@@ -364,6 +274,7 @@ void ListActions::run(Intent intent, std::optional<ConfirmState>& confirm) {
 void ListActions::run_intent(Intent intent, std::optional<ConfirmState>& confirm,
                              std::optional<RenameState>* rename) {
     pending_ = nullptr;
+    asked_listing_.reset();
     relation_target_.reset();
     switch (intent) {
     case Intent::UnlinkSelected:
@@ -492,20 +403,13 @@ void ListActions::copy_selected_note() {
     if (!row)
         return;
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
-    auto content = host_.store->read(row->path);
-    if (!content) {
-        host_.status.message = core::format_error(content.error());
-        return;
-    }
-    if (core::looks_binary(content->text) || content->text.find('\0') != std::string::npos) {
-        host_.status.message = core::tr("tui.copy_refused_binary");
-        return;
-    }
-    if (!core::is_valid_utf8(content->text)) {
-        host_.status.message = core::tr("tui.copy_refused_utf8");
-        return;
-    }
-    copy_text(std::move(content->text));
+    app::ClipboardText content = app::clipboard_text(*host_.store, row->path);
+    if (content.error)
+        host_.status.message = core::format_error(*content.error);
+    else if (content.refused != nullptr)
+        host_.status.message = core::tr(content.refused);
+    else
+        copy_text(std::move(content.text));
 }
 
 void ListActions::copy_preview_selection() {
@@ -523,7 +427,7 @@ void ListActions::copy_preview_selection() {
     // Biçimli görünümde seçim görüntülenen metindir; `c` özgün baytları kopyalar.
     const Preview& preview = host_.preview.shown();
     if (preview.display_only) {
-        host_.status.message = core::tr("tui.copy_refused_utf8");
+        host_.status.message = core::tr("app.copy_refused_utf8");
         return;
     }
     copy_text(selected_text(preview, *selection));
@@ -594,7 +498,7 @@ void ListActions::trash_folder(const std::string& folder, const app::Prompts& pr
     const auto trashed = [&] {
         const std::scoped_lock lock(host_.store_mutex);
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
-        return trash_.trash_folder(*host_.store, host_.state.listing(), folder, prompts);
+        return trash_.trash_folder(*host_.store, shown_listing(), folder, prompts);
     }();
     if (!trashed)
         return;  // onay bekliyor
@@ -678,7 +582,8 @@ void ListActions::delete_note(const core::NotePath& target, const app::Prompts& 
         const std::scoped_lock lock(host_.store_mutex);  // yeniden tarama iş parçacığı aynı store'u listeler
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
         core::NoteStore& store = *host_.store;
-        return from_trash ? trash_.purge(store, target, prompts) : trash_.remove(store, target, prompts);
+        return from_trash ? trash_.purge(store, target, prompts)
+                          : trash_.remove(store, shown_listing(), target, prompts);
     }();
     if (removed && !*removed)
         return;  // onay bekliyor
@@ -722,6 +627,64 @@ void ListActions::begin_link(std::optional<RenameState>& rename) {
 
 void ListActions::begin_import(std::optional<RenameState>& rename, std::string folder) {
     rename.emplace(RenameState::ImportSource{}, std::move(folder));
+}
+
+void ListActions::begin_view_name(std::optional<RenameState>& rename, bool save) {
+    view_removal_.clear();
+    view_shown_.reset();
+    if (!save) {
+        rename.emplace(RenameState::ViewName{}, std::string{}, host_.state.views());
+        return;
+    }
+    const std::string& query = host_.state.map_query().read_query();
+    if (query.empty()) {
+        host_.status.message = core::tr("error.view_needs_query");
+        return;
+    }
+    rename.emplace(RenameState::ViewName{}, query, std::vector<std::string>{});
+}
+
+void ListActions::submit_view(std::optional<RenameState>& rename) {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
+    RenameState& input = *rename;
+    const std::string name = input.text();
+    const bool save = !input.view_query().empty();
+    if (!save && view_removal_ != name) {  // silme geri alınamaz: aynı adda ikinci Enter
+        auto shown = [&] {
+            const std::scoped_lock lock(host_.store_mutex);
+            // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+            return core::find_view(*host_.store, name);
+        }();
+        if (!shown) {
+            input.set_error(terminal_safe(core::format_error(shown.error())));
+            return;
+        }
+        view_removal_ = name;
+        view_shown_ = std::move(*shown);  // uyarının gösterdiği görünüm; silme onu denetler
+        input.set_error(core::tr("tui.view_remove_again", {{"name", terminal_safe(name)}}));
+        return;
+    }
+    const auto done = [&]() -> std::expected<void, core::Error> {
+        const std::scoped_lock lock(host_.store_mutex);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+        core::NoteStore& store = *host_.store;
+        auto written = save ? host_.state.map_query().save_view(store, name)
+                            : core::remove_view(store, name, view_shown_);
+        if (written)
+            host_.state.set_views(app::view_names(store));
+        return written;
+    }();
+    view_removal_.clear();
+    view_shown_.reset();
+    if (!done) {
+        input.set_error(terminal_safe(core::format_error(done.error())));
+        return;
+    }
+    rename.reset();
+    host_.status.notify(
+        app::NoticeKind::Success,
+        terminal_safe(core::tr(save ? "app.view_saved" : "app.view_removed", {{"name", name}})));
+    host_.notify_changed();
 }
 
 void ListActions::submit_import(std::optional<RenameState>& rename) {
@@ -801,9 +764,15 @@ bool ListActions::cancel_import_on(Key key, Focus focus) {
 void ListActions::submit_link(std::optional<RenameState>& rename) {
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
     RenameState& input = *rename;
-    const auto target = core::NotePath::parse(input.target());
+    // Hedef GUI'deki gibi [[bağlantı]] kuralıyla çözülür (tam yol, uzantısız yol, dosya adı, yalın ad).
+    const std::optional<core::NotePath> target = [&] {
+        const std::scoped_lock lock(host_.store_mutex);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+        return host_.store->resolve_link(input.target());
+    }();
     if (!target) {
-        input.set_error(core::format_error(target.error()));
+        input.set_error(core::format_error(
+            core::Error{core::Error::Code::NotFound, "error.not_found", {{"path", input.target()}}}));
         return;
     }
     // Hedef ad sorulmadan önce doğrulanır: yanlış yol ad yazıldıktan sonra değil, burada söylenir.
@@ -924,8 +893,7 @@ void ListActions::begin_export(std::optional<RenameState>& rename) {
     if (!row)
         return;
     export_replace_.clear();
-    rename.emplace(RenameState::ExportTarget{}, row->path,
-                   core::split_note_path(row->path.string()).name + ".pdf");
+    rename.emplace(RenameState::ExportTarget{}, row->path, app::default_export_name(row->path));
 }
 
 void ListActions::submit_export(std::optional<RenameState>& rename) {
@@ -943,8 +911,7 @@ void ListActions::submit_export(std::optional<RenameState>& rename) {
     const std::string shown_path = terminal_safe(std::string(shown.begin(), shown.end()));
     // Uyarı satırda durdukça (düzenleme onu siler) aynı yola ikinci Enter onaydır.
     const bool warned = !input.error().empty() && export_replace_ == output;
-    // symlink_status: kırık bağ da var olan addır (exists bağı izler, onu "yok" sayıp sormadan yazardı).
-    if (std::filesystem::exists(std::filesystem::symlink_status(output, ec)) && !warned) {
+    if (!warned && app::export_target_exists(output)) {
         export_replace_ = output;
         input.set_error(core::tr("tui.export_exists", {{"path", shown_path}}));
         return;
@@ -955,7 +922,7 @@ void ListActions::submit_export(std::optional<RenameState>& rename) {
         return;
     }
     rename.reset();
-    host_.status.notify(app::NoticeKind::Success, core::tr("tui.exported", {{"path", shown_path}}));
+    host_.status.notify(app::NoticeKind::Success, core::tr("app.exported", {{"path", shown_path}}));
 }
 
 std::expected<void, core::Error> ListActions::export_note(const core::NotePath& note,
@@ -967,10 +934,7 @@ std::expected<void, core::Error> ListActions::export_note(const core::NotePath& 
     }();
     if (!content)
         return std::unexpected(content.error());
-    if (core::looks_binary(content->text))
-        return std::unexpected(
-            core::Error{core::Error::Code::InvalidPath, "tui.export_binary", {{"path", note.string()}}});
-    return pdf::export_pdf(content->text, pdf::format_for(note.value()), output);
+    return app::export_note_pdf(content->text, note, output);
 }
 
 void ListActions::begin_unlink(std::optional<ConfirmState>& confirm) {
@@ -981,31 +945,17 @@ void ListActions::begin_unlink(std::optional<ConfirmState>& confirm) {
         return;
     const core::RelatedNote& relation = panel.links().related[line->index];
     relation_target_ = std::pair(row->path, relation);
-    const std::string from = terminal_safe(row->path.string());
-    const std::string to = terminal_safe(relation.path.string());
-    confirm.emplace(relation.name.empty()
-                        ? core::tr("tui.confirm_unlink", {{"from", from}, {"to", to}})
-                        : core::tr("tui.confirm_unlink_named",
-                                   {{"from", from}, {"to", to}, {"name", terminal_safe(relation.name)}}),
-                    core::tr("tui.unlink_title"));
+    confirm.emplace(terminal_safe(app::unlink_question(row->path, relation)), core::tr("tui.unlink_title"));
 }
 
+// GUI ile tek yol (app::unrelate_map_notes): onay açıkken ilişki gittiyse relation_not_found.
 void ListActions::finish_unlink() {
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- finish_delete denetledi
-    const auto [first, relation] = *std::exchange(relation_target_, std::nullopt);
-    const auto removed = [&] {
-        const std::scoped_lock lock(host_.store_mutex);
-        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
-        return host_.store->remove_relation(relation.id);
-    }();
-    if (!removed) {
-        host_.status.notify(app::NoticeKind::Error, terminal_safe(core::format_error(removed.error())));
-        return;
-    }
-    host_.status.notify(app::NoticeKind::Success,
-                        core::tr("tui.unlinked", {{"path", terminal_safe(relation.path.string())}}));
-    host_.refresh_notes();
-    host_.notify_changed();
+    const auto [from, relation] = *std::exchange(relation_target_, std::nullopt);
+    finish_relation_edit([&](core::NoteStore& store) {
+        return app::unrelate_map_notes(store, {app::MapNodeKind::Note, from.string()},
+                                       {app::MapNodeKind::Note, relation.path.string()}, relation.id);
+    });
 }
 
 // Liste odağına editör park edilerek (kayıtla) gelinir, ayrılan sekme de kaydedilir: yazılacak notun
@@ -1071,7 +1021,7 @@ void ListActions::run_map_query(std::optional<ConfirmState>& confirm) {
         show_map_query(step);
         return;
     }
-    confirm.emplace(query.confirm_text(), core::tr("tui.query_confirm_title"), core::tr("tui.query_apply"));
+    confirm.emplace(query.confirm_text(), core::tr("app.query_confirm_title"), core::tr("app.query_apply"));
     pending_ = [this] {
         const app::MapQuery::Step applied = [&] {
             const std::scoped_lock lock(host_.store_mutex);
@@ -1111,6 +1061,11 @@ void ListActions::finish_delete(std::optional<ConfirmState>& confirm) {
     }
     if (const std::function<void()> retry = std::exchange(pending_, nullptr))
         retry();
+    asked_listing_.reset();
+}
+
+const app::Listing& ListActions::shown_listing() const {
+    return asked_listing_ ? *asked_listing_ : host_.state.listing();
 }
 
 // --- Özellik denetçisi (F4; model app::Inspector, GUI ile ortak) ---
@@ -1158,10 +1113,11 @@ void ListActions::begin_inspector_delete(std::optional<ConfirmState>& confirm) {
     confirm.emplace(terminal_safe(host_.state.inspector().confirm_remove_text(row)),
                     core::tr("inspector.remove_title"), core::tr("inspector.delete"));
     pending_ = [this, row] {
-        finish_inspector_write([&](core::NoteStore& store) {
+        finish_inspector_write([&](core::NoteStore& store, const app::SavePending& save_pending) {
             app::Inspector& inspector = host_.state.inspector();
-            return row.kind == app::InspectorRow::Kind::Label ? inspector.remove_label(store, row.key)
-                                                              : inspector.remove(store, row.key);
+            return row.kind == app::InspectorRow::Kind::Label
+                       ? inspector.remove_label(store, row.key, save_pending)
+                       : inspector.remove(store, row.key);
         });
     };
 }
@@ -1180,7 +1136,9 @@ void ListActions::submit_property(std::optional<RenameState>& rename) {
             return;
         }
         if (finish_inspector_write(
-                [&](core::NoteStore& store) { return host_.state.inspector().add_label(store, key); },
+                [&](core::NoteStore& store, const app::SavePending& save_pending) {
+                    return host_.state.inspector().add_label(store, key, save_pending);
+                },
                 &input))
             rename.reset();
         return;
@@ -1188,7 +1146,10 @@ void ListActions::submit_property(std::optional<RenameState>& rename) {
     const std::string key = input.property_key();
     const std::string text = input.text();
     if (finish_inspector_write(
-            [&](core::NoteStore& store) { return host_.state.inspector().set(store, key, text); }, &input))
+            [&](core::NoteStore& store, const app::SavePending&) {
+                return host_.state.inspector().set(store, key, text);
+            },
+            &input))
         rename.reset();
 }
 
@@ -1196,12 +1157,22 @@ void ListActions::submit_property(std::optional<RenameState>& rename) {
 // alır. Etiket notun metnini değiştirir: tarama sekmeleri tazeler (temiz sekme yeni metni alır, kirli sekme
 // ezilmez).
 bool ListActions::finish_inspector_write(
-    const std::function<std::expected<std::string, core::Error>(core::NoteStore&)>& write,
+    const std::function<std::expected<std::string, core::Error>(core::NoteStore&, const app::SavePending&)>&
+        write,
     RenameState* input) {
     const auto done = [&] {
-        const std::scoped_lock lock(host_.store_mutex);
+        std::unique_lock lock(host_.store_mutex);
+        // Sekmenin kaydı aynı kilidi alır (ve listeyi tazeler): kaydederken kilit bırakılır.
+        const app::SavePending save_pending = [&](const core::NotePath& note) {
+            if (!host_.save_note)
+                return true;
+            lock.unlock();
+            const bool saved = host_.save_note(note);
+            lock.lock();
+            return saved;
+        };
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
-        return write(*host_.store);
+        return write(*host_.store, save_pending);
     }();
     if (!done) {
         if (input != nullptr)
@@ -1222,7 +1193,7 @@ void ListActions::delete_folder(const std::string& folder, const app::Prompts& p
     const auto removed = [&] {
         const std::scoped_lock lock(host_.store_mutex);
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
-        return trash_.remove_folder(*host_.store, host_.state.listing(), folder, prompts);
+        return trash_.remove_folder(*host_.store, shown_listing(), folder, prompts);
     }();
     if (removed && !*removed)
         return;  // onay bekliyor
@@ -1303,67 +1274,46 @@ void ListActions::submit_move_to(std::optional<RenameState>& rename) {
     host_.status.notify(app::NoticeKind::Success, core::tr("tui.moved_to", {{"to", terminal_safe(dest)}}));
 }
 
-void ListActions::create_folder_from_row(std::optional<NewRowState>& row) {
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız new_row doluyken çağırır
-    std::string_view typed = row->text();
-    typed.remove_suffix(1);
-    const std::string folder = join_folder(host_.state.name_base_folder(), typed);
-    if (host_.state.folder_tree().find(folder)) {
-        row.reset();
-        host_.state.select_folder(folder);
-        host_.status.message = core::tr("tui.folder_exists", {{"path", terminal_safe(folder)}});
-        return;
-    }
-    const auto made = [&] {
-        const std::scoped_lock lock(host_.store_mutex);
-        return host_.store->create_folder(folder);
-    }();
-    if (!made) {
-        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız new_row doluyken çağırır
-        row->set_error(core::format_error(made.error()));
-        return;
-    }
-    row.reset();
-    host_.refresh_notes();
-    host_.state.select_folder(folder);
-    host_.status.message = core::tr("tui.folder_created", {{"path", terminal_safe(folder)}});
-    host_.notify_changed();
-}
-
+// GUI ile tek kural (app::quick_add): ad kırpılır; klasör görünümünde geçerli klasöre, değilse yeni notun
+// klasörüne göredir. Var olan klasör seçilir ve bunu söyler.
 void ListActions::submit_new_row(std::optional<NewRowState>& row, const NewRowDefaults& defaults,
                                  const std::function<void(const core::NotePath&)>& open) {
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız new_row doluyken çağırır
-    if (names_folder(row->text())) {
-        create_folder_from_row(row);
-        return;
-    }
-    // Baştaki `/` sessizce atılıp köke yazılmasın: yol notların köküne görelidir, mutlak yol hatadır.
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız new_row doluyken çağırır
-    if (row->text().starts_with('/')) {
-        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız new_row doluyken çağırır
-        row->set_error(core::format_error(core::NotePath::parse(row->text()).error()));
-        return;
-    }
-    // Klasör görünümünde ad geçerli klasöre göredir; düz listede eski kural.
-    const bool in_folder = host_.state.in_folder_view();
-    const std::string base = host_.state.name_base_folder();
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız new_row doluyken çağırır
-    const std::string name = in_folder ? join_folder(base, row->text()) : row->text();
-    const auto created = [&] {
+    const std::string base = host_.state.in_folder_view() ? host_.state.name_base_folder() : defaults.folder;
+    const auto added = [&] {
         const std::scoped_lock lock(host_.store_mutex);
-        return create_named_note(*host_.store, name, in_folder ? base : defaults.folder, defaults.type,
-                                 defaults.slug_max_length);
-    }();
-    if (!created) {
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız new_row doluyken çağırır
-        row->set_error(core::format_error(created.error()));
+        return app::quick_add(*host_.store, host_.state.folder_tree(), row->text(), base, defaults.type,
+                              defaults.slug_max_length);
+    }();
+    if (!added) {
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız new_row doluyken çağırır
+        row->set_error(core::format_error(added.error()));
         return;
     }
     row.reset();
+    switch (added->kind) {
+    case app::QuickAdd::Kind::Nothing:
+    case app::QuickAdd::Kind::Kept:  // TUI before_note vermez
+        return;
+    case app::QuickAdd::Kind::FolderExists:
+        host_.state.select_folder(added->folder);
+        host_.status.message = terminal_safe(added->message);
+        return;
+    case app::QuickAdd::Kind::FolderCreated:
+        host_.refresh_notes();
+        host_.state.select_folder(added->folder);
+        host_.status.message = terminal_safe(added->message);
+        host_.notify_changed();
+        return;
+    case app::QuickAdd::Kind::NoteCreated:
+        break;
+    }
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- NoteCreated'de not dolu
+    const core::NotePath path = added->note->path;
     host_.refresh_notes();
-    host_.state.map_note_created(created->path);  // haritadan `n`: not haritada kalır, yerine sabitlenir
-    host_.state.select_note(created->path);  // süzgeç notu gizliyorsa temizlenir
-    open(created->path);
+    host_.state.map_note_created(path);  // haritadan `n`: not haritada kalır, yerine sabitlenir
+    host_.state.select_note(path);       // süzgeç notu gizliyorsa temizlenir
+    open(path);
     host_.notify_changed();
 }
 
@@ -1406,6 +1356,11 @@ void ListActions::submit_rename(std::optional<RenameState>& rename) {
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
     if (rename->is_property()) {
         submit_property(rename);
+        return;
+    }
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
+    if (rename->is_view()) {
+        submit_view(rename);
         return;
     }
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- main yalnız rename doluyken çağırır
@@ -1480,36 +1435,24 @@ void ListActions::save_prefs_if_changed() {
         save_prefs();
 }
 
-// Ayarlar ekranıyla aynı kural: okunamayan config.toml ezilmez; yazılamazsa eski değer kalır.
+// Ayarlar ekranı ve GUI ile tek yol (app::write_settings): yalnız `icons` diskteki dosyanın üstüne yazılır,
+// okunamayan config.toml ezilmez; yazılamazsa eski değer kalır.
 void ListActions::toggle_icons() {
     if (!host_.config)
         return;
-    if (user_config_broken()) {
-        const std::u8string path = core::config_file().u8string();
-        host_.status.message = core::tr("tui.settings_config_broken",
-                                        {{"path", terminal_safe(std::string(path.begin(), path.end()))}});
+    const std::string next(host_.config->icons == kIconsOff ? kIconsNerd : kIconsOff);
+    if (const auto written = app::write_settings({{"icons", next}}); !written) {
+        host_.status.message = terminal_safe(written.error());
         return;
     }
-    core::Config next = *host_.config;
-    next.icons = next.icons == kIconsOff ? kIconsNerd : kIconsOff;
-    if (const auto saved = core::save_config(next); !saved) {
-        host_.status.message = terminal_safe(core::format_error(saved.error()));
-        return;
-    }
-    host_.config->icons = next.icons;
-    host_.state.set_icon_style(core::terminal_icon_style(next.icons));
+    host_.config->icons = next;
+    host_.state.set_icon_style(core::terminal_icon_style(next));
 }
 
 void ListActions::save_prefs() {
     host_.state.prune_open_folders();
-    std::error_code ec;
-    std::filesystem::create_directories(core::state_dir(), ec);
-    // Arama geçmişi taşır: yalnız sahibi okuyabilsin.
-    constexpr bool kOwnerOnly = true;
-    const auto written =
-        core::write_file_atomically(prefs_path(), format_list_prefs(host_.state.list_prefs()), kOwnerOnly);
-    if (!written)
-        core::log_warn("event=tui_state_write_failed detail=" + core::format_error(written.error()));
+    app::save_ui_prefs(kPrefsFile, ui_prefs_of(host_.state.list_prefs()),
+                       app::open_folder_filter(host_.state.folder_tree()));
 }
 
 }  // namespace noteapp::tui

@@ -2,33 +2,14 @@
 
 #include "core/i18n.hpp"
 #include "core/text.hpp"
+#include "pdf/md4c_parse.hpp"
 
 #include <algorithm>
-#include <md4c.h>
 #include <utility>
 
 namespace noteapp::pdf {
 
 namespace {
-
-constexpr char kReplacementCharacter[] = "\xEF\xBF\xBD";
-
-// Öznitelik metni; varlık parçaları çözülür (HTML'deki href gibi). md4c wiki hedefini zaten varlıksız kurar.
-std::string attribute_text(const MD_ATTRIBUTE& attribute) {
-    const std::string_view raw(attribute.text, attribute.size);
-    std::string out;
-    for (std::size_t i = 0; attribute.substr_offsets[i] < attribute.size; ++i) {
-        const MD_OFFSET begin = attribute.substr_offsets[i];
-        const std::string_view part = raw.substr(begin, attribute.substr_offsets[i + 1] - begin);
-        if (attribute.substr_types[i] == MD_TEXT_ENTITY)
-            out += core::decode_html_entity(part);
-        else if (attribute.substr_types[i] == MD_TEXT_NULLCHAR)
-            out += kReplacementCharacter;
-        else
-            out += part;
-    }
-    return out;
-}
 
 class BlockBuilder {
 public:
@@ -77,8 +58,7 @@ public:
         case MD_BLOCK_CODE: {
             flush();
             open(Block::Kind::Code);
-            const MD_ATTRIBUTE& lang = static_cast<const MD_BLOCK_CODE_DETAIL*>(detail)->lang;
-            current_.language.assign(lang.text == nullptr ? "" : lang.text, lang.size);
+            current_.language = raw_attribute(static_cast<const MD_BLOCK_CODE_DETAIL*>(detail)->lang);
             break;
         }
         case MD_BLOCK_TABLE:
@@ -113,13 +93,13 @@ public:
         case MD_BLOCK_QUOTE:
             flush();
             --quote_depth_;
-            nesting_.pop_back();
+            close_container();
             break;
         case MD_BLOCK_UL:
         case MD_BLOCK_OL:
             flush();
             lists_.pop_back();
-            nesting_.pop_back();
+            close_container();
             break;
         case MD_BLOCK_LI:
             flush();
@@ -144,10 +124,10 @@ public:
         switch (type) {
         case MD_SPAN_A:
             if (options_.links)
-                links_.push_back({attribute_text(static_cast<const MD_SPAN_A_DETAIL*>(detail)->href), false});
+                links_.push_back({decoded_attribute(static_cast<const MD_SPAN_A_DETAIL*>(detail)->href), false});
             break;
         case MD_SPAN_WIKILINK:
-            links_.push_back({attribute_text(static_cast<const MD_SPAN_WIKILINK_DETAIL*>(detail)->target), true});
+            links_.push_back({decoded_attribute(static_cast<const MD_SPAN_WIKILINK_DETAIL*>(detail)->target), true});
             break;
         case MD_SPAN_STRONG:
             ++bold_depth_;
@@ -232,7 +212,9 @@ private:
         current_.kind = kind;
         current_.list_depth = static_cast<int>(lists_.size());
         current_.quote_depth = quote_depth_;
-        current_.nesting = nesting_;
+        current_.nesting_kept = kept_containers_;
+        current_.nesting_opened = nesting_.substr(kept_containers_);
+        kept_containers_ = nesting_.size();
         current_.list_start = std::exchange(list_opened_, false);
         current_.marker = std::exchange(pending_marker_, {});
         is_open_ = true;
@@ -252,17 +234,9 @@ private:
         flush_marker();
     }
 
-    static Align align_of(MD_ALIGN align) {
-        switch (align) {
-        case MD_ALIGN_LEFT:
-            return Align::Left;
-        case MD_ALIGN_CENTER:
-            return Align::Center;
-        case MD_ALIGN_RIGHT:
-            return Align::Right;
-        default:
-            return Align::Default;
-        }
+    void close_container() {
+        nesting_.pop_back();
+        kept_containers_ = std::min(kept_containers_, nesting_.size());
     }
 
     void flush() {
@@ -277,9 +251,8 @@ private:
         if (!lists_.empty() && lists_.back().ordered)
             marker = std::to_string(lists_.back().next++) + ". ";
         else
-            marker = kListBullets[(std::max<std::size_t>(lists_.size(), 1) - 1) % std::size(kListBullets)];
-        if (item.is_task)
-            marker += item.task_mark == ' ' ? "[ ] " : "[x] ";
+            marker = list_bullet(lists_.size());
+        marker += task_marker(item);
         return marker;
     }
 
@@ -320,7 +293,8 @@ private:
     Block current_;
     bool is_open_ = false;
     std::vector<List> lists_;
-    std::string nesting_;  // açık kaplar dıştan içe (Block::nesting)
+    std::string nesting_;  // açık kaplar dıştan içe (Block::nesting_kept/nesting_opened)
+    std::size_t kept_containers_ = 0;  // son bloktan beri hiç kapanmamış dış kaplar: sonraki bloğun nesting_kept'i
     bool list_opened_ = false;  // liste açıldı, ilk bloğu henüz yok
     std::string pending_marker_;
     int quote_depth_ = 0;
@@ -336,43 +310,11 @@ private:
     bool in_table_cell_ = false;
 };
 
-BlockBuilder& builder_of(void* userdata) {
-    return *static_cast<BlockBuilder*>(userdata);
-}
-
 }  // namespace
 
 std::vector<Block> parse_markdown(std::string_view text, MarkdownOptions options) {
     BlockBuilder builder(options);
-    MD_PARSER parser{};
-    // MD_DIALECT_GITHUB'ın dipnot/uyarı blokları plan kapsamında değil; yalnız gereken bayraklar.
-    // MD_FLAG_NOHTML sözleşmedir: not içeriği güvenilmez.
-    parser.flags = MD_FLAG_TABLES | MD_FLAG_TASKLISTS | MD_FLAG_STRIKETHROUGH | MD_FLAG_PERMISSIVEAUTOLINKS |
-                   MD_FLAG_NOHTML;
-    if (options.links)
-        parser.flags |= MD_FLAG_WIKILINKS;
-    parser.enter_block = [](MD_BLOCKTYPE type, void* detail, void* userdata) {
-        builder_of(userdata).enter_block(type, detail);
-        return 0;
-    };
-    parser.leave_block = [](MD_BLOCKTYPE type, void*, void* userdata) {
-        builder_of(userdata).leave_block(type);
-        return 0;
-    };
-    parser.enter_span = [](MD_SPANTYPE type, void* detail, void* userdata) {
-        builder_of(userdata).enter_span(type, detail);
-        return 0;
-    };
-    parser.leave_span = [](MD_SPANTYPE type, void*, void* userdata) {
-        builder_of(userdata).leave_span(type);
-        return 0;
-    };
-    parser.text = [](MD_TEXTTYPE type, const MD_CHAR* value, MD_SIZE size, void* userdata) {
-        builder_of(userdata).text(type, std::string_view(value, size));
-        return 0;
-    };
-    // md4c yalnız bellek yetmezse hata verir; o ana kadarkiler çizilir, bad_alloc değilse dışa aktarma sürer.
-    md_parse(text.data(), static_cast<MD_SIZE>(text.size()), &parser, &builder);
+    parse_md4c(text, options.links ? kMarkdownFlags | MD_FLAG_WIKILINKS : kMarkdownFlags, builder);
     return std::move(builder).finish();
 }
 

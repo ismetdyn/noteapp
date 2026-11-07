@@ -217,6 +217,43 @@ std::expected<Document::Saved, core::Error> Document::save(core::NoteStore& stor
     }
 }
 
+std::expected<core::NotePath, core::Error> move_note(core::NoteStore& store, const core::NotePath& from,
+                                                     std::string_view folder, std::string_view name,
+                                                     std::string_view type) {
+    std::string target = std::string(name) + "." + std::string(type);
+    if (!folder.empty())
+        target = std::string(folder) + "/" + target;
+    auto to = core::NotePath::parse(target);
+    if (!to)
+        return std::unexpected(to.error());
+    if (*to == from)
+        return from;
+    return store.move(from, *to);
+}
+
+std::string Document::disk_notice() const {
+    if (deleted_on_disk_)
+        return core::tr("app.deleted_on_disk");
+    return changed_on_disk_ ? core::tr("app.changed_on_disk") : std::string{};
+}
+
+std::expected<bool, core::Error> Document::autosave(core::NoteStore& store, std::string_view text) {
+    const auto saved = save(store, text);
+    if (!saved)
+        return std::unexpected(saved.error());
+    switch (*saved) {
+    case Saved::Written:
+        return true;
+    case Saved::Conflict:
+        note_disk_change(DiskChange::Changed);
+        break;
+    case Saved::Gone:
+        note_disk_change(DiskChange::Deleted);
+        break;
+    }
+    return false;
+}
+
 std::expected<void, core::Error> Document::overwrite(core::NoteStore& store, std::string_view text) {
     if (!path_ || !writable())
         std::abort();

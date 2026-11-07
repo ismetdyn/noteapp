@@ -106,6 +106,65 @@ TEST_CASE("find also lists notes found through relations after the content lines
     CHECK(by_relation.exit_code == 0);
     CHECK((by_relation.out == "team.md\nbudget.md\n" || by_relation.out == "budget.md\nteam.md\n"));
     CHECK(box.run({"ls", "linked:budget"}).out == "team.md\n");
+
+    // find de sorgu argümanlarını alır (TUI/GUI içerik aramasıyla aynı hat); yalnız argüman metin değildir.
+    CHECK(box.run({"find", "budget", "type:txt"}).exit_code == 1);
+    CHECK(box.run({"find", "type:md"}).exit_code == 2);
+}
+
+// Eşitlik (NY-S): `ls` ad aramasında da ilişkiyle bulunan not ad eşleşmelerinin altında, TUI/GUI'deki nedeniyle
+// gelir; düz boru çıktısı (yalın yollar) `find` gibi değişmez.
+TEST_CASE("ls also lists notes found through relations under the name matches") {
+    const Sandbox box;
+    box.put("budget.md", "rakamlar\n");
+    box.put("team.md", "ekip\n");
+    box.put("other.md", "yok\n");
+    REQUIRE(box.run({"relation", "add", "team.md", "budget.md", "--name", "funds", "--directed"}).exit_code ==
+            0);
+
+    CHECK(box.run({"ls", "budget"}).out == "budget.md\n");
+    CHECK(box.run({"ls", "budget", "-0"}).out == std::string("budget.md\0", 10));
+
+    const auto long_form = box.run({"ls", "budget", "-l"});
+    CHECK(long_form.exit_code == 0);
+    CHECK(long_form.out.find("  budget.md\n") != std::string::npos);
+    CHECK(long_form.out.find("  team.md\tbağlı: budget.md (funds)\n") != std::string::npos);
+
+    const auto json = box.run({"ls", "budget", "--json"});
+    CHECK(json.exit_code == 0);
+    CHECK(json.out.find("{\"path\":\"budget.md\",\"type\":\"md\"") != std::string::npos);
+    CHECK(json.out.find(",\"reason\":\"linked\",\"label\":\"funds\",\"other\":\"budget.md\",\"hops\":1}") !=
+          std::string::npos);
+    CHECK(json.out.find("other.md") == std::string::npos);
+    CHECK(box.run({"ls", "budget", "--json", "-n", "1"}).out.find("team.md") == std::string::npos);
+    // -0 her zaman yalnız yol: -l ile de NUL akışına ilişki satırı girmez.
+    CHECK(box.run({"ls", "budget", "-l", "-0"}).out.find("team.md") == std::string::npos);
+}
+
+// --limit süzgeçten sonra keser: en üst içerik isabeti süzülen tipteyse kalan eşleşme kaybolmaz.
+TEST_CASE("find applies --limit after the search arguments filter") {
+    const Sandbox box;
+    // İki isabet satırı: içerik sırasında txt'den önce gelir (isabet satırı sayısı azalan).
+    box.put("a1.md", "kelime\nkelime\n");
+    box.put("a2.md", "kelime\nkelime\n");
+    box.put("a3.md", "kelime\nkelime\n");
+    box.put("z.txt", "kelime\n");
+    const auto result = box.run({"find", "kelime", "type:txt", "-n", "1"});
+    CHECK(result.exit_code == 0);
+    CHECK(result.out == "z.txt:1: kelime\n");
+}
+
+// Bilinmeyen anahtar (`a:b`, `http://x`) düz metindir; bozuk değer argümanın yeriyle bildirilir (TUI gibi).
+TEST_CASE("unknown keys stay text and a bad argument names its column") {
+    const Sandbox box("en");
+    box.put("link.md", "see http://x and a:b\n");
+    CHECK(box.run({"find", "a:b"}).out == "link.md:1: see http://x and a:b\n");
+    CHECK(box.run({"find", "http://x"}).out == "link.md:1: see http://x and a:b\n");
+
+    const auto bad = box.run({"ls", "plan sort:bogus"});
+    CHECK(bad.exit_code == 2);
+    CHECK(bad.err.find("Column 11:") != std::string::npos);
+    CHECK(box.run({"find", "plan sort:bogus"}).err.find("Column 11:") != std::string::npos);
 }
 
 TEST_CASE("find succeeds on relation hits alone; tags and relation names carry their own fields") {

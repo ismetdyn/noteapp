@@ -122,16 +122,6 @@ struct CreatedNote {
     Revision revision;
 };
 
-// Geçişin tek notu. Kimlik yoldan türetilir: iki cihaz aynı notu aynı düğüme getirir. deleted_at dolu not
-// çöpe gider.
-struct ImportedNote {
-    NotePath path;
-    std::string bytes;
-    std::optional<std::chrono::system_clock::time_point> updated_at = std::nullopt;
-    std::optional<std::chrono::system_clock::time_point> created_at = std::nullopt;
-    std::optional<std::chrono::system_clock::time_point> deleted_at = std::nullopt;
-};
-
 // Adlı ilişki (SPEC-graph "Adlı ilişkiler"): RELATED_TO kenarı, `name` (gösterim; yoksa adsız) ve `directed`
 // (yoksa yönsüz). Bir not çiftinde ad anahtarı (tag_key) başına tek ilişki, adsız en çok bir tane.
 struct RelationSpec {
@@ -235,12 +225,6 @@ struct UnreachableNote {
     std::string reason;  // invalid_name, invalid_folder, too_many_collisions
 };
 
-struct ImportOutcome {
-    std::size_t imported = 0;
-    std::size_t unchanged = 0;              // aynı baytlar ya da aynı geçiş tabanı zaten var
-    std::vector<NotePath> conflict_copies;  // grafta başka içerik vardı: dosyanın sürümü kopya oldu
-};
-
 // Notlar <dizin>/graph.db içindedir (SPEC-graph); dosya ağacı yoktur, yol IN_FOLDER ve CHILD_OF'tan
 // türetilir. Kopyalar aynı bağlantıyı paylaşır, thread-safe'tir. Hata durumunda istisna fırlatmaz.
 class NoteStore {
@@ -290,12 +274,15 @@ public:
     // Taşı/yeniden adlandır; hedef klasörler oluşur, uzantı değişimi tip değişimidir. Hedef varsa
     // AlreadyExists (asla ezilmez). Başarıda hedef yolu döner.
     std::expected<NotePath, Error> move(const NotePath& from, const NotePath& to);
-    // Notu kalıcı siler; onay ön yüzün işidir.
-    std::expected<void, Error> remove(const NotePath& path);
+    // Notu kalıcı siler; onay ön yüzün işidir. `expected` doluysa revizyon aynı işlemde denetlenir: not
+    // kullanıcının onayladığı hâlden değiştiyse (senkron, başka süreç) ModifiedExternally, not yerinde kalır.
+    std::expected<void, Error> remove(const NotePath& path,
+                                      const std::optional<Revision>& expected = std::nullopt);
 
     // Çöp kutusu: Note.deleted_at, senkronla cihazlar arası taşınır. Baytlara dokunmaz. Çöpte yol doluysa
-    // "-2"...
-    std::expected<TrashItem, Error> trash(const NotePath& path);
+    // "-2"... `expected`: remove'daki gibi.
+    std::expected<TrashItem, Error> trash(const NotePath& path,
+                                          const std::optional<Revision>& expected = std::nullopt);
     std::expected<std::vector<TrashItem>, Error> list_trash() const;  // atılma azalan, eşitlikte yol artan
     // item: TrashItem::path. Canlı ağaçta ad doluysa "-2", "-3"... (asla ezilmez). Başarıda canlı yol döner.
     std::expected<NotePath, Error> restore(const NotePath& item);
@@ -353,15 +340,6 @@ public:
     // Not içeren klasör force olmadan NotEmpty ({count} = not sayısı) verir ve hiçbir şey silinmez; force
     // özyinelemeli siler.
     std::expected<void, Error> remove_folder(std::string_view folder, bool force);
-
-    // Toplu içe aktarma (geçiş, perf kurulumu): tek işlem. Kimlik yoldan türetildiğinden tekrar etkisizdir.
-    std::expected<ImportOutcome, Error> import_notes(std::span<const ImportedNote> notes);
-    std::expected<void, Error> import_folders(std::span<const std::string> folders);
-    // Tüm notların [[bağlantı]] kenarlarını yeniden kurar: geçişte hedef, kaynaktan sonra gelmiş olabilir.
-    std::expected<void, Error> relink_notes();
-    // Bu not içe aktarıldı mı: gövde aynı, ya da içe aktarma tabanı aynı (sonradan düzenlenmiş), ya da
-    // kopyası var.
-    std::expected<bool, Error> verify_imported(const ImportedNote& note) const;
 
     // note_sync.cpp içindir: senkron, notu core'da bırakarak aynı bağlantıyı kullanır.
     struct Impl;

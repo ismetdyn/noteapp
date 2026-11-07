@@ -16,24 +16,6 @@ namespace noteapp::tui {
 namespace {
 
 constexpr std::string_view kBlankChars = " \t\r\n";
-constexpr char kDelete = 0x7f;
-
-// UTF-8 devam baytı (10xxxxxx): Backspace bir kod noktasının tamamını silsin.
-bool is_continuation(char c) {
-    return (static_cast<unsigned char>(c) & 0xC0) == 0x80;
-}
-
-void pop_code_point(std::string& s) {
-    while (s.size() > 1 && is_continuation(s.back()))
-        s.pop_back();
-    if (!s.empty())
-        s.pop_back();
-}
-
-// Kontrol karakterleri alana girmez (terminal olaylarından sızabilir).
-bool is_printable(std::string_view text) {
-    return !text.empty() && static_cast<unsigned char>(text.front()) >= 0x20 && text.front() != kDelete;
-}
 
 // NotePath'in hata biçimiyle aynı: satır içi hata mesajı format_error ile üretilir.
 core::Error invalid(std::string_view reason, std::string_view value) {
@@ -127,14 +109,14 @@ void SaveDialogState::edit_text(Key key, std::string_view text) {
     std::string& target = field_text();
     if (focus_ == Field::Type && !type_typing_) {
         // Önerilen/seçilen tip ilk tuşta tümden değişir; sonrası ekleme.
-        if (key == Key::Char && !is_printable(text))
+        if (key == Key::Char && !core::is_printable(text))
             return;
         type_.clear();
         type_typing_ = true;
     }
     if (key == Key::Backspace) {
-        pop_code_point(target);
-    } else if (is_printable(text)) {
+        core::pop_code_point(target);
+    } else if (core::is_printable(text)) {
         if (focus_ == Field::Type && target.empty() && text == ".")
             return;  // ".xml" yazan kullanıcı için baştaki nokta atılır
         target.append(text);
@@ -276,19 +258,6 @@ SaveDialogInit move_dialog_init(const core::NotePath& current, std::vector<std::
     return init;
 }
 
-std::expected<core::NotePath, core::Error> move_note(core::NoteStore& store, const core::NotePath& from,
-                                                     const SaveRequest& request) {
-    std::string target = request.name + "." + request.type;
-    if (!request.folder.empty())
-        target = request.folder + "/" + target;
-    auto to = core::NotePath::parse(target);
-    if (!to)
-        return std::unexpected(to.error());
-    if (*to == from)
-        return from;
-    return store.move(from, *to);
-}
-
 std::string initial_folder(const core::NotePath* selected, std::string_view default_folder) {
     if (selected) {
         const std::string path = selected->string();
@@ -361,6 +330,12 @@ RenameState::RenameState(ImportSource, std::string folder) : base_(std::move(fol
 RenameState::RenameState(PropertyLine, std::string key, std::string initial)
     : is_property_(true), property_key_(std::move(key)), line_(InputKind::Find) {
     line_.set_text(std::move(initial));
+}
+
+// Ad tek metindir (Find: sözcüklere bölünmez); silmede adaylar kayıtlı görünüm adlarıdır.
+RenameState::RenameState(ViewName, std::string query, std::vector<std::string> names)
+    : is_view_(true), view_query_(std::move(query)), line_(InputKind::Find) {
+    line_.set_sources(word_input_sources(std::move(names)));
 }
 
 // Adın tamamı tek metindir (Find: sözcüklere bölünmez); adaylar adların gösterimidir.

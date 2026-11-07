@@ -501,6 +501,22 @@ std::string slugify_stem(std::string_view stem, std::chrono::system_clock::time_
     return joined.empty() ? timestamp_name(now) : joined;
 }
 
+void pop_code_point(std::string& text) {
+    while (text.size() > 1 && (static_cast<unsigned char>(text.back()) & 0xC0U) == 0x80U)
+        text.pop_back();
+    if (!text.empty())
+        text.pop_back();
+}
+
+bool is_printable(std::string_view text) {
+    constexpr char kDelete = 0x7F;
+    return !text.empty() && static_cast<unsigned char>(text.front()) >= 0x20 && text.front() != kDelete;
+}
+
+bool is_typable(std::string_view text) {
+    return is_printable(text) && is_valid_utf8(text);
+}
+
 std::string normalize_line_endings(std::string_view text) {
     std::string out;
     out.reserve(text.size());
@@ -589,8 +605,6 @@ std::string human_size(std::uintmax_t bytes) {
     return std::format("{:.1f} {}", value, kUnits[unit]);
 }
 
-namespace {
-
 std::tm local_tm(std::chrono::system_clock::time_point time) {
     const std::time_t seconds = std::chrono::system_clock::to_time_t(time);
     std::tm local{};
@@ -601,6 +615,8 @@ std::tm local_tm(std::chrono::system_clock::time_point time) {
 #endif
     return local;
 }
+
+namespace {
 
 std::string format_tm(const std::tm& local, const char* format) {
     std::array<char, 32> text{};

@@ -15,7 +15,8 @@ inline ViewKind view_kind_for(std::string_view extension) {
 }
 
 // Saf: kaynak baytlar + genişlik -> biçimli satırlar; ağ ya da dosya yok. `source` geçerli UTF-8 olmalı
-// (PreviewCache arındırır). HTML düz metin kalır, görsel yer tutucuya, bağlantı metin + soluk URL'ye iner.
+// (PreviewCache arındırır). HTML düz metin kalır, görsel yer tutucuya, bağlantı metin + soluk URL'ye iner;
+// [[wiki]] bağlantısı GUI gibi ayraçsız metniyle, hedefi RenderedView::wiki_targets'ta.
 // `limits`: satır, tablo ve kod bloğu satırı sınırları (source_bytes'a çağıran bakar).
 RenderedView render_markdown(std::string_view source, int width, CellWidthFn cell_width,
                              const ViewLimits& limits = {});

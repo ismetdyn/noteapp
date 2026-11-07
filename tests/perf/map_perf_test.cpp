@@ -4,6 +4,7 @@
 #include "gui/gui_state.hpp"
 #include "gui/view.hpp"
 #include "gui/window_fixture.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 
 #include <algorithm>
@@ -36,17 +37,17 @@ std::string perf_path(int index) {
 
 // Not başına iki bağlantı, her ikinci notta bir üçüncü: 2.000 çizilen notta ~5.000 kenar.
 void seed_perf_corpus(const WindowFixture& fixture) {
-    std::vector<core::ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     for (int i = 0; i < kPerfNotes; ++i) {
         std::string body =
             "[[" + perf_path((i + 1) % kPerfNotes) + "]] [[" + perf_path((i + 13) % kPerfNotes) + "]]";
         if (i % 2 == 0)
             body += " [[" + perf_path((i + 97) % kPerfNotes) + "]]";
-        notes.push_back(core::ImportedNote{np(perf_path(i)), body + "\n"});
+        notes.push_back(noteapp::test::ImportedNote{np(perf_path(i)), body + "\n"});
     }
     noteapp::test::bulk_seed(fixture.store_dir(), notes);
     core::NoteStore store(fixture.store_dir());
-    REQUIRE(store.relink_notes().has_value());
+    REQUIRE(noteapp::test::relink_notes(store).has_value());
 }
 
 }  // namespace

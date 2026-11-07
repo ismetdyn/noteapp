@@ -9,6 +9,7 @@
 #include "search/content_index.hpp"
 #include "search/global_search.hpp"
 #include "search/query.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 #include "sync/note_status.hpp"
@@ -59,14 +60,14 @@ void write_corpus(const fs::path& dir) {
     }
     words[0] = "proje";
     words[1] = "bütçe";
-    std::vector<core::ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     for (int n = 0; n < kNotes; ++n) {
         std::string text;
         while (text.size() < 5000) {
             text += words[rng() % words.size()];
             text += (rng() % 12 == 0) ? '\n' : ' ';
         }
-        notes.push_back(core::ImportedNote{
+        notes.push_back(noteapp::test::ImportedNote{
             core::NotePath::parse("d" + std::to_string(n % 50) + "/n" + std::to_string(n) + ".md").value(),
             std::move(text)});
     }
@@ -103,10 +104,10 @@ TEST_CASE("query apply: 5000 notes filtered and sorted within 20 ms") {
 // tablo ve vurgu) 5.000 notu döndürürken liste süzgecinin bütçesinde (yukarıdaki query apply, 20 ms).
 TEST_CASE("map query: a read returning 5000 notes, with its table and highlight, within 20 ms") {
     const test::TempDir dir;
-    std::vector<core::ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     notes.reserve(kNotes);
     for (int n = 0; n < kNotes; ++n)
-        notes.push_back(core::ImportedNote{
+        notes.push_back(noteapp::test::ImportedNote{
             core::NotePath::parse("d" + std::to_string(n % 50) + "/n" + std::to_string(n) + ".md").value(),
             "not " + std::to_string(n) + "\n"});
     test::bulk_seed(dir.path(), notes);
@@ -134,10 +135,10 @@ TEST_CASE("map query: a read returning 5000 notes, with its table and highlight,
 // bütçenin içinde kalmalı.
 TEST_CASE("map query: naming and tabling a 100000-row result stays inside the default 5 s duration budget") {
     const test::TempDir dir;
-    std::vector<core::ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     notes.reserve(kNotes);
     for (int n = 0; n < kNotes; ++n)
-        notes.push_back(core::ImportedNote{
+        notes.push_back(noteapp::test::ImportedNote{
             core::NotePath::parse("d" + std::to_string(n % 50) + "/n" + std::to_string(n) + ".md").value(),
             "not " + std::to_string(n) + "\n"});
     test::bulk_seed(dir.path(), notes);
@@ -290,9 +291,9 @@ TEST_CASE(
     for (const int note_count : {kNotes, 2 * kNotes}) {
         CAPTURE(note_count);
         const test::TempDir dir;
-        std::vector<core::ImportedNote> notes;
+        std::vector<noteapp::test::ImportedNote> notes;
         for (int n = 0; n < note_count; ++n)
-            notes.push_back(core::ImportedNote{
+            notes.push_back(noteapp::test::ImportedNote{
                 core::NotePath::parse("d" + std::to_string(n % 50) + "/n" + std::to_string(n) + ".md")
                     .value(),
                 "not " + std::to_string(n) + "\n"});

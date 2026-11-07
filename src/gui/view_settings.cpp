@@ -1,4 +1,5 @@
 #include "core/i18n.hpp"
+#include "core/text.hpp"
 #include "gui/view_internal.hpp"
 
 #include <algorithm>
@@ -152,7 +153,7 @@ void View::draw_setting_field(const std::string& key) {
         remember_item_center("setting_hint:" + key);
     }
     if (!page.field_error(key).empty()) {
-        draw_error(page.field_error(key));
+        draw_error(core::terminal_safe(page.field_error(key)));
         remember_item_center("setting_error:" + key);
     }
     ImGui::PopID();
@@ -204,7 +205,7 @@ void View::draw_token_row() {
         queue([this] { state_.settings().clear_token(); });
     ImGui::EndDisabled();
     if (page.token_enabled()) {
-        const std::string state = core::tr(page.token_stored() ? "gui.token_stored" : "gui.token_none");
+        const std::string state = core::tr(page.token_stored() ? "gui.token_stored" : "app.token_none");
         ImGui::PushTextWrapPos(0.0F);
         ImGui::TextUnformatted(core::tr("gui.token_state", {{"state", state}}).c_str());
         ImGui::PopTextWrapPos();
@@ -230,7 +231,7 @@ void View::draw_connection_test_row() {
     // Uzun senkron hatası kalan alanda sarılır; kalan alan çok darsa düğmenin altına iner.
     flow_after_previous(ImGui::GetFontSize() * kMinInlineFieldEms, row_start_x, row_width);
     ImGui::PushTextWrapPos(0.0F);
-    ImGui::TextUnformatted(page.test_result().c_str());
+    ImGui::TextUnformatted(core::terminal_safe(page.test_result()).c_str());
     ImGui::PopTextWrapPos();
     remember_item_center("test_result");
 }
@@ -271,13 +272,14 @@ void View::draw_settings_footer() {
     const float top = ImGui::GetCursorPosY();
     ImGui::Separator();
     if (!page.global_error().empty()) {
-        draw_error(page.global_error());
+        // Hata dosya yolunu ve toml++ ayrıntısını taşır: denetim karakterleri görünür işaretle çizilir.
+        draw_error(core::terminal_safe(page.global_error()));
         remember_item_center("settings_error");
     }
     const bool changed = page.has_changes();
     const float row_start_x = ImGui::GetCursorScreenPos().x;
     const float row_width = ImGui::GetContentRegionAvail().x;
-    const std::string save_label = core::tr("gui.settings_save");
+    const std::string save_label = core::tr("app.settings_save");
     ImGui::BeginDisabled(!changed);
     if (button("revert", core::tr("gui.settings_revert")))
         queue([this] { state_.settings().revert(); });

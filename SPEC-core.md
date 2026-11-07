@@ -238,7 +238,7 @@ config'tedir.
   `limits.search.property_keys` (32; `prop:` süzgecinin depo görüntüsü başına önbellekte tuttuğu anahtar, en son
   kullanılanlar; `0` sınırsız, SPEC-search),
   `limits.sync.merge_input_bytes` (4 MiB; üç yönlü birleştirmenin en büyük girdisi, aşan çakışma kopya not olur).
-  Yapılandırmasız depo (`NoteStore(dizin)`, geçiş) `kDefaultFolderPathBytes` kullanır; bir test defaults.toml ile
+  Yapılandırmasız depo (`NoteStore(dizin)`) `kDefaultFolderPathBytes` kullanır; bir test defaults.toml ile
   aynı olduğunu denetler. OS dosya adı sınırının tek sahibi `core::kMaxFileNameBytes` (255, `note_path.hpp`).
   Not başına bağlantı/etiket tavanı, klasör derinliği, kopya sayacı ve ad arama sigortası kaldırıldı (sonlu
   kümede arama doğal olarak biter). Kalan tek ad deneme sigortası `create_private_temp_file`'ındır (rastgele ad,
@@ -248,14 +248,13 @@ config'tedir.
   `preview_fence_info_bytes` 64, `preview_table_header_bytes` 4 KiB; `app::markdown_chunk_limits_of`, iki arayüz; 0
   sınırsız, riski defaults.toml'da), renklendirme (`highlight_bytes` 2 MiB, `highlight_line_bytes` 64 KiB), yazım satırı, tamamlama
   (`completion_*`), yapıştırma (`paste_bytes` 32 MiB, terminal yapıştırmasında da; bitiş işareti gelmeyen yapıştırmanın sessizlik süresi `paste_timeout` 1 sn, 0 = hiç), arama geçmişi, geri alma (`undo_bytes` 64 MiB), taşıma
-  diyaloğu önerileri ve açılıştaki geçiş dışı dosya ipucu bütçesi (`stray_notice_files`, `stray_notice_bytes`).
+  diyaloğu önerileri.
   `[limits.lsp]` sunucu çıktısı korumaları (çerçeve, JSON iç içeliği/değer sayısı, tanı, öneri, bekleyen cevap),
   yansıtılan not boyu ve üç süre (`initialize_timeout`, `write_timeout`, `shutdown_timeout`). Değerler ve neyi
   saydıkları defaults.toml'da, davranışları SPEC-tui'de. Alt sınır olan en kısa tamamlama öneki `[tuning]
   completion_min_prefix_bytes`'tadır (`0 = sınırsız` anlamsız). TUI modülleri değeri kendi struct'ıyla alır
   (`tui::view_limits_of`, `syntax_limits_of`, `completion_limits_of`, `lsp_limits_of`); bir test bu struct'ların
-  kod varsayılanlarının defaults.toml ile aynı olduğunu denetler. `note graph status`, `migrate --new` ve TUI
-  açılış ipucu depoyu config'le açar (`limits.core.folder_path_bytes`). OSC 52'nin 75.000 baytı terminal protokolü
+  kod varsayılanlarının defaults.toml ile aynı olduğunu denetler. OSC 52'nin 75.000 baytı terminal protokolü
   sınırıdır, config'te değildir. `view_bytes` GUI önizlemesinin de sınırıdır: kullanıcı bir sınır verirse üstündeki not iki arayüzde de
   reddedilmez, biçimlenmeden ham metinle ve nedeniyle (anahtar adı dahil) gösterilir. Varsayılan sınırsızdır: md, csv ve
   json biçimli görünümü parça parça üretilir (SPEC-tui "REVIEW biçimli görünüm", SPEC-gui "Önizleme").
@@ -335,10 +334,10 @@ Bu bölüm yukarıdaki "Yazma", "Listeleme", "Klasörler", "Yol güvenliği" ve 
 - **MODIFIED** `absolute_path` kalktı. Dosya isteyen araç `edit_in_temp_file` kullanır: özel dosya (`create_private_temp_file`, 0600, 0700 dizin), bağ okunmaz, çakışma denetimiyle geri yazma, sonra silme. Kayıt başarısızsa dosya kalır, hata yolunu söyler (`error.edit_kept`). Bilinen sınır: süreç öldürülürse dosya `<durum>/tmp` altında kalır.
 - **MODIFIED** `.keep` emekli: boş klasör `Folder` düğümüdür. `remove_folder` yalnız canlı notları sayar.
 - **MODIFIED** Not boyutu (L4b, 2026-11-03): çerçeve (`limits.graph.frame_bytes`) not boyutunu sınırlamaz; büyük not günlükte parçalara bölünür ve senkronlanır (SPEC-graph "Parçalı çerçeve ve çok çerçeveli işlem"). Tek sınır depolamanındır: not, işlemiyle birlikte SQLite'ın tek değer sınırına (1 GB) sığmalıdır, aşan kayıt `LimitExceeded`; geçişte bu sınırı aşan dosya `too_large` ile atlanır ve raporlanır.
-- **ADDED** `LINKS_TO`: `[[hedef]]`, `[[hedef|takma]]`, `[[hedef#başlık]]`, kayıtla aynı işlemde. Çözüm sırası yol, uzantısız yol, dosya adı, yalın ad. Hedef yazma anında çözülür: sonradan oluşan hedef, kaynak yeniden kaydedilene ya da `note graph migrate`'e kadar bağlanmaz. Not başına en çok 1024 bağlantı.
+- **ADDED** `LINKS_TO`: `[[hedef]]`, `[[hedef|takma]]`, `[[hedef#başlık]]`, kayıtla aynı işlemde. Çözüm sırası yol, uzantısız yol, dosya adı, yalın ad. Hedef yazma anında çözülür: sonradan oluşan hedef, kaynak yeniden kaydedilene kadar bağlanmaz. Not başına en çok 1024 bağlantı.
 - **ADDED** `created_at`, `origin` gerçek değerdir, `origin` derleme platformu sabitidir (`windows`, `linux`, `macos`, `android`; geçişte `unknown`). `origin:` ve `created:` araması çalışır.
 - **MODIFIED** `tuning.autosave_ms` 1000'den 3000'e. Ölçüm (30 dakikalık benzetim, `tests/perf/note_store_perf_test.cpp`): 2 KiB notta 1 sn'de 119 kayıt 462 KiB, 3 sn'de 57 kayıt 217 KiB; 20 KiB notta 2,6 MiB'den 1,26 MiB'ye. Nedenselliğe dokunmaz. Bedel: kapanmadan öldürülen GUI son 3 sn'yi kaybeder (kapanış ve not geçişi yine kaydeder).
-- **ADDED** `Error::Code::MigrationRequired`; `health()` depo sorununu ön yüze söyler. Eski not bekleyen dizinde tüm yazmalar reddedilir.
+- **ADDED** `health()` depo sorununu ön yüze söyler.
 - **Performans (Release, 5.000 not, 2 KB):** `note "x"` 36 ms (sınır 200), açılış 44 ms (300), tuş başına liste 2 ms (50).
 
 ## Değişiklik 2026-11-01

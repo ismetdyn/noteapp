@@ -176,26 +176,13 @@ TEST_CASE("__complete writes nothing to the store or the config") {
     CHECK(fs::last_write_time(box.config_file()) == config_time);
 }
 
-TEST_CASE("__complete without a store, with old notes awaiting migration or a damaged store prints nothing") {
+TEST_CASE("__complete without a store or with a damaged store prints nothing") {
     {
         const Sandbox box;
         const auto result = box.run({"__complete", "note"});
         CHECK(result.exit_code == 0);
         CHECK(result.out.empty());
         CHECK(result.err.empty());
-        CHECK_FALSE(fs::exists(box.data() / "graph.db"));
-    }
-    {
-        const Sandbox box;
-        fs::create_directories(box.notes());
-        std::ofstream(box.notes() / "eski.md") << "eski not\n";
-        for (const char* kind : {"note", "folder", "tag", "view"}) {
-            CAPTURE(kind);
-            const auto result = box.run({"__complete", kind});
-            CHECK(result.exit_code == 0);
-            CHECK(result.out.empty());
-            CHECK(result.err.empty());
-        }
         CHECK_FALSE(fs::exists(box.data() / "graph.db"));
     }
     {

@@ -6,6 +6,7 @@ add_library(noteapp_app
     commands.cpp
     data_preview.cpp
     document.cpp
+    export.cpp
     graph_layout.cpp
     import_files.cpp
     inspector.cpp
@@ -13,18 +14,21 @@ add_library(noteapp_app
     item_ops.cpp
     label_fold.cpp
     listing.cpp
+    map_camera.cpp
     map_query.cpp
     map_relations.cpp
     note_map.cpp
     notices.cpp
     settings.cpp
-    stray_notice.cpp
+    sync_indicator.cpp
     sync_status_worker.cpp
     tabs.cpp
-    trash_ops.cpp)
+    trash_ops.cpp
+    ui_prefs.cpp)
 target_include_directories(noteapp_app PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(noteapp_app PUBLIC noteapp_core noteapp_search noteapp_sync noteapp_detect
-    PRIVATE tomlplusplus::tomlplusplus)
-# Sekmelerin `[[tabs]]` bloğu (tabs.cpp): ayrıştırma hatası parse_result ile döner (config.cpp ile aynı mod).
+    PRIVATE noteapp_pdf tomlplusplus::tomlplusplus)
+# Durum dosyaları (ui_prefs.cpp) ve sekmelerin `[[tabs]]` bloğu (tabs.cpp): ayrıştırma hatası parse_result ile
+# döner (config.cpp ile aynı mod).
 target_compile_definitions(noteapp_app PRIVATE TOML_EXCEPTIONS=0)
 noteapp_target_defaults(noteapp_app)

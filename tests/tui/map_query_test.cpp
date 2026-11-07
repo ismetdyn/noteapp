@@ -217,7 +217,7 @@ TEST_CASE("map query: a write asks first with No selected; Yes applies it and th
     REQUIRE(s.confirm.has_value());
     CHECK(s.confirm->message() == s.state.map_query().confirm_text());
     CHECK_FALSE(s.confirm->yes_selected());
-    CHECK(s.screen().find(core::tr("tui.query_apply")) != std::string::npos);
+    CHECK(s.screen().find(core::tr("app.query_apply")) != std::string::npos);
     s.answer(false);
     CHECK(s.count("MATCH ()-[r:RELATED_TO]->() WHERE r.name = 'q' RETURN r") == 0);
 
@@ -265,4 +265,69 @@ TEST_CASE("map query: O shows a table in the list pane; Down and Enter open a ro
 
     s.key(Key::Char, "O");
     CHECK_FALSE(s.state.map_query_table());
+}
+
+namespace {
+
+void type_into(std::optional<tui::RenameState>& rename, std::string_view text) {
+    REQUIRE(rename.has_value());
+    for (const char c : text)
+        rename->handle(Key::Char, std::string(1, c));
+}
+
+}  // namespace
+
+// SD11b: kayıtlı görünüm TUI'de de (palet view.save / view.remove, haritada K); kural GUI ve CLI ile aynı.
+TEST_CASE("map query: K saves the shown read as a view; view.remove deletes one after a second Enter") {
+    Scene s;
+    s.key(Key::Char, "K");  // sonuç yok: ileti, girdi açılmaz
+    CHECK_FALSE(s.rename.has_value());
+    CHECK(s.status.message == core::tr("error.view_needs_query"));
+
+    const std::string text = "MATCH (n:Note) WHERE n.name = 'b' RETURN n";
+    s.query(text);
+    s.key(Key::Char, "K");
+    REQUIRE(s.rename.has_value());
+    CHECK(s.rename->is_view());
+    type_into(s.rename, " mine");
+    s.actions.handle_rename_key(s.rename, Key::Enter, {});
+    REQUIRE(s.rename.has_value());  // baş boşluk core kuralıyla reddedilir, kırpılmaz; girdi açık kalır
+    CHECK_FALSE(s.rename->error().empty());
+    CHECK_FALSE(core::find_view(*s.store, " mine"));
+    s.actions.handle_rename_key(s.rename, Key::Escape, {});
+
+    s.key(Key::Char, "K");
+    type_into(s.rename, "mine");
+    s.actions.handle_rename_key(s.rename, Key::Enter, {});
+    CHECK_FALSE(s.rename.has_value());
+    REQUIRE(core::find_view(*s.store, "mine"));
+    CHECK(core::find_view(*s.store, "mine")->query == text);
+    CHECK(std::ranges::contains(s.state.views(), "mine"));  // Tab ve `view:` hemen görür
+
+    for (const tui::Command& command : tui::TuiState::commands())
+        if (command.id == "view.remove")
+            s.last = command.run(s.state);
+    REQUIRE(s.last == Intent::RemoveView);
+    s.actions.run(s.last, s.confirm, s.rename);
+    type_into(s.rename, "mi");
+    s.rename->handle(Key::Tab);  // kayıtlı adlar
+    CHECK(s.rename->text() == "mine");
+    s.actions.handle_rename_key(s.rename, Key::Enter, {});
+    REQUIRE(s.rename.has_value());  // ilk Enter uyarır, silmez
+    CHECK(core::find_view(*s.store, "mine"));
+    s.actions.handle_rename_key(s.rename, Key::Enter, {});
+    CHECK_FALSE(s.rename.has_value());
+    CHECK_FALSE(core::find_view(*s.store, "mine"));
+    CHECK_FALSE(std::ranges::contains(s.state.views(), "mine"));
+
+    // SD11b review: uyarıdan sonra senkron aynı adı başka sorguyla yeniden kurarsa ikinci Enter onu silmez.
+    s.actions.run(Intent::RemoveView, s.confirm, s.rename);
+    type_into(s.rename, "linked");
+    s.actions.handle_rename_key(s.rename, Key::Enter, {});
+    REQUIRE(core::save_view(*s.store, "linked", text, true));
+    s.actions.handle_rename_key(s.rename, Key::Enter, {});
+    REQUIRE(s.rename.has_value());
+    CHECK_FALSE(s.rename->error().empty());
+    REQUIRE(core::find_view(*s.store, "linked"));
+    CHECK(core::find_view(*s.store, "linked")->query == text);
 }

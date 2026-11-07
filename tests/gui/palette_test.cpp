@@ -178,7 +178,7 @@ TEST_CASE_FIXTURE(PaletteScene, "Ctrl+R relates the shown note to another; the r
         asked_title = title;
         return std::optional<std::string>("b");
     };
-    state->deciders.confirm_delete = [](const std::string&) { return true; };
+    state->deciders.confirm_delete = [](const std::string&, const std::string&) { return true; };
     // F1: hedeften sonra ad penceresi (TUI `L` ile aynı); ad ve yön ilişkiye gider.
     noteapp::gui::RelationRequest asked;
     state->deciders.relation = [&](const noteapp::gui::RelationRequest& request) {

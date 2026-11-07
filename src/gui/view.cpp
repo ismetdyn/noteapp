@@ -347,24 +347,48 @@ int View::idle_timeout_ms() const {
 }
 
 // Boşta kare yok: fare gecikmeli ipucu olan bir öğede durursa ipucu hiç açılmazdı (ImGui gecikmeyi kareler
-// arası süreden sayar). Gecikme dolunca bir kez uyanılır; fare kıpırdadıkça yeniden kurulur, öğeden çıkınca
-// kalkar. HoverItemDelayId: bu karede gecikmeli IsItemHovered soran öğe (SetItemTooltip, BeginItemTooltip).
+// arası gerçek süreden sayar). Uyanma her karede ImGui'nin kendi sayaçlarından kalan süreye kurulur: kareler
+// yavaşsa (yük) ya da başka kaynaktan geliyorsa gecikme uyanmadan önce dolar, bekleyen uyanma kalmaz.
+// HoverItemDelayId: bu karede gecikmeli IsItemHovered soran öğe (SetItemTooltip, BeginItemTooltip; hepsi
+// ImGuiHoveredFlags_ForTooltip ile).
 void View::schedule_tooltip_wake() {
-    const ImGuiID item = GImGui->HoverItemDelayId;
+    const ImGuiContext& g = *GImGui;
+    const ImGuiID item = g.HoverItemDelayId;
     if (item == 0) {
-        tooltip_item_ = 0;
+        tooltip_frames_ = 0;
         tooltip_at_.reset();
         return;
     }
-    const ImGuiIO& io = ImGui::GetIO();
-    if (item == tooltip_item_ && io.MouseDelta.x == 0.0F && io.MouseDelta.y == 0.0F)
+    const ImGuiStyle& style = g.Style;
+    // IsItemHovered'ın ForTooltip seçimi ve CalcDelayFromHoveredFlags (imgui.cpp, static) ile aynı.
+    const ImGuiHoveredFlags flags = g.NavHighlightItemUnderNav && g.NavCursorVisible
+                                        ? style.HoverFlagsForTooltipNav
+                                        : style.HoverFlagsForTooltipMouse;
+    const float delay = (flags & ImGuiHoveredFlags_DelayNormal) != 0  ? style.HoverDelayNormal
+                        : (flags & ImGuiHoveredFlags_DelayShort) != 0 ? style.HoverDelayShort
+                                                                      : 0.0F;
+    const bool unlocked =
+        (flags & ImGuiHoveredFlags_Stationary) == 0 || g.HoverItemUnlockedStationaryId == item;
+    const auto now = std::chrono::steady_clock::now();
+    if (unlocked && g.HoverItemDelayTimer >= delay) {
+        // İpucu bu karede çizildi. İlk karesi ölçümdür (gizli): görünmesi için hemen bir kare daha.
+        tooltip_frames_ = std::min(tooltip_frames_ + 1, 2);
+        if (tooltip_frames_ == 1)
+            tooltip_at_ = now;
+        else
+            tooltip_at_.reset();
         return;
-    tooltip_item_ = item;
-    const ImGuiStyle& style = ImGui::GetStyle();
-    const std::chrono::duration<float> delay(std::max(style.HoverStationaryDelay, style.HoverDelayNormal) +
-                                             kTooltipWakeMarginSeconds);
-    tooltip_at_ = std::chrono::steady_clock::now() +
-                  std::chrono::duration_cast<std::chrono::steady_clock::duration>(delay);
+    }
+    tooltip_frames_ = 0;
+    float left = std::max(0.0F, delay - g.HoverItemDelayTimer);
+    if (!unlocked)  // kilit, durma süresi dolduktan sonraki karenin başında açılır
+        left = std::max(left, style.HoverStationaryDelay - g.MouseStationaryTimer);
+    const std::chrono::duration<float> wait(left + kTooltipWakeMarginSeconds);
+    tooltip_at_ = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(wait);
+}
+
+bool View::tooltip_visible() const {
+    return tooltip_frames_ > 1;
 }
 
 bool View::tooltip_due(std::chrono::steady_clock::time_point now) {
@@ -528,7 +552,6 @@ void View::draw_left_pane() {
         draw_error(*error);
         remember_item_center("search_error");
     }
-    draw_migration_banner();
     if (map) {
         draw_map();
     } else {
@@ -573,7 +596,7 @@ void View::draw_status_bar() {
     ImU32 sync_color = colors.muted;
     core::FileIcon sync_icon{};
     switch (state_.sync_indicator()) {
-    case SyncIndicator::Off:
+    case SyncIndicator::Disabled:
         break;
     case SyncIndicator::Running:
         sync_color = colors.accent;
@@ -583,7 +606,7 @@ void View::draw_status_bar() {
         sync_color = colors.success;
         sync_icon = icons::kSyncOk;
         break;
-    case SyncIndicator::Error:
+    case SyncIndicator::Failed:
         sync_color = colors.danger;
         sync_icon = icons::kWarning;
         break;
@@ -599,7 +622,7 @@ void View::draw_status_bar() {
                             error ? colors.danger : colors.muted,
                             error ? StatusRank::Error : StatusRank::Info});
     }
-    const bool sync_error = state_.sync_indicator() == SyncIndicator::Error;
+    const bool sync_error = state_.sync_indicator() == SyncIndicator::Failed;
     if (sync_error)
         messages.push_back({sync, colors.danger, StatusRank::Error});
     if (editor_drawn_) {

@@ -1,4 +1,5 @@
 // note query: Cypher sorgusu, tablo veya JSON çıktı (SPEC-cli "Graph sorgusu").
+#include "app/map_query.hpp"
 #include "cli/commands.hpp"
 #include "cli/highlight.hpp"
 #include "core/graph_limits.hpp"
@@ -8,7 +9,6 @@
 #include "core/note_store.hpp"
 #include "core/paths.hpp"
 #include "core/text.hpp"
-#include "graph/graph.hpp"
 
 #include <algorithm>
 #include <array>
@@ -120,31 +120,6 @@ std::expected<QueryArgs, int> parse_query_args(const std::vector<std::string>& r
     return parsed;
 }
 
-// Sorgunun kendisi hatalıysa kullanım hatası, sınır veya çalışma anı hatası kullanıcı kaynaklı, depo hatası
-// iç hata.
-int exit_code_of(const graph::Error& error) {
-    using Code = graph::Error::Code;
-    switch (error.code) {
-    case Code::Syntax:
-    case Code::Unsupported:
-    case Code::ReadOnlyViolation:
-        return kExitUsage;
-    case Code::InvalidArgument:
-        return error.message_key == "graph.cypher_missing_param" ? kExitUsage : kExitUser;
-    case Code::NotFound:
-    case Code::LimitExceeded:
-        return kExitUser;
-    default:
-        return kExitInternal;
-    }
-}
-
-int report(const graph::Error& error) {
-    // İleti sorgudan veya dosyadan gelen metin taşıyabilir: kaçış dizisi terminale geçmesin.
-    std::cerr << sanitize_for_terminal(core::tr(error.message_key, error.args)) << '\n';
-    return exit_code_of(error);
-}
-
 std::string hex_of(std::span<const std::byte> id) {
     constexpr std::string_view kDigits = "0123456789abcdef";
     std::string out;
@@ -244,36 +219,6 @@ std::string table_text(std::string_view text) {
     return out;
 }
 
-std::string cell_text(const QueryValue& value) {
-    return std::visit(
-        [](const auto& v) -> std::string {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::monostate>) {
-                return "null";
-            } else if constexpr (std::is_same_v<T, bool>) {
-                return v ? "true" : "false";
-            } else if constexpr (std::is_same_v<T, std::int64_t>) {
-                return std::to_string(v);
-            } else if constexpr (std::is_same_v<T, double>) {
-                return double_text(v);
-            } else if constexpr (std::is_same_v<T, std::string>) {
-                return table_text(v);
-            } else if constexpr (std::is_same_v<T, graph::Bytes>) {
-                return "<bytes:" + std::to_string(v.data.size()) + ">";
-            } else if constexpr (std::is_same_v<T, graph::Timestamp>) {
-                return std::to_string(v.unix_ms);
-            } else if constexpr (std::is_same_v<T, graph::NodeId> || std::is_same_v<T, graph::EdgeId>) {
-                return hex_of(v.bytes);
-            } else {
-                std::string out = "[";
-                for (std::size_t i = 0; i < v.items.size(); ++i)
-                    out += (i == 0 ? "" : ", ") + cell_text(v.items[i]);
-                return out + "]";
-            }
-        },
-        value.v);
-}
-
 // Genişlik kod noktası sayar; geniş karakterde hizalama yaklaşıktır, içerik doğrudur.
 std::size_t display_width(std::string_view text) {
     return static_cast<std::size_t>(
@@ -293,23 +238,25 @@ std::string table_row(const std::vector<std::string>& cells, const std::vector<s
     return out;
 }
 
-std::string to_table(const graph::QueryResult& result) {
-    if (result.columns.empty())
+// Hücreler TUI/GUI tablosuyla aynıdır (app::query_table): not yolu, `#etiket`, kenar uçlarıyla, UTC zaman.
+std::string to_table(const core::UserQuery& query) {
+    const app::QueryTable table = app::query_table(query);
+    if (table.columns.empty())
         return "";
     std::vector<std::vector<std::string>> rows;
     std::vector<std::string> header;
-    header.reserve(result.columns.size());
-    for (const std::string& column : result.columns)
+    header.reserve(table.columns.size());
+    for (const std::string& column : table.columns)
         header.push_back(table_text(column));
     rows.push_back(std::move(header));
-    for (const auto& row : result.rows) {
+    for (const auto& row : table.rows) {
         std::vector<std::string> cells;
         cells.reserve(row.size());
-        for (const QueryValue& value : row)
-            cells.push_back(cell_text(value));
+        for (const app::QueryCell& cell : row)
+            cells.push_back(table_text(cell.text));
         rows.push_back(std::move(cells));
     }
-    std::vector<std::size_t> widths(result.columns.size(), 0);
+    std::vector<std::size_t> widths(table.columns.size(), 0);
     for (const auto& row : rows)
         for (std::size_t i = 0; i < row.size(); ++i)
             widths[i] = std::max(widths[i], display_width(row[i]));
@@ -324,69 +271,60 @@ std::string to_utf8(const fs::path& path) {
     return std::string(text.begin(), text.end());
 }
 
-// Okumanın deposu: NoteStore'la aynı dosya, ayrı bağlantı (WAL; bağlantı başına tek iş parçacığı). Yazma
-// NoteStore'dan geçer (run_write).
-std::expected<graph::Graph, int> open_database(const core::Config& config) {
+// Okuma depo yokken boş sonuç verirdi (core::run_user_query): CLI bunu açıkça söyler, dosya kurulmaz.
+bool database_exists() {
     const fs::path path = core::data_dir() / fs::path(kGraphFile);
     std::error_code code;
-    if (!fs::exists(path, code)) {
-        std::cerr << sanitize_for_terminal(core::tr("cli.query_no_database", {{"path", to_utf8(path)}}))
-                  << '\n';
-        return std::unexpected(kExitUser);
-    }
-    auto opened = graph::Graph::open(path, core::graph_limits_of(config.limits.graph));
-    if (!opened)
-        return std::unexpected(report(opened.error()));
-    return std::move(*opened);
+    if (fs::exists(path, code))
+        return true;
+    std::cerr << sanitize_for_terminal(core::tr("cli.query_no_database", {{"path", to_utf8(path)}})) << '\n';
+    return false;
 }
 
-// Yazmanın hatası çekirdekten (core::run_user_query) gelir: sorgunun kendi sorunu (sözdizimi, desteklenmeyen öğe,
-// eksik parametre) 2, korunan veri, çalışma anı hatası ve sınır 1, depo hatası 3 (SPEC-cli "Graph sorgusu").
-int write_exit_code(const core::Error& error) {
+// Hata çekirdekten (core::run_user_query) gelir: sorgunun kendi sorunu (sözdizimi, desteklenmeyen öğe, eksik
+// parametre, `--write`sız yazma) 2, korunan veri, çalışma anı hatası ve sınır 1, depo hatası 3 (SPEC-cli "Graph
+// sorgusu").
+int query_exit_code(const core::Error& error) {
     if (error.code != core::Error::Code::InvalidQuery)
         return error.code == core::Error::Code::NotFound ? kExitUser : kExitInternal;
-    constexpr std::array kUsageKeys = {std::string_view("graph.cypher_syntax"),
-                                       std::string_view("graph.cypher_unsupported"),
-                                       std::string_view("graph.cypher_missing_param")};
+    constexpr std::array kUsageKeys = {
+        std::string_view("graph.cypher_syntax"), std::string_view("graph.cypher_unsupported"),
+        std::string_view("graph.cypher_missing_param"), std::string_view("error.query_writes")};
     return std::ranges::find(kUsageKeys, error.message_key) != kUsageKeys.end() ? kExitUsage : kExitUser;
 }
 
-// Yazma haritanın sorgu çubuğuyla aynı korumadan geçer (lead kararı, F3 incelemesi): türetilmiş not verisi
-// (gövde, yol, bağlantı, etiket, klasör, görünüm) ve ilişki kurmak reddedilir; NoteStore'un deposu ve kilidiyle
-// çalışır, depoyu gerekirse kurar. Çıktı ham motor sonucudur (okumayla aynı biçim).
-int run_write(const QueryArgs& parsed, const core::Config& config, const graph::QueryLimits& limits) {
-    core::NoteStore store = core::NoteStore::for_config(config);
-    const auto done =
-        core::run_user_query(store, parsed.positional.front(), core::QueryAction::Write, limits, parsed.params);
-    if (!done) {
-        std::cerr << sanitize_for_terminal(core::format_error(done.error())) << '\n';
-        return write_exit_code(done.error());
-    }
-    std::cout << query_output(done->result, parsed.json);
-    return kExitOk;
+int report(const core::Error& error) {
+    // Arayüzün "onaylayın" iletisi yerine CLI'nin yolu: `--write`. İleti sorgudan metin taşıyabilir: temizlenir.
+    const std::string text = error.message_key == "error.query_writes" ? core::tr("graph.cypher_read_only", error.args)
+                                                                       : core::format_error(error);
+    std::cerr << sanitize_for_terminal(text) << '\n';
+    return query_exit_code(error);
 }
 
 }  // namespace
 
-std::string query_output(const graph::QueryResult& result, bool json) {
-    return json ? to_json(result) : to_table(result);
+std::string query_output(const core::UserQuery& query, bool json) {
+    return json ? to_json(query.result) : to_table(query);
 }
 
+// Okuma ve yazma TUI/GUI'nin sorgu çubuğuyla aynı çekirdekten geçer (core::run_user_query): yazma türetilmiş not
+// verisini ve ilişki kurmayı reddeder (F3 incelemesi, lead kararı), sonuçtaki düğümler not yoluna adlanır.
 int run_query(const ParsedArgs& args, const core::Config& config) {
     auto parsed = parse_query_args(args.rest);
     if (!parsed)
         return parsed.error();
-    const graph::QueryLimits limits = core::query_limits_of(config.limits.query);
-    if (parsed->write)
-        return run_write(*parsed, config, limits);
-    auto database = open_database(config);
-    if (!database)
-        return database.error();
-    const auto result = database->query(parsed->positional.front(), parsed->params, graph::QueryMode::ReadOnly,
-                                        limits);
-    if (!result)
-        return report(result.error());
-    std::cout << query_output(*result, parsed->json);
+    if (!parsed->write && !database_exists())
+        return kExitUser;
+    core::NoteStore store = core::NoteStore::for_config(config);
+    const auto done =
+        core::run_user_query(store, parsed->positional.front(),
+                             parsed->write ? core::QueryAction::Write : core::QueryAction::Read,
+                             core::query_limits_of(config.limits.query), parsed->params);
+    if (!done)
+        return report(done.error());
+    std::cout << query_output(*done, parsed->json);
+    if (done->naming_error)  // yazıldı ama düğümler adlanamadı: tablo kimlik gösterebilir, yazma başarıdır
+        std::cerr << sanitize_for_terminal(core::format_error(*done->naming_error)) << '\n';
     return kExitOk;
 }
 

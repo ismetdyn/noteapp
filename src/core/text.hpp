@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -20,6 +21,14 @@ std::string encode_utf8(std::u32string_view codepoints);
 // Basit küçük harf (ASCII, Latin-1, Latin Extended-A); I ve İ -> i. Türkçe harfleri ASCII'ye indirmez.
 char32_t to_lower(char32_t cp);
 bool is_valid_utf8(std::string_view utf8);
+// Sondaki kod noktasını bütün olarak siler (Backspace): UTF-8 devam baytları (10xxxxxx) tek tek kalmaz.
+void pop_code_point(std::string& text);
+// Yazılan olay metni kontrol karakteriyle (C0, DEL) başlamıyor ve boş değil: terminal ve pencere olaylarından
+// sızan denetim tuşları alana girmez. Bayt bayt gelen (bölünmüş) UTF-8'i kabul eder; TUI form alanları böyle
+// biriktirir.
+bool is_printable(std::string_view text);
+// is_printable ve metin kendi başına geçerli UTF-8 (editör: olay tam kod noktası taşır).
+bool is_typable(std::string_view text);
 
 // Görünmez biçim karakterleri: bidi denetimleri (U+061C, U+200E/F, U+202A–E, U+2066–9), sahtecilikte
 // kullanılan sıfır genişlikliler (U+200B, U+2060–4, U+FEFF), U+180E ve boş görünen Hangul dolguları (U+115F,
@@ -70,6 +79,8 @@ std::string note_name_source(std::string_view content, std::string_view type);
 
 // "512 B", "1.5 KiB", "2.0 MiB".
 std::string human_size(std::uintmax_t bytes);
+// Yerel saat diliminin takvim alanları (localtime_r / localtime_s): saat metinlerinin tek kaynağı.
+std::tm local_tm(std::chrono::system_clock::time_point time);
 // Yerel saatle "2026-11-01 14:32".
 std::string local_time_text(std::filesystem::file_time_type time);
 // Bugünse "14:32", başka günse "2026-11-01" (yerel saat).

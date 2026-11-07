@@ -3,6 +3,7 @@
 #include "cli/args.hpp"
 #include "cli/term.hpp"
 #include "core/config.hpp"
+#include "core/note_query.hpp"
 #include "core/note_store.hpp"
 #include "graph/query.hpp"
 
@@ -37,13 +38,14 @@ int run_find(const ParsedArgs& args, const core::Config& config);  // args.rest:
 // args.rest: [] | status | on | off | init REMOTE [--replace] | login [HOST] | logout [HOST] | --background
 int run_sync(const ParsedArgs& args, const core::Config& config);
 int run_export(const ParsedArgs& args, const core::Config& config);  // args.rest: --pdf SORGU|YOL [-o ÇIKTI]
-// args.rest: migrate | export --format jsonl [-o DOSYA] | import DOSYA
+// args.rest: export --format jsonl [-o DOSYA] | import DOSYA
 int run_graph(const ParsedArgs& args, const core::Config& config);
-int run_export_all(const std::string& directory, bool ignore_skipped, const core::Config& config);
+int run_export_all(const std::string& directory, const core::Config& config);
 // args.rest: [--write] [--json] [--param K=D]... CYPHER. Sınırlar kullanıcının profilidir: limits.query.*.
 int run_query(const ParsedArgs& args, const core::Config& config);
-// `note query`nin stdout biçimi: tablo ya da `--json` (commands_query.cpp).
-std::string query_output(const graph::QueryResult& result, bool json);
+// `note query`nin ve `view run`ın stdout biçimi: tablo (app::query_table hücreleri) ya da `--json` (ham
+// değer; commands_query.cpp).
+std::string query_output(const core::UserQuery& query, bool json);
 int run_tags(const ParsedArgs& args, const core::Config& config);  // args.rest: [--json]
 // args.rest: YOL... [--folder K] [--type T] [--name AD] [--overwrite] [--json] [--no-sync]
 int run_import(const ParsedArgs& args, const core::Config& config);

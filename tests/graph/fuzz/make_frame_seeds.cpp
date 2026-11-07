@@ -1,5 +1,5 @@
 // fuzz_frame'in başlangıç derlemi: her işlem türü ve değer tipi için geçerli çerçeve. Mutasyon biçime buradan
-// girer. İkinci dizin verilirse fuzz_log'unki de: v1 ve v2 (parçalı, yarım) günlükler.
+// girer. İkinci dizin verilirse fuzz_log'unki de: parçalı ve yarım günlükler.
 #include "graph/op.hpp"
 #include "graph/oplog.hpp"
 
@@ -36,18 +36,16 @@ void write_log_seeds(const fs::path& dir, const Frame& all, const Frame& single)
     const DeviceId device{std::byte{7}};
     const std::string whole = encode_frame(all);
     const std::string small = encode_frame(single);
-    std::ofstream(dir / "log-v1", std::ios::binary)
-        << encode_log_header(device) + encode_log_frame(small) + encode_log_frame(whole);
-    std::string parts = encode_log_header(device, kLogVersionParts) + encode_log_part(1, 0, true, small);
+    std::string parts = encode_log_header(device) + encode_log_part(1, 0, true, small);
     constexpr std::size_t kPieces = 4;
     const std::size_t piece = whole.size() / kPieces + 1;
     for (std::size_t index = 0; index * piece < whole.size(); ++index)
         parts +=
             encode_log_part(all.seq, static_cast<std::uint32_t>(index), (index + 1) * piece >= whole.size(),
                             std::string_view(whole).substr(index * piece, piece));
-    std::ofstream(dir / "log-v2", std::ios::binary) << parts;
-    std::ofstream(dir / "log-v2-unfinished", std::ios::binary)
-        << encode_log_header(device, kLogVersionParts) + encode_log_part(1, 0, false, small.substr(0, 10));
+    std::ofstream(dir / "log-parts", std::ios::binary) << parts;
+    std::ofstream(dir / "log-unfinished", std::ios::binary)
+        << encode_log_header(device) + encode_log_part(1, 0, false, small.substr(0, 10));
 }
 
 }  // namespace

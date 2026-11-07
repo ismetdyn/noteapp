@@ -3,6 +3,7 @@
 #include "core/i18n.hpp"
 #include "core/log.hpp"
 #include "core/note_views.hpp"
+#include "core/text.hpp"
 #include "search/folder_order.hpp"
 #include "search/fuzzy.hpp"
 
@@ -63,6 +64,22 @@ std::optional<std::size_t> relation_depth(const core::Config& config) {
     return config.limits.search.relation_depth.cap();
 }
 
+std::string sync_state_text(core::SyncState state) {
+    switch (state) {
+    case core::SyncState::Synced:
+        return core::tr("app.sync_state_synced");
+    case core::SyncState::Modified:
+        return core::tr("app.sync_state_modified");
+    case core::SyncState::New:
+        return core::tr("app.sync_state_new");
+    case core::SyncState::ConflictCopy:
+        return core::tr("app.sync_state_conflict");
+    case core::SyncState::SyncOff:
+        break;
+    }
+    return core::tr("app.sync_off");
+}
+
 std::string reason_text(const search::RelationReason& reason) {
     using Kind = search::RelationReason::Kind;
     const std::string& other = reason.other;
@@ -86,10 +103,94 @@ std::string reason_text(const search::RelationReason& reason) {
     return core::tr("search.reason_linked", {{"path", other}});
 }
 
-ContentSearcher content_searcher(std::function<const search::ContentIndex&()> index, core::Limit results) {
-    return [index = std::move(index), cap = results.cap()](std::string_view query) {
-        return index().search(query, cap);
+SearchEnter search_enter_action(SearchMode mode, bool has_selection, bool query_error, std::string_view query) {
+    if (mode == SearchMode::Global)
+        return has_selection && !query_error ? SearchEnter::Remember : SearchEnter::Nothing;
+    if (has_selection)
+        return query_error ? SearchEnter::Select : SearchEnter::Remember;
+    if (query.empty() || query_error)
+        return SearchEnter::Nothing;
+    const auto parsed = search::parse_query(query);
+    return parsed && parsed->filters.empty() && !parsed->sort ? SearchEnter::CreateNote : SearchEnter::Nothing;
+}
+
+std::string note_field_text(const core::NoteMeta& meta, NoteField field,
+                            std::optional<std::chrono::system_clock::time_point> short_now) {
+    const auto time_text = [&short_now](std::filesystem::file_time_type when) {
+        return short_now ? core::short_time_text(when, *short_now) : core::local_time_text(when);
     };
+    const auto or_none = [](std::string text) { return text.empty() ? core::tr("app.note_none") : text; };
+    switch (field) {
+    case NoteField::Size:
+        return core::human_size(meta.size);
+    case NoteField::Updated:
+        return time_text(meta.updated_at);
+    case NoteField::Created:
+        return meta.created_at ? time_text(*meta.created_at) : core::tr("app.note_unknown");
+    case NoteField::Sync:
+        return sync_state_text(meta.sync_status);
+    case NoteField::Origin:
+        return meta.origin.value_or(core::tr("app.note_unknown"));
+    case NoteField::Type:
+        return or_none(core::split_note_path(meta.path.string()).type);
+    case NoteField::Tags: {
+        std::string tags;  // son kayıttaki etiketler: "#a #b"
+        for (const std::string& tag : meta.tags)
+            tags += (tags.empty() ? "#" : " #") + tag;
+        return or_none(std::move(tags));
+    }
+    }
+    return {};
+}
+
+std::string column_text(const core::NoteMeta& meta, ListColumn column,
+                        std::optional<std::chrono::system_clock::time_point> short_now) {
+    switch (column) {
+    case ListColumn::Size:
+        return note_field_text(meta, NoteField::Size, short_now);
+    case ListColumn::Updated:
+        return note_field_text(meta, NoteField::Updated, short_now);
+    case ListColumn::Created:
+        return note_field_text(meta, NoteField::Created, short_now);
+    case ListColumn::Sync:
+        return note_field_text(meta, NoteField::Sync, short_now);
+    case ListColumn::Origin:
+        return note_field_text(meta, NoteField::Origin, short_now);
+    case ListColumn::SizeAndDate:
+    case ListColumn::None:
+        break;
+    }
+    return {};
+}
+
+void connect_store(Listing& listing, const core::NoteStore& store, const core::Config& config,
+                   ContentIndexSource index, std::mutex* store_mutex) {
+    // Kilitsiz arayüzde (GUI) boş kilit: depo yalnız UI iş parçacığındadır.
+    const auto locked = [store_mutex](auto&& read) {
+        if (store_mutex == nullptr)
+            return read();
+        const std::scoped_lock lock(*store_mutex);
+        return read();
+    };
+    search::ViewLookup views = [&store, locked](std::string_view name) {
+        return locked([&] { return core::view_notes(store, name); });
+    };
+    listing.set_view_lookup(views);
+    listing.set_edge_source([&store, locked] { return locked([&] { return search_edges(store); }); });
+    listing.set_property_source([&store, locked](std::string_view key) {
+        return locked([&] { return search_properties(store, key); });
+    });
+    listing.set_relation_depth(relation_depth(config));
+    listing.set_fuzzy_candidate_chars(config.limits.search.fuzzy_candidate_chars.cap());
+    if (!index)
+        return;
+    listing.set_content_results(config.limits.search.content_results.cap());
+    listing.set_content_index(index);
+    listing.set_global_searcher([&config, index, views = std::move(views)](
+                                    std::string_view query, std::span<const core::NoteMeta> notes,
+                                    const search::GraphInput& graph) {
+        return search::search_all(query, notes, index(), config.limits.search, views, graph);
+    });
 }
 
 bool Listing::set_notes(std::vector<core::NoteInfo> notes) {
@@ -149,7 +250,8 @@ void Listing::set_open(const std::string& folder, bool open) {
 }
 
 void Listing::prune_open_folders() {
-    std::erase_if(open_, [this](const std::string& folder) { return tree_.find(folder) == nullptr; });
+    if (const auto keep = open_folder_filter(tree_))  // boş ağaç: önceki liste korunur
+        std::erase_if(open_, [&keep](const std::string& folder) { return !keep(folder); });
 }
 
 // Numara her klasörde yeniden 1'den başlar: klasörler ve notlar birlikte sayılır (TUI kuralı, GUI aynı).
@@ -336,21 +438,29 @@ std::vector<ListRow> Listing::content_rows(const search::ParsedQuery& parsed,
                                            std::span<const core::NoteMeta> metas,
                                            const search::GraphInput& graph) const {
     std::vector<ListRow> rows;
-    if (!content_searcher_)
+    if (!content_index_ && !content_searcher_)
         return rows;
     // İndeks listeden eski olabilir: listede olmayan sonuç düşer.
     const std::vector<std::size_t> indices = search::apply(parsed.filters, std::nullopt, metas);
     std::map<core::NotePath, std::size_t> allowed;  // yol -> metas dizini
     for (const std::size_t i : indices)
         allowed.emplace(metas[i].path, i);
+    // Süzgeç sınırdan önce indekse gider: büyük depoda süzülen notlar için kesit üretilmez (SD7 review).
+    std::vector<search::ContentResult> results =
+        content_index_ ? content_index_().search(parsed.text, content_results_,
+                                                 [&allowed](const core::NotePath& path) { return allowed.contains(path); })
+                       : content_searcher_(parsed.text);
     std::vector<char> shown(metas.size(), 0);
-    for (search::ContentResult& result : content_searcher_(parsed.text))
+    for (search::ContentResult& result : results) {
+        if (rows.size() >= content_results_)
+            break;
         if (const auto found = allowed.find(result.path); found != allowed.end()) {
             shown[found->second] = 1;
             rows.push_back({.path = std::move(result.path),
                             .hit_count = result.hit_count,
                             .hits = std::move(result.first_hits)});
         }
+    }
     return with_relation_rows(std::move(rows), parsed, metas, not_shown(indices, shown), graph);
 }
 
@@ -416,6 +526,29 @@ void Listing::sort_rows(std::vector<ListRow>& rows, const search::SortSpec& sort
     for (const std::size_t index : order)
         sorted.push_back(std::move(rows[row_of.at(index)]));
     rows = std::move(sorted);
+}
+
+std::optional<FolderSummary> folder_summary(const Listing& listing, std::string_view folder,
+                                            std::chrono::system_clock::time_point now) {
+    const core::FolderNode* node = listing.tree().find(folder);
+    if (node == nullptr)
+        return std::nullopt;
+    FolderSummary summary{
+        .path = node->path,
+        .counts = core::tr("tui.folder_counts",
+                           {{"items", core::count_text("tui.count_items", node->item_count())},
+                            {"notes", core::count_text("tui.count_notes", node->note_count)},
+                            {"folders", core::count_text("tui.count_folders", node->folder_count)}}),
+        .size = core::human_size(node->size),
+        .updated = node->updated_at ? core::local_time_text(*node->updated_at) : core::tr("app.note_unknown"),
+        .recent = {}};
+    const std::size_t skip = node->path.empty() ? 0 : node->path.size() + 1;  // "klasör/"
+    for (const std::size_t index : node->recent) {
+        const core::NoteMeta& meta = listing.metas()[index];
+        const std::string full = meta.path.string();
+        summary.recent.push_back({meta.path, full.substr(skip), core::short_time_text(meta.updated_at, now)});
+    }
+    return summary;
 }
 
 }  // namespace noteapp::app

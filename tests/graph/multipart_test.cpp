@@ -97,12 +97,6 @@ std::string part(std::uint64_t seq, std::uint32_t index, bool final, std::string
     return encode_log_frame(payload);
 }
 
-std::string parts_header(const DeviceId& device, std::uint8_t version = 2) {
-    std::string header = encode_log_header(device);
-    header[4] = static_cast<char>(version);
-    return header;
-}
-
 Frame frame_of(std::uint64_t seq, std::vector<Op> ops) {
     Frame frame;
     frame.seq = seq;
@@ -192,26 +186,6 @@ TEST_CASE("a transaction with more operations than frame_ops syncs atomically; h
     CHECK(reader.dump() == writer.dump());
 }
 
-TEST_CASE("a log keeps the old format until a frame needs parts; earlier frames still match after that") {
-    Device writer(small_limits());
-    Device reader(small_limits());
-    writer.commit([](WriteTxn& txn) { GRAPH_OK(txn.put_node(kN)); });
-    const fs::path log = writer.exported();
-    CHECK(header_version(log) == 1);
-    CHECK(reader.ingest({log}).stalled.empty());
-
-    writer.commit([](WriteTxn& txn) { GRAPH_OK(txn.set_property(kN, "body", Bytes{pattern(256U * 1024U)})); });
-    const Result<ExportReport> upgraded = writer.graph().export_log(writer.outbox());
-    REQUIRE(upgraded.has_value());
-    CHECK_FALSE(upgraded->set_aside.has_value());
-    CHECK(header_version(log) == 2);
-
-    const MergeReport report = reader.ingest({log});
-    CHECK(report.bad_frames.empty());
-    CHECK(report.stalled.empty());
-    CHECK(reader.dump() == writer.dump());
-}
-
 TEST_CASE("a newer log version or record kind stops that log as log_too_new and nothing is misread") {
     SUBCASE("newer header version") {
         Device writer;
@@ -228,7 +202,7 @@ TEST_CASE("a newer log version or record kind stops that log as log_too_new and 
     SUBCASE("unknown record kind after a valid part") {
         const TempDir dir;
         const fs::path log = dir.path() / log_file_name(kD1);
-        write_file(log, parts_header(kD1) + part(1, 0, true, encode_frame(frame_of(1, {NodePut{kN}}))) +
+        write_file(log, encode_log_header(kD1) + part(1, 0, true, encode_frame(frame_of(1, {NodePut{kN}}))) +
                             part(2, 0, true, encode_frame(frame_of(2, {NodePut{kM}})), 7));
         Device reader;
         const MergeReport report = reader.ingest({log});
@@ -251,7 +225,7 @@ TEST_CASE("a hostile endless group is bounded: unfinished is invisible, oversize
     Device reader(limits);
 
     SUBCASE("an unfinished group is a partial tail and holds nothing back") {
-        std::string bytes = parts_header(kD1);
+        std::string bytes = encode_log_header(kD1);
         for (std::uint32_t i = 0; i < 50; ++i)
             bytes += part(1, i, false, std::string(64, 'x'));
         write_file(log, bytes);
@@ -261,7 +235,7 @@ TEST_CASE("a hostile endless group is bounded: unfinished is invisible, oversize
         CHECK(has(reader.graph(), kM));
     }
     SUBCASE("a group over group_bytes stops only that log") {
-        std::string bytes = parts_header(kD1);
+        std::string bytes = encode_log_header(kD1);
         for (std::uint32_t i = 0; i < 100; ++i)
             bytes += part(1, i, false, std::string(64, 'x'));
         bytes += part(1, 100, true, "y");
@@ -275,7 +249,7 @@ TEST_CASE("a hostile endless group is bounded: unfinished is invisible, oversize
     SUBCASE("a gap in the index or a changed seq inside a group is broken_group") {
         for (const bool gap : {true, false}) {
             CAPTURE(gap);
-            write_file(log, parts_header(kD1) + part(1, 0, false, frame.substr(0, 10)) +
+            write_file(log, encode_log_header(kD1) + part(1, 0, false, frame.substr(0, 10)) +
                                 part(gap ? 1 : 2, gap ? 2 : 1, true, frame.substr(10)));
             const MergeReport report = reader.ingest({log, honest_log});
             CHECK(reports_reason(report, "broken_group"));
@@ -352,7 +326,7 @@ namespace {
 // Mantıksal çerçeveyi `parts` eşit v2 kaydına böler (düşmanca gönderen istediği kadar küçük parça seçebilir).
 std::string split_into_parts(const DeviceId& device, std::uint64_t seq, const std::string& payload,
                              std::size_t parts) {
-    std::string bytes = parts_header(device);
+    std::string bytes = encode_log_header(device);
     std::size_t offset = 0;
     for (std::size_t index = 0; index < parts; ++index) {
         const std::size_t size = payload.size() / parts + (index < payload.size() % parts ? 1 : 0);
@@ -410,7 +384,7 @@ TEST_CASE("a remote frame that fits the reader but not the ops row stalls only i
     REQUIRE(payload.size() == kLength - 10);
     const TempDir dir;
     const fs::path log = dir.path() / log_file_name(kD1);
-    write_file(log, encode_log_header(kD1) + encode_log_frame(payload));
+    write_file(log, encode_log_header(kD1) + part(1, 0, true, payload));
     Device honest;
     honest.commit([](WriteTxn& txn) { GRAPH_OK(txn.put_node(kM)); });
     const std::vector<fs::path> logs{log, honest.exported()};
@@ -436,7 +410,7 @@ TEST_CASE("a remote frame that fits the reader but not the ops row stalls only i
 TEST_CASE("an unfinished group is charged to the ingest budget and not re-read while its log is unchanged") {
     const TempDir dir;
     const fs::path log = dir.path() / log_file_name(kD1);
-    std::string bytes = parts_header(kD1);
+    std::string bytes = encode_log_header(kD1);
     for (std::uint32_t i = 0; i < 50; ++i)
         bytes += part(1, i, false, std::string(64, 'x'));
     write_file(log, bytes);
@@ -462,7 +436,7 @@ TEST_CASE("an unfinished group is charged to the ingest budget and not re-read w
     CHECK(*(*store)->applied_seq(honest.graph().device()) == 1);
 
     // Dosya değişince (grup tamamlanınca) yeniden okunur ve uygulanır.
-    write_file(log, parts_header(kD1) + part(1, 0, true, encode_frame(frame_of(1, {NodePut{kN}}))));
+    write_file(log, encode_log_header(kD1) + part(1, 0, true, encode_frame(frame_of(1, {NodePut{kN}}))));
     const Result<MergeReport> third = ingest_logs(**store, logs, IngestLimits{});
     REQUIRE(third.has_value());
     CHECK(third->partial_tails.empty());
@@ -500,7 +474,7 @@ TEST_CASE("a remote frame rolled back as too big leaves no pending rebuild behin
 TEST_CASE("a remembered unfinished group is forgotten once its log is gone") {
     const TempDir dir;
     const fs::path log = dir.path() / log_file_name(kD1);
-    std::string bytes = parts_header(kD1);
+    std::string bytes = encode_log_header(kD1);
     for (std::uint32_t i = 0; i < 3; ++i)
         bytes += part(1, i, false, "x");
     write_file(log, bytes);

@@ -35,7 +35,7 @@ struct BatchReport {
     void renamed(std::string from, std::string to);
 };
 
-// Onay isteyen işlem ve metnin sayıları; metni arayüz kurar.
+// Onay isteyen işlem ve metnin sayıları; metni confirm_text kurar.
 enum class ConfirmKind {
     TrashFolder,   // notlu klasör çöpe (notsuz klasör sorulmaz: geri alma klasörü getirir)
     TrashBatch,    // seçimde notlu klasör var
@@ -54,10 +54,21 @@ struct Confirm {
     std::size_t folders = 0;  // klasör: alt klasör (kendisi hariç)
 };
 
+// Onay penceresinin metni ve başlığı (TUI ve GUI aynı): sayılar çoğullu, klasörde alt klasör sayısıyla.
+// Başlık boşsa arayüzün varsayılan başlığı. Yol güvenilmez: arayüz kendi temizliğinden geçirir.
+struct ConfirmText {
+    std::string message;
+    std::string title = {};
+};
+ConfirmText confirm_text(const Confirm& request);
+
 // Onay kararı. Kalıcı silme ve notlu klasörün çöpe atılması hep sorulur; varsayılan Vazgeç: bağlanmamış
 // istem hiçbir şeyi silmez, çöpe atmaz.
 struct Prompts {
     std::function<bool(const Confirm&)> confirm = [](const Confirm&) { return false; };
+    // Arayüz soruda notu kendisi kaydettiyse (GUI: gösterilen notun bekleyen düzenlemesi) yazdığı revizyon;
+    // yoksa nullopt. Çöpe atma o notu bu revizyonla atar, başka değişiklik (senkron) notu tutar.
+    std::function<std::optional<core::Revision>(const core::NotePath&)> written = {};
 };
 
 struct TrashTarget {
@@ -99,7 +110,9 @@ public:
     std::optional<FolderTrashed> trash_folder(core::NoteStore& store, const Listing& listing,
                                               std::string_view folder, const Prompts& prompts);
     // Seçim: her öğe denenir, atılanlar tek adımda geri gelir. Notlu klasör varsa sorulur; nullopt =
-    // vazgeçildi.
+    // vazgeçildi. Klasör ve seçim, kalıcı silme gibi sorudan önce listedeki revizyonla atılır: sonra değişen
+    // not kalır (error.trash_changed_since_confirm); arayüzün soruda kendi yazdığı revizyon
+    // (Prompts::written) onaylı sayılır.
     std::optional<BatchReport> trash_items(core::NoteStore& store, const Listing& listing,
                                            std::span<const TrashTarget> items, const Prompts& prompts);
 
@@ -113,9 +126,11 @@ public:
     std::expected<core::NotePath, core::Error> restore(core::NoteStore& store, const core::NotePath& item);
     BatchReport restore_items(core::NoteStore& store, std::span<const core::NotePath> items);
 
-    // Kalıcı silme: hep sorulur. false = vazgeçildi.
-    std::expected<bool, core::Error> remove(core::NoteStore& store, const core::NotePath& path,
-                                            const Prompts& prompts);
+    // Kalıcı silme: hep sorulur. false = vazgeçildi. Sorudan önce `listing`teki hâl (revizyon, klasörde
+    // altındaki notlar) alınır, yalnız o silinir: onay açıkken değişen ya da aynı yola gelen başka not kalır
+    // (error.changed_since_confirm). Arayüz kendi kaydedilmemiş düzenlemesini sormadan önce kaydeder.
+    std::expected<bool, core::Error> remove(core::NoteStore& store, const Listing& listing,
+                                            const core::NotePath& path, const Prompts& prompts);
     std::expected<bool, core::Error> purge(core::NoteStore& store, const core::NotePath& item,
                                            const Prompts& prompts);
     std::expected<bool, core::Error> remove_folder(core::NoteStore& store, const Listing& listing,
@@ -135,15 +150,10 @@ private:
     void push(Step step);
     // Kalıcı silinen çöp öğesi geri alınamaz: adımdan düşer. Klasör adımı klasörleri için kalır.
     void forget(const core::NotePath& item);
-    std::optional<core::Error> trash_folder_into(core::NoteStore& store, const Listing& listing, Step& step,
-                                                 const std::string& folder);
     Undone undo_batch(core::NoteStore& store);
     // Atılma anı tutmayan öğe artık bu adımın notu değildir: NotFound.
     static std::expected<core::NotePath, core::Error> restore_entry(core::NoteStore& store,
                                                                     const core::TrashItem& entry);
-    // Kullanıcının gördüğü notları kalıcı siler, sonra boşalan klasörü kaldırır.
-    static std::expected<void, core::Error>
-    remove_shown_folder(core::NoteStore& store, const Listing& listing, const std::string& folder);
 
     core::Limit undo_steps_;
     std::deque<Step> steps_;

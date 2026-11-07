@@ -60,6 +60,9 @@ std::expected<std::string, core::Error> disconnect_map_nodes(core::NoteStore& st
 std::expected<std::string, core::Error> relate_map_notes(core::NoteStore& store, const MapNode& from,
                                                          const MapNode& to,
                                                          const core::RelationSpec& relation);
+// İlişki kaldırma onayının sorusu (TUI bağlantı paneli, GUI bağlantı satırı); ad varsa hangi ilişki olduğunu
+// söyler. Yol ve ad güvenilmez: arayüz kendi temizliğinden geçirir.
+std::string unlink_question(const core::NotePath& from, const core::RelatedNote& relation);
 // Yalnız `relation` silinir (disconnect_map_nodes(Related) budur); ileti adını söyler.
 std::expected<std::string, core::Error> unrelate_map_notes(core::NoteStore& store, const MapNode& from,
                                                            const MapNode& to,

@@ -7,7 +7,6 @@
 #include "core/graph_limits.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
-#include "core/migration.hpp"
 #include "core/note_store_impl.hpp"
 #include "core/paths.hpp"
 #include "core/text.hpp"
@@ -178,6 +177,15 @@ std::string file_type(const NotePath& path) {
     return type.empty() ? "txt" : type;
 }
 
+// Silme ve çöpe atmanın onay denetimi: işlemin içinde, okuma ile yazma arasında başka yazma giremez.
+std::expected<void, Error> expect_revision(const NoteRow& note, const std::optional<Revision>& expected,
+                                           const std::string& key) {
+    if (expected && note.info.revision != *expected)
+        return std::unexpected(
+            Error{Error::Code::ModifiedExternally, "error.modified_externally", {{"path", key}}});
+    return {};
+}
+
 }  // namespace
 
 bool looks_binary(std::string_view bytes) {
@@ -189,7 +197,6 @@ NoteStore::NoteStore(fs::path directory, std::size_t slug_max_length)
 
 NoteStore NoteStore::for_config(const Config& config) {
     NoteStore store(data_dir(), config.tuning.slug_max_length);
-    store.impl_->legacy_notes_dir = config.notes_dir;
     store.impl_->batch_ops = config.tuning.graph_batch_ops;
     store.impl_->folder_path_bytes = config.limits.core.folder_path_bytes.cap();
     store.impl_->relation_name_bytes = config.limits.graph.relation_name_bytes.cap();
@@ -259,8 +266,6 @@ std::expected<NoteContent, Error> NoteStore::read_trash(const NotePath& item) co
 
 std::optional<Error> NoteStore::health() const {
     const std::scoped_lock lock(impl_->mutex);
-    if (auto gate = impl_->check_gate(); !gate)
-        return gate.error();
     const auto snapshot = impl_->current();
     if (!snapshot)
         return impl_->last_error;
@@ -398,7 +403,7 @@ std::expected<NotePath, Error> NoteStore::move(const NotePath& from, const NoteP
     });
 }
 
-std::expected<void, Error> NoteStore::remove(const NotePath& path) {
+std::expected<void, Error> NoteStore::remove(const NotePath& path, const std::optional<Revision>& expected) {
     const std::string key = path.string();
     std::optional<graph::NodeId> doomed;
     return impl_
@@ -410,7 +415,9 @@ std::expected<void, Error> NoteStore::remove(const NotePath& path) {
             const auto row = context.snapshot.live_by_path.find(key);
             if (row == context.snapshot.live_by_path.end())
                 return std::unexpected(not_found(key));
-            doomed = context.snapshot.live[row->second].id;
+            const NoteRow& note = context.snapshot.live[row->second];
+            NOTEAPP_TRY(expect_revision(note, expected, key));
+            doomed = note.id;
             if (auto gone = context.delete_node(*doomed, key); !gone)
                 return std::unexpected(gone.error());
             return std::monostate{};
@@ -418,7 +425,8 @@ std::expected<void, Error> NoteStore::remove(const NotePath& path) {
         .transform([](std::monostate) {});
 }
 
-std::expected<TrashItem, Error> NoteStore::trash(const NotePath& path) {
+std::expected<TrashItem, Error> NoteStore::trash(const NotePath& path,
+                                                 const std::optional<Revision>& expected) {
     const std::string key = path.string();
     const auto id =
         impl_->write<graph::NodeId>([&](WriteContext& context) -> std::expected<graph::NodeId, Error> {
@@ -427,6 +435,7 @@ std::expected<TrashItem, Error> NoteStore::trash(const NotePath& path) {
             const auto row = context.snapshot.live_by_path.find(key);
             if (row == context.snapshot.live_by_path.end())
                 return std::unexpected(not_found(key));
+            NOTEAPP_TRY(expect_revision(context.snapshot.live[row->second], expected, key));
             const graph::NodeId note = context.snapshot.live[row->second].id;
             if (auto marked = context.mark_trashed(note, key, std::chrono::system_clock::now()); !marked)
                 return std::unexpected(marked.error());
@@ -731,58 +740,6 @@ std::expected<void, Error> NoteStore::remove_folder(std::string_view folder, boo
     return {};
 }
 
-// Parti işlem bütçesine bölünür: not başına iş (etiketler, kenarlar) değişkendir, sabit not sayısı çerçeveyi
-// aşabilirdi. Her işlem atomik, içe aktarma idempotenttir (kimlik yoldan türer): arada ölüm yinelemede
-// tamamlanır.
-std::expected<ImportOutcome, Error> NoteStore::import_notes(std::span<const ImportedNote> notes) {
-    ImportOutcome total;
-    std::size_t at = 0;
-    while (at < notes.size()) {
-        std::size_t consumed = 0;
-        auto outcome = impl_->write_ungated<ImportOutcome>(
-            [&](WriteContext& context) -> std::expected<ImportOutcome, Error> {
-                // Eski dosya, başka cihazın görmediği gerçek düzenlemesini HLC'yle geçemez (SPEC-graph
-                // "Geçiş").
-                NOTEAPP_TRY_GRAPH(context.txn.set_lowest_priority(), "import");
-                return context.import_notes(notes.subspan(at), consumed);
-            });
-        if (!outcome)
-            return std::unexpected(outcome.error());
-        total.imported += outcome->imported;
-        total.unchanged += outcome->unchanged;
-        std::ranges::move(outcome->conflict_copies, std::back_inserter(total.conflict_copies));
-        at += consumed;
-    }
-    return total;
-}
-
-std::expected<void, Error> NoteStore::import_folders(std::span<const std::string> folders) {
-    std::size_t at = 0;
-    while (at < folders.size()) {
-        auto step = impl_->write_ungated<std::size_t>(
-            [&](WriteContext& context) -> std::expected<std::size_t, Error> {
-                NOTEAPP_TRY_GRAPH(context.txn.set_lowest_priority(), "import");
-                std::size_t next = at;
-                for (; next < folders.size() && (next == at || !context.over_budget()); ++next) {
-                    if (context.snapshot.live_by_path.contains(folders[next]))
-                        continue;  // aynı adlı not var: boş klasörü kurmak yol çakışması olurdu
-                    if (auto made = context.ensure_folder(folders[next]); !made)
-                        return std::unexpected(made.error());
-                }
-                return next;
-            });
-        if (!step)
-            return std::unexpected(step.error());
-        at = *step;
-    }
-    return {};
-}
-
-std::expected<void, Error> NoteStore::relink_notes() {
-    const std::scoped_lock lock(impl_->mutex);
-    return impl_->rederive_locked(Impl::Derive::Links);
-}
-
 namespace {
 
 // Bir notun gövdeden türeyen verisi. false: bütçeye sığmadı; not yeni işlemde baştan yinelenir, yapılmış
@@ -885,7 +842,7 @@ std::expected<void, Error> NoteStore::Impl::derive_notes(const std::vector<graph
 }
 
 // Hata okumayı durdurmaz: türetilmemiş veri notların kaybı değildir; işaret yazılmaz, sonraki açılış yeniden
-// dener. Geçiş bekliyorsa beklenir: geçiş relink_notes'la hepsini kurar.
+// dener.
 void NoteStore::Impl::index_derived_once() {
     if (derived_checked)
         return;
@@ -896,8 +853,6 @@ void NoteStore::Impl::index_derived_once() {
         std::error_code ec;
         if (fs::exists(marker, ec) || ec)
             continue;
-        if (!check_gate())
-            return;
         if (auto done = rederive_locked(what); !done) {
             log_warn("note store: cannot derive " + std::string(marker_name) + ": " +
                      format_error(done.error()));
@@ -907,16 +862,6 @@ void NoteStore::Impl::index_derived_once() {
             log_warn("note store: cannot write marker " + std::string(marker_name) + ": " +
                      format_error(written.error()));
     }
-}
-
-std::expected<bool, Error> NoteStore::verify_imported(const ImportedNote& note) const {
-    const std::scoped_lock lock(impl_->mutex);
-    if (auto opened = impl_->open_for_write(); !opened)
-        return std::unexpected(opened.error());
-    auto txn = impl_->opened_graph().read();
-    if (!txn)
-        return std::unexpected(from_graph(txn.error(), note.path.string()));
-    return verify_import(*txn, note);
 }
 
 }  // namespace noteapp::core

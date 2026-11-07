@@ -3,6 +3,7 @@
 // Notlar artık dosya değil, graph düğümü: testler de depoya depodan girer. Baytlar aynen yazılır. `directory`
 // graph.db'nin dizinidir; yardımcılar ayrı bağlantı açar, yani başka bir süreç gibi yazar.
 #include "core/note_store.hpp"
+#include "support/note_import.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -35,8 +36,8 @@ inline bool seed_note(core::NoteStore& store, std::string_view path, std::string
         auto parsed = core::NotePath::parse(path);
         if (!parsed)
             return false;
-        const core::ImportedNote imported{*parsed, std::string(bytes), when};
-        return store.import_notes(std::span(&imported, 1)).has_value();
+        const noteapp::test::ImportedNote imported{*parsed, std::string(bytes), when};
+        return noteapp::test::import_notes(store, std::span(&imported, 1)).has_value();
     }
     const auto created = store.create_exact(note, when);
     return created.has_value() && created->path.string() == path;
@@ -57,11 +58,13 @@ inline void upsert_note(const std::filesystem::path& directory, std::string_view
 }
 
 // Çok notlu kurulum (perf): işlem başına 500 not, geçişin yolu.
-inline void bulk_seed(const std::filesystem::path& directory, std::span<const core::ImportedNote> notes) {
+inline void bulk_seed(const std::filesystem::path& directory,
+                      std::span<const noteapp::test::ImportedNote> notes) {
     core::NoteStore store(directory);
     constexpr std::size_t kBatch = 500;
     for (std::size_t at = 0; at < notes.size(); at += kBatch) {
-        const auto imported = store.import_notes(notes.subspan(at, std::min(kBatch, notes.size() - at)));
+        const auto imported =
+            noteapp::test::import_notes(store, notes.subspan(at, std::min(kBatch, notes.size() - at)));
         REQUIRE(imported.has_value());
     }
 }

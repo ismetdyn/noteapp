@@ -119,10 +119,9 @@ void import_file(Run& run, const fs::path& path, const core::FileStat& stat, con
     const core::TypedName from_file = core::split_typed_name(file_name);
     const core::TypedName given = core::split_typed_name(given_name);
     const core::TypedName& chosen = given_name.empty() ? from_file : given;
-    std::string type = !given.extension.empty()       ? std::string(given.extension)
-                       : !run.options.type.empty()    ? run.options.type
-                       : !from_file.extension.empty() ? std::string(from_file.extension)
-                                                      : detect::suggest(*bytes, run.options.detect).type;
+    std::string type = new_note_type(
+        given.extension, run.options.type.empty() ? std::nullopt : std::optional<std::string>(run.options.type),
+        from_file.extension, *bytes, run.options.detect);
     const std::string wanted = core::join_folder(folder, std::string(chosen.stem) + "." + type);
     const auto updated = core::to_system_time(stat.mtime);
     const core::NewNote note{.folder = folder,
@@ -251,6 +250,18 @@ ImportReport import_paths(core::NoteStore& store, std::span<const std::filesyste
 ImportOptions import_options(const core::Config& config, std::string folder) {
     return {.folder = std::move(folder),
             .detect = {config.default_type, config.tuning.min_confidence, config.tuning.max_scan_bytes}};
+}
+
+std::string new_note_type(std::string_view name_extension, const std::optional<std::string>& chosen,
+                          std::string_view file_extension, std::string_view content,
+                          const detect::Options& detect) {
+    if (!name_extension.empty())
+        return std::string(name_extension);
+    if (chosen)
+        return *chosen;
+    if (!file_extension.empty())
+        return std::string(file_extension);
+    return detect::suggest(content, detect).type;
 }
 
 std::vector<ImportLine> import_report_lines(const ImportReport& report) {

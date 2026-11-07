@@ -25,24 +25,32 @@ constexpr float kPaneStep = 40.0F;
 
 // Komutun durumdan istediği karşılanmıyorsa nedeni (i18n anahtarı). TUI'nin needs_block'unun GUI karşılığı:
 // seçim, bağlantı ve yank bu arayüzün modelindedir.
+// Karar TUI ile ortak (app::command_block). Bağlantılar: kapalı bölümü komut açar (focus_links), gizli sayılmaz.
 const char* GuiState::command_block(app::CommandNeeds needs) {
-    switch (needs) {
-    case app::CommandNeeds::Nothing:
+    const app::CommandState state{.note = shown_ && !new_note_,
+                                  .row = trash_view_ ? trash_row_ >= 0 : !action_items().empty(),
+                                  .links = !link_lines_.empty(),
+                                  .folder_view = browsing() && layout_.browser_view == BrowserView::Tree,
+                                  .yank = !yank_.empty(),
+                                  .paste_folder = browsing(),
+                                  .sync = config_.sync.enabled};
+    switch (app::command_block(needs, state)) {
+    case app::CommandBlock::None:
         return nullptr;
-    case app::CommandNeeds::Note:
-        return shown_ && !new_note_ ? nullptr : "gui.cmd_why_note";
-    case app::CommandNeeds::Row:
-        return (trash_view_ ? trash_row_ >= 0 : !action_items().empty()) ? nullptr : "gui.cmd_why_row";
-    case app::CommandNeeds::Links:
-        return link_lines_.empty() ? "gui.cmd_why_links" : nullptr;
-    case app::CommandNeeds::FolderView:
-        return browsing() && layout_.browser_view == BrowserView::Tree ? nullptr : "gui.cmd_why_folder_view";
-    case app::CommandNeeds::Yank:
-        if (yank_.empty())
-            return "gui.paste_nothing";
-        return browsing() ? nullptr : "gui.paste_needs_folder";
-    case app::CommandNeeds::Sync:
-        return config_.sync.enabled ? nullptr : "gui.cmd_why_sync";
+    case app::CommandBlock::NoNote:
+        return "gui.cmd_why_note";
+    case app::CommandBlock::NoRow:
+        return "gui.cmd_why_row";
+    case app::CommandBlock::NoLinks:
+        return "app.cmd_why_links";
+    case app::CommandBlock::NotFolderView:
+        return "gui.cmd_why_folder_view";
+    case app::CommandBlock::NothingYanked:
+        return "gui.paste_nothing";
+    case app::CommandBlock::PasteNeedsFolder:
+        return "gui.paste_needs_folder";
+    case app::CommandBlock::SyncOff:
+        return "gui.cmd_why_sync";
     }
     return nullptr;
 }
@@ -175,12 +183,7 @@ void GuiState::unlink_note(const core::RelatedNote& selected) {
     const core::RelatedNote relation = selected;
     const core::NotePath from = shown_->path;
     const core::NotePath& other = relation.path;
-    const std::string question =
-        relation.name.empty()
-            ? core::tr("gui.confirm_unlink", {{"from", from.string()}, {"to", other.string()}})
-            : core::tr("gui.confirm_unlink_named",
-                       {{"from", from.string()}, {"to", other.string()}, {"name", relation.name}});
-    if (!deciders.confirm_delete(question))
+    if (!deciders.confirm_delete(app::unlink_question(from, relation), core::tr("tui.unlink_title")))
         return;
     finish_relation(app::unrelate_map_notes(store_, {MapNodeKind::Note, from.string()},
                                             {MapNodeKind::Note, other.string()}, relation.id));
@@ -240,21 +243,17 @@ void GuiState::copy_selected() {
     if (selected_folder_) {
         text = *selected_folder_;
     } else if (const auto path = current_path()) {
-        // Özgün baytlar (editörün LF gösterimi değil). Pano ikili veriyi taşıyamaz: nedeni söylenir.
-        auto content = store_.read(*path);
-        if (!content) {
-            fail(content.error());
+        // TUI ile aynı (app::clipboard_text): özgün baytlar; pano ikili veriyi taşıyamaz, nedeni söylenir.
+        app::ClipboardText content = app::clipboard_text(store_, *path);
+        if (content.error) {
+            fail(*content.error);
             return;
         }
-        if (core::looks_binary(content->text) || content->text.find('\0') != std::string::npos) {
-            status_ = core::tr("gui.copy_refused_binary");
+        if (content.refused != nullptr) {
+            status_ = core::tr(content.refused);
             return;
         }
-        if (!core::is_valid_utf8(content->text)) {
-            status_ = core::tr("gui.copy_refused_utf8");
-            return;
-        }
-        text = std::move(content->text);
+        text = std::move(content.text);
     } else {
         return;
     }

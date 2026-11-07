@@ -3,6 +3,7 @@
 #include "app/data_preview.hpp"
 #include "core/limits.hpp"
 #include "edit/syntax.hpp"
+#include "pdf/markdown_blocks.hpp"
 
 #include <cstddef>
 #include <limits>
@@ -40,6 +41,8 @@ struct TextLook {
     bool dim = false;
     bool underline = false;
     TokenKind token = TokenKind::Plain;
+    // Biçimli markdown'daki [[bağlantı]]: RenderedView::wiki_targets'ta 1 tabanlı sıra; 0 bağlantı değil.
+    std::size_t wiki_link = 0;
     bool operator==(const TextLook&) const = default;
 };
 
@@ -52,10 +55,13 @@ struct StyledSpan {
 
 // Görüntülenecek satırlar; üç dizi aynı uzunluktadır. Her satır genişliğe sığar (sarma burada biter), metin
 // terminal_safe'ten geçmiştir. `source_lines` kaynakta o satırı üreten bloğun satırıdır (0 tabanlı, azalmaz).
+// `wiki_targets`: [[bağlantı]] hedefleri (core::link_target anahtarı) metindeki sırayla; TextLook::wiki_link
+// bunlara bakar. Bağlantı ayraçsız, GUI gibi metniyle çizilir.
 struct RenderedView {
     std::vector<std::string> lines;
     std::vector<std::vector<StyledSpan>> spans;
     std::vector<std::size_t> source_lines;
+    std::vector<std::string> wiki_targets;
 };
 
 using CellWidthFn = int (*)(char32_t);
@@ -120,13 +126,10 @@ private:
     bool truncated_ = false;
 };
 
-// Hücrenin sütunundaki hizası (markdown tablosunun `:-:` ve `--:` sütunları).
-enum class CellAlign { Left, Center, Right };
-
 // Tablo verisi: hücreler sarılmamış; kısa satırlar boş hücreyle tamamlanır.
 struct TableData {
     std::vector<std::vector<InlineText>> rows;
-    std::vector<CellAlign> aligns;  // sütun başına; eksik sütun sola yaslı
+    std::vector<pdf::Align> aligns;  // sütun başına (markdown `:-:`, `--:`); eksik sütun sola yaslı
     std::vector<std::size_t> source_lines;
     std::size_t header_rows = 0;
     std::size_t omitted_rows = 0;  // ViewLimits::table_rows'u aşan, gösterilmeyen satırlar

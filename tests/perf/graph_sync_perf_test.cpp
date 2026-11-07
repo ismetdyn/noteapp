@@ -277,12 +277,12 @@ TEST_CASE("adversarial_log_stays_within_budget_and_releases_the_writer_lock") {
     const EdgeId edge = link_id(1);
     const DeviceId hostile{std::byte{0xAA}};
     const DeviceId rival{std::byte{0xBB}};
-    const auto payload_of = [](std::uint64_t seq, std::vector<Op> ops) {
+    const auto record_of = [](std::uint64_t seq, std::vector<Op> ops) {
         Frame frame;
         frame.seq = seq;
         frame.hlc = seq;
         frame.ops = std::move(ops);
-        return encode_frame(frame);
+        return encode_log_part(seq, 0, true, encode_frame(frame));
     };
     TempDir dir;
     const fs::path hostile_log = dir.path() / log_file_name(hostile);
@@ -291,11 +291,11 @@ TEST_CASE("adversarial_log_stays_within_budget_and_releases_the_writer_lock") {
         std::ofstream out(hostile_log, std::ios::binary);
         out << encode_log_header(hostile);
         std::uint64_t seq = 0;
-        out << encode_log_frame(payload_of(++seq, {NodePut{node}, NodePut{other}}));
+        out << record_of(++seq, {NodePut{node}, NodePut{other}});
         for (int i = 0; i < kEdgePuts; ++i)
-            out << encode_log_frame(payload_of(++seq, {EdgePut{edge, node, "A", other}}));
+            out << record_of(++seq, {EdgePut{edge, node, "A", other}});
         for (int i = 0; i < kNodeOps; ++i)
-            out << encode_log_frame(payload_of(++seq, {PropSet{node, "k", std::int64_t{i}}}));
+            out << record_of(++seq, {PropSet{node, "k", std::int64_t{i}}});
         REQUIRE(out.good());
     }
     {
@@ -305,8 +305,8 @@ TEST_CASE("adversarial_log_stays_within_budget_and_releases_the_writer_lock") {
         out << encode_log_header(rival);
         std::uint64_t seq = 0;
         for (int i = 0; i < kNodeOps; ++i)
-            out << encode_log_frame(payload_of(++seq, {NodeDel{node}}));
-        out << encode_log_frame(payload_of(++seq, {EdgePut{edge, node, "B", other}}));
+            out << record_of(++seq, {NodeDel{node}});
+        out << record_of(++seq, {EdgePut{edge, node, "B", other}});
         REQUIRE(out.good());
     }
 

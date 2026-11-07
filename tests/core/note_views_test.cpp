@@ -120,6 +120,27 @@ TEST_CASE("views: save, list, find, overwrite with the flag, remove") {
     CHECK(remove_view(store, "work").error().code == Error::Code::NotFound);
 }
 
+// SD11b review: silme onayda gösterilen görünümü siler; arada aynı ad başka sorguyla yeniden kurulduysa
+// kalır.
+TEST_CASE("views: remove with the confirmed view keeps a view rewritten after the confirmation") {
+    const TempDir dir;
+    NoteStore store(dir.path());
+    const auto first = std::chrono::system_clock::time_point{std::chrono::seconds(1000)};
+    REQUIRE(save_view(store, "daily", kTaggedWork, false, first).has_value());
+    const auto shown = find_view(store, "daily");
+    REQUIRE(shown.has_value());
+    REQUIRE(save_view(store, "daily", "MATCH (n:Note) RETURN n", true, first + std::chrono::seconds(5)));
+
+    const auto removed = remove_view(store, "daily", *shown);
+    REQUIRE_FALSE(removed);
+    CHECK(removed.error().code == Error::Code::ModifiedExternally);
+    CHECK(removed.error().message_key == "error.view_changed_since_confirm");
+    CHECK(find_view(store, "daily")->query == "MATCH (n:Note) RETURN n");
+
+    CHECK(remove_view(store, "daily", *find_view(store, "daily")).has_value());
+    CHECK(find_view(store, "daily").error().code == Error::Code::NotFound);
+}
+
 TEST_CASE("views: an empty store has no views; unknown names are NotFound") {
     const TempDir dir;
     const NoteStore store(dir.path());

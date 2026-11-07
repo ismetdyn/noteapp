@@ -217,11 +217,7 @@ std::string hidden_char_notice(const EditorBuffer& buffer) {
 std::string status_notice(const EditorSession& session) {
     if (!session.message().empty())
         return session.message();
-    if (session.deleted_on_disk())
-        return core::tr("tui.editor_deleted_on_disk");
-    if (session.changed_on_disk())
-        return core::tr("tui.editor_changed_on_disk");
-    return {};
+    return session.disk_notice();
 }
 
 ftxui::Elements choice_rows(std::initializer_list<std::string> labels, int selected) {

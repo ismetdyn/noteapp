@@ -11,6 +11,7 @@
 #include <fstream>
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -28,6 +29,23 @@ struct Home {
     TempDir dir;
     ScopedEnv env{"NOTEAPP_HOME", dir.path().u8string()};
     Home() { core::init_i18n("en"); }
+};
+
+// Çalışma dizini test süresince değişir; başarısız testte de geri döner (Windows çalışma dizinini silmez).
+class ScopedCurrentPath {
+public:
+    explicit ScopedCurrentPath(const std::filesystem::path& dir) : old_(std::filesystem::current_path()) {
+        std::filesystem::current_path(dir);
+    }
+    ~ScopedCurrentPath() {
+        std::error_code ignored;
+        std::filesystem::current_path(old_, ignored);
+    }
+    ScopedCurrentPath(const ScopedCurrentPath&) = delete;
+    ScopedCurrentPath& operator=(const ScopedCurrentPath&) = delete;
+
+private:
+    std::filesystem::path old_;
 };
 
 const SettingsState::Row& row(const SettingsState& s, std::string_view key) {
@@ -289,7 +307,7 @@ TEST_CASE("invalid values show an inline error on the row and leave the config f
         focus_row(s, bad.key);
         clear_field(s);
         type(s, bad.value);
-        CHECK_FALSE(s.commit(base));
+        CHECK_FALSE(s.submit(base));
         CHECK_FALSE(row(s, bad.key).error.empty());
         CHECK(noteapp::test::slurp(core::config_file()) == before);
     }
@@ -301,7 +319,7 @@ TEST_CASE("an emptied default_type is rejected like on the command line") {
     SettingsState s(base);
     focus_row(s, "default_type");
     clear_field(s);
-    CHECK_FALSE(s.commit(base));
+    CHECK_FALSE(s.submit(base));
     CHECK_FALSE(row(s, "default_type").error.empty());
     CHECK_FALSE(std::filesystem::exists(core::config_file()));
 }
@@ -320,7 +338,7 @@ TEST_CASE("a valid save writes config.toml and returns the new config") {
     type(s, "md, txt ,py");
     focus_row(s, "default_type");
     type(s, "");
-    const auto saved = s.commit(base);
+    const auto saved = s.submit(base);
     REQUIRE(saved);
     CHECK(saved->editor == "nano");
     const auto reloaded = core::load_config();
@@ -342,10 +360,79 @@ TEST_CASE("a broken config file refuses the save and stays untouched") {
     SettingsState s(base);
     focus_row(s, "editor");
     type(s, "x");
-    CHECK_FALSE(s.commit(base));
+    CHECK_FALSE(s.submit(base));
     CHECK_FALSE(s.error().empty());
     CHECK(s.error().find(core::config_file().filename().string()) != std::string::npos);
     CHECK(noteapp::test::slurp(core::config_file()) == broken);
+}
+
+// GUI ile tek metin: dosya adı ve sözdizimi hatasının yeri birlikte söylenir.
+TEST_CASE("the broken-config refusal also tells where the syntax error is") {
+    const Home home;
+    write_config("editor = \"vim\"\n[sync\nenabled = \n");
+    const auto base = core::load_config().config;
+    SettingsState s(base);
+    focus_row(s, "editor");
+    type(s, "x");
+    CHECK_FALSE(s.submit(base));
+    CHECK(s.error().find(core::config_file().filename().string()) != std::string::npos);
+    CHECK(s.error().find("at line ") != std::string::npos);
+}
+
+// Hata metni dosya yolunu ve toml++ ayrıntısını taşır: ikisi de ham denetim karakteri (CSI, RLO) içerebilir.
+// Hata satırı tek satırdır ve yolla başlar; yol geçici dizinin altında olsaydı denetim karakterleri uzun
+// geçici dizinde (Windows: C:\users\...\Temp\) kesilen kısma düşer, "yok" denetimleri boşuna geçerdi.
+// Göreli NOTEAPP_HOME onları her platformda satırın görünen başına koyar.
+TEST_CASE("the settings error line never draws hidden controls raw") {
+    const TempDir cwd;
+    const ScopedCurrentPath in_cwd(cwd.path());
+    ScopedEnv env{"NOTEAPP_HOME", std::optional<std::u8string>(u8"-\xE2\x80\xAE\xC2\x9B-")};
+    core::init_i18n("en");
+    write_config("editor = = bozuk\n");
+    const auto base = core::load_config().config;
+    SettingsState s(base);
+    focus_row(s, "editor");
+    type(s, "x");
+    CHECK_FALSE(s.submit(base));
+    REQUIRE(s.error().find("\xE2\x80\xAE") != std::string::npos);  // model ham baytı tutar
+    const std::string screen = render_settings(s, 80, 24).ToString();
+    // Hata satırı çizildi, iki karakter de yerinde U+FFFD olarak.
+    CHECK(screen.find("'-\xEF\xBF\xBD\xEF\xBF\xBD-") != std::string::npos);
+    CHECK(screen.find("\xE2\x80\xAE") == std::string::npos);
+    CHECK(screen.find("\xC2\x9B") == std::string::npos);
+}
+
+// GUI ile tek kural: ilk hatada durulmaz, düzeltilecek her satır aynı denemede görünür.
+TEST_CASE("every invalid row shows its error in the same save attempt") {
+    const Home home;
+    const auto base = defaults();
+    SettingsState s(base);
+    focus_row(s, "notes_dir");
+    clear_field(s);
+    focus_row(s, "sync.idle_seconds");
+    clear_field(s);
+    type(s, "0");
+    CHECK_FALSE(s.submit(base));
+    CHECK_FALSE(row(s, "notes_dir").error.empty());
+    CHECK_FALSE(row(s, "sync.idle_seconds").error.empty());
+    CHECK_FALSE(std::filesystem::exists(core::config_file()));
+}
+
+// Form açıkken `note config set` ile değişen ayar Kaydet'te ezilmez: yalnız formda değişen anahtarlar
+// diskteki dosyanın üstüne yazılır (GUI ile tek kural).
+TEST_CASE("saving keeps a setting changed on disk while the form was open") {
+    const Home home;
+    write_config("editor = \"vim\"\n");
+    const auto base = core::load_config().config;
+    SettingsState s(base);
+    write_config("editor = \"emacs\"\n");
+    focus_row(s, "sync.idle_seconds");
+    clear_field(s);
+    type(s, "45");
+    REQUIRE(s.submit(base));
+    const auto reloaded = core::load_config().config;
+    CHECK(reloaded.editor == "emacs");
+    CHECK(reloaded.sync.idle_seconds == 45);
 }
 
 TEST_CASE("the language change is visible to the caller through the saved config") {
@@ -353,7 +440,7 @@ TEST_CASE("the language change is visible to the caller through the saved config
     const auto base = core::load_config().config;
     SettingsState s(base);
     s.handle(Key::Right);
-    const auto saved = s.commit(base);
+    const auto saved = s.submit(base);
     REQUIRE(saved);
     CHECK(saved->language == row(s, "language").value);
     core::init_i18n(saved->language);
@@ -372,7 +459,7 @@ TEST_CASE("settings screen renders at the minimum size in both languages") {
         CHECK(has(screen, core::tr("tui.settings_language")));
         CHECK(has(screen, "‹"));
         CHECK(has(screen, "[ ]"));
-        CHECK(has(screen, core::tr("tui.settings_save")));  // düğme satırı görünür
+        CHECK(has(screen, core::tr("app.settings_save")));  // düğme satırı görünür
         CHECK(has(screen, core::tr("tui.settings_hints")));
     }
 }
@@ -382,7 +469,7 @@ TEST_CASE("the focused row scrolls into view and errors render inline") {
     SettingsState s(defaults());
     s.handle(Key::Up);  // düğme satırı
     auto screen = render_settings(s, 60, 15);
-    CHECK(has(screen, core::tr("tui.settings_save")));
+    CHECK(has(screen, core::tr("app.settings_save")));
     CHECK(has(screen, core::tr("tui.settings_sync_author_email")));
     CHECK_FALSE(has(screen, core::tr("tui.settings_language")));  // en üst satır kaydı
 
@@ -391,7 +478,7 @@ TEST_CASE("the focused row scrolls into view and errors render inline") {
     focus_row(bad, "sync.idle_seconds");
     clear_field(bad);
     type(bad, "0");
-    REQUIRE_FALSE(bad.commit(base));
+    REQUIRE_FALSE(bad.submit(base));
     CHECK(has(render_settings(bad, 60, 15), row(bad, "sync.idle_seconds").error.substr(0, 10)));
 }
 
@@ -448,7 +535,7 @@ TEST_CASE("the leave prompt replaces the form body with its three buttons") {
     s.handle(Key::Escape);
     const ftxui::Screen screen = render_settings(s, 60, 15);
     CHECK(has(screen, core::tr("tui.settings_confirm_leave")));
-    CHECK(has(screen, "[ " + core::tr("tui.settings_save") + " ]"));
+    CHECK(has(screen, "[ " + core::tr("app.settings_save") + " ]"));
     CHECK(has(screen, "[ " + core::tr("tui.discard_yes") + " ]"));
     CHECK(has(screen, "[ " + core::tr("tui.discard_no") + " ]"));
 }
@@ -477,12 +564,12 @@ TEST_CASE("the icons row cycles through nerd and off and is saved") {
     s.handle(Key::Right);
     CHECK(s.rows()[s.focus()].value == "nerd");
     s.handle(Key::Left);
-    const auto saved = s.commit(defaults());
+    const auto saved = s.submit(defaults());
     REQUIRE(saved.has_value());
     CHECK(saved->icons == "off");
     core::init_i18n("en");
-    CHECK(settings_label(s.rows()[s.focus()]) == "File icons");
+    CHECK(tui::settings_label(s.rows()[s.focus()]) == "File icons");
     core::init_i18n("tr");
-    CHECK(settings_label(s.rows()[s.focus()]) == "Dosya ikonları");
+    CHECK(tui::settings_label(s.rows()[s.focus()]) == "Dosya ikonları");
     core::init_i18n("en");
 }

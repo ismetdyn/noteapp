@@ -20,7 +20,7 @@ namespace noteapp::tui {
 
 namespace {
 
-constexpr int kFitMarginDots = 4;           // kenardaki düğümün etiketi tuvalden taşmasın
+constexpr float kFitMarginDots = 4.0F;      // kenardaki düğümün etiketi tuvalden taşmasın
 constexpr float kFitMinZoom = 0.0005F;      // 2.000 düğüm en küçük panelde de sığar
 constexpr float kFitMaxZoom = 0.3F;         // az düğüm panele yayılmasın: ideal kenar en çok 30 nokta
 constexpr float kLabelSpacingDots = 14.0F;  // komşular bu kadar açılınca tüm adlar yazılır
@@ -195,7 +195,7 @@ ftxui::Element query_table(const TuiState& state, int columns, int rows) {
                              columns));
     const app::QueryTable& table = outcome.table;
     if (table.columns.empty())
-        return vbox({std::move(status), paragraph(core::tr("tui.map_query_no_columns")) | dim, filler()});
+        return vbox({std::move(status), paragraph(core::tr("app.map_query_no_columns")) | dim, filler()});
     constexpr std::string_view kColumnGap = " │ ";
     const int count = static_cast<int>(table.columns.size());
     const int gaps = (count - 1) * ftxui::string_width(std::string(kColumnGap));
@@ -227,23 +227,9 @@ ftxui::Element query_table(const TuiState& state, int columns, int rows) {
 }  // namespace
 
 MapCamera fit_map_camera(std::span<const app::LayoutPoint> positions, int dots_x, int dots_y) {
-    if (positions.empty())
-        return {};
-    app::LayoutPoint low = positions.front();
-    app::LayoutPoint high = positions.front();
-    for (const app::LayoutPoint p : positions) {
-        low = {std::min(low.x, p.x), std::min(low.y, p.y)};
-        high = {std::max(high.x, p.x), std::max(high.y, p.y)};
-    }
-    const float room_x = std::max(static_cast<float>(dots_x - 2 * kFitMarginDots), 1.0F);
-    const float room_y = std::max(static_cast<float>(dots_y - 2 * kFitMarginDots), 1.0F);
-    const float span_x = std::max(high.x - low.x, app::GraphLayout::kIdealEdge);
-    const float span_y = std::max(high.y - low.y, app::GraphLayout::kIdealEdge);
-    MapCamera camera;
-    camera.zoom = std::clamp(std::min(room_x / span_x, room_y / span_y), kFitMinZoom, kFitMaxZoom);
-    camera.x = static_cast<float>(dots_x) / 2.0F - (low.x + high.x) / 2.0F * camera.zoom;
-    camera.y = static_cast<float>(dots_y) / 2.0F - (low.y + high.y) / 2.0F * camera.zoom;
-    return camera;
+    // Düğüm tek noktadır (kNodeRadiusDots): yerleşim biriminde payı yok.
+    return MapCamera::fit(positions, static_cast<float>(dots_x), static_cast<float>(dots_y), kFitMarginDots,
+                          0.0F, {kFitMinZoom, kFitMaxZoom});
 }
 
 // Harita (SPEC-tui "Harita"): kapsam satırı ve braille tuvali. Kenar çizgi, düğüm nokta, gösterilen not sarı

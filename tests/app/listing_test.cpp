@@ -4,12 +4,14 @@
 #include "app/listing.hpp"
 #include "core/config.hpp"
 #include "core/i18n.hpp"
+#include "core/text.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 
 #include <chrono>
 #include <cstdint>
 #include <doctest/doctest.h>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <optional>
@@ -430,25 +432,29 @@ TEST_CASE("search: a global searcher error is reported and the last valid rows a
     CHECK(paths(result.rows) == Strings{"personal-todo.md"});
 }
 
-// TUI ve GUI aynı anahtar: limits.search.content_results (0 = tüm sonuçlar).
-TEST_CASE("content_searcher caps results by limits.search.content_results and 0 returns all") {
+// TUI ve GUI aynı yol (app::connect_store), SD9 CLI düzeltmesiyle aynı kural: limits.search.content_results
+// süzgeçten sonra keser; `type:` ile süzülen eşleşme, süzgeçsiz sıralamada sınırın dışında kalsa da bulunur.
+// 0 = tüm sonuçlar.
+TEST_CASE("content search cuts at content_results after the arguments filter") {
     using namespace noteapp;
     const test::TempDir dir;
-    for (const char* name : {"a.md", "b.md", "c.md"})
-        test::upsert_note(dir.path(), name, "ortak kelime");
-    const core::NoteStore store(dir.path());
+    test::upsert_note(dir.path(), "a.md", "kelime\nkelime\nkelime\n");  // satır başına bir eşleşme
+    test::upsert_note(dir.path(), "b.md", "kelime\nkelime\n");
+    test::upsert_note(dir.path(), "z.txt", "kelime");
+    core::NoteStore store(dir.path());
     search::ContentIndex index(store, SIZE_MAX, 3);
     index.refresh();
     core::Config config = core::parse_config("").config;
+    REQUIRE(core::set_config_value(config, "limits.search.content_results", "1"));
+    Listing listing;
+    listing.set_notes(store.list());
+    app::connect_store(listing, store, config, [&]() -> const search::ContentIndex& { return index; });
+    CHECK(paths(listing.search("kelime type:txt", SearchMode::Content).rows) == Strings{"z.txt"});
+    CHECK(listing.search("kelime", SearchMode::Content).rows.size() == 1);
 
-    REQUIRE(core::set_config_value(config, "limits.search.content_results", "2"));
-    CHECK(app::content_searcher([&]() -> const search::ContentIndex& { return index; },
-                                config.limits.search.content_results)("kelime")
-              .size() == 2);
     REQUIRE(core::set_config_value(config, "limits.search.content_results", "0"));
-    CHECK(app::content_searcher([&]() -> const search::ContentIndex& { return index; },
-                                config.limits.search.content_results)("kelime")
-              .size() == 3);
+    app::connect_store(listing, store, config, [&]() -> const search::ContentIndex& { return index; });
+    CHECK(listing.search("kelime", SearchMode::Content).rows.size() == 3);
 }
 
 namespace {
@@ -585,4 +591,50 @@ TEST_CASE("search: a new edge list from the source replaces the cached relation 
         std::vector{NoteEdge{np("other.md"), np("budget.md"), EdgeKind::LinksTo}});
     CHECK(paths(r.listing.search("budget", SearchMode::Name).rows) ==
           Strings{"budget.md", "tagged.md", "other.md"});
+}
+
+// TUI ve GUI aynı Enter kararı: boş, bozuk ya da argümanlı sorgu not açmaz; genel aramada satırsız Enter boştur.
+TEST_CASE("search_enter_action: only plain unmatched text creates a note") {
+    using noteapp::app::SearchEnter;
+    using noteapp::app::search_enter_action;
+    CHECK(search_enter_action(SearchMode::Name, false, false, "") == SearchEnter::Nothing);
+    CHECK(search_enter_action(SearchMode::Name, false, false, "fikir") == SearchEnter::CreateNote);
+    CHECK(search_enter_action(SearchMode::Content, false, false, "tag:x") == SearchEnter::Nothing);
+    CHECK(search_enter_action(SearchMode::Name, false, true, "fikir") == SearchEnter::Nothing);
+    CHECK(search_enter_action(SearchMode::Name, true, false, "fikir") == SearchEnter::Remember);
+    CHECK(search_enter_action(SearchMode::Name, true, true, "tag:") == SearchEnter::Select);
+    CHECK(search_enter_action(SearchMode::Global, false, false, "fikir") == SearchEnter::Nothing);
+    CHECK(search_enter_action(SearchMode::Global, true, true, "x") == SearchEnter::Nothing);
+    CHECK(search_enter_action(SearchMode::Global, true, false, "x") == SearchEnter::Remember);
+}
+
+// SD11b: klasör özeti (TUI REVIEW, GUI editör yeri) tek hesap: sayılar, toplam boyut, son güncelleme, en yeni
+// notlar (klasöre göre ad, kısa tarih). Depo okunmaz, ağaçtan gelir.
+TEST_CASE("folder summary: counts, total size, last update and the newest notes from the tree") {
+    noteapp::core::init_i18n("en");
+    using noteapp::app::folder_summary;
+    const auto at = [](int minutes) {
+        return std::filesystem::file_time_type{} + std::chrono::minutes(minutes);
+    };
+    Listing listing;
+    listing.set_notes(
+        {make_note("work/a.md", 1, 1000), make_note("work/sub/b.md", 3, 24), make_note("other.md", 9, 5)});
+    const auto now = std::chrono::system_clock::now();
+    const auto summary = folder_summary(listing, "work", now);
+    REQUIRE(summary);
+    CHECK(summary->path == "work");
+    CHECK(summary->counts ==
+          "2 items · 2 notes · 1 folder");  // öğe: doğrudan çocuklar; not, klasör: alt ağaç
+    CHECK(summary->size == noteapp::core::human_size(1024));
+    CHECK(summary->updated == noteapp::core::local_time_text(at(3)));
+    REQUIRE(summary->recent.size() == 2);
+    CHECK(summary->recent[0].path.string() == "work/sub/b.md");  // en yeni başta
+    CHECK(summary->recent[0].name == "sub/b.md");
+    CHECK(summary->recent[0].updated == noteapp::core::short_time_text(at(3), now));
+    CHECK(summary->recent[1].name == "a.md");
+
+    const auto root = folder_summary(listing, "", now);
+    REQUIRE(root);
+    CHECK(root->recent.front().name == "other.md");  // kökte tam yol
+    CHECK_FALSE(folder_summary(listing, "gone", now));
 }

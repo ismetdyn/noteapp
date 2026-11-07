@@ -1,10 +1,10 @@
 #include "app/document.hpp"
+#include "app/export.hpp"
 #include "core/i18n.hpp"
 #include "core/text.hpp"
 #include "detect/detect.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/gui_state_internal.hpp"
-#include "pdf/pdf_export.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -47,7 +47,7 @@ void GuiState::new_note(const std::string& first_line) {
 
 bool GuiState::flush() {
     if (new_note_) {
-        if (is_blank(editor_.text())) {  // boş taslakta kaybedilecek bir şey yok
+        if (!draft_needs_answer(editor_.text())) {  // boş taslakta kaybedilecek bir şey yok
             new_note_ = false;
             return true;
         }
@@ -86,23 +86,14 @@ void GuiState::wrote() {
 // Otomatik kayıt soru açmaz, not yaratmaz (TUI ile aynı): çakışma ya da silinen not durum çubuğunda kalır,
 // karar açık kayıtta (Ctrl+S, not geçişi, kapanış).
 void GuiState::autosave() {
-    const auto saved = try_write();
-    if (!saved) {
-        report(saved.error());
-        return;
-    }
-    switch (*saved) {
-    case app::Document::Saved::Written:
-        break;
-    case app::Document::Saved::Conflict:
-        doc_.note_disk_change(app::DiskChange::Changed);
-        status_ = core::tr("gui.changed_on_disk");
-        break;
-    case app::Document::Saved::Gone:
-        doc_.note_disk_change(app::DiskChange::Deleted);
-        status_ = core::tr("gui.deleted_on_disk");
-        break;
-    }
+    autosave_.cancel();
+    const auto written = doc_.autosave(store_, editor_.text());
+    if (!written)
+        report(written.error());
+    else if (*written)
+        wrote();
+    else
+        status_ = doc_.disk_notice();
 }
 
 bool GuiState::save_existing() {
@@ -119,12 +110,22 @@ bool GuiState::save_existing() {
     case app::Document::Saved::Gone:
         break;
     }
-    // Not dışarıdan silinmiş: tamponu yeni not olarak sakla, kullanıcı yeniden adlandırıp kaydetsin. Belge
-    // BOM ve satır sonunu korur: yeni not aynı baytlarla yazılır.
+    // Not dışarıdan silinmiş: tamponu yeni not olarak sakla, farklı kaydet diyaloğu eski yer ve adı önerir
+    // (TUI ile aynı). Belge eski yolu, BOM'u ve satır sonunu korur: yeni not aynı baytlarla yazılır.
+    const core::NoteInfo gone = shown_note();  // kopya: aşağıda sıfırlanır
     new_note_ = true;
-    draft_folder_ = current_folder_;
+    draft_folder_ = core::split_note_path(gone.path.string()).folder;
     shown_.reset();
-    return save_new();
+    if (save_new())
+        return true;
+    // Vazgeçildi ya da yazılamadı: not taslağa dönmez, yine kendisidir (TUI ile aynı). Diske dönerse açık kayıt
+    // çakışmayı sorar ve otomatik kayıt sürer; dönmezse sonraki kayıt yine sorar. Belge yeni nota geçtiyse
+    // (yazıldı, okunamadı) dokunulmaz.
+    if (new_note_ && doc_.path() == gone.path) {
+        new_note_ = false;
+        shown_ = gone;
+    }
+    return false;
 }
 
 bool GuiState::resolve_conflict() {
@@ -180,6 +181,8 @@ bool GuiState::save_new() {
     request.initial = {app::suggested_stem(content, suggestion.type, std::chrono::system_clock::now(),
                                            config_.tuning.slug_max_length),
                        draft_folder_, suggestion.type};
+    if (const auto& gone = doc_.path())  // diskte silinmiş not (taslağın belgesinin yolu yoktur)
+        request.initial = move_request(*gone).initial;
     request.folders = folders_;
     request.types = config_.types;
     request.hint =
@@ -229,7 +232,7 @@ bool GuiState::adopt_saved(const core::NotePath& path) {
 
 bool GuiState::confirm_close() {
     if (new_note_) {
-        if (is_blank(editor_.text()))
+        if (!draft_needs_answer(editor_.text()))
             return true;
         switch (deciders.close_unsaved()) {
         case CloseChoice::Save:
@@ -342,19 +345,13 @@ bool GuiState::flush_shown() {
 // Tampon önceden kaydedilmiş olmalı (flush). Hedef varsa NoteStore::move AlreadyExists verir, hiçbir şey
 // değişmez.
 bool GuiState::move_saved(const core::NotePath& note, const SaveDetails& target) {
-    const auto to = core::NotePath::parse((target.folder.empty() ? "" : target.folder + "/") + target.name +
-                                          "." + target.type);
-    if (!to) {
-        report(to.error());
-        return false;
-    }
-    if (*to == note)
-        return true;
-    const auto moved = store_.move(note, *to);
+    const auto moved = app::move_note(store_, note, target.folder, target.name, target.type);
     if (!moved) {
         report(moved.error());
         return false;
     }
+    if (*moved == note)
+        return true;
     changed();
     if (shown_ && shown_->path == note) {
         shown_->path = *moved;
@@ -393,7 +390,7 @@ void GuiState::export_pdf() {
         note = shown_->path;
     if (!note)  // gösterilen not yok ya da boş taslak atıldı
         return;
-    const auto output = deciders.export_path(core::split_note_path(note->string()).name + ".pdf");
+    const auto output = deciders.export_path(app::default_export_name(*note));
     if (!output)
         return;
     const auto content = store_.read(*note);
@@ -401,13 +398,14 @@ void GuiState::export_pdf() {
         fail(content.error());
         return;
     }
-    const auto exported =
-        pdf::export_pdf(content->text, pdf::format_for(note->value()), path_from_utf8(*output));
+    // İkili denetimi diskteki baytlarda (CLI ve TUI ile aynı): salt-okunur nedeni "çok büyük" olan ikili not
+    // binary() ile yakalanmaz.
+    const auto exported = app::export_note_pdf(content->text, *note, path_from_utf8(*output));
     if (!exported) {
         fail(exported.error());
         return;
     }
-    status_ = core::tr("gui.exported", {{"path", *output}});
+    status_ = core::tr("app.exported", {{"path", *output}});
     // Göreli yolun klasörü boş olurdu ("Klasörü aç" file:/// kökünü açardı): mutlak yoldan alınır.
     std::error_code absolute_error;
     const std::filesystem::path written = std::filesystem::absolute(std::filesystem::path(*output), absolute_error);
@@ -418,7 +416,7 @@ void GuiState::export_pdf() {
 bool GuiState::can_export() const {
     // Boş taslakta export_pdf taslağı atar ve sessizce çıkar; ikili notu reddeder.
     if (new_note_)
-        return !is_blank(editor_.text());
+        return draft_needs_answer(editor_.text());
     return shown_.has_value() && !binary();
 }
 

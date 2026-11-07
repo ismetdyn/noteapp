@@ -9,6 +9,7 @@
 
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <functional>
 #include <optional>
 #include <poll.h>
 #include <string>
@@ -25,6 +26,7 @@ struct PtyOptions {
     std::vector<std::pair<std::string, std::optional<std::string>>> env = {};
     std::string input = {};          // terminale yazılan tuşlar (ör. onay yanıtı "y\n")
     std::string input_after = {};    // doluysa girdi, terminalde bu metin görününce yazılır (ör. Ctrl-C zamanlaması)
+    std::function<void()> before_input = {};  // girdiden hemen önce testte (ör. soru açıkken senkron yazması)
     bool stderr_to_file = false;     // stderr terminal değil, dosya: yalnız stdout TTY
     unsigned short rows = 24;
     unsigned short columns = 80;
@@ -85,6 +87,8 @@ inline PtyResult run_in_pty(const std::string& exe, const std::vector<std::strin
     PtyResult result;
     bool input_written = options.input.empty();
     const auto write_input = [&] {
+        if (options.before_input)
+            options.before_input();
         REQUIRE(write(master, options.input.data(), options.input.size()) ==
                 static_cast<ssize_t>(options.input.size()));
         input_written = true;

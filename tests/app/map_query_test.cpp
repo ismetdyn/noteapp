@@ -362,3 +362,30 @@ TEST_CASE("map query: the highlight lights its notes and edges, brings result no
     CHECK(model.highlighted_nodes().empty());
     CHECK(model.highlighted_edges().empty());
 }
+
+// SD11b: kayıtlı görünüm TUI ve GUI'de de kaydedilir; kural CLI `note view save` ile aynı (core::save_view).
+TEST_CASE("map query: only a shown read can be saved as a view, under the core name rules") {
+    Store s;
+    MapQuery query;
+    const auto none = query.save_view(s.store, "mine");
+    REQUIRE_FALSE(none);
+    CHECK(none.error().message_key == "error.view_needs_query");
+
+    const std::string text = "MATCH (n:Note) WHERE n.name = 'b' RETURN n";
+    ran(query, s.store, text);
+    CHECK(query.read_query() == text);
+    CHECK_FALSE(query.save_view(s.store, " mine"));  // baş boşluk reddedilir, kırpılmaz
+    CHECK_FALSE(query.save_view(s.store, "a/b"));
+    REQUIRE(query.save_view(s.store, "mine"));
+    CHECK(core::find_view(s.store, "mine")->query == text);
+    const auto again = query.save_view(s.store, "MINE");  // ezilmez
+    REQUIRE_FALSE(again);
+    CHECK(again.error().code == core::Error::Code::AlreadyExists);
+
+    // Görünümün ya da yazmanın sonucu kaydedilecek sorgu taşımaz; temizlenen sonuç da.
+    REQUIRE(query.run_view(s.store, "mine") == MapQuery::Step::Ran);
+    CHECK(query.read_query().empty());
+    ran(query, s.store, text);
+    query.clear();
+    CHECK(query.read_query().empty());
+}

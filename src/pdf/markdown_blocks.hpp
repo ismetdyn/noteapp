@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -40,8 +41,11 @@ struct Block {
     int heading_level = 0;
     int list_depth = 0;
     int quote_depth = 0;
-    // Kaplar dıştan içe: 'Q' alıntı, 'L' liste ("LQ": liste öğesindeki alıntı); derinlikler bunun sayımıdır.
-    std::string nesting;
+    // Kaplar dıştan içe: 'Q' alıntı, 'L' liste ("LQ": liste öğesindeki alıntı); derinlikler bunun sayımıdır. Yol
+    // farkla taşınır: önceki bloğun yolunun ilk `nesting_kept` kabı + `nesting_opened` (ayrıştırmanın ilk bloğunda
+    // nesting_kept 0). Tam yol her bloğa kopyalansa "- - - …" bellekte derinliğin karesi olurdu (SD5a).
+    std::size_t nesting_kept = 0;
+    std::string nesting_opened;
     // Liste imi: "• ", "2. ", "[x] "; ilk satırda asılı durur. Blok açmadan kap (iç liste, alıntı) açan ya da boş
     // öğenin imi kendi boş paragrafındadır.
     std::string marker;

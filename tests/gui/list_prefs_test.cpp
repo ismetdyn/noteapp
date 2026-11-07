@@ -105,6 +105,12 @@ TEST_CASE_FIXTURE(PrefsFixture, "the chosen sort is saved at once and restored w
         CHECK((saved.find("sort = \"size\"") != std::string::npos ||
                saved.find("sort = 'size'") != std::string::npos));
         CHECK(saved.find("sort_descending = false") != std::string::npos);
+#ifndef _WIN32
+        // Arama geçmişi taşır: TUI'nin tui-state.toml'u gibi yalnız sahibi okur (app::save_ui_prefs).
+        using std::filesystem::perms;
+        CHECK((std::filesystem::status(state_file()).permissions() & (perms::group_all | perms::others_all)) ==
+              perms::none);
+#endif
     }
     auto reopened = make_state();
     CHECK(reopened->sort().field == SortField::Size);

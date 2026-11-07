@@ -123,6 +123,18 @@ TEST_CASE("tabs: a written draft stays unsaved in its tab and the note opens in 
     CHECK(f.text() == "draft text");
 }
 
+// GUI ile aynı kural (app::keeps_tab): boş sekme korunacak bir şey taşımaz, düzenlenmiş olsa da.
+TEST_CASE("tabs: a draft edited back to empty is replaced by the next note") {
+    TabsFixture f;
+    REQUIRE(f.tabs.begin_note([](EditorSession& s) { s.begin_new_note(""); }, false) ==
+            EditorTabs::Result::Done);
+    f.type("x");
+    f.tabs.active().handle(Key::Backspace);
+    REQUIRE(f.text().empty());
+    REQUIRE(f.tabs.open_note(np("a.md"), 0, false) == EditorTabs::Result::Done);
+    CHECK(f.titles() == std::vector<std::string>{"a.md"});
+}
+
 TEST_CASE("tabs: an open note focuses its tab instead of duplicating it") {
     TabsFixture f;
     f.tabs.open_note(np("a.md"), 0, false);

@@ -192,26 +192,32 @@ private:
     bool last_hit_ = false;
 };
 
-// Kapların yatay yeri dıştan içe (Block::nesting): alıntı payı ve liste girintisi sırayla; öğedeki alıntının çubuğu
-// öğe metninin hizasında. `bars` alıntı çubuklarının x'i, `marker` en içteki listenin im yeri, `left` metnin başı.
-struct Indents {
-    std::vector<float> bars;
-    float marker = 0.0F;
-    float left = 0.0F;
+// Açık bir kabın yatay yeri; kaplar dıştan içe alıntı payı ve liste girintisiyle sırayla birikir, öğedeki alıntının
+// çubuğu öğe metninin hizasındadır. Yığın blokların farkıyla (Block::nesting_kept/nesting_opened) güncellenir: blok
+// başına yalnız değişen kaplar işlenir, düşman iç içelikte iş derinliğin karesi olmaz.
+struct Container {
+    char kind = 'L';       // 'Q' alıntı, 'L' liste
+    float bar = 0.0F;      // alıntı çubuğunun x'i
+    float marker = 0.0F;   // en içteki listenin im yeri
+    float left = 0.0F;     // metnin başı
+    float bar_top = 0.0F;  // alıntı: çubuğun başladığı y (aynı yolda süren bloklarda tek kutu)
 };
 
-Indents indents_of(const pdf::Block& block, float em) {
-    Indents out;
-    for (const char container : block.nesting) {
-        if (container == 'Q') {
-            out.bars.push_back(out.left);
-            out.left += kQuoteIndentEms * em;
-        } else {
-            out.marker = out.left;
-            out.left += kListIndentEms * em;
-        }
+void push_container(std::vector<Container>& open, char kind, float em, float top) {
+    Container added{kind};
+    added.bar_top = top;
+    if (!open.empty()) {
+        added.marker = open.back().marker;
+        added.left = open.back().left;
     }
-    return out;
+    if (kind == 'Q') {
+        added.bar = added.left;
+        added.left += kQuoteIndentEms * em;
+    } else {
+        added.marker = added.left;
+        added.left += kListIndentEms * em;
+    }
+    open.push_back(added);
 }
 
 class Layouter {
@@ -221,12 +227,11 @@ public:
         : out_(out), fonts_(fonts), resolves_(resolves), em_(em), width_(width), line_height_(em * kLineSpacing),
           highlight_line_bytes_(highlight_line_bytes) {}
 
-    // Bloğun altını döner; sağ kenarı `right_`a işler.
-    float add(const pdf::Block& block, float top) {
+    // Bloğun altını döner; sağ kenarı `right_`a işler. `innermost` bloğun en içteki kabı (yoksa null).
+    float add(const pdf::Block& block, const Container* innermost, float top) {
         quoted_ = block.quote_depth > 0;
-        const Indents indents = indents_of(block, em_);
-        const float marker_left = indents.marker;
-        float left = indents.left;
+        const float marker_left = innermost == nullptr ? 0.0F : innermost->marker;
+        float left = innermost == nullptr ? 0.0F : innermost->left;
         if (!block.marker.empty()) {
             const Look muted{fonts_.regular, em_, PreviewInk::Muted, false, {}, false};
             // Geniş im ("10. [x] ") metni sağa iter: üst üste binmesin.
@@ -394,10 +399,19 @@ PreviewLayout layout_preview(const std::vector<pdf::Block>& blocks, const Previe
     PreviewLayout out;
     Layouter layouter(out, fonts, font_size, width, resolves, highlight_line_bytes);
     const float bar_width = kQuoteBarEms * font_size;
+    const auto add_bar = [&out, bar_width](const Container& quote, float bottom) {
+        out.boxes.push_back(
+            {PreviewBox::Kind::QuoteBar, ImVec2(quote.bar, quote.bar_top), ImVec2(quote.bar + bar_width, bottom)});
+    };
     float y = 0.0F;
+    // Bloğun yolunun ilk open.size() kabı açık; kalanı nesting_opened[matched..]'dan eklenir.
+    std::vector<Container> open;
+    std::size_t matched = 0;
     for (std::size_t index = 0; index < blocks.size(); ++index) {
         const pdf::Block& block = blocks[index];
-        const float bottom = layouter.add(block, y);
+        for (std::size_t at = matched; at < block.nesting_opened.size(); ++at)
+            push_container(open, block.nesting_opened[at], font_size, y);
+        const float bottom = layouter.add(block, open.empty() ? nullptr : &open.back(), y);
         out.block_spans.emplace_back(y, bottom);
         const pdf::Block* next = index + 1 < blocks.size() ? &blocks[index + 1] : following;
         float gap_ems = kBlockGapEms;
@@ -407,18 +421,28 @@ PreviewLayout layout_preview(const std::vector<pdf::Block>& blocks, const Previe
                  !(next->list_start && next->list_depth <= block.list_depth))  // aynı ya da dıştaki yeni liste
             gap_ems = kListItemGapEms;
         const float gap = gap_ems * font_size;
-        // Alıntı çubuğu aynı alıntının sonraki bloğuna aradaki boşluk boyunca uzar: kesik çizgi olmasın.
-        const std::vector<float> bars = indents_of(block, font_size).bars;
-        std::size_t quote = 0;
-        for (std::size_t at = 0; at < block.nesting.size(); ++at) {
-            if (block.nesting[at] != 'Q')
-                continue;
-            const float x = bars[quote++];
-            const bool continues = next != nullptr && next->nesting.compare(0, at + 1, block.nesting, 0, at + 1) == 0;
-            out.boxes.push_back(
-                {PreviewBox::Kind::QuoteBar, ImVec2(x, y), ImVec2(x + bar_width, continues ? bottom + gap : bottom)});
+        // Alıntı çubuğu yolu aynı başlayan (kap türleri aynı) sonraki bloğa aradaki boşluk boyunca uzar: kesik çizgi
+        // olmasın. Süren çubuk tek kutudur; yolu ayrılan kapların çubuğu bu bloğun altında biter.
+        std::size_t common = 0;
+        matched = 0;
+        if (next != nullptr) {
+            common = std::min(next->nesting_kept, open.size());
+            while (common < open.size() && matched < next->nesting_opened.size() &&
+                   open[common].kind == next->nesting_opened[matched]) {
+                ++common;
+                ++matched;
+            }
         }
+        for (std::size_t at = common; at < open.size(); ++at) {
+            if (open[at].kind == 'Q')
+                add_bar(open[at], bottom);
+        }
+        open.resize(common);
         y = bottom + gap;
+    }
+    for (const Container& container : open) {  // sonraki parçaya süren çubuklar aradaki boşluğun sonuna dek
+        if (container.kind == 'Q')
+            add_bar(container, y);
     }
     out.size = ImVec2(layouter.right(), y);
     return out;

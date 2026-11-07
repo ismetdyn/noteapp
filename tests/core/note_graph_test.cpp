@@ -3,7 +3,6 @@
 // dizinde iki süreç gibidir.
 #include "core/config.hpp"
 #include "core/file_stat.hpp"
-#include "core/migration.hpp"
 #include "core/note_store.hpp"
 #include "core/note_sync.hpp"
 #include "core/paths.hpp"
@@ -503,32 +502,6 @@ TEST_CASE("a local write first saves a losing head that is still unresolved") {
     std::ranges::sort(bodies);
     CHECK((bodies == std::vector<std::string>{"a sürümü", "son"} ||
            bodies == std::vector<std::string>{"b sürümü", "son"}));
-}
-
-TEST_CASE("for_config refuses writes while old notes wait for migration, and says how") {
-    const TempDir home;
-    const noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
-    const TempDir notes;
-    {
-        std::ofstream(notes.path() / "eski.md", std::ios::binary) << "eski";
-    }
-    Config config = parse_config("").config;
-    config.notes_dir = notes.path();
-    NoteStore store = NoteStore::for_config(config);
-    const auto refused = store.create(NewNote{"", "n", "md", "x"});
-    REQUIRE_FALSE(refused.has_value());
-    CHECK(refused.error().code == Error::Code::MigrationRequired);
-    REQUIRE(store.health().has_value());
-    CHECK(store.health()->code == Error::Code::MigrationRequired);
-    CHECK(noteapp::test::slurp(notes.path() / "eski.md") == "eski");
-
-    const auto report = migrate_legacy_notes(notes.path(), data_dir());
-    REQUIRE(report.has_value());
-    CHECK(report->complete);
-    NoteStore after = NoteStore::for_config(config);
-    CHECK_FALSE(after.health().has_value());
-    CHECK(after.read(np("eski.md"))->text == "eski");
-    CHECK(after.create(NewNote{"", "n", "md", "x"}).has_value());
 }
 
 #ifndef _WIN32

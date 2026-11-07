@@ -223,7 +223,7 @@ TEST_CASE("move_note moves to a new folder and type") {
     const test::TempDir notes;
     core::NoteStore store(notes.path());
     REQUIRE(store.create({"work", "plan", "md", "içerik"}).has_value());
-    const auto moved = tui::move_note(store, path("work/plan.md"), {"archive/2026", "plan-v2", "txt"});
+    const auto moved = app::move_note(store, path("work/plan.md"), "archive/2026", "plan-v2", "txt");
     REQUIRE(moved.has_value());
     CHECK(moved->string() == "archive/2026/plan-v2.txt");
     CHECK(test::note_body(notes.path(), "archive/2026/plan-v2.txt") == "içerik");
@@ -236,7 +236,7 @@ TEST_CASE("move_note onto an existing note fails and leaves both files") {
     core::NoteStore store(notes.path());
     REQUIRE(store.create({"", "a", "md", "A"}).has_value());
     REQUIRE(store.create({"", "b", "md", "B"}).has_value());
-    const auto moved = tui::move_note(store, path("a.md"), {"", "b", "md"});
+    const auto moved = app::move_note(store, path("a.md"), "", "b", "md");
     REQUIRE_FALSE(moved.has_value());
     CHECK(moved.error().code == core::Error::Code::AlreadyExists);
     CHECK(test::note_body(notes.path(), "a.md") == "A");
@@ -247,7 +247,7 @@ TEST_CASE("move_note to the same path is a no-op") {
     const test::TempDir notes;
     core::NoteStore store(notes.path());
     REQUIRE(store.create({"w", "a", "md", "A"}).has_value());
-    const auto moved = tui::move_note(store, path("w/a.md"), {"w", "a", "md"});
+    const auto moved = app::move_note(store, path("w/a.md"), "w", "a", "md");
     REQUIRE(moved.has_value());
     CHECK(*moved == path("w/a.md"));
     CHECK(test::note_body(notes.path(), "w/a.md") == "A");

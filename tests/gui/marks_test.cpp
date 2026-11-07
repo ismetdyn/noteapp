@@ -46,7 +46,7 @@ struct MarksScene {
         fixture.add_note(".trash/t2.md", "t2\n", 50);
         state = fixture.make_state();
         view = make_view(*state);
-        state->deciders.confirm_delete = [this](const std::string&) {
+        state->deciders.confirm_delete = [this](const std::string&, const std::string&) {
             ++asked;
             return answer;
         };
@@ -109,6 +109,34 @@ TEST_CASE("Shift+Delete on marks asks once and deletes them for good") {
     CHECK_FALSE(s.fixture.note_exists("a.md"));
     CHECK_FALSE(s.fixture.note_exists("b.md"));
     CHECK_FALSE(s.fixture.note_exists(".trash/a.md"));
+    CHECK(s.fixture.note_exists("work/x.md"));
+}
+
+// Onay açıkken senkron (burada tarama) işaretlileri düşürür ya da aynı yola başka not koyar: Evet yalnız
+// sorulan hâli siler, başka hiçbir şeyi (app::TrashOps, TUI ile aynı kural).
+TEST_CASE("a permanent delete removes only what the confirmation showed") {
+    MarksScene s;
+    s.open("b.md");
+    run_command(*s.state, "mark");
+    run_command(*s.state, "mark");
+    s.state->deciders.confirm_delete = [&s](const std::string&, const std::string&) {
+        noteapp::core::NoteStore store(s.fixture.store_dir());
+        REQUIRE(store.remove(*noteapp::core::NotePath::parse("a.md")));
+        REQUIRE(store.remove(*noteapp::core::NotePath::parse("b.md")));
+        s.fixture.add_note("b.md", "another note at the same path\n");
+        s.state->rescan();
+        return true;
+    };
+    press(*s.view, ImGuiMod_Shift | ImGuiKey_Delete);
+    CHECK(s.fixture.note_exists("b.md"));
+    CHECK(s.fixture.note_exists("work/x.md"));
+
+    s.open("work/x.md");
+    s.state->deciders.confirm_delete = [&s](const std::string&, const std::string&) {
+        s.fixture.add_note("work/x.md", "changed by sync\n");
+        return true;
+    };
+    s.state->delete_note();
     CHECK(s.fixture.note_exists("work/x.md"));
 }
 
@@ -195,7 +223,7 @@ TEST_CASE("Ctrl+M on a folder row moves the folder; marked notes move together")
 TEST_CASE("the status bar shows how many rows are marked") {
     MarksScene s;
     s.open("b.md");
-    const std::string marked = noteapp::core::tr("gui.marked_count", {{"count", "2"}});
+    const std::string marked = noteapp::core::tr("app.marked_count", {{"count", "2"}});
     CHECK(s.state->count_label().find(marked) == std::string::npos);
     run_command(*s.state, "mark");
     run_command(*s.state, "mark");

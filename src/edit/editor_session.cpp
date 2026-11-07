@@ -2,14 +2,13 @@
 
 #include "app/document.hpp"
 #include "core/editor.hpp"
+#include "core/folder_tree.hpp"
 #include "core/i18n.hpp"
 #include "core/text.hpp"
 #include "edit/display_text.hpp"
 
 #include <algorithm>
-#include <iterator>
 #include <memory>
-#include <set>
 #include <string_view>
 #include <utility>
 
@@ -17,49 +16,10 @@ namespace noteapp::tui {
 
 namespace {
 
-constexpr char kDelete = 0x7F;
-
 std::string to_utf8(const std::filesystem::path& p) {
     const std::u8string u = p.u8string();
     return std::string(u.begin(), u.end());
 }
-
-bool is_typable(std::string_view text) {
-    return !text.empty() && static_cast<unsigned char>(text.front()) >= 0x20 && text.front() != kDelete &&
-           core::is_valid_utf8(text);
-}
-
-void pop_code_point(std::string& s) {
-    while (s.size() > 1 && (static_cast<unsigned char>(s.back()) & 0xC0) == 0x80)
-        s.pop_back();
-    if (!s.empty())
-        s.pop_back();
-}
-
-struct Motion {
-    Key key;
-    void (*apply)(EditorBuffer&, int columns, int rows);
-};
-
-// Hareketler salt-okunurda da çalışır: "→ yine de kaydırmaya izin verir".
-constexpr Motion kMotions[] = {
-    {Key::Left, [](EditorBuffer& b, int, int) { b.move_left(false); }},
-    {Key::Right, [](EditorBuffer& b, int, int) { b.move_right(false); }},
-    {Key::Up, [](EditorBuffer& b, int c, int) { b.move_rows(-1, c, false); }},
-    {Key::Down, [](EditorBuffer& b, int c, int) { b.move_rows(1, c, false); }},
-    {Key::Home, [](EditorBuffer& b, int, int) { b.move_home(false); }},
-    {Key::End, [](EditorBuffer& b, int, int) { b.move_end(false); }},
-    {Key::PageUp, [](EditorBuffer& b, int c, int r) { b.move_rows(-std::max(r - 1, 1), c, false); }},
-    {Key::PageDown, [](EditorBuffer& b, int c, int r) { b.move_rows(std::max(r - 1, 1), c, false); }},
-    {Key::CtrlHome, [](EditorBuffer& b, int, int) { b.move_doc_start(false); }},
-    {Key::CtrlEnd, [](EditorBuffer& b, int, int) { b.move_doc_end(false); }},
-    {Key::ShiftLeft, [](EditorBuffer& b, int, int) { b.move_left(true); }},
-    {Key::ShiftRight, [](EditorBuffer& b, int, int) { b.move_right(true); }},
-    {Key::ShiftUp, [](EditorBuffer& b, int c, int) { b.move_rows(-1, c, true); }},
-    {Key::ShiftDown, [](EditorBuffer& b, int c, int) { b.move_rows(1, c, true); }},
-    {Key::ShiftHome, [](EditorBuffer& b, int, int) { b.move_home(true); }},
-    {Key::ShiftEnd, [](EditorBuffer& b, int, int) { b.move_end(true); }},
-};
 
 template <typename Choice> Choice cycled(Choice current, int count, int delta) {
     return static_cast<Choice>((static_cast<int>(current) + delta + count) % count);
@@ -81,7 +41,6 @@ int choice_delta(Key key) {
     }
 }
 
-constexpr std::size_t kCompletionRows = 8;
 constexpr int kLeaveChoices = 3;
 constexpr int kConflictChoices = 4;
 
@@ -109,7 +68,7 @@ void EditorSession::start_draft(DraftName name) {
     doc_.reset_draft();
     buffer_.emplace(std::string{}, host_.cell_width, host_.undo_limit_bytes);
     ++buffer_generation_;
-    find_matches_.clear();
+    modes_.clear_find_matches();
     mode_ = Mode::Editing;
     show_info({});
     refresh_type();
@@ -165,6 +124,13 @@ void EditorSession::handle_name(Key key, std::string_view text) {
         submit_name();
     } else if (key == Key::Escape) {
         mode_ = Mode::Editing;  // hiçbir şey yazılmaz; `Kaydet` ile gelindiyse çıkış da iptal
+        // Silinmiş notun taslağı (ask_new_place) yalnız istem sürer: not yine kendisidir. Diske dönerse açık
+        // kayıt ve otomatik kayıt onun kuralıyla sürer (GUI ile aynı); dönmezse sonraki kayıt yine sorar, çıkış
+        // onu yeniden yaratır (flush_write).
+        if (doc_.path()) {
+            draft_.reset();
+            refresh_type();
+        }
         cancel_pending_leave();
         show_info({});
     }
@@ -191,8 +157,12 @@ void EditorSession::submit_name() {
 }
 
 EditorSession::SaveResult EditorSession::open_name_prompt() {
-    const std::string type = note_type();
-    name_line_.set_text(name_stem(type) + "." + type);
+    if (doc_.path()) {  // diskte silinmiş not: eski adı önerilir
+        name_line_.set_text(core::last_component(doc_.path()->string()));
+    } else {
+        const std::string type = note_type();
+        name_line_.set_text(name_stem(type) + "." + type);
+    }
     message_.clear();
     message_is_error_ = false;
     mode_ = Mode::NamePrompt;
@@ -208,12 +178,6 @@ std::string EditorSession::display_name() const {
     if (doc_.path())
         return doc_.path()->string();
     return draft_ && !draft_->stem.empty() ? draft_->stem : core::tr("tui.editor_untitled");
-}
-
-std::string EditorSession::find_label() const {
-    if (find_matches_.empty())
-        return {};
-    return match_label(find_index_, find_matches_.size());
 }
 
 void EditorSession::open(const core::NotePath& path, std::size_t start_line) {
@@ -241,8 +205,8 @@ void EditorSession::apply_text(std::string text) {
         buffer_.emplace(std::move(text), host_.cell_width, host_.undo_limit_bytes);
         ++buffer_generation_;
     }
-    find_matches_.clear();
-    ghost_.clear();
+    modes_.clear_find_matches();
+    modes_.clear_ghost();
     show_info({});
     refresh_type();
 }
@@ -283,7 +247,7 @@ void EditorSession::click_at(int x, int y) {
     const std::vector<VisualRow> rows = buffer_->visible_rows(columns_, rows_);
     if (rows.empty() || x < 0 || y < 0)
         return;
-    ghost_.clear();
+    modes_.clear_ghost();
     const std::size_t row = std::min(static_cast<std::size_t>(y), rows.size() - 1);
     buffer_->move_to_cell(rows[row], std::max(x - gutter_width(), 0));
 }
@@ -315,25 +279,14 @@ bool EditorSession::tick(std::chrono::steady_clock::time_point now) {
     autosave_->cancel();
     if (!buffer_->dirty() || !doc_.autosaves() || draft_)
         return false;
-    const auto saved = [&] {
+    const auto written = [&] {
         const std::scoped_lock lock(host_.store_mutex);
-        return doc_.save(host_.store, open_buffer().text());
+        return doc_.autosave(host_.store, open_buffer().text());
     }();
-    if (!saved) {
-        show_error(saved.error());
-        return true;
-    }
-    switch (*saved) {
-    case app::Document::Saved::Written:
+    if (!written)
+        show_error(written.error());
+    else if (*written)
         adopt_saved();
-        break;
-    case app::Document::Saved::Conflict:
-        doc_.note_disk_change(app::DiskChange::Changed);
-        break;
-    case app::Document::Saved::Gone:
-        doc_.note_disk_change(app::DiskChange::Deleted);
-        break;
-    }
     return true;
 }
 
@@ -364,15 +317,12 @@ void EditorSession::dispatch(Key key, std::string_view text, const SharedInputSo
 
 void EditorSession::handle_editing(Key key, std::string_view text) {
     show_info({});
-    const std::string ghost = std::exchange(ghost_, {});  // her tuş öneriyi düşürür; yazım yenisini üretir
-    if (!ghost.empty() && (key == Key::Tab || key == Key::Right)) {
-        const std::size_t size_before = open_buffer().text().size();
-        open_buffer().paste(ghost);
+    const std::size_t size_before = open_buffer().text().size();
+    if (modes_.accept_ghost(open_buffer(), key, doc_.writable())) {  // her tuş öneriyi düşürür
         note_draft_edit(size_before);
-        find_matches_.clear();
         return;
     }
-    if (apply_motion(key))
+    if (apply_motion_key(open_buffer(), key, columns_, rows_))
         return;
     switch (key) {
     case Key::CtrlQ:
@@ -392,15 +342,11 @@ void EditorSession::handle_editing(Key key, std::string_view text) {
         return;
     case Key::CtrlF:
         mode_ = Mode::Find;
-        find_origin_ = open_buffer().cursor();
-        find_line_.clear();
-        find_line_.set_sources(word_input_sources(
-            completion_candidates(open_buffer().text(), open_buffer().cursor(), shown_type_,
-                                  current_word_table().get(), host_.completion)));
-        find_matches_.clear();
+        modes_.open_find(open_buffer(), shown_type_, current_word_table().get());
         return;
     case Key::F3:
-        step_find(1);
+        if (modes_.step_find(open_buffer(), 1))
+            show_find_result();
         return;
     default:
         break;
@@ -408,43 +354,19 @@ void EditorSession::handle_editing(Key key, std::string_view text) {
     if (!doc_.writable())
         return;
     if (key == Key::CtrlSpace) {
-        open_completion();
+        modes_.open_completion(open_buffer(), shown_type_, current_word_table().get());
+        mode_ = Mode::Complete;
         return;
     }
-    const std::size_t size_before = open_buffer().text().size();
     apply_edit(key, text);
     note_draft_edit(size_before);
-    find_matches_.clear();  // ofsetler eski metne ait; F3 yeniden hesaplar
+    modes_.clear_find_matches();
     if (key == Key::Char)
-        update_ghost();
-}
-
-bool EditorSession::apply_motion(Key key) {
-    const auto* motion = std::ranges::find(kMotions, key, &Motion::key);
-    if (motion == std::ranges::end(kMotions))
-        return false;
-    motion->apply(open_buffer(), columns_, rows_);
-    return true;
+        modes_.update_ghost(open_buffer(), doc_.writable(), shown_type_, current_word_table().get());
 }
 
 void EditorSession::apply_edit(Key key, std::string_view text) {
     switch (key) {
-    case Key::Char:
-        if (is_typable(text))
-            open_buffer().type_text(text);
-        break;
-    case Key::Backspace:
-        open_buffer().backspace();
-        break;
-    case Key::Delete:
-        open_buffer().delete_forward();
-        break;
-    case Key::Enter:
-        open_buffer().newline();
-        break;
-    case Key::Tab:
-        open_buffer().type_text("\t");
-        break;
     case Key::CtrlX:
         copy_to_clipboard(open_buffer().cut());
         break;
@@ -454,13 +376,8 @@ void EditorSession::apply_edit(Key key, std::string_view text) {
     case Key::Paste:
         open_buffer().paste(text);
         break;
-    case Key::CtrlZ:
-        open_buffer().undo();
-        break;
-    case Key::CtrlY:
-        open_buffer().redo();
-        break;
     default:
+        apply_edit_key(open_buffer(), key, text);
         break;
     }
 }
@@ -489,192 +406,52 @@ std::shared_ptr<const WordTable> EditorSession::current_word_table() const {
     return host_.word_table ? host_.word_table() : nullptr;
 }
 
-// Yalnız satır sonunda: metnin ortasında soluk yazı ardındaki metni örterdi.
-void EditorSession::update_ghost() {
-    ghost_.clear();
-    const std::string& text = open_buffer().text();
-    const std::size_t cursor = open_buffer().cursor();
-    const bool at_line_end = cursor == text.size() || text[cursor] == '\n' || text[cursor] == '\r';
-    if (!doc_.writable() || !at_line_end || open_buffer().selection())
-        return;
-    const auto table = current_word_table();
-    ghost_ =
-        suggest_completion(text, cursor, shown_type_, table.get(), host_.completion).value_or(std::string{});
-}
-
-void EditorSession::open_completion() {
-    const std::string& text = open_buffer().text();
-    const std::size_t cursor = open_buffer().cursor();
-    const auto table = current_word_table();
-    completion_candidates_ = completion_candidates(text, cursor, shown_type_, table.get(), host_.completion);
-    completion_query_ = std::string(word_prefix_at(text, cursor, host_.completion.word_bytes));
-    completion_selected_ = 0;
-    completion_inserts_.clear();
-    ++completion_generation_;
-    refresh_completion();
-    mode_ = Mode::Complete;
-}
-
 void EditorSession::add_completion_items(std::uint64_t generation,
                                          std::span<const core::lsp::CompletionItem> items) {
-    if (mode_ != Mode::Complete || generation != completion_generation_)
-        return;
-    std::vector<std::string> labels;
-    for (const core::lsp::CompletionItem& item : items) {
-        std::string label = terminal_safe(item.label);
-        if (label.empty() || completion_inserts_.contains(label))
-            continue;
-        // Çok satırlı ya da denetim karakterli metin nota görünmeden kaçış dizisi veya satır sokardı.
-        const bool plain = !item.insert_text.empty() && terminal_safe(item.insert_text) == item.insert_text;
-        completion_inserts_.emplace(label, plain ? item.insert_text : label);
-        labels.push_back(std::move(label));
-    }
-    // Seçim kaymasın: kullanıcı okları kullanırken gelen cevap seçili adayı değiştirmez.
-    const std::string selected =
-        completion_items_.empty() ? std::string{} : completion_items_[completion_selected_];
-    // Yalnız bu cevabın etiketleriyle aynı olan adaylar düşer: aynı açılışa daha önce eklenmiş sunucu
-    // önerileri de completion_inserts_'tedir, onlar silinmemeli (bir dilin birden çok sunucusu).
-    const std::set<std::string_view> added(labels.begin(), labels.end());
-    std::erase_if(completion_candidates_, [&added](const std::string& word) { return added.contains(word); });
-    labels.insert(labels.end(), std::make_move_iterator(completion_candidates_.begin()),
-                  std::make_move_iterator(completion_candidates_.end()));
-    completion_candidates_ = std::move(labels);
-    refresh_completion();
-    const auto kept = std::ranges::find(completion_items_, selected);
-    completion_selected_ =
-        kept == completion_items_.end() ? 0 : static_cast<std::size_t>(kept - completion_items_.begin());
+    if (mode_ == Mode::Complete)
+        modes_.add_completion_items(generation, items);
 }
 
 const DiagnosticMark* EditorSession::diagnostic_at_cursor() const {
-    if (!buffer_)
-        return nullptr;
-    const std::size_t cursor = buffer_->cursor();
-    const auto found = std::ranges::find_if(diagnostics_, [cursor](const DiagnosticMark& mark) {
-        return cursor >= mark.range.begin && cursor <= mark.range.end;
-    });
-    return found == diagnostics_.end() ? nullptr : &*found;
-}
-
-void EditorSession::refresh_completion() {
-    completion_items_ = filter_candidates(completion_candidates_, completion_query_, kCompletionRows);
-    completion_selected_ =
-        std::min(completion_selected_, completion_items_.empty() ? 0 : completion_items_.size() - 1);
-}
-
-void EditorSession::insert_completion() {
-    if (completion_items_.empty())
-        return;
-    const std::size_t cursor = open_buffer().cursor();
-    const std::size_t typed =
-        word_prefix_at(open_buffer().text(), cursor, host_.completion.word_bytes).size();
-    const std::size_t size_before = open_buffer().text().size();
-    open_buffer().select_range({cursor - typed, cursor});
-    const std::string& label = completion_items_[completion_selected_];
-    const auto lsp_insert = completion_inserts_.find(label);
-    open_buffer().paste(lsp_insert == completion_inserts_.end() ? label : lsp_insert->second);
-    note_draft_edit(size_before);
-    find_matches_.clear();
+    return buffer_ ? modes_.diagnostic_at_cursor(*buffer_) : nullptr;
 }
 
 void EditorSession::handle_complete(Key key, std::string_view text) {
-    switch (key) {
-    case Key::Char:
-        if (is_typable(text)) {
-            completion_query_.append(text);
-            refresh_completion();
-        }
-        break;
-    case Key::Backspace:
-        pop_code_point(completion_query_);
-        refresh_completion();
-        break;
-    case Key::Up:
-    case Key::CtrlP:
-        completion_selected_ -= completion_selected_ > 0 ? 1 : 0;
-        break;
-    case Key::Down:
-    case Key::CtrlN:
-        completion_selected_ += completion_selected_ + 1 < completion_items_.size() ? 1 : 0;
-        break;
-    case Key::Enter:
-        insert_completion();
-        mode_ = Mode::Editing;
-        break;
-    case Key::Escape:
-    case Key::CtrlSpace:
-        mode_ = Mode::Editing;
-        break;
-    default:
-        break;
-    }
-}
-
-// Eşleşmeleri yeniden hesaplar; geçerli eşleşme `from`dan sonraki ilkidir, yoksa başa sarar.
-void EditorSession::recompute_find(std::size_t from) {
-    find_matches_ = find_folded(open_buffer().text(), find_line_.text());
-    const auto next =
-        std::ranges::find_if(find_matches_, [from](const ByteRange& m) { return m.begin >= from; });
-    find_index_ = next == find_matches_.end() ? 0 : static_cast<std::size_t>(next - find_matches_.begin());
-}
-
-void EditorSession::select_current_match() {
-    if (find_matches_.empty()) {
-        if (!find_line_.text().empty())
-            show_info(core::tr("tui.editor_not_found"));
+    const std::size_t size_before = open_buffer().text().size();
+    switch (modes_.handle_complete(open_buffer(), key, text)) {
+    case EditorModes::CompleteResult::Open:
         return;
+    case EditorModes::CompleteResult::Inserted:
+        note_draft_edit(size_before);
+        break;
+    case EditorModes::CompleteResult::Closed:
+        break;
     }
-    show_info({});
-    open_buffer().select_range(find_matches_[find_index_]);
+    mode_ = Mode::Editing;
 }
 
-void EditorSession::update_find() {
-    open_buffer().select_range({find_origin_, find_origin_});
-    show_info({});
-    recompute_find(find_origin_);
-    select_current_match();
-}
-
-void EditorSession::step_find(int delta) {
-    if (find_line_.text().empty())
-        return;
-    if (find_matches_.empty()) {
-        // Düzenleme eşleşmeleri düşürdü: imleçten sonraki ilk eşleşmeye gidilir, atlanmaz.
-        recompute_find(open_buffer().cursor());
-    } else {
-        const std::size_t count = find_matches_.size();
-        find_index_ = (find_index_ + count + (delta > 0 ? 1 : count - 1)) % count;
-    }
-    select_current_match();
+// Arama koştu: eşleşme yoksa (sorgu dolu) durum satırında söylenir, varsa ileti temizlenir.
+void EditorSession::show_find_result() {
+    show_info(modes_.find_missed() ? core::tr("tui.editor_not_found") : std::string{});
 }
 
 void EditorSession::handle_find(Key key, std::string_view text) {
-    const InputLine::Result result = find_line_.handle(key, text);
-    if ((key == Key::Backspace || result == InputLine::Result::Edited) && !find_line_.popup())
-        update_find();
-    if (result != InputLine::Result::Ignored)
-        return;
-    switch (key) {
-    case Key::Enter:
-    case Key::Down:
-    case Key::CtrlN:
-    case Key::F3:
-        step_find(1);
+    switch (modes_.handle_find(open_buffer(), key, text)) {
+    case EditorModes::FindResult::Searched:
+        show_find_result();
         break;
-    case Key::Up:
-    case Key::CtrlP:
-        step_find(-1);
-        break;
-    case Key::Escape:
+    case EditorModes::FindResult::Closed:
         mode_ = Mode::Editing;
-        find_matches_.clear();
         show_info({});
         break;
-    case Key::F9:
-        mode_ = Mode::Editing;
-        find_matches_.clear();
-        request_leave(AfterLeave::Settings);
+    case EditorModes::FindResult::Handled:
         break;
-    default:
+    case EditorModes::FindResult::Ignored:
+        if (key == Key::F9) {
+            mode_ = Mode::Editing;
+            modes_.close_find();
+            request_leave(AfterLeave::Settings);
+        }
         break;
     }
 }
@@ -737,9 +514,9 @@ void EditorSession::close() {
     draft_.reset();
     if (autosave_)
         autosave_->cancel();
-    find_matches_.clear();
-    ghost_.clear();
-    diagnostics_.clear();
+    modes_.clear_find_matches();
+    modes_.clear_ghost();
+    modes_.set_diagnostics({});
     mode_ = Mode::Editing;
     leave_pending_ = false;
     after_leave_ = AfterLeave::List;
@@ -766,7 +543,7 @@ EditorSession::SaveResult EditorSession::save() {
     if (!doc_.writable())
         return SaveResult::Failed;
     if (doc_.deleted_on_disk())
-        return save_as_new_note({}, "tui.editor_saved_new");
+        return ask_new_place();
     if (!open_buffer().dirty()) {
         show_info(core::tr("tui.editor_no_changes"));
         return SaveResult::Saved;
@@ -793,7 +570,18 @@ EditorSession::SaveResult EditorSession::save() {
     case app::Document::Saved::Gone:
         break;
     }
-    return save_as_new_note({}, "tui.editor_saved_new");
+    return ask_new_place();
+}
+
+// Not diskte yok: GUI gibi farklı kaydet. Tampon eski yer ve adla taslağa döner (çıkışta soru sorulamazsa
+// oraya yazılır); istem aynı yeri önerir, Enter notu yeniden yaratır, başka ad seçilebilir. Belge eski yolu
+// ve baytları (BOM, satır sonu) korur.
+EditorSession::SaveResult EditorSession::ask_new_place() {
+    const core::NoteParts parts = core::split_note_path(note_path().string());
+    name_folder_ = parts.folder;
+    draft_ = DraftName{parts.folder, parts.name, parts.type, false, true};
+    refresh_type();
+    return open_name_prompt();
 }
 
 // Yazılan bayt tamponla aynı kalsın; başarısızlıkta dosya kalmaz, yol sahiplenilmez: sonraki kayıt aynı adı

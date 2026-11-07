@@ -5,6 +5,7 @@
 #include "core/paths.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/view.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 
@@ -54,10 +55,10 @@ struct WindowFixture {
         const auto when = std::chrono::system_clock::now() - std::chrono::minutes(age_minutes);
         if (relative.starts_with(kTrashPrefix)) {
             noteapp::core::NoteStore store(store_dir());
-            const noteapp::core::ImportedNote item{
+            const noteapp::test::ImportedNote item{
                 noteapp::core::NotePath::parse(relative.substr(kTrashPrefix.size())).value(), content, when,
                 when, when};
-            REQUIRE(store.import_notes(std::span(&item, 1)).has_value());
+            REQUIRE(noteapp::test::import_notes(store, std::span(&item, 1)).has_value());
             return;
         }
         noteapp::test::upsert_note(store_dir(), relative, content, when);

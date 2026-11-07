@@ -64,8 +64,6 @@ inline constexpr std::string_view kNoteOrigin = "origin";
 inline constexpr std::string_view kDeletedAt = "deleted_at";
 // Silinen klasör ya da taşıma yolu değiştirse de çöp, atıldığı yolu bilir (geri yükleme oraya döner).
 inline constexpr std::string_view kTrashedFrom = "trashed_from";
-// Geçişin içe aktardığı baytların özeti: eski dosya bu tabanla aynıysa kopya üretmez (SPEC-graph "Geçiş").
-inline constexpr std::string_view kMigratedSha = "migrated_sha";
 // Gövde yazmasının gördüğü head'ler: (cihaz 16 bayt, seq 8 bayt LE) dizisi. Üç yönlü birleştirmenin tabanı
 // buradan bulunur.
 inline constexpr std::string_view kBodyParents = "body_parents";
@@ -83,7 +81,6 @@ inline constexpr std::string_view kOrigin = "macos";
 #else
 inline constexpr std::string_view kOrigin = "linux";
 #endif
-inline constexpr std::string_view kOriginUnknown = "unknown";
 
 // Görüntünün çözdüğü en uzun klasör yolu (limits.core.folder_path_bytes; derinlik sınırı yok). Yazma aynı
 // sınırı dayatır: yoksa kayıt başarılı döner, not görünmez kalırdı. Değer cihaza özgüdür: küçüğünü seçen
@@ -191,10 +188,6 @@ graph::Result<void> check_user_change(graph::ReadTxn& txn, const graph::QueryCha
 // Note düğümünün uygulamaya ait anahtarı mı (gövde, ad, tip, zamanlar...).
 bool protected_note_key(std::string_view key);
 
-std::expected<bool, Error> verify_import(graph::ReadTxn& txn, const ImportedNote& note);
-// Geçiş notunun baytlarını tutabilecek düğümler (asıl ve kopya), UnreachableNote::id biçiminde.
-std::array<std::string, 2> imported_note_ids(const ImportedNote& note);
-
 // Açık bir yazma işleminde uygulama şemasının yazmaları.
 class WriteContext {
 public:
@@ -215,9 +208,6 @@ public:
     std::expected<void, Error> clear_trashed(const graph::NodeId& id, std::string_view path);
     std::expected<std::optional<graph::NodeId>, Error> ensure_folder(std::string_view path);
     std::expected<void, Error> rename_folder(std::span<const graph::NodeId> ids, std::string_view target);
-    // Bütçe dolana dek içe aktarır (en az bir not); consumed işlenen not sayısıdır, kalan yeni işleme kalır.
-    std::expected<ImportOutcome, Error> import_notes(std::span<const ImportedNote> notes,
-                                                     std::size_t& consumed);
     std::expected<void, Error> update_links(const graph::NodeId& id, std::string_view path,
                                             std::string_view body);
     // Yalnız ekler: gövdenin index'te çözülen ama kenarı olmayan hedeflerine kenar kurar, hiçbir kenarı
@@ -278,9 +268,6 @@ private:
                                           std::string_view edge_type, std::string_view path);
     std::expected<void, Error> set_text_if_changed(const graph::NodeId& id, std::string_view key,
                                                    const std::string& value, std::string_view path);
-    std::expected<void, Error> import_one(const ImportedNote& note, ImportOutcome& outcome);
-    std::expected<void, Error> import_existing(const ImportedNote& note, const graph::NodeId& id,
-                                               ImportOutcome& outcome);
     std::expected<NotePath, Error> conflict_copy_path(const graph::NodeId& id, const graph::NodeId& copy,
                                                       std::int64_t at);
     // Farklı head'lerin temiz üç yönlü birleşimi; taban yok, ikili, geçersiz UTF-8 ya da çakışma: boş.
@@ -299,7 +286,6 @@ private:
     std::expected<std::vector<std::pair<graph::EdgeId, graph::NodeId>>, Error>
     neighbor_edges(const graph::NodeId& id, graph::Direction direction, std::optional<std::string_view> type,
                    std::string_view path);
-    std::expected<bool, Error> is_stale_import(const graph::NodeId& id, const graph::Version& version);
     std::expected<std::int64_t, Error> version_time(const graph::NodeId& id, const graph::Version& version);
 
     std::expected<void, Error> set_link_targets(const graph::NodeId& id, std::string_view path,
@@ -323,9 +309,9 @@ struct NoteStore::Impl {
     std::filesystem::path database() const { return directory / "graph.db"; }
     // Veritabanı yoksa ya da açılamıyorsa boş (neden last_error'da). mutex tutulurken çağrılır.
     std::shared_ptr<const Snapshot> current();
-    std::expected<void, Error> check_gate();
     std::expected<void, Error> open_for_write();
-    // Tags: yalnız etiketler. Links: bağlantılar baştan ve etiketler (geçiş, yarım kalan kendi yazması).
+    // Tags: yalnız etiketler. Links: bağlantılar baştan ve etiketler (yarım kalan kendi yazması, test
+    // kurulumu).
     // MissingLinks: yalnız eksik bağlantı kenarları ve kLinkTargets (eski veri, sonradan oluşan hedef).
     // TagsAndMissingLinks: etiketler ve eksik bağlantı kenarları (senkronla gelen gövde).
     enum class Derive { Tags, Links, MissingLinks, TagsAndMissingLinks };
@@ -339,13 +325,6 @@ struct NoteStore::Impl {
                                                                      std::string_view path);
 
     template <class R, class F> std::expected<R, Error> write(F&& body) {
-        const std::scoped_lock lock(mutex);
-        if (auto gate = check_gate(); !gate)
-            return std::unexpected(gate.error());
-        return write_locked<R>(std::forward<F>(body));
-    }
-    // Geçişin kendisi kapıdan muaftır: kapıyı açan odur.
-    template <class R, class F> std::expected<R, Error> write_ungated(F&& body) {
         const std::scoped_lock lock(mutex);
         return write_locked<R>(std::forward<F>(body));
     }
@@ -385,8 +364,6 @@ struct NoteStore::Impl {
 
     std::filesystem::path directory;
     std::size_t slug_max_length;
-    std::optional<std::filesystem::path> legacy_notes_dir;
-    bool gate_open = false;        // geçiş bir kez doğrulandıysa süreç boyunca yeniden taranmaz
     bool derived_checked = false;  // index_derived_once süreç başına bir kez bakar
     std::mutex mutex;
     std::optional<graph::Graph> graph;

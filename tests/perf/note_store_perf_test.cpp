@@ -4,6 +4,7 @@
 #include "core/note_sync.hpp"
 #include "core/process.hpp"
 #include "support/cli_sandbox.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 #include "tui/tui_state.hpp"
 
@@ -36,11 +37,11 @@ double median(std::vector<double> samples) {
 }
 
 void seed_corpus(const fs::path& directory) {
-    std::vector<core::ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     notes.reserve(kNotes);
     const std::string body(kBodyBytes, 'x');
     for (int i = 0; i < kNotes; ++i)
-        notes.push_back(core::ImportedNote{
+        notes.push_back(noteapp::test::ImportedNote{
             core::NotePath::parse("folder" + std::to_string(i % 40) + "/note-" + std::to_string(i) + ".md")
                 .value(),
             body + std::to_string(i)});

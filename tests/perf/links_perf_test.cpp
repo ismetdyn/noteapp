@@ -4,6 +4,7 @@
 #include "core/note_store.hpp"
 #include "core/note_sync.hpp"
 #include "graph/graph.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 #include "tui/tui_state.hpp"
@@ -35,7 +36,7 @@ std::string note_path(int index) {
 
 // extra her gövdeye eklenir: hedefi henüz olmayan bağlantı (T92 ölçümü).
 void seed_corpus(const fs::path& directory, const std::string& extra = {}) {
-    std::vector<core::ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     notes.reserve(kNotes);
     for (int i = 0; i < kNotes; ++i) {
         std::string body(1024, 'x');
@@ -43,11 +44,12 @@ void seed_corpus(const fs::path& directory, const std::string& extra = {}) {
         for (int step = 1; step < kLinksPerNote; ++step)
             body += " [[" + note_path((i + (step * 37)) % kNotes) + "]]";
         body += extra;
-        notes.push_back(core::ImportedNote{core::NotePath::parse(note_path(i)).value(), std::move(body)});
+        notes.push_back(
+            noteapp::test::ImportedNote{core::NotePath::parse(note_path(i)).value(), std::move(body)});
     }
     test::bulk_seed(directory, notes);
     core::NoteStore store(directory);
-    REQUIRE(store.relink_notes().has_value());
+    REQUIRE(noteapp::test::relink_notes(store).has_value());
 }
 
 double median_lookup_ms(const core::NoteStore& store, const core::NotePath& path) {

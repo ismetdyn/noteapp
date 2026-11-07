@@ -57,6 +57,7 @@ struct Preview {
     bool partial = false;  // büyük md parça parça üretiliyor: devamı var (TuiState::set_preview_lines)
     std::vector<std::vector<StyledSpan>> styled;
     std::vector<std::size_t> source_lines;
+    std::vector<std::string> wiki_targets;  // biçimli markdown: RenderedView::wiki_targets, parçalar ardışık
     std::string note;  // biçimli görünüm istendi, olmadı: toplamlar satırında soluk neden
 };
 

@@ -2,15 +2,19 @@
 
 // gui_state*.cpp dosyalarının ortak iç yardımcıları. Yalnız src/gui/gui_state*.cpp içerir.
 
+#include "app/tabs.hpp"
 #include "core/text.hpp"
 
 #include <string>
+#include <string_view>
 
 namespace noteapp::gui {
 
-// Tampon yalnız boşluktan ibaret mi: boş taslak sorulmadan atılır, kaybedilecek bir şey yok.
-inline bool is_blank(const std::string& text) {
-    return core::first_non_empty_line(text).empty();
+// Taslakta kaybedilecek metin var mı (kapanış sorusu, kaydedilmemiş işareti, kayıt akışı, dışa aktarma):
+// sekmesini koruyan taslak, TUI ile tek kural (app::keeps_tab). Yalnız boşluk da olsa yazılmış metin sessizce
+// atılmaz; boş taslak sorulmadan kapanır.
+inline bool draft_needs_answer(std::string_view text) {
+    return app::keeps_tab(/*pinned=*/false, /*kept=*/false, /*is_draft=*/true, text);
 }
 
 }  // namespace noteapp::gui

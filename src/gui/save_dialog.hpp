@@ -60,6 +60,6 @@ ChoiceBox<CloseChoice> make_close_box();
 // Ayarlar'dan çıkış ve pencere kapanışı: varsayılan ve Esc düğmesi Vazgeç (Ayarlar'da kalınır).
 ChoiceBox<CloseChoice> make_close_settings_box();
 // Silme onayı: varsayılan ve Esc düğmesi "Vazgeç" (geri alınamaz işlem; Enter'a basmak silmesin).
-ChoiceBox<bool> make_delete_box(const std::string& message);
+ChoiceBox<bool> make_delete_box(const std::string& message, const std::string& title = {});
 
 }  // namespace noteapp::gui

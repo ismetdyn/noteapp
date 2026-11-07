@@ -37,7 +37,11 @@ std::expected<SavedView, Error> find_view(const NoteStore& store, std::string_vi
 std::expected<void, Error>
 save_view(NoteStore& store, std::string_view name, std::string_view query, bool overwrite,
           std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
-std::expected<void, Error> remove_view(NoteStore& store, std::string_view name);
+// `expected` doluysa (onayda gösterilen görünüm) silme aynı işlemde onu denetler: arada sorgusu ya da kaydı
+// değiştiyse (senkron aynı adı yeniden kurdu) ModifiedExternally (error.view_changed_since_confirm),
+// silinmez.
+std::expected<void, Error> remove_view(NoteStore& store, std::string_view name,
+                                       const std::optional<SavedView>& expected = std::nullopt);
 
 // Görünümü salt-okunur modda ve görünüm profiliyle (config limits.view.*; kökeni izlenmez, korumalı kalır)
 // çalıştırır. Yazan sorgu InvalidQuery (error.view_writes) döner; işlem açılmaz, graf değişmez.

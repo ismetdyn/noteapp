@@ -12,17 +12,17 @@ void GuiState::delete_note() {
     if (!path)
         return;
     const bool shown = shown_ && shown_->path == *path;
-    int row = 0;
-    int browser_index = -1;
-    const auto save_and_locate = [&] {
-        if (shown && !flush())
-            return false;
-        // flush mtime'ı değiştirip satırı yukarı taşımış olabilir: komşu satır silmeden önce çözülür.
-        row = std::max(0, model_.index_of(*path));
-        browser_index = browsing() ? browser_row() : -1;
-        return true;
-    };
-    const auto removed = trash_.remove(store_, *path, trash_prompts(save_and_locate));
+    // Kendi kaydedilmemiş düzenlemesi sormadan önce kaydedilir ve liste tazelenir: silme yalnız sorulan hâli
+    // (listedeki revizyon) siler, onay açıkken senkronla değişen not kalır (app::TrashOps::remove).
+    if (shown) {
+        if (!flush())
+            return;
+        rescan();
+    }
+    // flush mtime'ı değiştirip satırı yukarı taşımış olabilir: komşu satır silmeden önce çözülür.
+    const int row = std::max(0, model_.index_of(*path));
+    const int browser_index = browsing() ? browser_row() : -1;
+    const auto removed = trash_.remove(store_, model_.listing(), *path, trash_prompts());
     if (!removed) {
         fail(removed.error());
         return;
@@ -35,33 +35,11 @@ void GuiState::delete_note() {
 
 app::Prompts GuiState::trash_prompts(const std::function<bool()>& prepare) {
     return {[this, prepare](const app::Confirm& request) {
-        std::string message;
-        switch (request.kind) {
-        case app::ConfirmKind::Delete:
-            message = core::tr("gui.confirm_delete_note", {{"path", request.path}});
-            break;
-        case app::ConfirmKind::Purge:
-            message = core::tr("gui.confirm_purge", {{"path", request.path}});
-            break;
-        case app::ConfirmKind::EmptyTrash:
-            message = core::tr("gui.confirm_empty_trash", {{"count", std::to_string(request.items)}});
-            break;
-        case app::ConfirmKind::TrashFolder:
-            message = core::tr("gui.confirm_trash_folder",
-                               {{"folder", request.path}, {"count", std::to_string(request.notes)}});
-            break;
-        case app::ConfirmKind::TrashBatch:
-            message = core::tr("gui.confirm_trash_batch", {{"items", std::to_string(request.items)},
-                                                           {"notes", std::to_string(request.notes)}});
-            break;
-        case app::ConfirmKind::DeleteBatch:
-            message = core::tr("gui.confirm_delete_batch", {{"items", std::to_string(request.items)}});
-            break;
         // Tek klasörün kalıcı silinmesi yalnız çöpten (karar 1); seçimdeki klasör DeleteBatch ile sorulur.
-        case app::ConfirmKind::DeleteFolder:
+        if (request.kind == app::ConfirmKind::DeleteFolder)
             return false;
-        }
-        return deciders.confirm_delete(message) && (!prepare || prepare());
+        const app::ConfirmText text = app::confirm_text(request);  // TUI ile aynı metin ve başlık
+        return deciders.confirm_delete(text.message, text.title) && (!prepare || prepare());
     }};
 }
 
@@ -227,7 +205,7 @@ void GuiState::purge_trashed() {
         if (report->done > 0)
             changed();
         rescan();
-        publish(*report, "gui.batch_deleted");
+        publish(*report, "app.batch_deleted");
         return;
     }
     if (trash_row_ < 0)

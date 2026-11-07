@@ -677,7 +677,7 @@ TEST_CASE("the move dialog target deleted meanwhile returns an error and moves n
     f.put("c.md");
     const core::NotePath from = *core::NotePath::parse("c.md");
     test::erase_note(f.dir.path(), "c.md");
-    CHECK_FALSE(tui::move_note(*f.store, from, {"", "renamed", "md"}).has_value());
+    CHECK_FALSE(app::move_note(*f.store, from, "", "renamed", "md").has_value());
     CHECK_FALSE(f.exists("renamed.md"));
     CHECK(f.exists("b.md"));
 }
@@ -913,6 +913,26 @@ TEST_CASE("a: an existing folder name says it exists and selects it") {
     CHECK(f.state.selected_folder_row()->path.string() == "work");
     CHECK(f.status.message.find("already exists") != std::string::npos);
     CHECK(f.changes == 0);
+}
+
+// GUI ile tek kural (app::quick_add): baştaki ve sondaki boşluk atılır; klasör görünümü dışında da ad yeni notun
+// klasörüne göredir.
+TEST_CASE("a: the name is trimmed and outside the folder view it joins the new note folder") {
+    StoreFixture f;
+    f.put("inbox/x.md");
+    f.load();
+    f.add_row("  plan  ");
+    CHECK(f.exists("plan.md"));
+
+    f.state.handle(Key::Char, "/");
+    type(f.state, "x");
+    REQUIRE_FALSE(f.state.in_folder_view());
+    f.row.emplace(f.state.name_input_sources());
+    for (const char c : std::string_view("work/idea"))
+        f.row->handle(Key::Char, std::string_view(&c, 1));
+    f.actions.submit_new_row(f.row, {"inbox", "md", core::kDefaultSlugMaxLength},
+                             [&f](const core::NotePath&) { ++f.opened; });
+    CHECK(f.exists("inbox/work/idea.md"));
 }
 
 TEST_CASE("tail_cells cuts by terminal cells, wide characters do not overflow") {

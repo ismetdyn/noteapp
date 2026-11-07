@@ -1,9 +1,11 @@
 #pragma once
 
 #include "core/note_store.hpp"
+#include "tui/styled_view.hpp"
 
 #include <cstddef>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -17,6 +19,10 @@ struct WikiSpan {
     std::string_view target;
 };
 std::vector<WikiSpan> wiki_spans(std::string_view line);
+// Biçimli görünüm satırının [[bağlantı]]ları: ayraçsız çizildiğinden aralık ve hedef görünümden gelir
+// (TextLook::wiki_link -> `targets`, RenderedView::wiki_targets). Aynı bağlantının bitişik parçaları (içindeki
+// vurgu) tek aralıktır; sarılan bağlantı her satırda ayrı aralıktır.
+std::vector<WikiSpan> wiki_spans(std::span<const StyledSpan> spans, std::span<const std::string> targets);
 
 // REVIEW'un altındaki bağlantı bölümünün saf modeli: düz satırlar, seçim, pencere. Seçim yalnız öğe
 // satırlarında gezer; binlerce satırda çizim ve kaydırma görünene orantılıdır, başka kopya yoktur.

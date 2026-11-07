@@ -1,4 +1,4 @@
-// `note graph migrate | export | import` ve `note export --all`. Motor nottan habersizdir: JSONL biçimi
+// `note graph export | import` ve `note export --all`. Motor nottan habersizdir: JSONL biçimi
 // düğüm, etiket, kenar ve özellikten ibarettir. Biçim (bir satır bir nesne):
 //   {"k":"noteapp-graph","v":1}
 //   {"k":"node","id":"<32 hex>","labels":["Note"],"props":{"name":{"s":"a"},"body":{"b":"<base64>"}}}
@@ -13,7 +13,7 @@
 #include "core/i18n.hpp"
 #include "core/json_parser.hpp"
 #include "core/json_text.hpp"
-#include "core/migration.hpp"
+#include "core/note_export.hpp"
 #include "core/note_store_impl.hpp"
 #include "core/paths.hpp"
 #include "graph/graph.hpp"
@@ -733,220 +733,10 @@ int run_graph_import(const std::vector<std::string>& rest, const core::Config& c
     return importer.refused() == 0 ? kExitOk : kExitUser;
 }
 
-constexpr std::string_view kIgnoreSkipped = "--ignore-skipped";
-constexpr std::string_view kClearSkipped = "--clear-skipped";
-
-void print_skipped(const char* key, const std::vector<core::SkippedFile>& files) {
-    for (const core::SkippedFile& file : files)
-        std::cerr << sanitize_for_terminal(
-                         core::tr(key, {{"path", file.path}, {"reason", core::tr("reason." + file.reason)}}))
-                  << '\n';
-}
-
-// Geçişte kalan dosyaları söyler: silinirse kaybolurlar. Dönüş çıkış kodu; kullanıcı kabul etmediyse
-// kExitUser.
-int report_skipped_list(const std::vector<core::SkippedFile>& files, bool ignore_skipped) {
-    if (files.empty())
-        return kExitOk;
-    std::cerr << core::tr("cli.skipped_header", {{"count", std::to_string(files.size())}}) << '\n';
-    print_skipped("cli.skipped_file", files);
-    if (ignore_skipped)
-        return kExitOk;
-    std::cerr << core::tr("cli.skipped_exit_hint") << '\n';
-    return kExitUser;
-}
-
-int report_skipped_files(bool ignore_skipped) {
-    const auto files = core::read_skipped_files(core::data_dir());
-    if (!files) {
-        std::cerr << sanitize_for_terminal(core::format_error(files.error())) << '\n';
-        return kExitInternal;
-    }
-    return report_skipped_list(*files, ignore_skipped);
-}
-
-struct RootSkipped {
-    int exit_code = kExitOk;
-    std::size_t listed = 0;
-};
-
-// Status yalnız geçerli kökü denetler; başka kökün kaydı burada çözülemez, yalnız sayısı söylenir.
-RootSkipped report_skipped_of_root(const std::filesystem::path& notes_dir, bool ignore_skipped) {
-    auto files = core::read_skipped_files(core::data_dir());
-    if (!files) {
-        std::cerr << sanitize_for_terminal(core::format_error(files.error())) << '\n';
-        return {.exit_code = kExitInternal};
-    }
-    std::vector<core::SkippedFile> mine;
-    for (core::SkippedFile& file : *files)
-        if (core::skipped_file_is_under(file, notes_dir))
-            mine.push_back(std::move(file));
-    if (const std::size_t others = files->size() - mine.size(); others > 0)
-        std::cerr << core::tr("cli.skipped_other_dirs", {{"count", std::to_string(others)}}) << '\n';
-    return {report_skipped_list(mine, ignore_skipped), mine.size()};
-}
-
-int run_graph_clear_skipped() {
-    const auto files = core::read_skipped_files(core::data_dir());
-    if (!files) {
-        std::cerr << sanitize_for_terminal(core::format_error(files.error())) << '\n';
-        return kExitInternal;
-    }
-    print_skipped("cli.skipped_file", *files);
-    if (auto cleared = core::clear_skipped_files(core::data_dir()); !cleared) {
-        std::cerr << sanitize_for_terminal(core::format_error(cleared.error())) << '\n';
-        return kExitInternal;
-    }
-    std::cout << core::tr("cli.skipped_cleared", {{"count", std::to_string(files->size())}}) << '\n';
-    return kExitOk;
-}
-
-constexpr std::size_t kMaxStrayListed = 200;
-
-// Geçişten sonra notes_dir'e düşen dosyalar. Çıktı da sınırlıdır: tek klasör ekranı boğmasın.
-// Depo config'le açılır: içe alınamayacak dosyanın kararı limits.core.folder_path_bytes'ı kullanır.
-int report_stray_files(const core::Config& config) {
-    const core::NoteStore store = core::NoteStore::for_config(config);
-    const auto scan = core::find_stray_files(store, config.notes_dir, core::data_dir());
-    if (!scan) {
-        std::cerr << sanitize_for_terminal(core::format_error(scan.error())) << '\n';
-        return kExitInternal;
-    }
-    if (scan->files.empty() && !scan->truncated)
-        return kExitOk;
-    const std::size_t count = scan->files.size();
-    std::cerr << core::tr("cli.stray_header", {{"count", std::to_string(count)}}) << '\n';
-    const std::span listed = std::span(scan->files).first(std::min(count, kMaxStrayListed));
-    for (const core::SkippedFile& file : listed)
-        std::cerr << sanitize_for_terminal(
-                         core::tr("cli.stray_file",
-                                  {{"path", file.path}, {"reason", core::tr("reason." + file.reason)}}))
-                  << '\n';
-    if (count > listed.size())
-        std::cerr << core::tr("cli.stray_more", {{"count", std::to_string(count - listed.size())}}) << '\n';
-    if (scan->truncated)
-        std::cerr << core::tr("cli.stray_truncated") << '\n';
-    std::cerr << core::tr("cli.stray_hint") << '\n';
-    return kExitUser;
-}
-
-int run_graph_status(const core::Config& config, bool ignore_skipped) {
-    const bool pending = core::legacy_notes_pending(config.notes_dir, core::data_dir());
-    if (pending)
-        std::cerr << sanitize_for_terminal(
-                         core::tr("cli.graph_status_pending", {{"path", to_utf8(config.notes_dir)}}))
-                  << '\n';
-    const RootSkipped skipped = report_skipped_of_root(config.notes_dir, ignore_skipped);
-    if (skipped.exit_code == kExitInternal)
-        return skipped.exit_code;
-    const int stray = pending ? kExitOk : report_stray_files(config);
-    if (skipped.exit_code != kExitOk || stray != kExitOk)
-        return std::max(skipped.exit_code, stray);
-    if (pending)
-        return kExitUser;
-    if (skipped.listed > 0)  // kabul edildi, çözülmedi: "kalan yok" denemez
-        std::cout << core::tr("cli.graph_status_accepted", {{"count", std::to_string(skipped.listed)}})
-                  << '\n';
-    else
-        std::cout << core::tr("cli.graph_status_ok") << '\n';
-    return kExitOk;
-}
-
-int run_graph_status_command(const std::vector<std::string>& rest, const core::Config& config) {
-    if (rest.size() == 1)
-        return run_graph_status(config, false);
-    if (rest.size() == 2 && rest[1] == kIgnoreSkipped)
-        return run_graph_status(config, true);
-    if (rest.size() == 2 && rest[1] == kClearSkipped)
-        return run_graph_clear_skipped();
-    return usage_error("graph");
-}
-
-void print_removal_advice(const std::filesystem::path& notes_dir) {
-    std::error_code ec;
-    const bool in_repo = fs::exists(notes_dir / ".git", ec);
-    std::cout << sanitize_for_terminal(
-                     core::tr(in_repo ? "cli.migrate_remove_repo" : "cli.migrate_remove_plain",
-                              {{"path", to_utf8(notes_dir)}}))
-              << '\n';
-}
-
-int run_graph_migrate_new(const core::Config& config) {
-    if (core::legacy_notes_pending(config.notes_dir, core::data_dir())) {
-        std::cerr << sanitize_for_terminal(
-                         core::tr("cli.graph_status_pending", {{"path", to_utf8(config.notes_dir)}}))
-                  << '\n';
-        return kExitUser;
-    }
-    const auto report = core::migrate_new_notes(config.notes_dir, core::data_dir(),
-                                                config.limits.core.folder_path_bytes.cap());
-    if (!report) {
-        std::cerr << sanitize_for_terminal(core::format_error(report.error())) << '\n';
-        return kExitInternal;
-    }
-    for (const std::string& file : report->new_files)
-        std::cout << sanitize_for_terminal(core::tr("cli.migrate_new_file", {{"path", file}})) << '\n';
-    for (const core::NotePath& copy : report->conflict_copies)
-        std::cout << sanitize_for_terminal(core::tr("cli.sync_conflict_copy", {{"path", copy.string()}}))
-                  << '\n';
-    print_skipped("cli.migrate_skipped", report->skipped);
-    print_skipped("cli.migrate_failed", report->failed);
-    std::cout << core::tr("cli.migrate_new_summary", {{"count", std::to_string(report->new_files.size())}})
-              << '\n';
-    if (!report->backup.empty())
-        std::cout << sanitize_for_terminal(
-                         core::tr("cli.migrate_backup_hint", {{"path", to_utf8(report->backup)}}))
-                  << '\n';
-    if (!report->new_files.empty())
-        print_removal_advice(config.notes_dir);
-    if (const std::size_t left = report->skipped.size() + report->failed.size(); left > 0)
-        std::cerr << core::tr("cli.migrate_left_behind", {{"count", std::to_string(left)}}) << '\n';
-    return report->complete ? kExitOk : kExitUser;
-}
-
-int run_graph_migrate(const core::Config& config, bool skip_failed) {
-    const auto report = core::migrate_legacy_notes(
-        config.notes_dir, core::data_dir(),
-        {.skip_failed = skip_failed, .folder_path_bytes = config.limits.core.folder_path_bytes.cap()});
-    if (!report) {
-        std::cerr << sanitize_for_terminal(core::format_error(report.error())) << '\n';
-        return kExitInternal;
-    }
-    std::cout << core::tr("cli.migrate_summary", {{"imported", std::to_string(report->imported)},
-                                                  {"unchanged", std::to_string(report->unchanged)},
-                                                  {"folders", std::to_string(report->folders)},
-                                                  {"backup", sanitize_for_terminal(to_utf8(report->backup))}})
-              << '\n';
-    for (const core::NotePath& copy : report->conflict_copies)
-        std::cout << sanitize_for_terminal(core::tr("cli.sync_conflict_copy", {{"path", copy.string()}}))
-                  << '\n';
-    print_skipped("cli.migrate_skipped", report->skipped);
-    print_skipped("cli.migrate_failed", report->failed);
-    std::cout << sanitize_for_terminal(
-                     core::tr("cli.migrate_backup_hint", {{"path", to_utf8(report->backup)}}))
-              << '\n';
-    if (!report->complete) {
-        std::cerr << core::tr("cli.migrate_incomplete") << '\n';
-        return kExitUser;
-    }
-    print_removal_advice(config.notes_dir);
-    if (const std::size_t left = report->skipped.size() + report->failed.size(); left > 0)
-        std::cerr << core::tr("cli.migrate_left_behind", {{"count", std::to_string(left)}}) << '\n';
-    return kExitOk;
-}
-
 }  // namespace
 
 int run_graph(const ParsedArgs& args, const core::Config& config) {
     const std::string sub = args.rest.empty() ? std::string() : args.rest.front();
-    if (sub == "migrate" && args.rest.size() == 1)
-        return run_graph_migrate(config, false);
-    if (sub == "migrate" && args.rest.size() == 2 && args.rest[1] == "--skip-failed")
-        return run_graph_migrate(config, true);
-    if (sub == "migrate" && args.rest.size() == 2 && args.rest[1] == "--new")
-        return run_graph_migrate_new(config);
-    if (sub == "status")
-        return run_graph_status_command(args.rest, config);
     if (sub == "export")
         return run_graph_export(args.rest, config);
     if (sub == "import")
@@ -1212,7 +1002,7 @@ int run_relation(const ParsedArgs& args, const core::Config& config) {
     return run_relation_ls(*parsed, store);
 }
 
-int run_export_all(const std::string& directory, bool ignore_skipped, const core::Config& config) {
+int run_export_all(const std::string& directory, const core::Config& config) {
     const core::NoteStore store = core::NoteStore::for_config(config);
     const auto report = core::export_all_notes(store, from_utf8(directory));
     if (!report) {
@@ -1222,15 +1012,18 @@ int run_export_all(const std::string& directory, bool ignore_skipped, const core
     std::cout << core::tr("cli.export_all_done", {{"count", std::to_string(report->written.size())},
                                                   {"path", sanitize_for_terminal(directory)}})
               << '\n';
-    print_skipped("cli.export_all_refused", report->refused);
+    for (const core::RefusedFile& file : report->refused)
+        std::cerr << sanitize_for_terminal(
+                         core::tr("cli.export_all_refused",
+                                  {{"path", file.path}, {"reason", core::tr("reason." + file.reason)}}))
+                  << '\n';
     for (const core::UnreachableNote& lost : report->unreachable)
         std::cerr << sanitize_for_terminal(core::tr("cli.export_all_unreachable",
                                                     {{"id", lost.id},
                                                      {"name", lost.name},
                                                      {"reason", core::tr("reason." + lost.reason)}}))
                   << '\n';
-    const int exported = report->refused.empty() && report->unreachable.empty() ? kExitOk : kExitUser;
-    return std::max(exported, report_skipped_files(ignore_skipped));
+    return report->refused.empty() && report->unreachable.empty() ? kExitOk : kExitUser;
 }
 
 }  // namespace noteapp::cli

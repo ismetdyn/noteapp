@@ -34,7 +34,6 @@ noteapp_add_test(gui
     search_args_test.cpp
     search_line_test.cpp
     settings_test.cpp
-    stray_notice_test.cpp
     tabs_test.cpp
     theme_test.cpp
     toolbar_test.cpp

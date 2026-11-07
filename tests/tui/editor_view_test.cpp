@@ -455,7 +455,7 @@ TEST_CASE("new note view: the blank editor takes the whole terminal, list and to
     CHECK(row_text(screen, 0).starts_with(core::tr("tui.new_note_header")));
     CHECK_FALSE(contains(screen, "a.md"));
     CHECK_FALSE(contains(screen, core::tr("tui.mode_name")));
-    CHECK_FALSE(contains(screen, core::tr("tui.sync_off")));
+    CHECK_FALSE(contains(screen, core::tr("app.sync_off")));
     CHECK(screen.PixelAt(0, 1).character == "╭");
     CHECK(screen.PixelAt(tui::kMinWidth - 1, 1).character == "╮");
     CHECK_FALSE(screen.PixelAt(0, 1).dim);

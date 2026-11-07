@@ -36,8 +36,6 @@ constexpr const char* kExpandedMark = "▾";
 constexpr const char* kCollapsedMark = "▸";
 constexpr float kSelectionBarPixels = 2.0F;  // ölçek 1 pikseli
 constexpr float kEmptyIconPixels = 32.0F;    // boş liste bloğunun simgesi, ölçek 1 pikseli
-constexpr float kBannerAlpha = 0.12F;        // geçiş şeridinin zemini: uyarı renginin bu kadarı
-constexpr std::string_view kMigrateCommand = "note graph migrate";
 
 // Satırın kalıcı adı (test kancası ve ImGui kimliği): sıra değil yol, liste değişince tıklama başka satıra
 // kaymasın.
@@ -247,46 +245,6 @@ void View::draw_empty_notes() {
     flow_after_previous(button_width(import_label), row_start_x, width);
     if (button("empty_import", import_label, ButtonKind::Ghost))
         queue([this] { state_.request_import(GuiState::ImportRequest::Files); });
-}
-
-// Eski düzende not var (G14): durum çubuğunda kırpılmasın diye liste üstünde uyarı şeridi. Komut seçilebilir
-// metin ve Kopyala ile panoya; tam ileti (yol) ipucunda. Not hiç kaydedilmez, davranış değişmez.
-void View::draw_migration_banner() {
-    const std::optional<core::Error>& issue = state_.store_issue();
-    if (!issue || issue->code != core::Error::Code::MigrationRequired)
-        return;
-    const theme::Theme& colors = theme::current();
-    const ImGuiStyle& style = ImGui::GetStyle();
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->ChannelsSplit(2);  // zemin içerikten sonra ölçülür, altına çizilir
-    draw->ChannelsSetCurrent(1);
-    ImGui::BeginGroup();
-    const float width = ImGui::GetContentRegionAvail().x;
-    std::string message = core::format_error(*issue);
-    if (const std::string warning = core::icon_text(core::icon_table::kWarning, state_.icon_style());
-        !warning.empty())
-        message = warning + " " + message;
-    ImGui::PushStyleColor(ImGuiCol_Text, colors.warning);
-    draw_fitted_text("migrate_message", message, width, keep_start);
-    ImGui::PopStyleColor();
-    const std::string copy_label = core::tr("gui.migrate_copy");
-    std::string command(kMigrateCommand);  // salt okunur: seçilip kopyalanabilsin diye metin alanı
-    ImGui::SetNextItemWidth(std::max(width - button_width(copy_label) - style.ItemSpacing.x,
-                                     ImGui::GetFontSize() * kMinFieldEms));
-    ImGui::InputText("##migrate_command", &command, ImGuiInputTextFlags_ReadOnly);
-    remember_item_center("migrate_command");
-    flow_after_previous(button_width(copy_label), ImGui::GetItemRectMin().x, width);
-    if (button("migrate_copy", copy_label))
-        queue([this] { state_.copy_to_clipboard(std::string(kMigrateCommand)); });
-    ImGui::SetItemTooltip("%s", core::tr("gui.migrate_copy_tip").c_str());
-    ImGui::EndGroup();
-    draw->ChannelsSetCurrent(0);
-    const ImVec2 pad(style.FramePadding.x / 2.0F, style.FramePadding.y / 2.0F);
-    draw->AddRectFilled(ImVec2(ImGui::GetItemRectMin().x - pad.x, ImGui::GetItemRectMin().y - pad.y),
-                        ImVec2(ImGui::GetItemRectMax().x + pad.x, ImGui::GetItemRectMax().y + pad.y),
-                        theme::with_alpha(colors.warning, kBannerAlpha), style.FrameRounding);
-    draw->ChannelsMerge();
-    remember_item_center("migrate_banner");
 }
 
 void View::draw_note_list() {
@@ -691,8 +649,8 @@ View::details_column_widths(const std::vector<BrowserRow>& rows, std::chrono::sy
 void View::draw_column_menu() {
     if (!ImGui::BeginPopup("##columns"))
         return;
-    for (const auto& [column, name] : kDetailsColumnNames) {
-        const std::string id = std::string("column.") + (column == DetailsColumn::SizeAndDate ? "size_date" : name);
+    for (const auto& [column, name] : app::kListColumnNames) {
+        const std::string id = "column." + std::string(column == DetailsColumn::SizeAndDate ? "size_date" : name);
         const app::CommandSpec* spec = app::find_command(id);
         if (spec == nullptr)
             continue;
@@ -710,14 +668,24 @@ void View::draw_folder_summary() {
     ImGui::BeginChild("##folder_summary", ImVec2(0.0F, 0.0F), theme::kPaneChildFlags);
     if (summary) {
         const std::string icon = core::icon_text(core::folder_icon(true), state_.icon_style());
-        const std::string title = summary->path.empty() ? core::tr("gui.all_notes") : summary->path;
+        const std::string title =
+            summary->path.empty() ? core::tr("gui.all_notes") : core::terminal_safe(summary->path);
         ImGui::PushTextWrapPos(0.0F);
         ImGui::TextUnformatted((icon.empty() ? title : icon + " " + title).c_str());
-        ImGui::TextUnformatted(
-            core::tr("gui.folder_summary_counts", {{"notes", std::to_string(summary->notes)},
-                                                   {"folders", std::to_string(summary->folders)}})
-                .c_str());
+        ImGui::TextUnformatted(summary->counts.c_str());
+        ImGui::TextUnformatted(core::tr("tui.folder_total_size", {{"value", summary->size}}).c_str());
+        ImGui::TextUnformatted(core::tr("tui.meta_updated", {{"value", summary->updated}}).c_str());
         ImGui::PopTextWrapPos();
+        // TUI ile aynı: alt ağaçta en yeni notlar, klasöre göre ad ve kısa tarih (ad senkronla gelebilir).
+        if (!summary->recent.empty()) {
+            ImGui::Spacing();
+            ImGui::TextDisabled("%s", core::tr("tui.folder_recent").c_str());
+            for (const app::FolderSummary::Recent& note : summary->recent) {
+                ImGui::TextUnformatted(("  " + core::terminal_safe(note.name)).c_str());
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", note.updated.c_str());
+            }
+        }
         draw_hint(core::tr("gui.folder_summary_hint"));
     }
     ImGui::EndChild();

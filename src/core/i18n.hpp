@@ -2,6 +2,7 @@
 
 #include "core/error.hpp"
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -29,6 +30,9 @@ std::string current_language();
 // Anahtarı etkin dilde çevirir, {ad} yer tutucularını doldurur. Geri düşüş: etkin dil → en → anahtarın
 // kendisi (eksik anahtar için log'a bir kez uyarı). Başlatma sonrası okumalar iş parçacığı güvenlidir.
 std::string tr(std::string_view key, const Args& args = {});
+
+// "1 item", "3 items": `<key>_one` birdir; Türkçede ikisi aynı metindir.
+std::string count_text(std::string_view key, std::size_t count);
 
 // tr(message_key, args); `reason` argümanının `reason.<değer>` kataloğu varsa çevrilmiş hâliyle değişir.
 std::string format_error(const Error& error);

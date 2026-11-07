@@ -93,8 +93,6 @@ std::expected<LogIngest, Error>
 ingest_note_logs(NoteStore& store, std::span<const std::filesystem::path> logs, const TextMerger& merger) {
     NoteStore::Impl& impl = store.impl();
     const std::scoped_lock lock(impl.mutex);
-    if (auto gate = impl.check_gate(); !gate)
-        return std::unexpected(gate.error());
     if (auto opened = impl.open_for_write(); !opened)
         return std::unexpected(opened.error());
     const std::shared_ptr<const Snapshot> before = impl.current();

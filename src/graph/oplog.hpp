@@ -21,21 +21,18 @@ namespace noteapp::graph::detail {
 
 class Store;
 
-// Dosya sürümü (SPEC-graph "Parçalı çerçeve"): v1'de her kayıt tam bir çerçevedir, v2'de her kayıt bir
-// parçadır. Yazan v1'i bölünmesi gereken ilk çerçeveye dek korur; okuyan ikisini de okur, daha yenisini
-// log_too_new ile reddeder.
-inline constexpr std::uint8_t kLogVersionWhole = 1;
-inline constexpr std::uint8_t kLogVersionParts = 2;
-inline constexpr std::uint8_t kLogVersion = kLogVersionParts;  // okunabilen en yeni sürüm
+// Dosya sürümü (SPEC-graph "Parçalı çerçeve"): her kayıt bir parçadır. Okuyan yalnız bu sürümü okur; daha
+// yenisini log_too_new, daha eskisini bad_version ile reddeder.
+inline constexpr std::uint8_t kLogVersion = 2;
 inline constexpr std::size_t kLogHeaderBytes = 4 + 1 + std::tuple_size_v<DeviceId>;
 inline constexpr std::size_t kFrameDigestBytes = 8;
 inline constexpr std::size_t kFrameEnvelopeBytes = sizeof(std::uint32_t) + kFrameDigestBytes;
-// v2 kaydının yükü: tür u8 | seq u64 | index u32 | final u8 | baytlar. Bilinmeyen tür log_too_new'dir.
+// Kaydın yükü: tür u8 | seq u64 | index u32 | final u8 | baytlar. Bilinmeyen tür log_too_new'dir.
 inline constexpr std::uint8_t kPartKind = 1;
 inline constexpr std::size_t kPartHeaderBytes = 1 + sizeof(std::uint64_t) + sizeof(std::uint32_t) + 1;
 
-std::string encode_log_header(const DeviceId& device, std::uint8_t version = kLogVersionWhole);
-// Kaydın zarfı (uzunluk + özet). v1'de yük çerçevedir, v2'de parçadır (encode_log_part).
+std::string encode_log_header(const DeviceId& device);
+// Kaydın zarfı (uzunluk + özet); yük parçadır (encode_log_part).
 std::string encode_log_frame(std::string_view payload);
 std::string encode_log_part(std::uint64_t seq, std::uint32_t index, bool final, std::string_view chunk);
 // Yazanın parça sayısı: her parça kayıt sınırına sığar, işlem yoğunluğu parça başına limits.ops'u geçmez.
@@ -70,8 +67,7 @@ public:
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- Damaged yalnız damaged() ile döner, o doldurur
     const Error& error() const { return *error_; }
     const DeviceId& device() const { return device_; }
-    std::uint8_t version() const { return version_; }
-    // Son çerçevenin kayıt sayısı (v1'de 1): işlem sınırı parça başınadır (logical_frame_limits).
+    // Son çerçevenin kayıt sayısı: işlem sınırı parça başınadır (logical_frame_limits).
     std::size_t parts() const { return parts_; }
     std::uint64_t offset() const { return offset_; }
     std::uint64_t file_size() const { return file_.size(); }
@@ -82,14 +78,11 @@ private:
     Status damaged(Error error);
     // `at`taki kaydı record_'a okur, özetini doğrular; Frame ise end kaydın sonudur.
     Status read_record(std::uint64_t at, std::uint64_t& end);
-    Status next_whole();
-    Status next_group();
 
     InputFile file_;
     std::size_t max_frame_bytes_;
     std::size_t max_group_bytes_;
     DeviceId device_{};
-    std::uint8_t version_ = kLogVersionWhole;
     std::uint64_t offset_ = 0;
     std::size_t parts_ = 0;
     std::string record_;

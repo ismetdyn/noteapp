@@ -245,6 +245,46 @@ TEST_CASE_FIXTURE(SaveFixture, "a vanished note is saved through the new-note di
     CHECK(read_note("restored.md") == "mine");
 }
 
+// TUI ile aynı: silinmiş not farklı kaydet sorusuyla, eski yeri ve adıyla önerilir.
+TEST_CASE_FIXTURE(SaveFixture, "a vanished note's save dialog is prefilled with its old folder, name and type") {
+    add_note("work/alpha.md", "original", 10);
+    auto state = make_state();
+    wire(*state, std::nullopt, ConflictChoice::Cancel);
+    state->select_row(state->model().index_of(*noteapp::core::NotePath::parse("work/alpha.md")));
+    remove_note("work/alpha.md");
+    state->edit_text("mine");
+    state->save_now();
+    REQUIRE(calls.dialog == 1);
+    CHECK(calls.last_request.initial.name == "alpha");
+    CHECK(calls.last_request.initial.folder == "work");
+    CHECK(calls.last_request.initial.type == "md");
+    CHECK(state->buffer() == "mine");  // vazgeçildi: metin yerinde
+}
+
+// TUI ile aynı: vazgeçilen farklı kaydet sorusu notu taslağa çevirmez. Not diske dönünce açık kayıt adı değil
+// çakışmayı sorar, sonra otomatik kayıt normale döner.
+TEST_CASE_FIXTURE(SaveFixture,
+                  "a vanished note whose save dialog was cancelled is saved as itself once it is back") {
+    add_note("alpha.md", "original", 10);
+    auto state = make_state();
+    wire(*state, std::nullopt, ConflictChoice::Overwrite);
+    state->edit_text("mine");
+    remove_note("alpha.md");
+    state->save_now();
+    REQUIRE(calls.dialog == 1);
+    CHECK(state->buffer() == "mine");
+
+    add_note("alpha.md", "back", 0);
+    state->rescan();
+    state->save_now();
+    CHECK(calls.dialog == 1);  // ad yeniden sorulmaz
+    CHECK(calls.conflict == 1);
+    CHECK(read_note("alpha.md") == "mine");
+    state->edit_text("mine 2");
+    state->tick(after_ms(kAutosaveMs * 4));
+    CHECK(read_note("alpha.md") == "mine 2");
+}
+
 TEST_CASE_FIXTURE(SaveFixture,
                   "new note: Ctrl+N opens an empty untitled buffer, first save asks the dialog") {
     add_note("work/alpha.md", "alpha", 10);
@@ -712,7 +752,7 @@ TEST_CASE_FIXTURE(SaveFixture, "autosave never asks: a conflict is shown and the
     CHECK(read_note("alpha.md") == "external");
     CHECK(state->buffer() == "mine");
     CHECK(header_has(*state, "gui.state_modified"));
-    CHECK(state->status() == noteapp::core::tr("gui.changed_on_disk"));
+    CHECK(state->status() == noteapp::core::tr("app.changed_on_disk"));  // TUI ile aynı metin
     state->edit_text("mine+");
     state->tick(after_ms(kAutosaveMs * 8));
     CHECK(calls.conflict == 0);  // açık kayda dek bir daha denenmez
@@ -730,7 +770,7 @@ TEST_CASE_FIXTURE(SaveFixture, "autosave never creates a note that was deleted o
     CHECK(calls.dialog == 0);
     CHECK_FALSE(note_exists("alpha.md"));
     CHECK(state->buffer() == "mine");
-    CHECK(state->status() == noteapp::core::tr("gui.deleted_on_disk"));
+    CHECK(state->status() == noteapp::core::tr("app.deleted_on_disk"));
 }
 
 TEST_CASE_FIXTURE(SaveFixture, "a conflict copy keeps CRLF and BOM bytes and later saves stay CRLF") {

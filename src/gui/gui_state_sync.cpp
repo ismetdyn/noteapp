@@ -2,27 +2,11 @@
 #include "app/settings.hpp"
 #include "core/i18n.hpp"
 #include "gui/gui_state.hpp"
+#include "sync/sync_service.hpp"
 
-#include <ctime>
-#include <format>
 #include <utility>
 
 namespace noteapp::gui {
-
-namespace {
-
-std::string local_hh_mm(std::chrono::system_clock::time_point when) {
-    const std::time_t time = std::chrono::system_clock::to_time_t(when);
-    std::tm local{};
-#ifdef _WIN32
-    localtime_s(&local, &time);
-#else
-    localtime_r(&time, &local);
-#endif
-    return std::format("{:02}:{:02}", local.tm_hour, local.tm_min);
-}
-
-}  // namespace
 
 void GuiState::changed() {
     ++changes_;
@@ -44,7 +28,8 @@ void GuiState::start_sync() {
         deciders.while_busy([this] { stop_sync(std::chrono::seconds(config_.tuning.exit_timeout_seconds)); });
     }
     if (!config_.sync.enabled) {
-        show_sync_status({}, false);
+        sync_.disable();
+        show_sync_label();
         return;
     }
     // Çağrı İŞÇİ iş parçacığından gelir: durum kopyalanıp UI iş parçacığına aktarılır. AutoSync bu nesneden
@@ -64,7 +49,8 @@ void GuiState::start_sync() {
             });
         });
     ++sync_restarts_;
-    show_sync_status({}, true);
+    sync_.restore(sync::SyncService(config_).status());  // ilk senkronun ⟳'u işçiden gelir
+    show_sync_label();
     auto_sync_->start();
 }
 
@@ -77,36 +63,26 @@ void GuiState::stop_sync(std::chrono::seconds timeout) {
 }
 
 void GuiState::show_sync_status(const sync::SyncStatus& status, bool running) {
-    const bool was_running = sync_indicator_ == SyncIndicator::Running;
-    show_sync_label(status, running);
-    if (!was_running || sync_indicator_ == SyncIndicator::Running)
-        return;
-    if (sync_indicator_ == SyncIndicator::Error)
-        notify(app::NoticeKind::Error, sync_label_);
-    else if (sync_indicator_ == SyncIndicator::Ok)
-        notify(app::NoticeKind::Success, core::tr("notice.sync_done"));
+    const auto notice = sync_.update(status, running);
+    show_sync_label();
+    if (notice)
+        notify(notice->kind, notice->text);
 }
 
-void GuiState::show_sync_label(const sync::SyncStatus& status, bool running) {
-    if (!auto_sync_ && !running && !status.last_success && !status.last_error) {
-        sync_label_ = core::tr("gui.sync_off");
-        sync_indicator_ = SyncIndicator::Off;
-    } else if (running) {
-        // NOLINTNEXTLINE(bugprone-branch-clone) -- hata ve son başarı denetiminden önce gelmeli
+void GuiState::show_sync_label() {
+    switch (sync_.state()) {
+    case SyncIndicator::Disabled:
+        sync_label_ = core::tr("app.sync_off");
+        break;
+    case SyncIndicator::Running:
         sync_label_ = core::tr("gui.sync_running");
-        sync_indicator_ = SyncIndicator::Running;
-    } else if (status.last_error) {
-        sync_label_ = core::tr("gui.sync_error", {{"detail", core::format_error(*status.last_error)}});
-        sync_indicator_ = SyncIndicator::Error;
-    } else if (!status.log_issues.empty()) {  // başarılı ama bir cihazın günlüğü duruyor: sessiz kalmaz
-        sync_label_ = core::tr("gui.sync_error", {{"detail", core::format_error(status.log_issues.front())}});
-        sync_indicator_ = SyncIndicator::Error;
-    } else if (status.last_success) {
-        sync_label_ = core::tr("gui.sync_ok", {{"time", local_hh_mm(*status.last_success)}});
-        sync_indicator_ = SyncIndicator::Ok;
-    } else {
-        sync_label_ = core::tr("gui.sync_running");  // açıldı, henüz sonuç yok
-        sync_indicator_ = SyncIndicator::Running;
+        break;
+    case SyncIndicator::Ok:
+        sync_label_ = core::tr("gui.sync_ok", {{"time", sync_.success_time()}});
+        break;
+    case SyncIndicator::Failed:
+        sync_label_ = core::tr("gui.sync_error", {{"detail", sync_.error_text()}});
+        break;
     }
 }
 
@@ -126,8 +102,8 @@ void GuiState::apply_settings(const core::Config& before, const core::Config& af
         language_servers_.set_store(store_);
         content_index_.reset();
         // Eski dizinin notlarının sekmeleri kapanır; taslaklar dizine bağlı değildir, kalır.
-        std::erase_if(tabs_, [](const NoteTab& tab) { return !tab.saved.new_note; });
-        active_tab_ = tabs_.empty() ? 0 : tabs_.front().id;
+        tabs_.close_if([](const NoteTab& tab) { return !tab.saved.new_note; });
+        tabs_.activate(tabs_.empty() ? 0 : tabs_.front().id);
         parked_ = !tabs_.empty();
         shown_.reset();
         doc_.reset_draft();
@@ -141,8 +117,10 @@ void GuiState::apply_settings(const core::Config& before, const core::Config& af
     rescan();
     if (after.sync.enabled)
         request_sync_states();
-    else if (before.sync.enabled)
+    else if (before.sync.enabled) {
+        sync_status_.cancel();  // yoldaki istek eski durumu geri getirmesin
         apply_sync_states({});  // kapandı: hepsi sync_off
+    }
     if (app::sync_restart_needed(before, after))
         start_sync();
     if (before.language != after.language)

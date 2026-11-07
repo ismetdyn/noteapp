@@ -87,8 +87,8 @@ ChoiceBox<CloseChoice> make_close_settings_box() {
     return box;
 }
 
-ChoiceBox<bool> make_delete_box(const std::string& message) {
-    return {.title = core::tr("gui.confirm_delete_title"),
+ChoiceBox<bool> make_delete_box(const std::string& message, const std::string& title) {
+    return {.title = title.empty() ? core::tr("gui.confirm_delete_title") : title,
             .message = message,
             .buttons = {{core::tr("gui.delete"), true}, {core::tr("gui.cancel"), false}},
             .default_button = 1,

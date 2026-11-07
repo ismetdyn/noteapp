@@ -38,7 +38,7 @@ public:
     // Etkin sekmenin oturumu; sekme yoksa kapalı yedek oturum (hiçbir şey açmaz).
     EditorSession& active();
     const EditorSession& active() const;
-    std::uint64_t active_id() const { return active_; }  // 0 = sekme yok
+    std::uint64_t active_id() const { return tabs_.active_id(); }  // 0 = sekme yok
     bool empty() const { return tabs_.empty(); }
     std::size_t size() const { return tabs_.size(); }
     std::vector<TabLabel> labels() const;
@@ -100,21 +100,17 @@ private:
         std::optional<core::NotePath> pending;  // geri yüklendi, henüz okunmadı
     };
 
-    Tab* find(std::uint64_t id);
-    const Tab* find(std::uint64_t id) const;
     Tab* find_path(const core::NotePath& path);
     std::optional<core::NotePath> path_of(const Tab& tab) const;
     bool keeps(const Tab& tab) const;
     // Hedef sekme: yeni sekme açılır ya da etkin sekme yeniden kullanılır; sınırda nullptr.
-    Tab* target(bool new_tab, bool& limited);
-    Tab& push();
+    Tab* target(bool new_tab);
+    Tab* push();  // sınırda nullptr
     void activate(Tab& tab);
 
     Factory make_;
     core::Limit limit_;
-    std::vector<Tab> tabs_;
-    std::uint64_t active_ = 0;
-    std::uint64_t next_id_ = 1;
+    app::TabList<Tab> tabs_;               // sıra, kimlik, etkin sekme, komşu (GUI ile ortak)
     std::uint64_t closing_ = 0;            // Ctrl+W ile kapanması beklenen sekme
     std::unique_ptr<EditorSession> idle_;  // sekme yokken: kapalı oturum
 };

@@ -41,7 +41,7 @@ struct TrashScene {
         fixture.add_note("b.md", "b\n", 10);
         state = fixture.make_state();
         view = make_view(*state);
-        state->deciders.confirm_delete = [this](const std::string&) {
+        state->deciders.confirm_delete = [this](const std::string&, const std::string&) {
             ++asked;
             return answer;
         };
@@ -231,7 +231,7 @@ TEST_CASE("Empty asks first and removes everything; the default dialog answer is
     CHECK(frame > 0);
     CHECK(scene.state->trash_count() == 2);
 
-    scene.state->deciders.confirm_delete = [](const std::string&) { return true; };
+    scene.state->deciders.confirm_delete = [](const std::string&, const std::string&) { return true; };
     click_button(*scene.view, kEmpty);
     CHECK(scene.state->trash_count() == 0);
     CHECK_FALSE(scene.fixture.note_exists(".trash/a.md"));

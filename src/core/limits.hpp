@@ -152,8 +152,6 @@ struct TuiLimits {
     Limit search_entry_bytes;       // hatırlanan en uzun sorgu
     Limit undo_bytes;               // editörde not başına geri alma geçmişi
     Limit save_suggestions;         // taşıma diyaloğunda gösterilen klasör önerisi
-    Limit stray_notice_files;       // açılışta geçiş dışı dosya taramasının dosya bütçesi
-    Limit stray_notice_bytes;       // aynı taramanın bayt bütçesi
 
     bool operator==(const TuiLimits&) const = default;
 };

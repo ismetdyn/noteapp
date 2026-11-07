@@ -5,7 +5,6 @@
 
 #include <expected>
 #include <functional>
-#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -28,68 +27,50 @@ struct SettingsHost {
     std::function<void(bool ok, std::string text)> notify = {};
 };
 
-// Ayarlar formunun modeli (ImGui bilmez): config_entries'teki 12 anahtar + token satırı + bağlantı testi.
-// Doğrulama set_config_value'dadır (CLI/yükleyiciyle aynı kurallar); burada kopyalanmaz. Deciders
-// GuiState'indir, onunla yaşar.
+// Ayarlar sekmesi: alanlar, doğrulama, token ve kaydet/test akışı app::SettingsForm'dadır (TUI ile tek
+// kural); burada ImGui'nin yazdığı alanlar, karar pencereleri (origin değiştirme, bekleme imleci) ve işçi iş
+// parçacığı var. Deciders GuiState'indir, onunla yaşar.
 class SettingsPage {
+    core::Config applied_;
+    const Deciders& deciders_;
+    SettingsHost host_;
+    app::SettingsForm form_;
+
 public:
     SettingsPage(core::Config config, const Deciders& deciders, SettingsHost host);
     ~SettingsPage();
     SettingsPage(const SettingsPage&) = delete;
     SettingsPage& operator=(const SettingsPage&) = delete;
 
-    app::TokenStore tokens = app::system_token_store();  // testler değiştirir
-    std::string token;  // maskeli alanın tamponu; kasaya yazılınca silinir, config'e ve loga girmez
+    app::TokenStore& tokens = form_.tokens();  // testler değiştirir
+    std::string& token =
+        form_.token;  // maskeli alanın tamponu; kasaya yazılınca silinir, config'e ve loga girmez
 
-    const std::vector<std::string>& keys() const { return keys_; }                // form sırası
-    std::string& field(const std::string& key) { return fields_.at(key).value; }  // ImGui doğrudan yazar
-    void field_edited(const std::string& key);                                    // field'a yazdıktan sonra
+    const std::vector<std::string>& keys() const { return keys_; }                 // form sırası
+    std::string& field(const std::string& key) { return form_.field(key).value; }  // ImGui doğrudan yazar
+    void field_edited(const std::string& key);                                     // field'a yazdıktan sonra
     void set_field(const std::string& key, std::string value);
-    const std::string& field_error(const std::string& key) const { return fields_.at(key).error; }
-    const std::string& global_error() const { return global_error_; }
+    const std::string& field_error(const std::string& key) const { return form_.field(key).error; }
+    const std::string& global_error() const { return form_.error(); }
     const std::vector<std::string>& types() const { return applied_.types; }
     // Form kayıtlı değerlerden farklı mı ya da kasaya gitmemiş token yazılı mı (TUI changed() ile aynı).
-    bool has_changes() const;
+    bool has_changes() const { return form_.changed(); }
 
-    bool token_enabled() const { return token_enabled_; }
-    bool token_stored() const { return token_stored_; }
-    const std::string& test_result() const { return test_result_; }
-    bool testing() const { return testing_; }
+    bool token_enabled() const { return form_.token_enabled(); }
+    bool token_stored() const { return form_.token_stored(); }
+    const std::string& test_result() const { return form_.test_result(); }
+    bool testing() const { return form_.testing(); }
 
+    void opened();           // Ayarlar sekmesi açıldı: kasa göstergesi yeniden sorulur
     void save();             // Kaydet; yazılmış token da kasaya gider (TUI Kaydet gibi)
     void revert();           // Geri al: alanlar kaydedilmiş değerlere döner, yazılmış token silinir
     void test_connection();  // app::run_connection_test (enable + tek senkron), işçi iş parçacığında
     void browse_notes_dir();
-    void save_token();
-    void clear_token();
+    void save_token() { form_.store_token(); }
+    void clear_token() { form_.clear_token(); }
 
 private:
-    struct Field {
-        std::string value;
-        std::string error;
-    };
-
-    void load(const core::Config& config);
-    void clear_errors();
-    void refresh_token_row();
-    // Formdaki değişen anahtarları `target`'a uygular; her alanın hatası kendi altında. false = hata var.
-    bool apply_form(core::Config& target);
-    // enable akışı: uyuşmazlıkta karar sorulur. Boş metin = başarılı; yoksa gösterilecek hata.
-    std::string enable_sync(const core::Config& candidate);
-    // Kayıt reddedilirken: kullanıcı config'i bozuksa (söz dizimi/okunamıyor) o uyarıyı verir.
-    std::expected<core::Config, std::string> load_config_for_update() const;
-
-    core::Config applied_;
-    const Deciders& deciders_;
-    SettingsHost host_;
     std::vector<std::string> keys_;
-    std::map<std::string, Field> fields_;
-    std::string global_error_;
-    std::string test_result_;
-    std::string token_host_;  // `token`'ın yazıldığı host; değişince token silinir
-    bool token_enabled_ = false;
-    bool token_stored_ = false;
-    bool testing_ = false;
     std::thread worker_;  // bağlantı testi senkronu; yıkıcı bekler (sync_now zaman aşımıyla sınırlı)
 };
 

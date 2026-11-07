@@ -1,10 +1,12 @@
 #pragma once
 
 #include "app/import_files.hpp"
+#include "app/inspector.hpp"
 #include "app/item_ops.hpp"
 #include "app/trash_ops.hpp"
 #include "core/config.hpp"
 #include "core/note_store.hpp"
+#include "core/note_views.hpp"
 #include "edit/clipboard.hpp"
 #include "tui/modals.hpp"
 #include "tui/mouse.hpp"
@@ -13,24 +15,26 @@
 #include "tui/view.hpp"
 
 #include <expected>
-#include <utility>
 #include <filesystem>
 #include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace noteapp::tui {
 
 class EditorSession;
 
-// Sıralama ve sağ sütun `<state>/tui-state.toml`da kalır; bozuk değer varsayılana döner. Sürüm işareti
-// olmayan eski dosyada `column = "none"` o sürümün varsayılanıdır, seçim sayılmaz: yeni varsayılana taşınır.
+// Liste tercihleri `<state>/tui-state.toml`da; GUI ile ortak alanlar app::ui_prefs kuralıyla (bozuk değer
+// varsayılana döner), `list_share` bu arayüzündür.
 std::string format_list_prefs(const ListPrefs& prefs);
 ListPrefs parse_list_prefs(std::string_view text, const SearchHistoryLimits& history = {});
-void load_list_prefs(TuiState& state);
+// Dosya okunamadıysa kenara alınır; dönen ileti (boş değilse) kullanıcıya bir kez gösterilir. `max_bytes`:
+// tuning.max_note_bytes.
+std::string load_list_prefs(TuiState& state, const core::Limit& max_bytes = {});
 
 // Liste ve Önizleme eylemlerinin yan etkileri (pano, çöp, sıralama kalıcılığı). main'in karmaşıklığı artmasın
 // diye orada değil; tuş kararı TuiState'te kalır, burası Intent'i yürütür.
@@ -59,6 +63,9 @@ struct ListHost {
     std::function<void(const std::string& from, const std::string& to)> on_moved = {};
     // İşçiden UI iş parçacığına iş (main: app_.Post ve çizim isteği); içe alma ilerlemesi ve raporu.
     std::function<void(std::function<void()>)> post = {};
+    // Denetçi etiketi notun metnini yazmadan önce o notun açık sekmesindeki düzenleme kaydedilir (main: etkin
+    // sekmenin park'ı). Boş = sekme yok.
+    app::SavePending save_note = {};
 };
 
 class ListActions {
@@ -86,9 +93,9 @@ public:
     void begin_inspector_edit(std::optional<RenameState>& rename, bool add);
     void begin_inspector_delete(std::optional<ConfirmState>& confirm);
     void submit_property(std::optional<RenameState>& rename);
-    bool finish_inspector_write(
-        const std::function<std::expected<std::string, core::Error>(core::NoteStore&)>& write,
-        RenameState* input = nullptr);
+    bool finish_inspector_write(const std::function<std::expected<std::string, core::Error>(
+                                    core::NoteStore&, const app::SavePending&)>& write,
+                                RenameState* input = nullptr);
     // `m`: seçim ya da satır için hedef klasör girdisi, geçerli klasörle dolu; Tab klasörleri önerir.
     void begin_move_to(std::optional<RenameState>& rename);
     // `L`: boş girdi, Tab not yollarını önerir; Enter hedefi doğrular ve ad satırını açar (F1, RenameState
@@ -100,6 +107,10 @@ public:
     // alınamazsa girdi yazılanla ve nedeniyle geri açılır; alınınca özet durum satırında, ilk not REVIEW'da
     // açılır (editördeyken odak çalınmaz). Biri sürerken ikincisi girdide reddedilir.
     void begin_import(std::optional<RenameState>& rename, std::string folder);
+    // Kayıtlı görünüm (GUI ile aynı kural, app::MapQuery::save_view ve core::remove_view): `save` gösterilen
+    // okumanın sorgusunu sorulan adla kaydeder (okuma yoksa ileti, girdi açılmaz); değilse silinecek adı
+    // sorar, Tab kayıtlı adları önerir, Enter uyarır, aynı adda ikinci Enter siler. Hata girdide kalır.
+    void begin_view_name(std::optional<RenameState>& rename, bool save);
     bool importing() const { return import_.running(); }
     // İçe alma sürerken Esc ve Ctrl+C (editör dışında) onu durdurur: alınanlar kalır. Tüketildiyse true.
     bool cancel_import_on(Key key, Focus focus);
@@ -132,6 +143,7 @@ private:
     void submit_move_to(std::optional<RenameState>& rename);
     void submit_link(std::optional<RenameState>& rename);
     void submit_import(std::optional<RenameState>& rename);
+    void submit_view(std::optional<RenameState>& rename);
     // UI iş parçacığında, rapor gelince; `rename` main'in girdisidir (ListActions'tan uzun yaşar).
     void finish_import(std::optional<RenameState>& rename, const app::ImportReport& report);
     // `P`: GUI gibi `<ad>.pdf` önerir; PDF diskteki baytlardan noteapp_pdf ile üretilir. Var olan dosya ancak
@@ -164,7 +176,6 @@ private:
     bool finish_relation_edit(
         const std::function<std::expected<std::string, core::Error>(core::NoteStore&)>& edit,
         RenameState* input = nullptr);
-    void create_folder_from_row(std::optional<NewRowState>& row);
     void submit_folder_rename(std::optional<RenameState>& rename, const std::string& target);
     void trash_folder(const std::string& folder, const app::Prompts& prompts);
     void copy_selected();
@@ -174,8 +185,8 @@ private:
     void begin_trash(std::optional<ConfirmState>& confirm);
     void begin_delete_action(std::optional<ConfirmState>& confirm);
     void restore_action();
-    void trash_marked(const app::Prompts& prompts);
-    void delete_marked(const app::Prompts& prompts);
+    void trash_marked(const std::vector<app::TrashTarget>& targets, const app::Prompts& prompts);
+    void delete_marked(const std::vector<app::TrashTarget>& targets, bool from_trash, const app::Prompts& prompts);
     void restore_marked();
     void paste();
     void publish(BatchReport& report, const char* done_key);
@@ -183,14 +194,20 @@ private:
     // Onay penceresi modaldır, karar sonra gelir: istem soruyu `confirm`a yazar ve "hayır" der; Evet'te
     // finish_delete `retry`ı koşar, o da aynı işlemi onaylı istemle yeniden çağırır.
     app::Prompts ask_later(std::optional<ConfirmState>& confirm, std::function<void()> retry);
+    // Toplu ve klasör işinin listesi: onay bekleyen iş için sorulduğu andaki, değilse güncel liste.
+    const app::Listing& shown_listing() const;
 
     ListHost host_;
     // Çöp, geri alma yığını ve kalıcı silme kuralı GUI ile ortak (app::TrashOps); yığın bu oturumluktur.
     app::TrashOps trash_;
     std::function<void()> pending_;  // açık onayın Evet'i; Vazgeç main'de kalır, bir sonraki run() düşürür
+    // Açık onayın sorulduğu andaki liste: Evet yalnız orada gösterilen notlara uygulanır (shown_listing).
+    std::optional<app::Listing> asked_listing_;
     // Açık onay ilişki için (seçili not, satırdaki not). Vazgeçilirse sonraki run() düşürür.
     // Onaydaki ilişki: gösterilen not ve panelin seçili ilişki satırı (yalnız o ilişki silinir).
     std::optional<std::pair<core::NotePath, core::RelatedNote>> relation_target_;
+    std::string view_removal_;              // silme uyarısı gösterilmiş görünüm adı; sıradaki Enter onu siler
+    std::optional<core::SavedView> view_shown_;  // uyarı anındaki görünüm: arada değiştiyse silinmez
     std::filesystem::path export_replace_;  // uyarısı gösterilmiş var olan çıktı; sıradaki Enter onu ezer
     // Sürmekte olan içe almanın girdisi: hiçbir şey alınamazsa yazılanla geri açılır.
     std::optional<RenameState> import_prompt_;

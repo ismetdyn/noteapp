@@ -1,9 +1,12 @@
 // T82: md4c yürüyüşünün blok çıktısı. PDF hedefleri hiç taşımaz; GUI önizlemesi `links` ile bağlantı
 // hedeflerini ve [[wiki]] bağlantılarını ister.
 #include "pdf/markdown_blocks.hpp"
+#include "pdf/md4c_parse.hpp"
 
 #include <doctest/doctest.h>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using noteapp::pdf::Block;
@@ -77,4 +80,46 @@ TEST_CASE("link targets and wiki links are carried only when asked") {
             CHECK_FALSE(span.wiki);
         }
     }
+}
+
+// SD5a: blok kap yolunun tamamını taşısaydı "- - - …" (iç içe liste) bellekte derinliğin karesi olurdu (64 KiB →
+// 512 MB). Bloklardaki kap verisi girdiyle doğrusal kalır; ölçü bayttır, süre değil.
+TEST_CASE("deep list nesting keeps the per-block container data linear in the input") {
+    constexpr std::size_t kDepth = 32000;
+    std::string text;
+    for (std::size_t i = 0; i < kDepth; ++i)
+        text += "- ";
+    text += "x\n";
+    const auto blocks = parse_markdown(text);
+    std::size_t container_bytes = 0;
+    for (const Block& block : blocks)
+        container_bytes += block.nesting_opened.size();
+    CHECK(blocks.size() >= kDepth);  // her öğe kendi bloğunu verdi: boş çıktı yanlış yeşil olmasın
+    CHECK(container_bytes <= text.size());
+}
+
+namespace {
+
+// İlk metinde fırlatan işleyici (bellek yetmezliği gibi): md4c -fexceptions'sız C'dir, exception onun
+// çerçevelerinden geçmemeli.
+struct ThrowingHandler {
+    int texts = 0;
+    void enter_block(MD_BLOCKTYPE /*type*/, const void* /*detail*/) {}
+    void leave_block(MD_BLOCKTYPE /*type*/) {}
+    void enter_span(MD_SPANTYPE /*type*/, const void* /*detail*/) {}
+    void leave_span(MD_SPANTYPE /*type*/) {}
+    void text(MD_TEXTTYPE /*type*/, std::string_view /*value*/) {
+        ++texts;
+        throw std::runtime_error("handler failed");
+    }
+};
+
+}  // namespace
+
+TEST_CASE("md4c: a handler exception stops the parse and reaches the caller after md4c returns") {
+    ThrowingHandler handler;
+    CHECK_THROWS_WITH_AS(
+        noteapp::pdf::parse_md4c("first *one*\n\nsecond\n", noteapp::pdf::kMarkdownFlags, handler),
+        "handler failed", std::runtime_error);
+    CHECK(handler.texts == 1);  // ayrıştırma ilk hatada durdu
 }

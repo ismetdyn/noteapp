@@ -16,9 +16,15 @@ SyncStatusWorker::~SyncStatusWorker() = default;
 void SyncStatusWorker::request(const core::Config& config, std::span<const core::NoteMeta> notes) {
     {
         const std::scoped_lock lock(mutex_);
-        job_ = Job{config, {notes.begin(), notes.end()}};
+        job_ = Job{config, {notes.begin(), notes.end()}, generation_.load()};
     }
     wake_.notify_all();
+}
+
+void SyncStatusWorker::cancel() {
+    const std::scoped_lock lock(mutex_);
+    job_.reset();
+    ++generation_;
 }
 
 void SyncStatusWorker::run(const std::stop_token& stop) {
@@ -34,7 +40,8 @@ void SyncStatusWorker::run(const std::stop_token& stop) {
             SyncStates states;
             for (const core::NoteMeta& note : job.notes)
                 states.emplace(note.path, note.sync_status);
-            deliver_(std::move(states));
+            if (current(job.generation))  // UI yine bakar: teslimle uygulama arasında da iptal olabilir
+                deliver_(std::move(states), job.generation);
         } else {
             core::log_warn("event=sync_status_failed detail=" + core::format_error(filled.error()));
         }

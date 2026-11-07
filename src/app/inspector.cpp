@@ -173,22 +173,29 @@ std::expected<std::string, core::Error> Inspector::remove(core::NoteStore& store
     return core::tr("inspector.removed", {{"key", std::string(key)}});
 }
 
-std::expected<std::string, core::Error> Inspector::add_label(core::NoteStore& store, std::string_view tag) {
-    if (!target_ || target_->kind != InspectTarget::Kind::Note)
-        return std::unexpected(not_a_note());
-    auto done = connect_map_nodes(store, {MapNodeKind::Note, path_text(target_->note)},
-                                  {MapNodeKind::Tag, tag_without_hash(tag)}, MapEdgeKind::Tag);
-    if (done)
-        reload(store);
-    return done;
+std::expected<std::string, core::Error> Inspector::add_label(core::NoteStore& store, std::string_view tag,
+                                                             const SavePending& save_pending) {
+    return write_label(store, tag, save_pending, true);
 }
 
-std::expected<std::string, core::Error> Inspector::remove_label(core::NoteStore& store,
-                                                                std::string_view tag) {
-    if (!target_ || target_->kind != InspectTarget::Kind::Note)
+std::expected<std::string, core::Error> Inspector::remove_label(core::NoteStore& store, std::string_view tag,
+                                                                const SavePending& save_pending) {
+    return write_label(store, tag, save_pending, false);
+}
+
+std::expected<std::string, core::Error> Inspector::write_label(core::NoteStore& store, std::string_view tag,
+                                                               const SavePending& save_pending, bool add) {
+    if (!target_ || target_->kind != InspectTarget::Kind::Note || !target_->note)
         return std::unexpected(not_a_note());
-    auto done = disconnect_map_nodes(store, {MapNodeKind::Note, path_text(target_->note)},
-                                     {MapNodeKind::Tag, tag_without_hash(tag)}, MapEdgeKind::Tag);
+    // Kayıt listeyi ve bu denetçiyi tazeleyebilir: not önceden alınır.
+    const core::NotePath note = *target_->note;
+    if (save_pending && !save_pending(note))
+        return std::unexpected(
+            core::Error{core::Error::Code::ModifiedExternally, "inspector.save_first", {}});
+    const MapNode from{MapNodeKind::Note, note.string()};
+    const MapNode to{MapNodeKind::Tag, tag_without_hash(tag)};
+    auto done = add ? connect_map_nodes(store, from, to, MapEdgeKind::Tag)
+                    : disconnect_map_nodes(store, from, to, MapEdgeKind::Tag);
     if (done)
         reload(store);
     return done;

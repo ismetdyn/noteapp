@@ -236,9 +236,9 @@ TEST_CASE("same_device_and_seq_with_other_bytes_is_a_bad_frame") {
     frame.seq = 1;
     frame.hlc = 5;
     frame.ops.emplace_back(NodePut{kNode});
-    const std::string first = encode_log_header(forged) + encode_log_frame(encode_frame(frame));
+    const std::string first = encode_log_header(forged) + test::whole_record(encode_frame(frame));
     frame.ops[0] = NodePut{kOther};
-    const std::string second = encode_log_header(forged) + encode_log_frame(encode_frame(frame));
+    const std::string second = encode_log_header(forged) + test::whole_record(encode_frame(frame));
 
     Device b;
     const fs::path inbox = b.dir() / log_file_name(forged);

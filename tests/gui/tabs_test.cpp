@@ -195,6 +195,66 @@ TEST_CASE("tabs: a draft stays unsaved in its own tab while another tab is shown
     CHECK(scene.state->buffer() == "taslak\n");
 }
 
+// TUI ile aynı kural (app::keeps_tab): boş olmayan taslak, yalnız boşluk olsa da, sekmesinde kalır.
+TEST_CASE("tabs: a whitespace-only draft keeps its tab and the next note opens in a new one") {
+    TabsScene scene;
+    scene.state->new_tab();
+    const auto draft = scene.state->active_tab();
+    scene.state->edit_text("  \n");
+    scene.open("a.md");
+    CHECK(scene.state->tabs().size() == 3);
+    CHECK(scene.save_dialogs == 0);
+    REQUIRE(scene.state->activate_tab(draft));
+    CHECK(scene.state->is_new_note());
+    CHECK(scene.state->buffer() == "  \n");
+}
+
+// TUI ile tek kural (app::keeps_tab): yalnız boşluk da olsa yazılmış taslak kapanırken sorulur, sessizce
+// atılmaz.
+TEST_CASE("tabs: closing a whitespace-only draft asks like any written draft") {
+    TabsScene scene;
+    scene.state->new_tab();
+    const auto draft = scene.state->active_tab();
+    scene.state->edit_text("  \n");
+    scene.close_choice = CloseChoice::Cancel;
+    scene.state->close_active_tab();
+    CHECK(scene.close_questions == 1);
+    REQUIRE(scene.state->tabs().size() == 2);
+    CHECK(scene.state->buffer() == "  \n");
+
+    REQUIRE(scene.state->activate_tab(scene.state->tabs()[0].id));
+    scene.state->close_tab(draft);  // arka plandaki taslak: öne gelir, sorulur
+    CHECK(scene.close_questions == 2);
+    CHECK(scene.state->active_tab() == draft);
+    CHECK(scene.state->buffer() == "  \n");
+
+    REQUIRE(scene.state->activate_tab(scene.state->tabs()[0].id));
+    CHECK_FALSE(scene.state->request_close());  // pencere kapanışı da sorar
+    CHECK(scene.close_questions == 3);
+
+    scene.close_choice = CloseChoice::Discard;
+    scene.state->close_tab(draft);
+    CHECK(tab_paths(*scene.state) == std::vector<std::string>{"c.md"});
+}
+
+// SD11b: aynı kural sekmenin kaydedilmemiş işaretinde, dışa aktarmada ve kayıt akışında (flush): yalnız
+// boşluk da yazılmış metindir, sessizce atılmaz.
+TEST_CASE("tabs: a whitespace-only draft is unsaved and export asks to save it instead of dropping it") {
+    TabsScene scene;
+    scene.state->new_tab();
+    const auto draft = scene.state->active_tab();
+    scene.state->edit_text("  \n");
+    CHECK(scene.state->tabs().back().id == draft);
+    CHECK(scene.state->tabs().back().unsaved);
+    CHECK(scene.state->can_export());
+
+    scene.state->export_pdf();  // önce kayıt: kaydet penceresi açılır, vazgeçilince taslak kalır
+    CHECK(scene.save_dialogs == 1);
+    CHECK(scene.state->active_tab() == draft);
+    CHECK(scene.state->is_new_note());
+    CHECK(scene.state->buffer() == "  \n");
+}
+
 TEST_CASE("tabs: closing a tab with unsaved work follows the unsaved-changes flow") {
     TabsScene scene;
     scene.state->new_tab();

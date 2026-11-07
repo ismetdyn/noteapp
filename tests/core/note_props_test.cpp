@@ -174,9 +174,9 @@ TEST_CASE("note properties: the inspector refuses exactly the keys the query bar
     TempDir dir;
     NoteStore store(dir.path());
     REQUIRE(seed_note(store, "a.md", "a\n"));
-    for (const char* key : {"name", "type", "body", "created_at", "updated_at", "origin", "deleted_at",
-                            "trashed_from", "migrated_sha", "body_parents", "link_targets", "status", "owner",
-                            "display", "query", "directed"}) {
+    for (const char* key :
+         {"name", "type", "body", "created_at", "updated_at", "origin", "deleted_at", "trashed_from",
+          "body_parents", "link_targets", "status", "owner", "display", "query", "directed"}) {
         INFO(key);
         const std::string cypher = std::string("MATCH (n:Note) SET n.`") + key + "` = 'x'";
         const auto by_query = run_user_query(store, cypher, QueryAction::Preview, {});

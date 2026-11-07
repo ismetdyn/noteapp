@@ -402,6 +402,67 @@ TEST_CASE("preview layout: a quote inside a list item keeps its bar at the item'
     CHECK(run_of(layout, "alıntı").pos.x > bars.front());
 }
 
+// SD5a: liste öğesindeki alıntı zinciri ("- > - > …") her blokta her alıntı düzeyine ayrı çubuk verseydi kutular
+// derinliğin karesi olurdu. Ardışık blokların aynı çubuğu tek kutudur: alıntı başına bir kutu.
+TEST_CASE("preview layout: quotes nested in list items give one bar per quote, not one per block and level") {
+    const FontScene scene;
+    constexpr std::size_t kDepth = 2000;
+    std::string markdown;
+    for (std::size_t i = 0; i < kDepth; ++i)
+        markdown += "- > ";
+    markdown += "x\n";
+    const Laid laid = laid_out(scene, markdown, 400.0F);
+    std::size_t bars = 0;
+    for (const auto& box : laid.layout.boxes)
+        bars += box.kind == noteapp::gui::PreviewBox::Kind::QuoteBar ? 1 : 0;
+    CHECK(laid.blocks.size() >= kDepth);
+    CHECK(bars >= 1);
+    CHECK(bars <= kDepth);
+}
+
+// SD5a: çubuklar blok başına kutu yerine süren alıntı başına tek kutu oldu; çizilen yer değişmedi. Beklenenler
+// 7dab3ce^'in (blok başına kutu, yol karşılaştırması) piksel çıktısıyla farklı karşılaştırmada birebir doğrulandı:
+// her çubuk [ilk bloğun üstü, son bloğun altı], x'e göre sıralı. Aynı türde ardışık kaplar (iki ayrı "> a", "> b")
+// eskisi gibi aradaki boşlukta birleşir; ayrı öğelerdeki alıntılar ("- > a", "- > b") ayrı kalır.
+TEST_CASE("preview layout: quote bars cover exactly what the per-block bars covered") {
+    struct Case {
+        std::string_view markdown;
+        std::vector<std::pair<std::size_t, std::size_t>> bars;  // (ilk blok, son blok)
+    };
+    const std::vector<Case> cases = {
+        {"- > a\n- > b\n", {{1, 1}, {3, 3}}},
+        {"> a\n\n---\n\n> b\n", {{0, 0}, {2, 2}}},
+        {"> - a\n>\n> text\n", {{0, 1}}},
+        {"- a\n\n  > - b\n  >   - c\n  >\n  > d\n\n- e\n", {{1, 3}}},
+        {"> > > a\n\nb\n", {{0, 0}, {0, 0}, {0, 0}}},
+        {"> - > - a\n\nb\n", {{0, 1}, {1, 1}}},
+        {"> a\n\n  > b\n", {{0, 1}}},
+        {"- a\n\n  > in item\n\n> top\n", {{2, 2}, {1, 1}}},
+        {"> a\n\n> b\n", {{0, 1}}},
+        {"> a\n>\n> b\n", {{0, 1}}},
+        {"- > - > a\n  >   > b\n  > c\n- > d\n", {{1, 2}, {4, 4}, {2, 2}}},
+        {"> 1. a\n>    > q\n> 2. b\n>\n> > deep\n> > > deeper\n> tail\n", {{0, 4}, {3, 4}, {4, 4}, {1, 1}}},
+    };
+    const FontScene scene;
+    for (const Case& test : cases) {
+        CAPTURE(test.markdown);
+        const Laid laid = laid_out(scene, test.markdown, 400.0F);
+        std::vector<noteapp::gui::PreviewBox> bars;
+        for (const auto& box : laid.layout.boxes)
+            if (box.kind == noteapp::gui::PreviewBox::Kind::QuoteBar)
+                bars.push_back(box);
+        std::ranges::sort(bars, {}, [](const noteapp::gui::PreviewBox& box) { return std::pair(box.min.x, box.min.y); });
+        REQUIRE(bars.size() == test.bars.size());
+        const auto& spans = laid.layout.block_spans;
+        for (std::size_t at = 0; at < bars.size(); ++at) {
+            const auto [first, last] = test.bars[at];
+            REQUIRE(last < spans.size());
+            CHECK(bars[at].min.y == doctest::Approx(spans[first].first));
+            CHECK(bars[at].max.y == doctest::Approx(spans[last].second));
+        }
+    }
+}
+
 // İki ayrı liste HTML'deki gibi paragraf aralığıyla ayrılır; aynı listenin öğeleri ve iç listenin ilk öğesi sık kalır.
 TEST_CASE("preview layout: adjacent separate lists keep a block gap, items of one list stay tight") {
     const FontScene scene;

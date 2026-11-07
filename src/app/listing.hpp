@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/ui_prefs.hpp"
 #include "core/config.hpp"
 #include "core/folder_tree.hpp"
 #include "core/limits.hpp"
@@ -12,12 +13,14 @@
 #include "search/relation_search.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <span>
@@ -61,6 +64,16 @@ constexpr search::SortSpec sort_for(search::SortField field) {
 // Ad: fuzzy yol; içerik: tam metin; genel: ad ve içerik birlikte (search::search_all).
 enum class SearchMode { Name, Content, Global };
 
+// Arama satırında Enter (TUI ve GUI aynı kural; odak arayüzde).
+enum class SearchEnter {
+    Nothing,     // hiçbir şey: satır yok ve not açılmaz, ya da genel aramada satır yok veya sorgu bozuk
+    Select,      // bulunan satırda kalınır; bozuk sorgu geçmişe girmez
+    Remember,    // bulunan satırda kalınır, sorgu geçmişe girer
+    CreateNote,  // eşleşmesiz düz metin: taslağın ilk satırı olur
+};
+// Boş, bozuk ya da argümanlı (`tag:`, `sort:`) sorgu not metni değildir: satır yoksa not açılmaz.
+SearchEnter search_enter_action(SearchMode mode, bool has_selection, bool query_error, std::string_view query);
+
 // İçerik ve genel arama dışarıdan verilir: ContentIndex'in G/Ç'si ve tembel kurulumu listenin işi değil.
 using ContentSearcher = std::function<std::vector<search::ContentResult>(std::string_view text)>;
 // graph: listenin kenarları ve ilişki derinliği (set_edge_source, set_relation_depth); search_all'a geçer.
@@ -80,8 +93,26 @@ std::optional<std::size_t> relation_depth(const core::Config& config);
 // Satırın neden metni ("tag: #x", "relation: uses → b.md", "linked: b.md (uses)"); etkin dilde. Ad ve yol
 // güvenilmez: arayüz kendi temizliğinden geçirir.
 std::string reason_text(const search::RelationReason& reason);
-// `index` tembel kurulur (ilk aramada). Sonuç sınırı limits.search.content_results; 0 = tüm sonuçlar.
-ContentSearcher content_searcher(std::function<const search::ContentIndex&()> index, core::Limit results);
+// Notun senkron durumu; TUI ayrıntısında, GUI bilgi panelinde ve Ayrıntılar sütununda aynı metin. "değişti"
+// aramadaki `sync:modified` ile aynı sözcüktür.
+std::string sync_state_text(core::SyncState state);
+// İçerik indeksi arayüzündür ve tembel kurulur (ilk aramada).
+using ContentIndexSource = std::function<const search::ContentIndex&()>;
+
+// Notun üst veri alanları; TUI satır ayrıntısı ve GUI Bilgi paneli bu sırayla gösterir.
+enum class NoteField { Size, Updated, Created, Sync, Origin, Type, Tags };
+inline constexpr std::array<NoteField, 7> kNoteFields = {NoteField::Size,   NoteField::Updated, NoteField::Created,
+                                                         NoteField::Sync,   NoteField::Origin,  NoteField::Type,
+                                                         NoteField::Tags};
+// Alanın metni. `short_now` verilirse tarih kısa biçimde (bugünse saat; dar sütun), değilse tam yerel saat.
+// Başka cihazdan gelen düğümde created ve origin olmayabilir: "bilinmiyor"; boş tip ve etiket "yok".
+// Origin ve etiket güvenilmez: arayüz kendi temizliğinden geçirir.
+std::string note_field_text(const core::NoteMeta& meta, NoteField field,
+                            std::optional<std::chrono::system_clock::time_point> short_now = std::nullopt);
+// Liste sütununun metni (TUI `v`, GUI Ayrıntılar): seçilen alan; SizeAndDate ve None boş (yerleşim
+// arayüzdedir).
+std::string column_text(const core::NoteMeta& meta, ListColumn column,
+                        std::optional<std::chrono::system_clock::time_point> short_now = std::nullopt);
 
 // Listenin bir satırı; iki arayüz kendi çizimini bundan kurar.
 struct ListRow {
@@ -122,6 +153,9 @@ public:
     // `view:` süzgecinin notları; bağlanmazsa `view:` hiçbir notu geçirmez.
     void set_view_lookup(search::ViewLookup views) { views_ = std::move(views); }
     void set_content_searcher(ContentSearcher searcher) { content_searcher_ = std::move(searcher); }
+    // Gerçek indeks (TUI, GUI, CLI): argüman süzgeci ve sonuç sınırı indekse verilir, kesit yalnız gösterilen
+    // satırlar için üretilir. Verilirse set_content_searcher'ın yerine geçer.
+    void set_content_index(ContentIndexSource index) { content_index_ = std::move(index); }
     void set_global_searcher(GlobalSearcher searcher) { global_searcher_ = std::move(searcher); }
     // Kenarlar yalnız gerektiğinde (metinli arama ilişki açıkken, `rel:`/`linked:`) arama başına bir kez
     // istenir.
@@ -168,6 +202,9 @@ public:
     // aday.
     void set_fuzzy_candidate_chars(std::size_t chars) { fuzzy_candidate_chars_ = chars; }
     std::size_t fuzzy_candidate_chars() const { return fuzzy_candidate_chars_; }
+    // limits.search.content_results (sınırsız SIZE_MAX): içerik araması argüman süzgecinden sonra bu kadar
+    // satırda kesilir; süzgeçten önce kesmek süzülen eşleşmeyi kaybettirirdi.
+    void set_content_results(std::size_t results) { content_results_ = results; }
 
 private:
     // Geçerli sorgunun satırları; yalnız genel arama hata döndürebilir.
@@ -205,6 +242,7 @@ private:
     search::SortSpec sort_{search::SortField::Updated, true};  // TUI ListPrefs varsayılanı: en yeni başta
     search::ViewLookup views_;
     ContentSearcher content_searcher_;
+    ContentIndexSource content_index_;
     GlobalSearcher global_searcher_;
     EdgeSource edge_source_;
     search::PropertyLookup property_source_;
@@ -217,6 +255,32 @@ private:
     std::string last_valid_query_;                 // bozuk sorguda satırlar bununla kurulur
     // Arayüz config'ten verir (set_fuzzy_candidate_chars); verilmezse defaults.toml'daki değer.
     std::size_t fuzzy_candidate_chars_ = search::kDefaultFuzzyCandidateChars;
+    std::size_t content_results_ = SIZE_MAX;
 };
+
+// Listenin depo ve config bağları: `view:`, kenarlar, `prop:`, ilişki derinliği, fuzzy aday sınırı. `index`
+// verilirse (TUI, GUI) içerik ve genel arama ile limits.search.content_results da; CLI kendi sınırını uygular. `store`, `config` ve `store_mutex` listeden uzun yaşar
+// (referansla tutulur). `store_mutex` verilirse depo okumaları onun altındadır (TUI: yeniden tarama iş
+// parçacığı aynı depoyu listeler).
+void connect_store(Listing& listing, const core::NoteStore& store, const core::Config& config,
+                   ContentIndexSource index = {}, std::mutex* store_mutex = nullptr);
+
+// Seçili klasörün özeti (TUI REVIEW ve satır ayrıntısı, GUI editörün yeri): depo okunmaz, hepsi listenin
+// ağacından. Metinler etkin dilde; yol ve ad güvenilmez, arayüz kendi temizliğinden geçirir.
+struct FolderSummary {
+    struct Recent {
+        core::NotePath path;
+        std::string name;     // klasöre göre yol
+        std::string updated;  // kısa tarih (bugünse saat)
+    };
+    std::string path;            // "" kök
+    std::string counts;          // "3 items · 5 notes · 1 folder": öğe doğrudan çocuk, not ve klasör alt ağaç
+    std::string size;            // alt ağacın toplam boyutu
+    std::string updated;         // alt ağaçta son güncelleme, tam yerel saat; not yoksa "bilinmiyor"
+    std::vector<Recent> recent;  // alt ağaçta en yeni notlar, en yeni başta (FolderTree::kRecentNotes)
+};
+// Klasör ağaçta yoksa nullopt.
+std::optional<FolderSummary> folder_summary(const Listing& listing, std::string_view folder,
+                                            std::chrono::system_clock::time_point now);
 
 }  // namespace noteapp::app

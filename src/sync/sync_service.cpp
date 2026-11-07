@@ -4,7 +4,6 @@
 #include "core/file_stat.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
-#include "core/migration.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
 #include "core/note_sync.hpp"
@@ -1077,8 +1076,8 @@ std::expected<std::vector<std::string>, core::Error> remote_refs(git_remote* rem
     return names;
 }
 
-// Uzak boş: yönetilen dosyalar ve bu cihazın günlüğü ilk commit olur ve gönderilir. Geçiş bekliyorsa günlük
-// verilmez: enable yine kurulur, senkron geçişe kadar reddeder.
+// Uzak boş: yönetilen dosyalar ve bu cihazın günlüğü ilk commit olur ve gönderilir. Depo açılamıyorsa
+// günlük verilmez: enable yine kurulur, senkron depo onarılana kadar reddeder.
 std::expected<void, core::Error> seed_empty_remote(const core::Config& config, git_repository* repo,
                                                    git_remote* remote, const Credentials& credentials) {
     const fs::path& notes_dir = config.notes_dir;
@@ -1166,15 +1165,11 @@ std::expected<void, core::Error> enable_locked(const core::Config& config, std::
     if (!credentials)
         return std::unexpected(credentials.error());
     const bool local_empty = !has_visible_entries(notes_dir);
-    const bool had_old_notes = core::legacy_notes_pending(notes_dir, core::data_dir());
     const bool had_gitignore = fs::exists(notes_dir / ".gitignore", ec);
     const bool had_gitattributes = fs::exists(notes_dir / ".gitattributes", ec);
     const bool had_log_dir = fs::exists(notes_dir / kLogDir, ec);
     bool created = false;
     auto outcome = initialize(config, url, *credentials, local_empty, created);
-    // Klonla gelen düz dosyalar bu cihazın eski notu değildir.
-    if (outcome && !had_old_notes)
-        outcome = core::mark_notes_dir_current(notes_dir, core::data_dir());
     if (!outcome && created) {  // yalnız kendi oluşturduğumuz depo: başkasının .git'ine asla dokunulmaz
         remove_git_dir(notes_dir / ".git");
         if (!had_gitignore)
@@ -1410,10 +1405,8 @@ std::expected<SyncResult, core::Error> SyncService::run_cycle(const SyncTestHook
         return std::unexpected(credentials.error());
 
     core::NoteStore store = core::NoteStore::for_config(config_);
-    if (const auto issue = store.health())  // geçiş bekliyor ya da depo açılamıyor: git'e hiç dokunulmaz
+    if (const auto issue = store.health())  // depo açılamıyor: git'e hiç dokunulmaz
         return std::unexpected(*issue);
-    // Burada geçirilecek yerel eski not yok: bundan sonra git'le gelen dosya bu cihazın eski notu sayılmaz.
-    NOTEAPP_TRY(core::mark_notes_dir_current(config_.notes_dir, core::data_dir()));
     NOTEAPP_TRY(ensure_gitattributes(config_.notes_dir));
     NOTEAPP_TRY(ensure_gitignore(config_.notes_dir));
 

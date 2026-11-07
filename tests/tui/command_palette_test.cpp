@@ -498,11 +498,14 @@ TEST_CASE("palette: the recent list follows limits.app.recent_commands, also whe
     }
     CHECK(state.list_prefs().recent_commands.size() == 3);
 
-    std::string text = "recent_commands = [";
-    for (int i = 0; i < 500; ++i)
-        text += "\"x" + std::to_string(i) + "\", ";
-    text += "\"last\"]\n";
+    // Elle yazılmış dosya: kayıtlı her komut (bilinmeyen ad GUI gibi düşer, app::parse_ui_prefs).
+    std::string text = "recent_commands = [\"bogus\"";
+    for (const app::CommandSpec& spec : app::kCommandRegistry)
+        text += ", \"" + std::string(spec.id) + "\"";
+    text += "]\n";
+    const std::size_t known = std::size(app::kCommandRegistry);
     const core::Limit configured = core::parse_config("").config.limits.app.recent_commands;
+    REQUIRE(known > configured.value);
     tui::TuiState loaded = sample_state();
     loaded.set_recent_commands_limit(configured);
     loaded.set_list_prefs(tui::parse_list_prefs(text));
@@ -510,7 +513,7 @@ TEST_CASE("palette: the recent list follows limits.app.recent_commands, also whe
     tui::TuiState unlimited = sample_state();
     unlimited.set_recent_commands_limit(core::Limit{0, "0"});
     unlimited.set_list_prefs(tui::parse_list_prefs(text));
-    CHECK(unlimited.list_prefs().recent_commands.size() == 501);
+    CHECK(unlimited.list_prefs().recent_commands.size() == known);
 }
 
 // ---- Çalışamayan ----
@@ -565,7 +568,7 @@ TEST_CASE("palette: a folder row blocks note commands, links need a section, tra
     tui::TuiState plain = state_for(tui::kInReview);
     plain.set_links(core::NoteLinks{}, 2, np("a.md"));
     plain.handle(Key::Char, ":");
-    CHECK(std::string_view(reason_of(plain, "links.focus")) == "tui.cmd_why_links");
+    CHECK(std::string_view(reason_of(plain, "links.focus")) == "app.cmd_why_links");
 
     tui::TuiState trash = state_for(tui::kInTrash);
     trash.handle(Key::Char, ":");
@@ -647,7 +650,7 @@ TEST_CASE("links.toggle hides the links section under REVIEW, blocks links.focus
     CHECK(state.handle(Key::Char, "b") == Intent::None);
     CHECK(state.focus() == Focus::Preview);
     state.handle(Key::Char, ":");
-    CHECK(std::string_view(reason_of(state, "links.focus")) == "tui.cmd_why_links");
+    CHECK(std::string_view(reason_of(state, "links.focus")) == "app.cmd_why_links");
     aim(state, "links.toggle");
     state.handle(Key::Enter);
     CHECK(state.links_reserved_rows(kPaneRows) > 0);
@@ -790,6 +793,22 @@ TEST_CASE("icons.toggle flips the setting, writes config.toml and takes effect a
     CHECK(core::load_config().config.icons == "nerd");
 }
 
+// GUI ve Ayarlar formuyla tek yol: yalnız `icons` diskteki dosyanın üstüne yazılır; uygulama açıkken `note
+// config set` ile değişen ayar ezilmez.
+TEST_CASE("icons.toggle keeps a setting changed on disk while the app was running") {
+    StoreFixture f;
+    f.config.icons = "nerd";
+    f.state.set_icon_style(core::IconStyle::Nerd);
+    core::Config other = f.config;
+    REQUIRE(core::set_config_value(other, "editor", "emacs-on-disk"));
+    REQUIRE(core::save_config(other));
+    f.run_palette("icons.toggle");
+    CHECK(f.config.icons == "off");
+    const core::Config reloaded = core::load_config().config;
+    CHECK(reloaded.icons == "off");
+    CHECK(reloaded.editor == "emacs-on-disk");
+}
+
 TEST_CASE("icons.toggle refuses to overwrite a config.toml it cannot read") {
     StoreFixture f;
     f.config.icons = "nerd";
@@ -813,7 +832,7 @@ TEST_CASE("recent commands reach tui-state.toml through the host") {
     f.actions.save_prefs_if_changed();
     std::ifstream in(core::state_dir() / "tui-state.toml");
     const std::string text{std::istreambuf_iterator<char>(in), {}};
-    CHECK(has(text, "recent_commands = [\"column.sync\"]"));
+    CHECK(tui::parse_list_prefs(text).recent_commands == std::vector<std::string>{"column.sync"});
 }
 
 // ---- Çizim ----
@@ -939,7 +958,7 @@ TEST_CASE("render: the box names the target, or the count when rows are marked")
     state.handle(Key::Escape);
     state.handle(Key::Char, "v");
     state.handle(Key::Char, ":");
-    CHECK(has(screen_text(state), core::tr("tui.marked_count", {{"count", "1"}})));
+    CHECK(has(screen_text(state), core::tr("app.marked_count", {{"count", "1"}})));
 }
 
 namespace {

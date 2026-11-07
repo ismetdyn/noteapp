@@ -1,6 +1,7 @@
 #include "core/config.hpp"
 #include "edit/language_servers.hpp"
 #include "edit/lsp_workspace.hpp"
+#include "support/note_import.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
 
@@ -438,7 +439,7 @@ TEST_CASE("server caches in dot directories of the workspace survive a sync") {
 TEST_CASE("mirroring 2000 notes runs off the UI thread") {
     Workspace ws;
     constexpr std::size_t kNotes = 2000;
-    std::vector<core::ImportedNote> notes;
+    std::vector<noteapp::test::ImportedNote> notes;
     for (std::size_t i = 0; i < kNotes; ++i)
         notes.push_back({note("pkg" + std::to_string(i % 20) + "/m" + std::to_string(i) + ".py"),
                          "def f" + std::to_string(i) + "():\n    return " + std::string(200, '1') + "\n",

@@ -5,6 +5,7 @@
 #include "core/note_props.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
+#include "tui/editor_view.hpp"
 #include "tui/list_actions.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
@@ -13,6 +14,7 @@
 #include <doctest/doctest.h>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/screen.hpp>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -46,8 +48,21 @@ struct Scene {
     int changes = 0;
     std::optional<tui::ConfirmState> confirm;
     std::optional<tui::RenameState> rename;
-    tui::ListActions actions{tui::ListHost{store, mutex, internal, system, state, preview, status,
-                                           [this] { refresh(); }, [this] { ++changes; }}};
+    std::function<bool(const core::NotePath&)> save_note;  // main: etkin sekmenin park'ı
+    tui::ListActions actions{
+        tui::ListHost{store,
+                      mutex,
+                      internal,
+                      system,
+                      state,
+                      preview,
+                      status,
+                      [this] { refresh(); },
+                      [this] { ++changes; },
+                      nullptr,
+                      {},
+                      {},
+                      [this](const core::NotePath& note) { return !save_note || save_note(note); }}};
 
     Scene() {
         core::init_i18n("en");
@@ -228,6 +243,45 @@ TEST_CASE("tui inspector: #key adds a label to the note's text; d on the label r
     scene.key(Key::Left);
     scene.key(Key::Enter);
     CHECK(scene.store->read(np("a.md"))->text == "a\n");
+}
+
+TEST_CASE("tui inspector: a label on a note with unsaved edits saves the edits first, nothing is lost") {
+    Scene scene;
+    tui::EditorSession editor{
+        tui::EditorHost{*scene.store, scene.mutex, scene.internal, tui::terminal_cell_width,
+                        std::uintmax_t{1024} * 1024, core::kDefaultSlugMaxLength,
+                        [](std::string_view) { return std::string("md"); }, [](const core::NotePath&) {},
+                        [] {}, [](std::optional<std::size_t>) {}, [](const core::Error&) {}, [] {}}};
+    editor.open(np("a.md"));
+    editor.handle(Key::Char, "x");
+    REQUIRE(editor.dirty());
+    scene.save_note = [&](const core::NotePath& note) { return editor.path() != note || editor.park(); };
+    scene.open_review_inspector();
+    scene.key(Key::Char, "a");
+    scene.type("#plan");
+    scene.key(Key::Enter);
+    // Etiket gövdeye yazılmadan önce sekmenin düzenlemesi kaydedildi: sonraki kayıt çakışma sormaz.
+    CHECK_FALSE(editor.dirty());
+    CHECK(scene.store->read(np("a.md"))->text == "xa\n#plan\n");
+}
+
+// Kayıt düşerse (park false) etiket yazılmaz: kirli tampon ile dosya ayrışmaz, neden girdide kalır.
+TEST_CASE("tui inspector: when saving the edits first fails the label is not written") {
+    Scene scene;
+    int saves = 0;
+    scene.save_note = [&](const core::NotePath&) {
+        ++saves;
+        return false;
+    };
+    scene.open_review_inspector();
+    scene.key(Key::Char, "a");
+    scene.type("#plan");
+    scene.key(Key::Enter);
+    CHECK(saves == 1);
+    CHECK(scene.store->read(np("a.md"))->text == "a\n");
+    REQUIRE(scene.rename.has_value());
+    CHECK(scene.rename->error() == core::tr("inspector.save_first"));
+    CHECK(scene.changes == 0);
 }
 
 TEST_CASE("tui inspector: p on a related row of the links section inspects that relation") {

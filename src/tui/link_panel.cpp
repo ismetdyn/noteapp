@@ -21,6 +21,22 @@ std::vector<WikiSpan> wiki_spans(std::string_view line) {
     return spans;
 }
 
+std::vector<WikiSpan> wiki_spans(std::span<const StyledSpan> spans, std::span<const std::string> targets) {
+    std::vector<WikiSpan> links;
+    std::size_t previous = 0;
+    for (const StyledSpan& span : spans) {
+        const std::size_t link = span.look.wiki_link;
+        if (link == 0)
+            continue;
+        if (link == previous && links.back().end == span.begin)
+            links.back().end = span.end;
+        else
+            links.push_back({span.begin, span.end, targets[link - 1]});
+        previous = link;
+    }
+    return links;
+}
+
 void LinkPanel::set(core::NoteLinks links, bool same_note) {
     links_ = std::move(links);
     lines_ = core::link_lines(links_);

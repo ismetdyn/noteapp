@@ -264,7 +264,7 @@ TEST_CASE("leaving the trash after a restore selects the first row of the list")
     f.put("c.md", "c");
     f.put("a.md", "a");
     f.load();
-    f.state.set_list_prefs({{search::SortField::Name, false}, tui::ListColumn::None});
+    f.state.set_list_prefs({{{search::SortField::Name, false}, tui::ListColumn::None}});
     const std::string first = f.state.selected_row()->path.string();
     std::optional<tui::ConfirmState> confirm;
     const auto press = [&](std::string_view letter) {
@@ -286,18 +286,18 @@ TEST_CASE("Space and Alt+→ open the selected row; I toggles all rows") {
     tui::TuiState s;
     s.set_notes({info("a.md"), info("b.md"), info("c.md")});
     CHECK(s.handle(Key::Char, " ") == Intent::None);
-    CHECK(s.row_height(0) == 6);
+    CHECK(s.row_height(0) == 1 + tui::TuiState::kMetaLines);
     CHECK(s.row_height(1) == 1);
     s.handle(Key::Char, " ");
     CHECK(s.row_height(0) == 1);
     CHECK(s.handle(Key::AltRight) == Intent::None);  // Listede `i` içe almadır (CLI -i)
-    CHECK(s.row_height(0) == 6);
+    CHECK(s.row_height(0) == 1 + tui::TuiState::kMetaLines);
     s.handle(Key::AltLeft);
     CHECK(s.row_height(0) == 1);
     s.handle(Key::Char, " ");  // biri açık: I hepsini açar
     s.handle(Key::Char, "I");
     for (std::size_t row = 0; row < 3; ++row)
-        CHECK(s.row_height(row) == 6);
+        CHECK(s.row_height(row) == 1 + tui::TuiState::kMetaLines);
     s.handle(Key::Char, "I");  // hepsi açık: I hepsini kapatır
     for (std::size_t row = 0; row < 3; ++row)
         CHECK(s.row_height(row) == 1);
@@ -307,7 +307,7 @@ TEST_CASE("Space works in the trash view too and stays text in the search input"
     tui::TuiState trash;
     trash.enter_trash({core::TrashItem{core::NotePath::parse("a.md").value(), {}, 1}});
     trash.handle(Key::Char, " ");
-    CHECK(trash.row_height(0) == 6);
+    CHECK(trash.row_height(0) == 1 + tui::TuiState::kMetaLines);
     tui::TuiState s;
     s.set_notes({info("a b.md")});
     s.handle(Key::Char, "/");
@@ -376,16 +376,17 @@ TEST_CASE("a narrow list drops the date, then the size, and never clips a value"
     CHECK(left.find("2.9") == left.find("2.9 KiB"));  // yarım değer yok
 }
 
-TEST_CASE("prefs: saved with a version; an old file's column none migrates once, a new one stays") {
+// GUI ile tek kural (app::ui_prefs): sürüm işareti yok, yazılmamış sütun varsayılandır, `none` seçimdir.
+TEST_CASE("prefs: a missing column is the default and a saved none stays none") {
     using Column = tui::ListColumn;
     CHECK(tui::parse_list_prefs("").column == Column::SizeAndDate);
-    CHECK(tui::parse_list_prefs("column = \"none\"\n").column == Column::SizeAndDate);
+    CHECK(tui::parse_list_prefs("column = \"none\"\n").column == Column::None);
     CHECK(tui::parse_list_prefs("column = \"size\"\n").column == Column::Size);
-    const tui::ListPrefs none{{search::SortField::Updated, true}, Column::None};
+    const tui::ListPrefs none{{{search::SortField::Updated, true}, Column::None}};
     const std::string saved = tui::format_list_prefs(none);
-    CHECK(saved.find("version") != std::string::npos);
+    CHECK(saved.find("version") == std::string::npos);
     CHECK(tui::parse_list_prefs(saved).column == Column::None);
-    const tui::ListPrefs both{{search::SortField::Updated, true}, Column::SizeAndDate};
+    const tui::ListPrefs both{{{search::SortField::Updated, true}, Column::SizeAndDate}};
     CHECK(tui::parse_list_prefs(tui::format_list_prefs(both)).column == Column::SizeAndDate);
 }
 

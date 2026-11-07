@@ -1,9 +1,9 @@
+#include "app/export.hpp"
 #include "cli/commands.hpp"
 #include "cli/highlight.hpp"
 #include "core/error.hpp"
 #include "core/i18n.hpp"
 #include "core/note_store.hpp"
-#include "pdf/pdf_export.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -28,7 +28,7 @@ fs::path from_utf8(const std::string& s) {
 
 struct ExportArgs {
     bool pdf = false;
-    bool ignore_skipped = false;
+    bool force = false;
     std::optional<std::string> all;
     std::optional<std::string> output;
     std::vector<std::string> positional;
@@ -41,8 +41,8 @@ std::expected<ExportArgs, int> parse_export_args(const std::vector<std::string>&
         const std::string& arg = rest[i];
         if (arg == "--pdf") {
             parsed.pdf = true;
-        } else if (arg == "--ignore-skipped") {
-            parsed.ignore_skipped = true;
+        } else if (arg == "--force") {
+            parsed.force = true;
         } else if (arg == "--all") {
             if (i + 1 >= rest.size())
                 return std::unexpected(missing_value_error("export", arg));
@@ -67,11 +67,11 @@ int run_export(const ParsedArgs& args, const core::Config& config) {
     if (!parsed)
         return parsed.error();
     if (parsed->all) {
-        if (parsed->pdf || parsed->output || !parsed->positional.empty())
+        if (parsed->pdf || parsed->output || parsed->force || !parsed->positional.empty())
             return usage_error("export");
-        return run_export_all(*parsed->all, parsed->ignore_skipped, config);
+        return run_export_all(*parsed->all, config);
     }
-    if (!parsed->pdf || parsed->ignore_skipped || parsed->positional.size() != 1)
+    if (!parsed->pdf || parsed->positional.size() != 1)
         return usage_error("export");
 
     core::NoteStore store = core::NoteStore::for_config(config);
@@ -84,19 +84,22 @@ int run_export(const ParsedArgs& args, const core::Config& config) {
     const auto content = store.read(note->path);
     if (!content)
         return fail(content.error());
-    if (core::looks_binary(content->text)) {
-        std::cerr << sanitize_for_terminal(core::tr("cli.binary_note", {{"path", note->path.string()}}))
+    // Varsayılan çıktı geçerli dizindedir (not klasörüne değil); `-o` göreli ise yine geçerli dizine göredir.
+    const fs::path output =
+        fs::absolute(from_utf8(parsed->output.value_or(app::default_export_name(note->path))));
+
+    // TUI ve GUI sorar; CLI soramaz: var olan dosya (kırık bağ dahil) --force olmadan ezilmez.
+    if (!parsed->force && app::export_target_exists(output)) {
+        std::cerr << sanitize_for_terminal(core::tr("cli.export_exists", {{"path", to_utf8(output)}}))
                   << '\n';
         return kExitUser;
     }
-    // Varsayılan çıktı geçerli dizindedir (not klasörüne değil); `-o` göreli ise yine geçerli dizine göredir.
-    fs::path default_name = note->path.value().stem();
-    default_name += ".pdf";  // replace_extension "a.b.md" -> "a.pdf" yapardı
-    const fs::path output = fs::absolute(parsed->output ? from_utf8(*parsed->output) : default_name);
-
-    const auto exported = pdf::export_pdf(content->text, pdf::format_for(note->path.value()), output);
-    if (!exported)
-        return fail(exported.error());
+    const auto exported = app::export_note_pdf(content->text, note->path, output);
+    if (!exported) {
+        const int code = fail(exported.error());
+        // İkili not kullanıcı hatasıdır (1), yol hatası (2) değil.
+        return exported.error().message_key == app::kExportBinaryKey ? kExitUser : code;
+    }
     std::cout << core::tr("cli.exported", {{"path", sanitize_for_terminal(to_utf8(output))}}) << '\n';
     return kExitOk;
 }

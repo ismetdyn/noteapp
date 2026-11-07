@@ -54,7 +54,7 @@ TEST_CASE("the delete confirmation puts its buttons on the right, Delete filled 
     std::uint32_t delete_fill = 0;
     std::uint32_t cancel_fill = 0;
     scene.with_dialog(
-        [&] { scene.state->deciders.confirm_delete(noteapp::core::tr("gui.trash_empty_hint")); },
+        [&] { scene.state->deciders.confirm_delete(noteapp::core::tr("gui.trash_empty_hint"), {}); },
         [&] {
             rects = scene.view->item_rects();
             delete_fill = fill_of(rects.at("choice:0"));

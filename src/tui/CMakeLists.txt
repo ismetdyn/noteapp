@@ -23,8 +23,8 @@ add_library(noteapp_tui
     tui_state.cpp)
 target_include_directories(noteapp_tui PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(noteapp_tui
-    PUBLIC noteapp_edit noteapp_app noteapp_core noteapp_detect noteapp_search noteapp_sync ftxui::dom
-    PRIVATE md4c noteapp_pdf)
+    PUBLIC noteapp_edit noteapp_app noteapp_core noteapp_detect noteapp_search noteapp_sync noteapp_pdf ftxui::dom
+    PRIVATE md4c)
 noteapp_target_defaults(noteapp_tui)
 
 add_executable(notes

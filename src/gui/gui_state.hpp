@@ -10,6 +10,7 @@
 #include "app/map_query.hpp"
 #include "app/note_map.hpp"
 #include "app/notices.hpp"
+#include "app/sync_indicator.hpp"
 #include "app/sync_status_worker.hpp"
 #include "app/tabs.hpp"
 #include "app/trash_ops.hpp"
@@ -87,8 +88,10 @@ struct Deciders {
     std::function<CloseChoice()> close_unsaved = [] { return CloseChoice::Cancel; };
     // Ayarlar formunda kaydedilmemiş değişiklikle kapanış.
     std::function<CloseChoice()> close_unsaved_settings = [] { return CloseChoice::Cancel; };
-    // Silme onayı: true = sil. Üretimde varsayılan düğme Vazgeç.
-    std::function<bool(const std::string& message)> confirm_delete = [](const std::string&) { return false; };
+    // Silme onayı: true = sil. Üretimde varsayılan düğme Vazgeç. Başlık boşsa genel silme başlığı
+    // (metin ve başlık TUI ile aynı: app::confirm_text).
+    std::function<bool(const std::string& message, const std::string& title)> confirm_delete =
+        [](const std::string&, const std::string&) { return false; };
     // Harita sorgusunun yazması (F3): `message` özetidir (app::MapQuery::confirm_text). true = uygula.
     // Üretimde varsayılan düğme Vazgeç.
     std::function<bool(const std::string& message)> confirm_query = [](const std::string&) { return false; };
@@ -108,6 +111,11 @@ struct Deciders {
     // Komut paleti: seçilen komut kimliği; nullopt = vazgeçti.
     std::function<std::optional<std::string>()> palette = [] { return std::nullopt; };
     std::function<void()> help = [] {};
+    // Kayıtlı görünümün adı (palet `view.save`, çubuğun düğmesi); kırpılmaz: kural
+    // core::validate_view_name'in. nullopt = vazgeçti.
+    std::function<std::optional<std::string>(const std::string& title)> view_name = [](const std::string&) {
+        return std::nullopt;
+    };
     // İlişkilendirilecek not (yol ya da [[hedef]] metni); nullopt = vazgeçti.
     std::function<std::optional<std::string>(const std::string& title)> link_target = [](const std::string&) {
         return std::nullopt;
@@ -127,28 +135,17 @@ struct Deciders {
 };
 
 enum class Tab { Notes, Settings };
-// Durum çubuğundaki senkron göstergesinin anlamı (etiketin rengi ve simgesi).
-enum class SyncIndicator { Off, Running, Ok, Error };
+// Durum çubuğundaki senkron göstergesinin anlamı (etiketin rengi ve simgesi); model TUI ile ortak.
+using SyncIndicator = app::SyncIndicator::State;
 enum class FocusRequest { None, Search, Editor, List, QuickAdd, Links, Preview };
 enum class BrowserView { Tree, Details, Map };
-// Ayrıntılar'ın üst veri sütunları (TUI'deki sağ sütun, `column` komutları). Sıra `column` döngüsüdür; kalıcı
-// adlar TUI'ninkilerle aynıdır (kDetailsColumnNames).
-enum class DetailsColumn { SizeAndDate, Size, Updated, Created, Sync, Origin, None };
-inline constexpr std::pair<DetailsColumn, const char*> kDetailsColumnNames[] = {
-    {DetailsColumn::SizeAndDate, "size_and_date"},
-    {DetailsColumn::Size, "size"},
-    {DetailsColumn::Updated, "updated"},
-    {DetailsColumn::Created, "created"},
-    {DetailsColumn::Sync, "sync"},
-    {DetailsColumn::Origin, "origin"},
-    {DetailsColumn::None, "none"},
-};
+// Ayrıntılar'ın üst veri sütunları: TUI'deki sağ sütunla tek tablo (app::ListColumn, app::kListColumnNames).
+using DetailsColumn = app::ListColumn;
 // Ayarlar → Görünüm'deki yazı aileleri; gui-state.toml'da bu adlarla. İlki varsayılandır (gömülü DejaVu),
 // TUI'de karşılığı yoktur (terminalin fontu).
 inline constexpr const char* kUiFonts[] = {"dejavu", "inter"};
 inline constexpr const char* kEditorFonts[] = {"dejavu-mono", "jetbrains-mono"};
-// Notun senkron durumu, bilgi panelinde ve Ayrıntılar sütununda aynı metin.
-std::string sync_state_text(core::SyncState state);
+using app::sync_state_text;
 // Komut paletinin satırı (app::rank_palette sırasıyla).
 struct PaletteRow {
     std::string_view id;
@@ -156,7 +153,8 @@ struct PaletteRow {
     const char* blocked;  // çalışamıyorsa nedeni (i18n anahtarı); nullptr = çalışır
 };
 // Arama kutusunun seçicisi: değeri sorguya `tag:` ya da `view:` argümanı olarak yazar (TUI'de Tab listesi).
-enum class Picker { None, Tag, View };
+// RemoveView (palet `view.remove`): seçilen kayıtlı görünüm sorulup silinir.
+enum class Picker { None, Tag, View, RemoveView };
 
 struct PickerItem {
     std::string value;  // argümanın değeri
@@ -185,12 +183,6 @@ struct GuiLayout {
 };
 
 // Klasör satırı seçiliyken sağ panelin özeti; sayaçlar alt ağacı kapsar.
-struct FolderSummary {
-    std::string path;
-    std::size_t notes{};
-    std::size_t folders{};
-};
-
 // Sağ panelin not bilgisi satırı: etiket ve biçimlenmiş değer (çevrilmiş).
 struct InfoField {
     std::string label;
@@ -332,7 +324,8 @@ public:
         return max_row_number_;
     }
     const std::optional<std::string>& selected_folder() const { return selected_folder_; }
-    std::optional<FolderSummary> folder_summary();
+    // TUI'nin klasör özetiyle aynı hesap (app::folder_summary); klasör artık yoksa nullopt.
+    std::optional<app::FolderSummary> folder_summary();
     bool is_expanded(const std::string& folder) const { return model_.listing().is_open(folder); }
     void set_expanded(const std::string& folder, bool expanded);
     void toggle_expanded(const std::string& folder) { set_expanded(folder, !is_expanded(folder)); }
@@ -465,6 +458,11 @@ public:
     // çubuğun altında kalır (map_query().error()), metin de düzeltilmek üzere kalır.
     void run_map_query();
     void run_map_view(const std::string& name);  // kayıtlı görünümler listesi
+    // Gösterilen okumanın sorgusu adla kayıtlı görünüm olur (app::MapQuery::save_view, TUI `K` ile aynı
+    // kural); okuma yoksa ileti, ad sorulmaz. Seçicideki silme: deciders.confirm_delete, sonra
+    // core::remove_view.
+    void save_map_view();
+    void remove_saved_view(const std::string& name);
     // ↑ ↓: `current` kutunun metnidir; geçmişte bir adım (tui::InputLine, InputKind::Query). Değişmezse nullopt.
     std::optional<std::string> map_query_history_step(std::string_view current, bool older);
     void toggle_map_query_table() { map_query_.toggle_table(); }
@@ -596,7 +594,7 @@ public:
     // (kept) ya da kaydedilmemiş taslaksa yeni sekmede açılır. Açık not yinelenmez, sekmesi öne gelir. Sekme
     // sayısı limits.app.tabs ile sınırlıdır (0 = sınırsız; kural app/tabs, TUI ile ortak).
     std::vector<TabSummary> tabs() const;
-    std::uint64_t active_tab() const { return active_tab_; }  // 0 = sekme yok
+    std::uint64_t active_tab() const { return tabs_.active_id(); }  // 0 = sekme yok
     // Sekmeden ayrılırken bekleyen düzenleme kendi notuna yazılır, taslak sekmesinde kalır. Kayıt olmazsa
     // geçiş iptal: false. Sekme çubuğu ve kısayollar: odak editöre.
     bool activate_tab(std::uint64_t id);
@@ -721,8 +719,8 @@ public:
     // Açılışta okunan depo sorunu (geçiş gerekli ya da açılamıyor); liste üstündeki şerit bunu gösterir.
     const std::optional<core::Error>& store_issue() const { return store_issue_; }
     const std::string& sync_label() const { return sync_label_; }
-    SyncIndicator sync_indicator() const { return sync_indicator_; }  // etiketin rengi ve simgesi
-    // Koşu bitince (Running -> Ok/Error) sonuç bildirimi.
+    SyncIndicator sync_indicator() const { return sync_.state(); }  // etiketin rengi ve simgesi
+    // AutoSync durumu; bildirim kuralı app::SyncIndicator::update.
     void show_sync_status(const sync::SyncStatus& status, bool running);
 
     SettingsPage& settings() { return settings_; }
@@ -838,7 +836,7 @@ private:
     const char* command_block(app::CommandNeeds needs);
     void set_sort(search::SortSpec sort);
     void request_sync_states();
-    void show_sync_label(const sync::SyncStatus& status, bool running);
+    void show_sync_label();
     bool apply_sync_states(app::SyncStates states);  // durumlar değiştiyse true
     void ensure_map();
     // false: yazılmadı (kayıt olmadı ya da hata; hata bildirimdedir).
@@ -856,8 +854,10 @@ private:
     bool select_nearest_note(int from);
     void activate_row(int index);
     bool folder_action_allowed();
-    void load_list_prefs();
-    void load_gui_state();
+    // gui-state.toml (app::load_ui_prefs): sıra ve açık klasörler taramadan önce, gerisi sonra uygulanır.
+    app::UiPrefsRules prefs_rules() const;
+    void load_list_prefs(const app::UiPrefs& saved);
+    void load_gui_state(const app::UiPrefs& saved);
     void save_gui_state() const;
     bool run_posted();
     void start_sync();
@@ -870,8 +870,6 @@ private:
     void apply_settings(const core::Config& before, const core::Config& after);
 
     // Sekmeler. Kimlikle aranır: kayıt akışı tarar, tarama sekme kapatabilir; sıra numarası kayardı.
-    NoteTab* find_tab(std::uint64_t id);
-    const NoteTab* find_tab(std::uint64_t id) const;
     std::optional<core::NotePath> tab_note(const NoteTab& tab) const;
     std::optional<std::uint64_t> tab_of(const core::NotePath& path) const;
     bool keeps_active_tab() const;
@@ -963,6 +961,8 @@ private:
     bool links_open_ = true;
     void reload_inspector();
     void finish_inspector_write(const std::expected<std::string, core::Error>& done);
+    bool finish_label_write(const std::expected<std::string, core::Error>& done);
+    bool flush_if_shown(const core::NotePath& note);
     app::Inspector inspector_{config_.limits.app.query_cell_bytes.cap()};
     bool inspector_open_ = false;
     std::optional<core::NotePath>
@@ -975,9 +975,7 @@ private:
     bool dirty_ = false;     // editör, diskteki sürümden farklı
     bool in_show_ = false;   // show_current yeniden girişini engeller (kayıt akışı listeyi tazeler)
     std::size_t editor_generations_ = 0;  // buffer_generation_ değerleri: sekmeler arasında da benzersiz
-    std::vector<NoteTab> tabs_;
-    std::uint64_t active_tab_ = 0;
-    std::uint64_t next_tab_id_ = 1;
+    app::TabList<NoteTab> tabs_;          // sıra, kimlik, etkin sekme, komşu (TUI ile ortak)
     // Etkin sekmenin içeriği anlık görüntüsünde, editör boş (klasör seçili ya da süzgeç notu gizledi).
     bool parked_ = false;
     bool tabs_closed_ = false;  // kullanıcı son sekmeyi kapattı: süzgeç kendiliğinden ilk notu açmaz
@@ -989,7 +987,7 @@ private:
     std::size_t sync_restarts_ = 0;
     std::size_t sync_generation_ = 0;  // durdurulan AutoSync'in kuyrukta kalan durumu yeni göstergeyi ezmesin
     std::string sync_label_;
-    SyncIndicator sync_indicator_ = SyncIndicator::Off;
+    app::SyncIndicator sync_;
     Tab tab_ = Tab::Notes;
     FocusRequest focus_request_ = FocusRequest::None;
     std::string status_;
@@ -1009,7 +1007,6 @@ private:
     // Dış editörü bekleyen işçi (kendi NoteStore bağlantısıyla); post çağırır, ilk yıkılır. Yıkım editörün
     // kapanmasını bekler: request_close editör açıkken kapanmaz.
     std::jthread external_;
-    std::jthread stray_probe_;  // açılıştaki geçiş dışı dosya taraması (app::count_stray_files)
     app::ImportJob import_{[this](std::function<void()> work) { post(std::move(work)); }};  // post çağırır
     // Kendi depo bağlantısıyla arka planda okur; post çağırmaz, yine de UI üyelerinden önce yıkılır.
     static constexpr std::chrono::seconds kWordTableIdle{1};  // TUI ile aynı tempo

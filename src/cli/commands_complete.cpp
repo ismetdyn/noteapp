@@ -4,7 +4,6 @@
 #include "cli/commands.hpp"
 #include "cli/highlight.hpp"
 #include "core/i18n.hpp"
-#include "core/migration.hpp"
 #include "core/note_store_impl.hpp"
 #include "core/note_views.hpp"
 #include "core/paths.hpp"
@@ -539,11 +538,8 @@ complete -c note -f
 // ---- __complete ----
 
 // Tamamlama her Tab'da çalışır ve hiçbir şey yazmamalı: depo yoksa kurulmaz (okuma yolu dosya yaratmaz),
-// eski notlar geçiş bekliyorsa açılmaz, açılışın türetilmiş dizin onarımı (yazma) atlanır. Açılamayan, bozuk
-// ya da kilitli depo boş liste verir.
+// açılışın türetilmiş dizin onarımı (yazma) atlanır. Açılamayan, bozuk ya da kilitli depo boş liste verir.
 std::optional<core::NoteStore> read_only_store(const core::Config& config) {
-    if (core::legacy_notes_pending(config.notes_dir, core::data_dir()))
-        return std::nullopt;
     core::NoteStore store = core::NoteStore::for_config(config);
     store.impl().derived_checked = true;
     return store;

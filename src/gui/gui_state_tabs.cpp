@@ -11,19 +11,9 @@
 
 namespace noteapp::gui {
 
-GuiState::NoteTab* GuiState::find_tab(std::uint64_t id) {
-    const auto found = std::ranges::find(tabs_, id, &NoteTab::id);
-    return found == tabs_.end() ? nullptr : &*found;
-}
-
-const GuiState::NoteTab* GuiState::find_tab(std::uint64_t id) const {
-    const auto found = std::ranges::find(tabs_, id, &NoteTab::id);
-    return found == tabs_.end() ? nullptr : &*found;
-}
-
 // Etkin sekmenin notu canlı üyelerde, diğerlerininki anlık görüntüde. Taslağın notu yoktur.
 std::optional<core::NotePath> GuiState::tab_note(const NoteTab& tab) const {
-    if (tab.id == active_tab_ && !parked_)
+    if (tab.id == tabs_.active_id() && !parked_)
         return shown_ && !new_note_ ? std::optional(shown_->path) : std::nullopt;
     return tab.saved.shown && !tab.saved.new_note ? std::optional(tab.saved.shown->path) : std::nullopt;
 }
@@ -40,7 +30,7 @@ std::vector<TabSummary> GuiState::tabs() const {
     std::vector<TabSummary> out;
     out.reserve(tabs_.size());
     for (const NoteTab& tab : tabs_) {
-        const bool live = tab.id == active_tab_ && !parked_;
+        const bool live = tab.id == tabs_.active_id() && !parked_;
         const bool draft = live ? new_note_ : tab.saved.new_note;
         const std::string& text = live ? editor_.text() : tab.saved.editor.text();
         const auto note = tab_note(tab);
@@ -50,29 +40,28 @@ std::vector<TabSummary> GuiState::tabs() const {
         summary.kept = tab.kept;
         summary.path = note ? note->string() : std::string{};
         summary.title = note ? core::last_component(summary.path) : core::tr("gui.untitled");
-        summary.unsaved = draft ? !is_blank(text) : (live && dirty_);
+        summary.unsaved = draft ? draft_needs_answer(text) : (live && dirty_);
         out.push_back(std::move(summary));
     }
     return out;
 }
 
-// Boş sekme (ne not ne yazılmış taslak) korunacak bir şey taşımaz.
 bool GuiState::keeps_active_tab() const {
-    const NoteTab* tab = find_tab(active_tab_);
+    const NoteTab* tab = tabs_.active();
     if (tab == nullptr)
         return false;
-    const bool draft_text = !parked_ && new_note_ && !is_blank(editor_.text());
-    if (!parked_ && !shown_ && !draft_text)
-        return false;
-    return tab->pinned || tab->kept || draft_text;
+    // Park edilmiş sekme nottur; ne not ne taslak olan boş editör boş taslak sayılır.
+    const bool note = parked_ || (shown_ && !new_note_);
+    return app::keeps_tab(tab->pinned, tab->kept, !note, note ? std::string_view{} : editor_.text());
 }
 
 void GuiState::claim_active_tab() {
     if (tabs_.empty()) {
-        tabs_.emplace_back().id = next_tab_id_++;
-        active_tab_ = tabs_.back().id;
+        // Boş listede ilk sekme sınırsız push'tur (limits.app.tabs en az 1 ya da 0 = sınırsız): hiç boş
+        // kalmaz.
+        tabs_.activate(tabs_.push(core::Limit{})->id);
     } else if (parked_) {
-        if (NoteTab* tab = find_tab(active_tab_))
+        if (NoteTab* tab = tabs_.active())
             tab->saved = {};  // yerine geçen içerik park edilen notu bırakır
     }
     parked_ = false;
@@ -103,7 +92,7 @@ bool GuiState::leave_tab() {
 }
 
 void GuiState::stash() {
-    NoteTab* tab = find_tab(active_tab_);
+    NoteTab* tab = tabs_.active();
     if (tab == nullptr || parked_)
         return;
     tab->saved = EditorSnapshot{.shown = shown_,
@@ -122,10 +111,10 @@ void GuiState::stash() {
 // Sekmenin anlık görüntüsü canlı üyelere geçer. Not dışarıda değiştiyse gösterilen notun kuralı geçerlidir
 // (show_note): temizse yeniden okunur. Aynı içerikte kuşak korunur, editör kaydırması yerinde kalır.
 void GuiState::restore_tab(std::uint64_t id, bool focus_editor) {
-    NoteTab* tab = find_tab(id);
+    NoteTab* tab = tabs_.find(id);
     if (tab == nullptr)
         return;
-    active_tab_ = id;
+    tabs_.activate(id);
     parked_ = false;
     tabs_closed_ = false;
     selected_folder_.reset();
@@ -157,11 +146,11 @@ void GuiState::restore_tab(std::uint64_t id, bool focus_editor) {
         ensure_visible(*note);
         // Süzgeç gevşerken not listede yoksa apply_filter ilk satırı açıp başka sekmeye geçmiş olabilir:
         // düşürülecek olan o sekme değil, bu sekmedir; geçiş olduysa dokunulmaz.
-        if (active_tab_ != id)
+        if (tabs_.active_id() != id)
             return;
         const int row = model_.index_of(*note);
         if (row < 0) {  // taramalar arasında gitmiş
-            status_ = core::tr("gui.tab_closed_missing", {{"path", note->string()}});
+            status_ = core::tr("app.tab_closed_missing", {{"path", note->string()}});
             drop_active_tab();
             return;
         }
@@ -174,16 +163,16 @@ void GuiState::restore_tab(std::uint64_t id, bool focus_editor) {
 }
 
 bool GuiState::switch_tab(std::uint64_t id, bool focus_editor) {
-    if (find_tab(id) == nullptr)
+    if (tabs_.find(id) == nullptr)
         return false;
-    if (id == active_tab_ && !parked_) {
+    if (id == tabs_.active_id() && !parked_) {
         if (focus_editor)
             request_focus(FocusRequest::Editor);
         return true;
     }
     if (!leave_tab())
         return false;
-    if (find_tab(id) == nullptr)  // kaydın taraması sekmeyi kapatmış olabilir
+    if (tabs_.find(id) == nullptr)  // kaydın taraması sekmeyi kapatmış olabilir
         return false;
     restore_tab(id, focus_editor);
     return true;
@@ -196,13 +185,15 @@ bool GuiState::activate_tab(std::uint64_t id) {
 // Yeni boş sekme en sona eklenir (ImGui de yeni sekmeyi sona koyar; sıralar ayrışmaz) ve etkin olur.
 bool GuiState::push_tab() {
     if (!app::can_add_tab(tabs_.size(), config_.limits.app.tabs)) {
-        status_ = core::tr("gui.tab_limit", {{"max", config_.limits.app.tabs.text}});
+        status_ = core::tr("app.tab_limit", {{"max", config_.limits.app.tabs.text}});
         return false;
     }
     if (!leave_tab())
         return false;
-    tabs_.emplace_back().id = next_tab_id_++;
-    active_tab_ = tabs_.back().id;
+    NoteTab* tab = tabs_.push(config_.limits.app.tabs);
+    if (tab == nullptr)  // yukarıda denetlendi; leave_tab'in kaydı sekme açmaz
+        return false;
+    tabs_.activate(tab->id);
     parked_ = false;
     tabs_closed_ = false;
     current_row_ = -1;
@@ -212,32 +203,27 @@ bool GuiState::push_tab() {
 // Etkin sekmeyi atar (içerik kaydedilmiş ya da bilerek bırakılmış olmalı); sağındaki, yoksa solundaki öne
 // gelir.
 void GuiState::drop_active_tab() {
-    const auto found = std::ranges::find(tabs_, active_tab_, &NoteTab::id);
-    if (found == tabs_.end())
+    if (!tabs_.close(tabs_.active_id()))
         return;
-    const auto index = static_cast<std::size_t>(found - tabs_.begin());
-    tabs_.erase(found);
     if (tabs_.empty()) {
-        active_tab_ = 0;
         parked_ = false;
         clear_live();
         current_row_ = -1;
         return;
     }
-    active_tab_ = tabs_[app::neighbour_after_close(index, tabs_.size())].id;
     if (!parked_)  // park edilmişse editör zaten boş: yeni etkin sekme de park edilmiş kalır
-        restore_tab(active_tab_, false);
+        restore_tab(tabs_.active_id(), false);
 }
 
 void GuiState::erase_tab(std::uint64_t id) {
-    if (id == active_tab_)
+    if (id == tabs_.active_id())
         drop_active_tab();
     else
-        std::erase_if(tabs_, [id](const NoteTab& tab) { return tab.id == id; });
+        tabs_.close(id);
 }
 
 void GuiState::park_or_clear() {
-    if (!parked_ && shown_ && !new_note_ && find_tab(active_tab_) != nullptr) {
+    if (!parked_ && shown_ && !new_note_ && tabs_.active() != nullptr) {
         stash();
         parked_ = true;
         return;
@@ -253,7 +239,7 @@ void GuiState::close_missing_tabs(const std::unordered_set<std::string>& present
         return;
     std::vector<std::pair<std::uint64_t, core::NotePath>> gone;
     for (const NoteTab& tab : tabs_) {
-        const bool live = tab.id == active_tab_ && !parked_;
+        const bool live = tab.id == tabs_.active_id() && !parked_;
         const auto note = tab_note(tab);
         if (!note || present.contains(note->string()) || (live && dirty_))
             continue;
@@ -263,9 +249,9 @@ void GuiState::close_missing_tabs(const std::unordered_set<std::string>& present
         gone.emplace_back(tab.id, *note);
     }
     // Gösterilen sekme en son: kapanınca öne gelen komşu, kapanacaklardan biri olmasın.
-    std::ranges::stable_partition(gone, [this](const auto& item) { return item.first != active_tab_; });
+    std::ranges::stable_partition(gone, [this](const auto& item) { return item.first != tabs_.active_id(); });
     for (const auto& [id, note] : gone) {
-        status_ = core::tr("gui.tab_closed_missing", {{"path", note.string()}});
+        status_ = core::tr("app.tab_closed_missing", {{"path", note.string()}});
         erase_tab(id);
     }
 }
@@ -273,7 +259,8 @@ void GuiState::close_missing_tabs(const std::unordered_set<std::string>& present
 bool GuiState::confirm_close_drafts() {
     std::vector<std::uint64_t> drafts;
     for (const NoteTab& tab : tabs_) {
-        if (!(tab.id == active_tab_ && !parked_) && tab.saved.new_note && !is_blank(tab.saved.editor.text()))
+        if (!(tab.id == tabs_.active_id() && !parked_) && tab.saved.new_note &&
+            draft_needs_answer(tab.saved.editor.text()))
             drafts.push_back(tab.id);
     }
     for (const std::uint64_t id : drafts) {
@@ -285,37 +272,25 @@ bool GuiState::confirm_close_drafts() {
 
 bool GuiState::restore_tabs(const app::SavedTabs& saved) {
     // Silinmiş, taşınmış, yinelenen ya da elle bozulmuş girdi atlanır; sınır limits.app.tabs (TUI ile ortak).
-    const app::RestoredTabs plan = app::restorable_tabs(
+    // Açılıştaki ilk satır gösterimi bırakılır: henüz düzenlenmedi (açılışta tek, düzenlenmemiş sekme).
+    const bool restored = tabs_.restore(
         saved, [this](const core::NotePath& path) { return model_.index_of(path) >= 0; },
-        config_.limits.app.tabs);
-    if (plan.tabs.empty())
+        config_.limits.app.tabs,
+        [this](NoteTab& tab, const app::RestoredTab& entry) {
+            tab.loaded = false;
+            tab.saved.shown = model_.note_at(model_.index_of(entry.path));
+        });
+    if (!restored)
         return false;
-    std::vector<NoteTab> restored;
-    restored.reserve(plan.tabs.size());
-    for (const app::RestoredTab& entry : plan.tabs) {
-        NoteTab tab;
-        tab.id = next_tab_id_++;
-        tab.pinned = entry.pinned;
-        tab.kept = entry.kept;
-        tab.loaded = false;
-        tab.saved.shown = model_.note_at(model_.index_of(entry.path));
-        restored.push_back(std::move(tab));
-    }
-    // Açılıştaki ilk satır gösterimi bırakılır: henüz düzenlenmedi.
     clear_live();
-    tabs_ = std::move(restored);
-    active_tab_ = tabs_[plan.active].id;
     parked_ = true;
-    restore_tab(active_tab_, false);
+    restore_tab(tabs_.active_id(), false);
     return true;
 }
 
 void GuiState::next_tab(int delta) {
-    if (tabs_.empty())
-        return;
-    const auto index =
-        static_cast<std::size_t>(std::ranges::find(tabs_, active_tab_, &NoteTab::id) - tabs_.begin());
-    activate_tab(tabs_[app::cycled_tab(index, delta, tabs_.size())].id);
+    if (!tabs_.empty())
+        activate_tab(tabs_.cycled(delta));
 }
 
 void GuiState::new_tab() {
@@ -327,11 +302,11 @@ void GuiState::new_tab() {
 }
 
 void GuiState::close_tab(std::uint64_t id) {
-    const NoteTab* tab = find_tab(id);
+    const NoteTab* tab = tabs_.find(id);
     if (tab == nullptr)
         return;
-    if (id != active_tab_ || parked_) {
-        if (!tab->saved.new_note || is_blank(tab->saved.editor.text())) {
+    if (id != tabs_.active_id() || parked_) {
+        if (!tab->saved.new_note || !draft_needs_answer(tab->saved.editor.text())) {
             erase_tab(id);
             return;
         }
@@ -346,28 +321,17 @@ void GuiState::close_tab(std::uint64_t id) {
 }
 
 void GuiState::close_active_tab() {
-    if (active_tab_ != 0)
-        close_tab(active_tab_);
+    if (tabs_.active_id() != 0)
+        close_tab(tabs_.active_id());
 }
 
 void GuiState::set_tab_pinned(std::uint64_t id, bool pinned) {
-    if (NoteTab* tab = find_tab(id))
+    if (NoteTab* tab = tabs_.find(id))
         tab->pinned = pinned;
 }
 
 void GuiState::reorder_tabs(const std::vector<std::uint64_t>& order) {
-    std::vector<NoteTab> sorted;
-    sorted.reserve(tabs_.size());
-    for (const std::uint64_t id : order) {
-        const auto found = std::ranges::find(tabs_, id, &NoteTab::id);
-        if (found != tabs_.end() && std::ranges::find(sorted, id, &NoteTab::id) == sorted.end())
-            sorted.push_back(std::move(*found));
-    }
-    for (NoteTab& tab : tabs_) {  // taşınmış öğenin kimliği yerinde kalır: ikinci kez alınmaz
-        if (std::ranges::find(sorted, tab.id, &NoteTab::id) == sorted.end())
-            sorted.push_back(std::move(tab));
-    }
-    tabs_ = std::move(sorted);
+    tabs_.reorder(order);
 }
 
 void GuiState::open_in_new_tab(const core::NotePath& path) {
@@ -378,7 +342,7 @@ void GuiState::open_in_new_tab(const core::NotePath& path) {
         return;
     }
     if (!parked_ && shown_ && !new_note_ && shown_->path == path) {
-        if (NoteTab* tab = find_tab(active_tab_))
+        if (NoteTab* tab = tabs_.active())
             tab->kept = true;  // zaten burada: sekme korunur, sonraki açılış yeni sekmeye
         return;
     }
@@ -388,9 +352,9 @@ void GuiState::open_in_new_tab(const core::NotePath& path) {
     }
     if (!push_tab())
         return;
-    const std::uint64_t id = active_tab_;
+    const std::uint64_t id = tabs_.active_id();
     select_row(model_.index_of(path));
-    if (NoteTab* tab = find_tab(id))
+    if (NoteTab* tab = tabs_.find(id))
         tab->kept = true;
 }
 

@@ -55,7 +55,7 @@ struct FolderFixture : WindowFixture {
             last_prompt_initial = initial;
             return name_answer;
         };
-        state.deciders.confirm_delete = [this](const std::string& message) {
+        state.deciders.confirm_delete = [this](const std::string& message, const std::string&) {
             ++confirms;
             last_confirm = message;
             return delete_answer;
@@ -112,8 +112,9 @@ TEST_CASE_FIXTURE(FolderFixture, "deleting a non-empty folder never happens with
     CHECK(note_exists("work/a.md"));
     CHECK(note_exists("work/b.md"));
     CHECK(dir_exists("work"));
-    // Onay metni klasör adını ve not sayısını taşır.
-    CHECK(last_confirm == tr("gui.confirm_trash_folder", {{"folder", "work"}, {"count", "2"}}));
+    // Onay metni TUI'ninkiyle aynı (app::confirm_text): klasör adı, çoğullu not ve alt klasör sayısı.
+    CHECK(last_confirm == tr("tui.confirm_trash_folder",
+                             {{"path", "work"}, {"notes", "2 notes"}, {"folders", "0 subfolders"}}));
 
     delete_answer = true;
     state->delete_folder("work");
@@ -295,6 +296,29 @@ TEST_CASE_FIXTURE(FolderFixture,
     CHECK(contains(state->header(), "keep.md"));
 }
 
+// SD11b review: klasör çöpe giderken gösterilen notun soruda yapılan kaydı onaylıdır; soru açıkken senkronun
+// değiştirdiği başka not çöpe gitmez, klasörle birlikte kalır.
+TEST_CASE_FIXTURE(FolderFixture, "trashing a folder keeps a note synced in while the question was open") {
+    add_note("work/a.md", "hello", 10);
+    add_note("work/b.md", "other", 20);
+    add_note("keep.md", "keep", 30);
+    auto state = make_state();
+    wire(*state);
+    REQUIRE(current(*state) == "work/a.md");
+    state->edit_text("edited");
+    state->deciders.confirm_delete = [this](const std::string&, const std::string&) {
+        ++confirms;
+        add_note("work/b.md", "synced", 0);  // başka cihaz, soru açıkken
+        return true;
+    };
+    state->delete_folder("work");
+    CHECK(confirms == 1);
+    CHECK(state->write_count() == 1);  // gösterilen not önce kaydedildi ve çöpe gitti
+    CHECK(note_exists(".trash/work/a.md"));
+    CHECK(note_exists("work/b.md"));  // senkronun değiştirdiği not yerinde
+    CHECK(dir_exists("work"));
+}
+
 TEST_CASE_FIXTURE(FolderFixture, "a failing flush aborts folder rename and delete") {
     add_note("work/a.md", "original", 10);
     auto state = make_state();
@@ -333,7 +357,7 @@ TEST_CASE_FIXTURE(FolderFixture,
 
     delete_answer = false;
     state->delete_note();
-    CHECK(last_confirm == tr("gui.confirm_delete_note", {{"path", "n2.md"}}));
+    CHECK(last_confirm == tr("tui.confirm_delete", {{"path", "n2.md"}}));
     CHECK(note_exists("n2.md"));
     CHECK(current(*state) == "n2.md");
 

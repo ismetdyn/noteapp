@@ -175,7 +175,7 @@ TableLayout layout_table(const ViewBuilder& view, const TableData& table, int ro
 }
 
 void add_table_row(ViewBuilder& view, const std::vector<InlineText>& row, const std::vector<int>& widths,
-                   const std::vector<CellAlign>& aligns, const InlineText& prefix, std::size_t source_line) {
+                   const std::vector<pdf::Align>& aligns, const InlineText& prefix, std::size_t source_line) {
     static const InlineText kEmptyCell;
     const std::size_t columns = widths.size();
     std::vector<std::vector<ByteSpan>> wrapped(columns);
@@ -197,8 +197,8 @@ void add_table_row(ViewBuilder& view, const std::vector<InlineText>& row, const 
                 spare = std::max(
                     widths[c] - view.cells(std::string_view(cell.text).substr(slice.first, slice.second - slice.first)),
                     0);
-                const CellAlign align = c < aligns.size() ? aligns[c] : CellAlign::Left;
-                before = align == CellAlign::Right ? spare : align == CellAlign::Center ? spare / 2 : 0;
+                const pdf::Align align = c < aligns.size() ? aligns[c] : pdf::Align::Default;
+                before = align == pdf::Align::Right ? spare : align == pdf::Align::Center ? spare / 2 : 0;
                 line.append(std::string(static_cast<std::size_t>(before), ' '));
                 append_slice(line, cell, slice, cursors[c]);
             }

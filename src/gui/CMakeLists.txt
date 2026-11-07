@@ -42,9 +42,7 @@ noteapp_embed_files(noteapp_gui gui/icon_font.hpp noteapp::gui embedded_ui_font
 target_include_directories(noteapp_gui PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(noteapp_gui
     PUBLIC noteapp_app noteapp_edit noteapp_core noteapp_search noteapp_sync imgui
-    PRIVATE noteapp_detect noteapp_pdf tomlplusplus::tomlplusplus)
-# gui-state.toml'un ayrıştırma hatası parse_result ile döner (config.cpp ile aynı istisnasız mod).
-target_compile_definitions(noteapp_gui PRIVATE TOML_EXCEPTIONS=0)
+    PRIVATE noteapp_detect noteapp_pdf)
 noteapp_target_defaults(noteapp_gui)
 
 add_executable(notes-gui WIN32 main.cpp)

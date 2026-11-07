@@ -146,11 +146,28 @@ TEST_CASE(
     ToolScene::open(*state, "ikili.bin");
     run_command(*state, "copy");
     CHECK(scene.copied.size() == 2);
-    CHECK(state->status() == core::tr("gui.copy_refused_binary"));
+    CHECK(state->status() == core::tr("app.copy_refused_binary"));
     ToolScene::open(*state, "bozuk.txt");
     run_command(*state, "copy");
     CHECK(scene.copied.size() == 2);
-    CHECK(state->status() == core::tr("gui.copy_refused_utf8"));
+    CHECK(state->status() == core::tr("app.copy_refused_utf8"));
+}
+
+// Pano yazılamazsa (SDL_SetClipboardText false) kopya başarılı sayılmaz: neden durum çubuğunda, hata
+// renginde.
+TEST_CASE("copy: a clipboard that cannot be written says so as an error, not as copied") {
+    ToolScene scene;
+    auto state = scene.fixture.make_state();
+    std::vector<std::string> offered;
+    state->deciders.copy_text = [&](const std::string& text) {
+        offered.push_back(text);
+        return false;
+    };
+    ToolScene::open(*state, "a.md");
+    run_command(*state, "copy");
+    REQUIRE(offered == std::vector<std::string>{"alfa\n"});  // pano gerçekten denendi
+    CHECK(state->status() == core::tr("gui.copy_failed"));
+    CHECK(state->status_is_error());
 }
 
 // Çöp görünümünde ve klasör satırında arkadaki canlı not hedef değildir (TUI'de de çöpte `E` yok).

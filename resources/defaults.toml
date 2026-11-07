@@ -169,8 +169,6 @@ search_history = 200          # hatırlanan arama sorgusu
 search_entry_bytes = 1024     # hatırlanan en uzun sorgu
 undo_bytes = "64MiB"          # editörde not başına geri alma geçmişi; dolunca en eski adım düşer
 save_suggestions = 5          # taşıma diyaloğunda (Ctrl-R) gösterilen klasör önerisi
-stray_notice_files = 2000     # açılışta notes içindeki geçiş dışı dosya ipucunun taradığı dosya; fazlası `note graph status`'ta
-stray_notice_bytes = "8MiB"   # aynı ipucunun okuduğu bayt
 
 # Dil sunucusu (TUI). Sunucu çıktısı güvenilmezdir: aşan çerçeve sunucuyu durdurur, aşan öğe atlanır.
 # 0'ın riski: header_bytes, body_bytes, message_values, pending_reply_bytes sınırsızsa bozuk sunucu belleği

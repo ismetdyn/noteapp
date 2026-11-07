@@ -602,11 +602,11 @@ TEST_CASE("clicking a note row only selects, wherever it lands; details stay on 
     CHECK(s.selected() == 1);
     CHECK(s.row_height(1) == 1);
     s.handle(Key::Char, " ");
-    CHECK(s.row_height(1) == 6);
+    CHECK(s.row_height(1) == 1 + tui::TuiState::kMetaLines);
     // Ayrıntı satırına tıklamak açık satırı seçer, kapatmaz.
     click(kMarkerX, kFirstRowY + 2);
     CHECK(s.selected() == 1);
-    CHECK(s.row_height(1) == 6);
+    CHECK(s.row_height(1) == 1 + tui::TuiState::kMetaLines);
 }
 
 TEST_CASE("Alt arrows and page keys work in the trash view") {
@@ -615,7 +615,7 @@ TEST_CASE("Alt arrows and page keys work in the trash view") {
     s.enter_trash({core::TrashItem{core::NotePath::parse("a.md").value(), {}, 1}});
     s.set_preview_line_count(100);
     s.handle(Key::AltRight);
-    CHECK(s.row_height(0) == 6);
+    CHECK(s.row_height(0) == 1 + tui::TuiState::kMetaLines);
     s.handle(Key::AltLeft);
     CHECK(s.row_height(0) == 1);
     s.handle(Key::PageDown);
@@ -646,11 +646,11 @@ TEST_CASE("Alt arrows expand and collapse rows; navigation and clicks walk over 
     s.set_notes(flat_sample());
     CHECK(s.row_height(0) == 1);
     s.handle(Key::AltRight);
-    CHECK(s.row_height(0) == 6);
+    CHECK(s.row_height(0) == 1 + tui::TuiState::kMetaLines);
     s.handle(Key::Down);
     s.handle(Key::AltRight);
-    CHECK(s.row_height(1) == 6);
-    CHECK(s.row_height(0) == 6);  // birden çok satır açık kalır
+    CHECK(s.row_height(1) == 1 + tui::TuiState::kMetaLines);
+    CHECK(s.row_height(0) == 1 + tui::TuiState::kMetaLines);  // birden çok satır açık kalır
     CHECK(s.selected() == 1);
     s.handle(Key::Down);
     CHECK(s.selected() == 2);
@@ -658,13 +658,13 @@ TEST_CASE("Alt arrows expand and collapse rows; navigation and clicks walk over 
     CHECK(s.selected() == 1);
     s.handle(Key::AltLeft);
     CHECK(s.row_height(1) == 1);
-    CHECK(s.row_height(0) == 6);
+    CHECK(s.row_height(0) == 1 + tui::TuiState::kMetaLines);
 
     // Görsel satır -> not satırı.
     CHECK(s.row_at(10, 0) == 0);
-    CHECK(s.row_at(10, 5) == 0);
-    CHECK(s.row_at(10, 6) == 1);
-    CHECK(s.row_at(10, 7) == 2);
+    CHECK(s.row_at(10, 7) == 0);
+    CHECK(s.row_at(10, 8) == 1);
+    CHECK(s.row_at(10, 9) == 2);
 
     // Seçili satır pencerede kalır; açık satır yukarıdan sayılır.
     s.handle(Key::Char, "g");
@@ -692,8 +692,8 @@ TEST_CASE("a click on an expanded line selects its row") {
         tui::EditorHost{*f.store, f.mutex, f.internal, plain_width, 1024, core::kDefaultSlugMaxLength,
                         [](std::string_view) { return std::string("md"); }, [](const core::NotePath&) {},
                         [] {}, [](std::optional<std::size_t>) {}, [](const core::Error&) {}, [] {}});
-    // İlk satır y=2, açık satırın 5 ek satırı var: y=8 ikinci nottur, y=5 ilk notun ek satırı.
-    tui::route_mouse({1, 8, tui::MouseButton::Left, tui::MouseMotion::Press}, f.state, editor);
+    // İlk satır y=2, açık satırın 7 ek satırı var: y=10 ikinci nottur, y=5 ilk notun ek satırı.
+    tui::route_mouse({1, 10, tui::MouseButton::Left, tui::MouseMotion::Press}, f.state, editor);
     CHECK(f.state.selected_row()->path.string() == below);
     tui::route_mouse({1, 5, tui::MouseButton::Left, tui::MouseMotion::Press}, f.state, editor);
     CHECK(f.state.selected() == 0);
@@ -766,7 +766,7 @@ TEST_CASE("v cycles the right column; o opens the sort menu; both are saved") {
 
 TEST_CASE("prefs: round trip through tui-state.toml; broken values fall back to defaults") {
     using Column = tui::ListColumn;
-    const tui::ListPrefs prefs{{search::SortField::Size, false}, Column::Origin};
+    const tui::ListPrefs prefs{{{search::SortField::Size, false}, Column::Origin}};
     const auto parsed = tui::parse_list_prefs(tui::format_list_prefs(prefs));
     CHECK(parsed.sort.field == search::SortField::Size);
     CHECK_FALSE(parsed.sort.descending);
@@ -910,7 +910,7 @@ TEST_CASE("sync status worker delivers off the calling thread and coalesces requ
     const std::vector<core::NoteMeta> metas = {core::NoteMeta{core::NotePath::parse("a.md").value()},
                                                core::NoteMeta{core::NotePath::parse("b.md").value()}};
     {
-        app::SyncStatusWorker worker([&](app::SyncStates states) {
+        app::SyncStatusWorker worker([&](app::SyncStates states, std::uint64_t) {
             const std::scoped_lock lock(mutex);
             threads.push_back(std::this_thread::get_id());
             delivered = states.size();
@@ -929,6 +929,23 @@ TEST_CASE("sync status worker delivers off the calling thread and coalesces requ
 }
 
 // ---- graph depo: üst veri ön yüze gerçekten ulaşır ----
+
+// GUI Bilgi paneliyle aynı alanlar (app::note_fields): tip ve etiketler de satır ayrıntısındadır.
+TEST_CASE("row details show the type and the tags like the GUI info panel") {
+    StoreFixture f;
+    test::upsert_note(f.dir.path(), "plan.md", "#proje toplanti\n");
+    test::upsert_note(f.dir.path(), "bos.txt", "x\n");
+    f.load();
+    f.select("plan.md");
+    f.press(" ");
+    const std::string details = screen_text(f.state);
+    CHECK(has(details, "type: md"));
+    CHECK(has(details, "tags: #proje"));
+    f.press(" ");
+    f.select("bos.txt");
+    f.press(" ");
+    CHECK(has(screen_text(f.state), "tags: none"));
+}
 
 TEST_CASE("graph store: created and origin really show in row details, the v column and queries") {
     StoreFixture f;

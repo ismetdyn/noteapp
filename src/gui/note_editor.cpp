@@ -1,13 +1,10 @@
 #include "gui/note_editor.hpp"
 
 #include "core/text.hpp"
-#include "edit/display_text.hpp"
-#include "edit/note_find.hpp"
 
 #include <algorithm>
 #include <array>
 #include <iterator>
-#include <set>
 #include <utility>
 
 namespace noteapp::gui {
@@ -68,46 +65,7 @@ template <std::size_t N> bool in_ranges(const std::array<CodeRange, N>& ranges, 
     return found != ranges.begin() && code_point <= std::prev(found)->last;
 }
 
-constexpr char kDelete = 0x7F;
-constexpr std::size_t kCompletionRows = 8;  // TUI ile aynı liste boyu
-constexpr int kWheelRows = 3;               // TUI tekerlek adımı
-
-bool is_typable(std::string_view text) {
-    return !text.empty() && static_cast<unsigned char>(text.front()) >= 0x20 && text.front() != kDelete &&
-           core::is_valid_utf8(text);
-}
-
-void pop_code_point(std::string& text) {
-    while (text.size() > 1 && (static_cast<unsigned char>(text.back()) & 0xC0U) == 0x80U)
-        text.pop_back();
-    if (!text.empty())
-        text.pop_back();
-}
-
-struct Motion {
-    Key key;
-    void (*apply)(tui::EditorBuffer&, int columns, int rows);
-};
-
-// TUI EditorSession'daki tabloyla aynı: hareketler salt-okunurda da çalışır.
-constexpr Motion kMotions[] = {
-    {Key::Left, [](tui::EditorBuffer& b, int, int) { b.move_left(false); }},
-    {Key::Right, [](tui::EditorBuffer& b, int, int) { b.move_right(false); }},
-    {Key::Up, [](tui::EditorBuffer& b, int c, int) { b.move_rows(-1, c, false); }},
-    {Key::Down, [](tui::EditorBuffer& b, int c, int) { b.move_rows(1, c, false); }},
-    {Key::Home, [](tui::EditorBuffer& b, int, int) { b.move_home(false); }},
-    {Key::End, [](tui::EditorBuffer& b, int, int) { b.move_end(false); }},
-    {Key::PageUp, [](tui::EditorBuffer& b, int c, int r) { b.move_rows(-std::max(r - 1, 1), c, false); }},
-    {Key::PageDown, [](tui::EditorBuffer& b, int c, int r) { b.move_rows(std::max(r - 1, 1), c, false); }},
-    {Key::CtrlHome, [](tui::EditorBuffer& b, int, int) { b.move_doc_start(false); }},
-    {Key::CtrlEnd, [](tui::EditorBuffer& b, int, int) { b.move_doc_end(false); }},
-    {Key::ShiftLeft, [](tui::EditorBuffer& b, int, int) { b.move_left(true); }},
-    {Key::ShiftRight, [](tui::EditorBuffer& b, int, int) { b.move_right(true); }},
-    {Key::ShiftUp, [](tui::EditorBuffer& b, int c, int) { b.move_rows(-1, c, true); }},
-    {Key::ShiftDown, [](tui::EditorBuffer& b, int c, int) { b.move_rows(1, c, true); }},
-    {Key::ShiftHome, [](tui::EditorBuffer& b, int, int) { b.move_home(true); }},
-    {Key::ShiftEnd, [](tui::EditorBuffer& b, int, int) { b.move_end(true); }},
-};
+constexpr int kWheelRows = 3;  // TUI tekerlek adımı
 
 }  // namespace
 
@@ -126,7 +84,7 @@ void NoteEditor::set_writable(bool writable) {
     writable_ = writable;
     if (writable)
         return;
-    ghost_.clear();
+    modes_.clear_ghost();
     if (mode_ == Mode::Complete)
         mode_ = Mode::Editing;
 }
@@ -163,7 +121,7 @@ void NoteEditor::click(std::size_t visible_row, int cell, bool extend) {
     const std::vector<tui::VisualRow> rows = buffer_.visible_rows(columns_, rows_);
     if (rows.empty())
         return;
-    ghost_.clear();
+    modes_.clear_ghost();
     const tui::VisualRow& row = rows[std::min(visible_row, rows.size() - 1)];
     if (extend)
         buffer_.extend_to_cell(row, std::max(cell, 0));
@@ -174,7 +132,7 @@ void NoteEditor::click(std::size_t visible_row, int cell, bool extend) {
 void NoteEditor::wheel(int rows) {
     if (rows == 0 || mode_ == Mode::Complete)
         return;
-    ghost_.clear();
+    modes_.clear_ghost();
     buffer_.move_rows(rows * kWheelRows, columns_, false);
 }
 
@@ -193,13 +151,9 @@ void NoteEditor::handle(Key key, std::string_view text, const tui::WordTable* wo
 }
 
 void NoteEditor::handle_editing(Key key, std::string_view text, const tui::WordTable* words) {
-    const std::string ghost = std::exchange(ghost_, {});  // her tuş öneriyi düşürür; yazım yenisini üretir
-    if (!ghost.empty() && writable_ && (key == Key::Tab || key == Key::Right)) {
-        buffer_.paste(ghost);
-        find_matches_.clear();
+    if (modes_.accept_ghost(buffer_, key, writable_))  // her tuş öneriyi düşürür; yazım yenisini üretir
         return;
-    }
-    if (apply_motion(key))
+    if (tui::apply_motion_key(buffer_, key, columns_, rows_))
         return;
     switch (key) {
     case Key::Escape:
@@ -217,66 +171,30 @@ void NoteEditor::handle_editing(Key key, std::string_view text, const tui::WordT
     if (!writable_)
         return;
     if (key == Key::CtrlSpace) {
-        open_completion(words);
+        modes_.open_completion(buffer_, type_, words);
+        mode_ = Mode::Complete;
         return;
     }
-    apply_edit(key, text);
-    find_matches_.clear();  // ofsetler eski metne ait; F3 yeniden hesaplar
+    tui::apply_edit_key(buffer_, key, text);
+    modes_.clear_find_matches();
     if (key == Key::Char)
-        update_ghost(words);
-}
-
-bool NoteEditor::apply_motion(Key key) {
-    const auto* motion = std::ranges::find(kMotions, key, &Motion::key);
-    if (motion == std::ranges::end(kMotions))
-        return false;
-    motion->apply(buffer_, columns_, rows_);
-    return true;
-}
-
-void NoteEditor::apply_edit(Key key, std::string_view text) {
-    switch (key) {
-    case Key::Char:
-        if (is_typable(text))
-            buffer_.type_text(text);
-        break;
-    case Key::Backspace:
-        buffer_.backspace();
-        break;
-    case Key::Delete:
-        buffer_.delete_forward();
-        break;
-    case Key::Enter:
-        buffer_.newline();
-        break;
-    case Key::Tab:
-        buffer_.type_text("\t");
-        break;
-    case Key::CtrlZ:
-        buffer_.undo();
-        break;
-    case Key::CtrlY:
-        buffer_.redo();
-        break;
-    default:
-        break;
-    }
+        modes_.update_ghost(buffer_, writable_, type_, words);
 }
 
 std::string NoteEditor::cut() {
     if (!writable_)
         return copy();
-    ghost_.clear();
-    find_matches_.clear();
+    modes_.clear_ghost();
+    modes_.clear_find_matches();
     return buffer_.cut();
 }
 
 void NoteEditor::paste(std::string_view text) {
     if (!writable_ || text.empty())
         return;
-    ghost_.clear();
+    modes_.clear_ghost();
     buffer_.paste(text);
-    find_matches_.clear();
+    modes_.clear_find_matches();
 }
 
 // Baytlar aynen girer (yapıştırmadaki satır sonu çevrimi yok): programatik metin olduğu gibi yazılır.
@@ -288,200 +206,38 @@ void NoteEditor::replace_all(std::string_view text) {
         buffer_.backspace();
     else
         buffer_.type_text(text);
-    ghost_.clear();
-    find_matches_.clear();
-}
-
-// Yalnız satır sonunda: metnin ortasında soluk yazı ardındaki metni örterdi.
-void NoteEditor::update_ghost(const tui::WordTable* words) {
-    ghost_.clear();
-    const std::string& text = buffer_.text();
-    const std::size_t cursor = buffer_.cursor();
-    const bool at_line_end = cursor == text.size() || text[cursor] == '\n' || text[cursor] == '\r';
-    if (!writable_ || !at_line_end || buffer_.selection())
-        return;
-    ghost_ = tui::suggest_completion(text, cursor, type_, words, limits_.completion).value_or(std::string{});
-}
-
-void NoteEditor::open_completion(const tui::WordTable* words) {
-    const std::string& text = buffer_.text();
-    const std::size_t cursor = buffer_.cursor();
-    completion_candidates_ = tui::completion_candidates(text, cursor, type_, words, limits_.completion);
-    completion_query_ = std::string(tui::word_prefix_at(text, cursor, limits_.completion.word_bytes));
-    completion_selected_ = 0;
-    completion_inserts_.clear();
-    ++completion_generation_;
-    refresh_completion();
-    mode_ = Mode::Complete;
+    modes_.clear_ghost();
+    modes_.clear_find_matches();
 }
 
 void NoteEditor::add_completion_items(std::uint64_t generation,
                                       std::span<const core::lsp::CompletionItem> items) {
-    if (mode_ != Mode::Complete || generation != completion_generation_)
-        return;
-    std::vector<std::string> labels;
-    for (const core::lsp::CompletionItem& item : items) {
-        std::string label = tui::terminal_safe(item.label);
-        if (label.empty() || completion_inserts_.contains(label))
-            continue;
-        // Çok satırlı ya da denetim karakterli metin nota görünmeden satır ya da kaçış sokardı.
-        const bool plain = !item.insert_text.empty() && tui::terminal_safe(item.insert_text) == item.insert_text;
-        completion_inserts_.emplace(label, plain ? item.insert_text : label);
-        labels.push_back(std::move(label));
-    }
-    // Seçim kaymasın: kullanıcı okları kullanırken gelen cevap seçili adayı değiştirmez.
-    const std::string selected =
-        completion_items_.empty() ? std::string{} : completion_items_[completion_selected_];
-    // Yalnız bu cevabın etiketleri düşer: aynı açılışa daha önce eklenmiş sunucu önerileri kalır.
-    const std::set<std::string_view> added(labels.begin(), labels.end());
-    std::erase_if(completion_candidates_, [&added](const std::string& word) { return added.contains(word); });
-    labels.insert(labels.end(), std::make_move_iterator(completion_candidates_.begin()),
-                  std::make_move_iterator(completion_candidates_.end()));
-    completion_candidates_ = std::move(labels);
-    refresh_completion();
-    const auto kept = std::ranges::find(completion_items_, selected);
-    completion_selected_ =
-        kept == completion_items_.end() ? 0 : static_cast<std::size_t>(kept - completion_items_.begin());
-}
-
-const tui::DiagnosticMark* NoteEditor::diagnostic_at_cursor() const {
-    const std::size_t cursor = buffer_.cursor();
-    const auto found = std::ranges::find_if(diagnostics_, [cursor](const tui::DiagnosticMark& mark) {
-        return cursor >= mark.range.begin && cursor <= mark.range.end;
-    });
-    return found == diagnostics_.end() ? nullptr : &*found;
-}
-
-void NoteEditor::refresh_completion() {
-    completion_items_ = tui::filter_candidates(completion_candidates_, completion_query_, kCompletionRows);
-    completion_selected_ =
-        std::min(completion_selected_, completion_items_.empty() ? 0 : completion_items_.size() - 1);
-}
-
-void NoteEditor::insert_completion() {
-    if (completion_items_.empty())
-        return;
-    const std::size_t cursor = buffer_.cursor();
-    const std::size_t typed = tui::word_prefix_at(buffer_.text(), cursor, limits_.completion.word_bytes).size();
-    buffer_.select_range({cursor - typed, cursor});
-    const std::string& label = completion_items_[completion_selected_];
-    const auto lsp_insert = completion_inserts_.find(label);
-    buffer_.paste(lsp_insert == completion_inserts_.end() ? label : lsp_insert->second);
-    find_matches_.clear();
+    if (mode_ == Mode::Complete)
+        modes_.add_completion_items(generation, items);
 }
 
 void NoteEditor::handle_complete(Key key, std::string_view text) {
-    switch (key) {
-    case Key::Char:
-        if (is_typable(text)) {
-            completion_query_.append(text);
-            refresh_completion();
-        }
-        break;
-    case Key::Backspace:
-        pop_code_point(completion_query_);
-        refresh_completion();
-        break;
-    case Key::Up:
-    case Key::CtrlP:
-        completion_selected_ -= completion_selected_ > 0 ? 1 : 0;
-        break;
-    case Key::Down:
-    case Key::CtrlN:
-        completion_selected_ += completion_selected_ + 1 < completion_items_.size() ? 1 : 0;
-        break;
-    case Key::Enter:
-        insert_completion();
+    if (modes_.handle_complete(buffer_, key, text) != tui::EditorModes::CompleteResult::Open)
         mode_ = Mode::Editing;
-        break;
-    case Key::Escape:
-    case Key::CtrlSpace:
-        mode_ = Mode::Editing;
-        break;
-    default:
-        break;
-    }
 }
 
 void NoteEditor::open_find(const tui::WordTable* words) {
-    ghost_.clear();
+    modes_.open_find(buffer_, type_, words);
     mode_ = Mode::Find;
-    find_origin_ = buffer_.cursor();
-    find_line_.clear();
-    find_line_.set_sources(tui::word_input_sources(
-        tui::completion_candidates(buffer_.text(), buffer_.cursor(), type_, words, limits_.completion)));
-    find_matches_.clear();
-    find_missed_ = false;
-}
-
-void NoteEditor::close_find() {
-    mode_ = Mode::Editing;
-    find_matches_.clear();
-    find_missed_ = false;
-}
-
-std::string NoteEditor::find_label() const {
-    if (find_matches_.empty())
-        return {};
-    return tui::match_label(find_index_, find_matches_.size());
-}
-
-void NoteEditor::handle_find(Key key, std::string_view text) {
-    const tui::InputLine::Result result = find_line_.handle(key, text);
-    if ((key == Key::Backspace || result == tui::InputLine::Result::Edited) && !find_line_.popup())
-        update_find();
-    if (result != tui::InputLine::Result::Ignored)
-        return;
-    switch (key) {
-    case Key::Enter:
-    case Key::Down:
-    case Key::CtrlN:
-    case Key::F3:
-        step_find(1);
-        break;
-    case Key::Up:
-    case Key::CtrlP:
-        step_find(-1);
-        break;
-    case Key::Escape:
-        close_find();
-        break;
-    default:
-        break;
-    }
-}
-
-void NoteEditor::update_find() {
-    buffer_.select_range({find_origin_, find_origin_});
-    recompute_find(find_origin_);
-    select_current_match();
 }
 
 void NoteEditor::step_find(int delta) {
-    if (find_line_.text().empty())
-        return;
-    if (find_matches_.empty()) {
-        // Düzenleme eşleşmeleri düşürdü: imleçten sonraki ilk eşleşmeye gidilir, atlanmaz.
-        recompute_find(buffer_.cursor());
-    } else {
-        const std::size_t count = find_matches_.size();
-        find_index_ = (find_index_ + count + (delta > 0 ? 1 : count - 1)) % count;
-    }
-    select_current_match();
+    modes_.step_find(buffer_, delta);
 }
 
-// Eşleşmeleri yeniden hesaplar; geçerli eşleşme `from`dan sonraki ilkidir, yoksa başa sarar.
-void NoteEditor::recompute_find(std::size_t from) {
-    find_matches_ = tui::find_folded(buffer_.text(), find_line_.text());
-    const auto next =
-        std::ranges::find_if(find_matches_, [from](const tui::ByteRange& m) { return m.begin >= from; });
-    find_index_ = next == find_matches_.end() ? 0 : static_cast<std::size_t>(next - find_matches_.begin());
+void NoteEditor::close_find() {
+    modes_.close_find();
+    mode_ = Mode::Editing;
 }
 
-void NoteEditor::select_current_match() {
-    find_missed_ = find_matches_.empty() && !find_line_.text().empty();
-    if (!find_matches_.empty())
-        buffer_.select_range(find_matches_[find_index_]);
+void NoteEditor::handle_find(Key key, std::string_view text) {
+    if (modes_.handle_find(buffer_, key, text) == tui::EditorModes::FindResult::Closed)
+        mode_ = Mode::Editing;
 }
 
 }  // namespace noteapp::gui

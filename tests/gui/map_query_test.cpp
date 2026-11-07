@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <doctest/doctest.h>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -284,4 +285,90 @@ TEST_CASE("map query: the views list runs a saved view; typing a view's name run
     CHECK(scene.state->map_query().outcome()->highlight.notes == std::set<std::string>{"a.md", "b.md", "c.md"});
     // Yazılan metin görünüm olarak çözüldü: durum satırı bunu kayıtlı adıyla söyler.
     CHECK(scene.state->status() == core::tr("map.query_view", {{"name", "linked"}, {"rows", "2"}, {"notes", "3"}}));
+}
+
+// SD11b: kayıtlı görünüm GUI'de de (çubuğun düğmesi ve palet view.save; seçiciden view.remove). Kural TUI ve
+// CLI ile aynı: ad kırpılmaz, baş/son boşluk reddedilir; silme sorar.
+TEST_CASE("map query: Save view stores the shown read under a name; the remove picker asks before deleting") {
+    QueryScene scene;
+    scene.open();
+    std::vector<std::string> names = {" mine", "mine"};
+    scene.state->deciders.view_name = [&](const std::string&) {
+        std::optional<std::string> next;
+        if (!names.empty()) {
+            next = names.front();
+            names.erase(names.begin());
+        }
+        return next;
+    };
+    int asked = 0;
+    bool answer = false;
+    scene.state->deciders.confirm_delete = [&](const std::string&, const std::string&) {
+        ++asked;
+        return answer;
+    };
+    scene.open_bar();
+    CHECK(scene.has("map_query_save"));
+    scene.state->save_map_view();  // sonuç yok: ad sorulmaz
+    CHECK(names.size() == 2);
+
+    const std::string text = "MATCH (n:Note) WHERE n.name = 'b' RETURN n";
+    scene.run(text);
+    click_button(*scene.view, "map_query_save");  // " mine": core reddeder, kayıt yok
+    click_button(*scene.view, "map_query_save");
+    CHECK(names.empty());
+    // Her bakış taze depoyla: GUI'nin yazması başka bağlantıdadır.
+    const auto saved = [&](const std::string& name) {
+        core::NoteStore store(scene.fixture.store_dir());
+        const auto view = core::find_view(store, name);
+        return view ? view->query : std::string{};
+    };
+    CHECK(saved(" mine").empty());
+    CHECK(saved("mine") == text);
+
+    scene.state->open_picker(noteapp::gui::Picker::RemoveView);
+    REQUIRE(std::ranges::any_of(scene.state->picker_items(),
+                                [](const auto& item) { return item.value == "mine"; }));
+    scene.state->pick("mine");  // Vazgeç: kalır
+    CHECK(asked == 1);
+    CHECK(saved("mine") == text);
+    answer = true;
+    scene.state->open_picker(noteapp::gui::Picker::RemoveView);
+    scene.state->pick("mine");
+    CHECK(asked == 2);
+    CHECK(saved("mine").empty());
+}
+
+// SD11b review: seçici senkronla gelen adı görünür çizer (`daily` ile `daily` + U+200B ayrılır); silme onayda
+// gösterilen görünümü siler, onay açıkken aynı ad başka sorguyla yeniden kurulduysa o kalır.
+TEST_CASE(
+    "map query: the remove picker shows hidden characters and keeps a view rewritten during the question") {
+    QueryScene scene;
+    const std::string hidden = "daily\xE2\x80\x8B";
+    {
+        core::NoteStore store(scene.fixture.store_dir());
+        REQUIRE(core::save_view(store, "daily", "MATCH (n:Note) RETURN n", false));
+        REQUIRE(core::save_view(store, hidden, "MATCH (n:Note) RETURN n", false));
+    }
+    scene.open();
+    scene.state->open_picker(noteapp::gui::Picker::RemoveView);
+    const auto& items = scene.state->picker_items();
+    const auto item = std::ranges::find(items, hidden, &noteapp::gui::PickerItem::value);
+    REQUIRE(item != items.end());
+    CHECK(item->label != "daily");
+    CHECK(item->label.find("\xE2\x80\x8B") == std::string::npos);  // gizli karakter ham çizilmez
+
+    const std::string rewritten = "MATCH (n:Note) WHERE n.name = 'a' RETURN n";
+    scene.state->deciders.confirm_delete = [&](const std::string&, const std::string&) {
+        core::NoteStore other(scene.fixture.store_dir());  // başka cihaz, soru açıkken
+        REQUIRE(core::save_view(other, "daily", rewritten, true));
+        return true;
+    };
+    scene.state->pick("daily");
+    const auto saved = [&] {
+        core::NoteStore store(scene.fixture.store_dir());
+        const auto view = core::find_view(store, "daily");
+        return view ? view->query : std::string{};
+    };
+    CHECK(saved() == rewritten);
 }

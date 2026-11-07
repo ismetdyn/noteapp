@@ -116,18 +116,38 @@ TEST_CASE("inspector: set and remove write one property, reload and report") {
 TEST_CASE("inspector: labels are the note's tags, added to and removed from its text") {
     Scene scene;
     scene.open_note("b.md");
-    REQUIRE(scene.inspector.add_label(scene.store, "#Plan").has_value());
+    REQUIRE(scene.inspector.add_label(scene.store, "#Plan", {}).has_value());
     CHECK(scene.store.read(np("b.md"))->text == "b\n#plan\n");
     REQUIRE(scene.row("plan") != nullptr);
     CHECK(scene.row("plan")->kind == InspectorRow::Kind::Label);
-    CHECK(scene.inspector.add_label(scene.store, "plan").error().code == core::Error::Code::AlreadyExists);
-    CHECK_FALSE(scene.inspector.add_label(scene.store, "a b").has_value());  // etiket değil: yazılmaz
+    CHECK(scene.inspector.add_label(scene.store, "plan", {}).error().code ==
+          core::Error::Code::AlreadyExists);
+    CHECK_FALSE(scene.inspector.add_label(scene.store, "a b", {}).has_value());  // etiket değil: yazılmaz
     CHECK(scene.store.read(np("b.md"))->text == "b\n#plan\n");
     CHECK(scene.inspector.confirm_remove_text(*scene.row("plan")) ==
           core::tr("inspector.confirm_remove_label", {{"tag", "plan"}, {"path", "b.md"}}));
-    REQUIRE(scene.inspector.remove_label(scene.store, "plan").has_value());
+    REQUIRE(scene.inspector.remove_label(scene.store, "plan", {}).has_value());
     CHECK(scene.row("plan") == nullptr);
     CHECK(scene.store.read(np("b.md"))->text == "b\n");
+}
+
+TEST_CASE("inspector: a label write saves the note's pending edit first; an unsaved note is not written") {
+    Scene scene;
+    scene.open_note("b.md");
+    std::vector<std::string> saved;
+    const auto save = [&](const core::NotePath& note) {
+        saved.push_back(note.string());
+        return true;
+    };
+    REQUIRE(scene.inspector.add_label(scene.store, "plan", save).has_value());
+    REQUIRE(scene.inspector.remove_label(scene.store, "plan", save).has_value());
+    CHECK(saved == std::vector<std::string>{"b.md", "b.md"});
+    const auto refused =
+        scene.inspector.add_label(scene.store, "plan", [](const core::NotePath&) { return false; });
+    REQUIRE_FALSE(refused.has_value());
+    CHECK(refused.error().message_key == "inspector.save_first");
+    CHECK(scene.store.read(np("b.md"))->text == "b\n");
+    CHECK(scene.row("plan") == nullptr);
 }
 
 TEST_CASE("inspector: a relation shows its own properties; name and direction stay read-only") {
@@ -144,7 +164,7 @@ TEST_CASE("inspector: a relation shows its own properties; name and direction st
     CHECK(scene.row("since")->value_text == "2024");
     CHECK(scene.inspector.set(scene.store, "name", "x").error().message_key ==
           "error.property_relation_reserved");
-    CHECK(scene.inspector.add_label(scene.store, "x").error().message_key == "inspector.labels_on_notes");
+    CHECK(scene.inspector.add_label(scene.store, "x", {}).error().message_key == "inspector.labels_on_notes");
     // Kenar kalkınca yeniden okuma hatayı söyler, satır kalmaz.
     REQUIRE(scene.store.remove_relation(id).has_value());
     scene.inspector.reload(scene.store);

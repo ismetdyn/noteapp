@@ -2,8 +2,10 @@
 
 #include "app/document.hpp"
 #include "core/folder_tree.hpp"
+#include "core/i18n.hpp"
 #include "core/text.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <utility>
 
@@ -192,6 +194,64 @@ MoveResult move_items(core::NoteStore& store, const Listing& listing, std::span<
             result.first = ItemRef{*target, item.is_folder};
     }
     return result;
+}
+
+void prune_marks(std::set<std::string>& marks, const Listing& listing) {
+    std::erase_if(marks, [&listing](const std::string& key) {
+        if (key.ends_with('/'))
+            return listing.tree().find(std::string_view(key).substr(0, key.size() - 1)) == nullptr;
+        const auto path = core::NotePath::parse(key);
+        return !path || listing.meta_of(*path) == nullptr;
+    });
+}
+
+std::vector<TrashTarget> trash_targets(std::span<const ItemRef> items) {
+    std::vector<TrashTarget> targets;
+    targets.reserve(items.size());
+    for (const ItemRef& item : items)
+        targets.push_back({item.path, item.is_folder});
+    return targets;
+}
+
+ClipboardText clipboard_text(const core::NoteStore& store, const core::NotePath& path) {
+    auto content = store.read(path);
+    if (!content)
+        return {.error = content.error()};
+    if (core::looks_binary(content->text) || content->text.find('\0') != std::string::npos)
+        return {.refused = "app.copy_refused_binary"};
+    if (!core::is_valid_utf8(content->text))
+        return {.refused = "app.copy_refused_utf8"};
+    return {.text = std::move(content->text)};
+}
+
+std::expected<QuickAdd, core::Error> quick_add(core::NoteStore& store, const core::FolderTree& tree,
+                                               std::string_view typed, std::string_view base,
+                                               std::string_view default_type, std::size_t slug_max_length,
+                                               const std::function<bool()>& before_note) {
+    constexpr std::string_view kBlank = " \t";
+    const std::size_t first = typed.find_first_not_of(kBlank);
+    if (first == std::string_view::npos)
+        return QuickAdd{};
+    const std::string_view name = typed.substr(first, typed.find_last_not_of(kBlank) - first + 1);
+    if (name.starts_with('/'))
+        return std::unexpected(core::NotePath::parse(name).error());
+    if (names_folder(name)) {
+        std::string folder = core::join_folder(base, name.substr(0, name.size() - 1));
+        if (tree.find(folder) != nullptr) {
+            std::string message = core::tr("tui.folder_exists", {{"path", folder}});
+            return QuickAdd{.kind = QuickAdd::Kind::FolderExists, .folder = std::move(folder), .message = std::move(message)};
+        }
+        if (const auto made = store.create_folder(folder); !made)
+            return std::unexpected(made.error());
+        std::string message = core::tr("tui.folder_created", {{"path", folder}});
+        return QuickAdd{.kind = QuickAdd::Kind::FolderCreated, .folder = std::move(folder), .message = std::move(message)};
+    }
+    if (before_note && !before_note())
+        return QuickAdd{.kind = QuickAdd::Kind::Kept};
+    auto created = create_named_note(store, core::join_folder(base, name), base, default_type, slug_max_length);
+    if (!created)
+        return std::unexpected(created.error());
+    return QuickAdd{.kind = QuickAdd::Kind::NoteCreated, .note = std::move(*created)};
 }
 
 }  // namespace noteapp::app

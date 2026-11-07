@@ -1159,7 +1159,7 @@ TEST_CASE("session: deleted on disk while clean closes the editor") {
     CHECK_FALSE(f.exists("a.md"));
 }
 
-TEST_CASE("session: deleted on disk while dirty keeps the text and Ctrl+S saves it as a new note") {
+TEST_CASE("session: deleted on disk while dirty keeps the text and Ctrl+S asks where to save it (GUI too)") {
     Fixture f;
     f.open_with("work/a.md", "eski\r\n");
     f.type("x");
@@ -1169,18 +1169,28 @@ TEST_CASE("session: deleted on disk while dirty keeps the text and Ctrl+S saves 
     CHECK(f.session.deleted_on_disk());
     CHECK(f.text() == "xeski\r\n");
     f.session.handle(Key::CtrlS);
+    REQUIRE(f.session.mode() == EditorSession::Mode::NamePrompt);
+    CHECK(f.session.name_input() == "a.md");  // eski yer ve ad önerilir
+    CHECK(f.session.name_folder() == "work");
+    CHECK_FALSE(f.exists("work/a.md"));
+    f.session.handle(Key::Enter);
+    CHECK(f.session.mode() == EditorSession::Mode::Editing);
     CHECK(f.bytes("work/a.md") == "xeski\r\n");
     CHECK(f.saved == std::vector<std::string>{"work/a.md"});
     CHECK_FALSE(f.session.deleted_on_disk());
     CHECK_FALSE(f.session.dirty());
 }
 
-TEST_CASE("session: a save that finds the note gone also saves it as new without a rescan") {
+TEST_CASE("session: a save that finds the note gone asks for its place without a rescan") {
     Fixture f;
     f.open_with("a.md", "eski");
     f.type("x");
     f.erase("a.md");
     f.session.handle(Key::CtrlQ);
+    f.session.handle(Key::Enter);
+    REQUIRE(f.session.is_open());  // önce nereye kaydedileceği sorulur
+    REQUIRE(f.session.mode() == EditorSession::Mode::NamePrompt);
+    CHECK_FALSE(f.exists("a.md"));
     f.session.handle(Key::Enter);
     CHECK_FALSE(f.session.is_open());
     CHECK(f.bytes("a.md") == "xeski");
@@ -1273,7 +1283,11 @@ const std::vector<SaveAsNew>& save_as_new_paths() {
              f.rescan();
              REQUIRE(f.session.deleted_on_disk());
          },
-         [](Fixture& f) { f.session.handle(Key::CtrlS); }},
+         [](Fixture& f) {
+             f.session.handle(Key::CtrlS);  // ad istemi açılır (ya da başarısız denemeden açık kalır)
+             REQUIRE(f.session.mode() == EditorSession::Mode::NamePrompt);
+             f.session.handle(Key::Enter);
+         }},
         {"recreate on exit",
          "work/a.md",
          {},
@@ -1522,8 +1536,53 @@ TEST_CASE("autosave: a note deleted on disk is never created again by autosave")
     CHECK_FALSE(f.exists("a.md"));
     CHECK(f.session.deleted_on_disk());
     CHECK(f.session.dirty());
-    f.session.handle(Key::CtrlS);  // açık kayıt yeni not yazar (eski kural)
+    f.session.handle(Key::CtrlS);  // açık kayıt nereye yazılacağını sorar
+    REQUIRE(f.session.mode() == EditorSession::Mode::NamePrompt);
+    f.session.handle(Key::Enter);
     CHECK(f.bytes("a.md") == "mine base");
+}
+
+// Vazgeçilen "nereye kaydedilsin" istemi taslak bırakmaz: not diske dönünce açık kayıt adı değil çakışmayı
+// sorar, sonra otomatik kayıt normale döner (GUI'de aynı akış: save_test).
+TEST_CASE(
+    "autosave: a cancelled save-where prompt for a deleted note leaves the note itself once it is back") {
+    Fixture f(kTestLimit, kAutosave);
+    f.open_with("a.md", "base");
+    f.type("mine ");
+    f.erase("a.md");
+    f.rescan();
+    REQUIRE(f.session.deleted_on_disk());
+    f.session.handle(Key::CtrlS);
+    REQUIRE(f.session.mode() == EditorSession::Mode::NamePrompt);
+    f.session.handle(Key::Escape);
+    REQUIRE(f.session.mode() == EditorSession::Mode::Editing);
+    CHECK_FALSE(f.exists("a.md"));
+
+    f.change_externally("a.md", "back");
+    f.rescan();
+    CHECK_FALSE(f.session.deleted_on_disk());
+    CHECK(f.session.changed_on_disk());
+    f.session.handle(Key::CtrlS);
+    REQUIRE(f.session.mode() == EditorSession::Mode::ConflictPrompt);  // ad değil, çakışma
+    f.press_conflict_choice(EditorSession::ConflictChoice::Overwrite);
+    CHECK(f.bytes("a.md") == "mine base");
+    f.type("x");
+    REQUIRE(f.session.autosave_deadline().has_value());
+    CHECK(f.session.tick(after(kAutosave * 4)));
+    CHECK(f.bytes("a.md") == "mine xbase");
+}
+
+TEST_CASE("session: after a cancelled save-where prompt the exit still recreates the deleted note") {
+    Fixture f;
+    f.open_with("work/a.md", "eski");
+    f.type("x");
+    f.erase("work/a.md");
+    f.rescan();
+    f.session.handle(Key::CtrlS);
+    REQUIRE(f.session.mode() == EditorSession::Mode::NamePrompt);
+    f.session.handle(Key::Escape);
+    CHECK_FALSE(f.session.flush_on_exit().empty());
+    CHECK(f.bytes("work/a.md") == "xeski");
 }
 
 TEST_CASE("autosave: drafts, read-only notes and an open find input are not autosaved") {

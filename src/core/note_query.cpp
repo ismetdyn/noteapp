@@ -25,8 +25,8 @@ using graph::QueryChange;
 // Uygulama şemasının etiketleri ve türettiği özellikleri (SPEC-graph "Veri modeli"). Bu anahtarlar yalnız
 // NoteStore'un yazma yollarıyla değişir: gövde bağlantı ve etiket kenarlarını, yol klasör kenarlarını
 // türetir; ham yazma onları birbirinden koparırdı.
-constexpr std::array kNoteKeys = {kName,      kType,       kBody,         kCreatedAt,   kUpdatedAt,   kNoteOrigin,
-                                  kDeletedAt, kTrashedFrom, kMigratedSha, kBodyParents, kLinkTargets};
+constexpr std::array kNoteKeys = {kName,       kType,      kBody,        kCreatedAt,   kUpdatedAt,
+                                  kNoteOrigin, kDeletedAt, kTrashedFrom, kBodyParents, kLinkTargets};
 constexpr std::array kFolderKeys = {kName};
 constexpr std::array kTagKeys = {kName, kTagDisplay};
 constexpr std::array kViewKeys = {kName, kViewQuery, kCreatedAt, kUpdatedAt};
@@ -359,7 +359,6 @@ std::expected<UserQuery, Error> write_locked(NoteStore::Impl& impl, std::string_
                                              const graph::QueryLimits& limits, const graph::Params& params) {
     const std::string database = path_utf8(impl.database());
     const auto deadline = deadline_after(limits.max_duration);  // adlandırma da bu süreye sayılır
-    NOTEAPP_TRY(impl.check_gate());
     NOTEAPP_TRY(impl.open_for_write());
     QueryChanges changes;
     graph::QueryHooks hooks;

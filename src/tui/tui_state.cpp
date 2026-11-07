@@ -40,7 +40,7 @@ std::size_t initial_scroll(const Row& row) {
     return line_index > kHitContextLines ? line_index - kHitContextLines : 0;
 }
 
-constexpr int kListColumnCount = 7;
+constexpr int kListColumnCount = static_cast<int>(app::kListColumnNames.size());
 // Bu aralıktan sık gelen aynı yön tuşu tekrardır; daha uzun duraklama hızlanmayı sıfırlar.
 constexpr auto kKeyRepeatGap = std::chrono::milliseconds(120);
 constexpr int kRepeatsPerStep = 8;  // adım her bu kadar tekrarda bir büyür
@@ -82,12 +82,6 @@ Row to_row(app::ListRow&& row) {
                .reason = std::move(row.reason)};
 }
 
-// Argümanlı ya da bozuk sorgu metin değildir. `view:` bakılmadan da argüman sayılır (bozuk ya da süzgeç).
-bool has_arguments(std::string_view query) {
-    const auto parsed = search::parse_query(query);
-    return !parsed || !parsed->filters.empty() || parsed->sort.has_value();
-}
-
 }  // namespace
 
 // Satırın seçim kimliği: not yolu `/` ile bitmez, klasör satırıyla karışmaz.
@@ -107,12 +101,7 @@ std::vector<ListItem> TuiState::action_items() const {
 }
 
 void TuiState::prune_marks() {
-    std::erase_if(marks_, [this](const std::string& key) {
-        if (key.ends_with('/'))
-            return listing_.tree().find(std::string_view(key).substr(0, key.size() - 1)) == nullptr;
-        const auto path = core::NotePath::parse(key);
-        return !path || !listing_.meta_of(*path);
-    });
+    app::prune_marks(marks_, listing_);
 }
 
 void TuiState::toggle_mark() {
@@ -350,12 +339,8 @@ void TuiState::pan_map(float dx, float dy) {
 void TuiState::zoom_map(float factor) {
     MapCamera camera = map_camera();
     const auto [columns, rows] = map_cells();
-    const float cx = static_cast<float>(columns * kMapDotsPerCellX) / 2.0F;
-    const float cy = static_cast<float>(rows * kMapDotsPerCellY) / 2.0F;
-    const float zoom = std::clamp(camera.zoom * factor, kMapMinZoom, kMapMaxZoom);
-    camera.x = cx - (cx - camera.x) * (zoom / camera.zoom);
-    camera.y = cy - (cy - camera.y) * (zoom / camera.zoom);
-    camera.zoom = zoom;
+    camera.zoom_at(static_cast<float>(columns * kMapDotsPerCellX) / 2.0F,
+                   static_cast<float>(rows * kMapDotsPerCellY) / 2.0F, factor, {kMapMinZoom, kMapMaxZoom});
     map_camera_ = camera;
 }
 
@@ -696,13 +681,15 @@ void TuiState::open_map_edge(int column, int row) {
 }
 
 // Keşif tuşları (F2, SPEC-tui "Harita"). Harfler İngilizce adlardan: (e)X(pand), e(dges), N(ame), P(in),
-// U(npin), R(oute), n(ew), d(elete → çöp); F3 Q(uery), O(utput: tablo). Listenin `x` `X` `e` `/` tuşları haritada
-// gölgelenir; liste görünmez.
+// U(npin), R(oute), n(ew), d(elete → çöp); F3 Q(uery), O(utput: tablo), K(eep: sorguyu görünüm olarak).
+// Listenin `x` `X` `e` `/` tuşları haritada gölgelenir; liste görünmez.
 std::optional<Intent> TuiState::handle_map_explore_key(std::string_view text) {
     if (text == "Q") {  // vazgeçilen ya da hatalı sorgunun metniyle açılır
         begin_map_input(MapInputKind::Query, views_, map_query_text_);
         return Intent::None;
     }
+    if (text == "K")
+        return Intent::SaveView;
     if (text == "O") {
         if (map_query_.outcome()) {
             map_query_.toggle_table();
@@ -1137,9 +1124,10 @@ void TuiState::toggle_tree(std::size_t row) {
     refilter(false);
 }
 
+// Ağaç boşken (ilk tarama, açılamayan depo) süzgeç yoktur: açık klasörler kaybolmaz (app::open_folder_filter).
 void TuiState::prune_open_folders() {
-    std::erase_if(prefs_.open_folders,
-                  [this](const std::string& folder) { return !listing_.tree().find(folder); });
+    if (const auto keep = app::open_folder_filter(listing_.tree()))
+        std::erase_if(prefs_.open_folders, [&keep](const std::string& folder) { return !keep(folder); });
 }
 
 void TuiState::toggle_expanded(std::size_t row) {
@@ -1434,9 +1422,13 @@ void TuiState::set_preview_view(const std::vector<std::size_t>* source_lines, st
     preview_scroll_ = display_line_of(top);
 }
 
-void TuiState::set_preview_lines(const std::vector<std::string>* lines, std::size_t generation, bool partial) {
+void TuiState::set_preview_lines(const std::vector<std::string>* lines, std::size_t generation, bool partial,
+                                 const std::vector<std::vector<StyledSpan>>* styled,
+                                 const std::vector<std::string>* wiki_targets) {
     const bool grew = generation == preview_generation_ && preview_lines_ != lines->size();
     preview_text_ = lines;
+    preview_styled_ = styled && wiki_targets ? styled : nullptr;
+    preview_wiki_targets_ = wiki_targets;
     preview_partial_ = partial;
     set_preview_line_count(lines->size());
     if (generation != preview_generation_) {
@@ -1504,7 +1496,7 @@ bool TuiState::open_note_in_review(const core::NotePath& path) {
 std::optional<std::string> TuiState::selected_wiki_target() const {
     if (!wiki_link_ || !preview_text_ || wiki_link_->line >= preview_text_->size())
         return std::nullopt;
-    for (const WikiSpan& span : wiki_spans((*preview_text_)[wiki_link_->line]))
+    for (const WikiSpan& span : wiki_spans_on(wiki_link_->line))
         if (span.begin == wiki_link_->begin)
             return std::string(span.target);
     return std::nullopt;
@@ -1516,10 +1508,18 @@ std::optional<ByteRange> TuiState::wiki_selection_on_line(std::size_t line) cons
     return ByteRange{wiki_link_->begin, wiki_link_->end};
 }
 
-bool TuiState::select_wiki_link_at(std::size_t line, std::size_t offset) {
+std::vector<WikiSpan> TuiState::wiki_spans_on(std::size_t line) const {
     if (!preview_text_ || line >= preview_text_->size())
-        return false;
-    for (const WikiSpan& span : wiki_spans((*preview_text_)[line]))
+        return {};
+    if (!preview_styled_)
+        return wiki_spans((*preview_text_)[line]);
+    // set_preview_lines ikisini birlikte kurar.
+    return line < preview_styled_->size() ? wiki_spans((*preview_styled_)[line], *preview_wiki_targets_)
+                                          : std::vector<WikiSpan>{};
+}
+
+bool TuiState::select_wiki_link_at(std::size_t line, std::size_t offset) {
+    for (const WikiSpan& span : wiki_spans_on(line))
         if (offset >= span.begin && offset < span.end) {
             wiki_link_ = PreviewPoint{line, span.begin, span.end};
             return true;
@@ -1540,7 +1540,7 @@ void TuiState::step_wiki_link(int direction) {
                                         : (direction > 0 ? 0 : lines[line].size() + 1);
     std::optional<PreviewPoint> found;
     for (bool first = true;; first = false) {
-        const std::vector<WikiSpan> spans = wiki_spans(lines[line]);
+        const std::vector<WikiSpan> spans = wiki_spans_on(line);
         if (direction > 0) {
             const auto next = std::ranges::find_if(
                 spans, [&](const WikiSpan& span) { return !first || span.begin >= from; });
@@ -2000,19 +2000,24 @@ void TuiState::begin_view_search() {
     handle_search_line(Key::Tab, {});
 }
 
+// Karar GUI ile ortak (app::search_enter_action); odak bu arayüzün.
 Intent TuiState::search_enter() {
-    if (mode_ == Mode::Global) {
-        if (!selected_row() || query_error_)
-            return Intent::None;
-        focus_ = Focus::Preview;  // satır seçilince önizleme eşleşmeye kaydı
+    const bool global = mode_ == Mode::Global;
+    const bool selected = global ? selected_row() != nullptr : selected_entry() != nullptr;
+    switch (app::search_enter_action(mode_, selected, query_error_.has_value(), query())) {
+    case app::SearchEnter::Nothing:
+        return Intent::None;
+    case app::SearchEnter::Select:
+        focus_ = Focus::List;
+        return Intent::None;
+    case app::SearchEnter::Remember:
+        // Genel aramada önizleme eşleşmeye kaydı; düz aramada seçim kalır, açmak `e` ya da Enter ile Listeden.
+        focus_ = global ? Focus::Preview : Focus::List;
         return remember_query();
+    case app::SearchEnter::CreateNote:
+        break;
     }
-    if (selected_entry()) {
-        focus_ = Focus::List;  // seçim kalır; açmak `e` ya da Enter ile Listeden
-        return query_error_ ? Intent::None : remember_query();
-    }
-    // Argümanlı sorgu metin değildir: taslağın ilk satırı olamaz.
-    return query().empty() || query_error_ || has_arguments(query()) ? Intent::None : Intent::CreateFromQuery;
+    return Intent::CreateFromQuery;
 }
 
 // Enter'la kullanılan arama geçmişe girer; eşleşmesiz sorgu notun ilk satırı olur, oraya girmez.

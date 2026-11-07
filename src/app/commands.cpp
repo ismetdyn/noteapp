@@ -8,6 +8,27 @@
 
 namespace noteapp::app {
 
+CommandBlock command_block(CommandNeeds needs, const CommandState& state) {
+    const auto unless = [](bool satisfied, CommandBlock reason) { return satisfied ? CommandBlock::None : reason; };
+    switch (needs) {
+    case CommandNeeds::Nothing:
+        return CommandBlock::None;
+    case CommandNeeds::Note:
+        return unless(state.note, CommandBlock::NoNote);
+    case CommandNeeds::Row:
+        return unless(state.row, CommandBlock::NoRow);
+    case CommandNeeds::Links:
+        return unless(state.links, CommandBlock::NoLinks);
+    case CommandNeeds::FolderView:
+        return unless(state.folder_view, CommandBlock::NotFolderView);
+    case CommandNeeds::Yank:
+        return state.yank ? unless(state.paste_folder, CommandBlock::PasteNeedsFolder) : CommandBlock::NothingYanked;
+    case CommandNeeds::Sync:
+        return unless(state.sync, CommandBlock::SyncOff);
+    }
+    return CommandBlock::None;
+}
+
 std::vector<std::size_t> rank_palette(std::string_view query, std::span<const PaletteCandidate> candidates,
                                       std::span<const std::string> recent, std::size_t max_candidate) {
     struct Ranked {

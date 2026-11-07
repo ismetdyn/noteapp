@@ -159,29 +159,40 @@ private:
     MapHighlight highlight_;
 };
 
+QueryTable raw_table(const core::UserQuery& query, OutcomeBuilder& builder) {
+    QueryTable table;
+    table.columns = query.result.columns;
+    table.rows.reserve(query.result.rows.size());
+    for (const auto& row : query.result.rows) {
+        std::vector<QueryCell> cells;
+        cells.reserve(row.size());
+        for (const graph::QueryValue& value : row)
+            cells.push_back(builder.cell(value));
+        table.rows.push_back(std::move(cells));
+    }
+    return table;
+}
+
 }  // namespace
 
 std::string cell_text(std::string_view raw, std::size_t max_bytes) {
     return shown_text(raw, max_bytes);
 }
 
+QueryTable query_table(const core::UserQuery& query) {
+    OutcomeBuilder builder(query);
+    return raw_table(query, builder);
+}
+
 QueryOutcome query_outcome(const core::UserQuery& query, bool wrote, std::size_t cell_bytes, std::string_view view) {
     QueryOutcome outcome;
-    outcome.table.columns.reserve(query.result.columns.size());
-    for (const std::string& column : query.result.columns)
-        outcome.table.columns.push_back(shown_text(column, cell_bytes));
-    outcome.table.rows.reserve(query.result.rows.size());
     OutcomeBuilder builder(query);
-    for (const auto& row : query.result.rows) {
-        std::vector<QueryCell> cells;
-        cells.reserve(row.size());
-        for (const graph::QueryValue& value : row) {
-            QueryCell cell = builder.cell(value);
+    outcome.table = raw_table(query, builder);
+    for (std::string& column : outcome.table.columns)
+        column = shown_text(column, cell_bytes);
+    for (auto& row : outcome.table.rows)
+        for (QueryCell& cell : row)
             cell.text = shown_text(cell.text, cell_bytes);  // `note` ham kalır: not onunla açılır
-            cells.push_back(std::move(cell));
-        }
-        outcome.table.rows.push_back(std::move(cells));
-    }
     outcome.highlight = builder.take_highlight();
     outcome.changes = query.changes;
     outcome.wrote = wrote;
@@ -241,8 +252,12 @@ MapQuery::Step MapQuery::run(core::NoteStore& store, std::string_view text) {
     const auto writes = core::query_writes(text, limits_);
     if (!writes)
         return fail(writes.error());
-    if (!*writes)
-        return finish(core::run_user_query(store, text, core::QueryAction::Read, limits_), false);
+    if (!*writes) {
+        const Step step = finish(core::run_user_query(store, text, core::QueryAction::Read, limits_), false);
+        if (step == Step::Ran)
+            read_query_ = std::string(text);
+        return step;
+    }
     const auto preview = core::run_user_query(store, text, core::QueryAction::Preview, limits_);
     if (!preview)
         return fail(preview.error());
@@ -254,14 +269,20 @@ MapQuery::Step MapQuery::run(core::NoteStore& store, std::string_view text) {
 
 MapQuery::Step MapQuery::run_view(const core::NoteStore& store, std::string_view name) {
     pending_.reset();
-    return finish(core::run_saved_view(store, name), false, name);
+    const Step step = finish(core::run_saved_view(store, name), false, name);
+    if (step == Step::Ran)
+        read_query_.clear();  // sonuç görünümündür: kaydedilecek yazılı sorgu yok
+    return step;
 }
 
 MapQuery::Step MapQuery::apply(core::NoteStore& store) {
     if (!pending_)
         return Step::Failed;
     const std::string text = *std::exchange(pending_, std::nullopt);
-    return finish(core::run_user_query(store, text, core::QueryAction::Write, limits_), true);
+    const Step step = finish(core::run_user_query(store, text, core::QueryAction::Write, limits_), true);
+    if (step == Step::Ran)
+        read_query_.clear();  // yazan sorgu görünüm olamaz
+    return step;
 }
 
 void MapQuery::clear() {
@@ -269,7 +290,14 @@ void MapQuery::clear() {
     confirm_text_.clear();
     outcome_.reset();
     error_.clear();
+    read_query_.clear();
     table_ = false;
+}
+
+std::expected<void, core::Error> MapQuery::save_view(core::NoteStore& store, std::string_view name) const {
+    if (read_query_.empty())
+        return std::unexpected(core::Error{core::Error::Code::InvalidQuery, "error.view_needs_query", {}});
+    return core::save_view(store, name, read_query_, false);
 }
 
 MapQuery::Step MapQuery::fail(const core::Error& error) {

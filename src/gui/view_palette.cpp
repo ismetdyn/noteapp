@@ -80,7 +80,7 @@ std::optional<std::string> View::ask_palette() {
     std::optional<std::string> result;
     bool first_frame = true;
     run_modal(
-        core::tr("gui.palette_title"),
+        core::tr("app.palette_title"),
         [&]() -> bool {
             const std::vector<PaletteRow> rows = state_.palette_rows(query);
             selected = rows.empty() ? 0 : std::min(selected, rows.size() - 1);

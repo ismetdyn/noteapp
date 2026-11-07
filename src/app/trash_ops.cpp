@@ -1,9 +1,14 @@
 #include "app/trash_ops.hpp"
 
 #include "core/folder_tree.hpp"
+#include "core/i18n.hpp"
 
 #include <algorithm>
+#include <iterator>
+#include <optional>
 #include <ranges>
+#include <span>
+#include <string>
 #include <utility>
 
 namespace noteapp::app {
@@ -28,6 +33,84 @@ std::size_t note_count(const Listing& listing, std::string_view folder) {
     return node ? node->note_count : 0;
 }
 
+// Kullanıcıya gösterilen not: yol ve sorudan önce listedeki revizyon. Yalnız bu hâl silinir ya da çöpe
+// atılır: senkron notu değiştirdiyse ya da aynı yola başka not koyduysa not kalır (SD7 review). Revizyon
+// deponun işleminin içinde denetlenir (NoteStore::remove/trash `expected`): okuma ile silme arasına yazma
+// giremez (SD11b).
+struct ShownNote {
+    core::NotePath path;
+    std::optional<core::Revision> revision;  // listede yoksa (eski liste) denetlenmez
+};
+
+ShownNote shown_note(const Listing& listing, const core::NotePath& path) {
+    const core::NoteInfo* info = listing.note_of(path);
+    return {path, info ? std::optional(info->revision) : std::nullopt};
+}
+
+// Soruda arayüzün kendi yazması (Prompts::written) onaylı hâldir: o notun beklenen revizyonu odur.
+void apply_written(std::span<ShownNote> notes, const Prompts& prompts) {
+    if (!prompts.written)
+        return;
+    for (ShownNote& note : notes)
+        if (auto own = prompts.written(note.path))
+            note.revision = own;
+}
+
+std::vector<ShownNote> shown_under(const Listing& listing, std::string_view folder) {
+    std::vector<ShownNote> notes;
+    for (const std::size_t note : listing.tree().notes_under(folder))
+        notes.push_back(shown_note(listing, listing.metas()[note].path));
+    return notes;
+}
+
+// Deponun ModifiedExternally'si kullanıcıya "onaydan sonra değişti" olarak söylenir.
+core::Error changed_since_shown(core::Error error, const char* message_key) {
+    if (error.code == core::Error::Code::ModifiedExternally)
+        error.message_key = message_key;
+    return error;
+}
+
+std::expected<void, core::Error> remove_shown(core::NoteStore& store, const ShownNote& note) {
+    return store.remove(note.path, note.revision).transform_error([](core::Error error) {
+        return changed_since_shown(std::move(error), "error.changed_since_confirm");
+    });
+}
+
+std::expected<core::TrashItem, core::Error> trash_shown(core::NoteStore& store, const ShownNote& note) {
+    return store.trash(note.path, note.revision).transform_error([](core::Error error) {
+        return changed_since_shown(std::move(error), "error.trash_changed_since_confirm");
+    });
+}
+
+// Klasörün gösterilen notları tek tek çöpe, sonra boşalan klasör kaldırılır (depo klasörü not başına çöpe
+// atmaz: remove_folder force notları kalıcı siler). Arada gelen ya da değişen not klasörü tutar (NotEmpty,
+// değişti); kalanlar sürer. Hiç not atılamadıysa klasörler adıma yazılmaz: geri alma senkronun kaldırdığı
+// klasörü geri getirmesin.
+struct FolderTrash {
+    std::vector<core::TrashItem> notes;
+    std::vector<std::string> folders;  // geri almada yeniden kurulacaklar
+    std::optional<core::Error> failure;
+};
+
+FolderTrash trash_shown_folder(core::NoteStore& store, const Listing& listing,
+                               std::span<const ShownNote> shown, const std::string& folder) {
+    FolderTrash done;
+    for (const ShownNote& note : shown) {
+        auto trashed = trash_shown(store, note);
+        if (!trashed) {
+            done.failure = done.failure ? done.failure : trashed.error();
+            continue;  // kalanlar sürer, klasör yerinde kalır
+        }
+        done.notes.push_back(std::move(*trashed));
+    }
+    if (!done.failure)
+        if (auto removed = store.remove_folder(folder, false); !removed)
+            done.failure = removed.error();
+    if (!done.failure || !done.notes.empty())
+        std::ranges::copy(listing.tree().folders_under(folder), std::back_inserter(done.folders));
+    return done;
+}
+
 std::size_t note_count(const Listing& listing, std::span<const TrashTarget> items) {
     std::size_t notes = 0;
     for (const TrashTarget& item : items)
@@ -36,6 +119,34 @@ std::size_t note_count(const Listing& listing, std::span<const TrashTarget> item
 }
 
 }  // namespace
+
+ConfirmText confirm_text(const Confirm& request) {
+    const std::string& path = request.path;
+    const std::string notes = core::count_text("tui.count_notes", request.notes);
+    const std::string folders = core::count_text("tui.count_subfolders", request.folders);
+    const std::string items = core::count_text("tui.count_items", request.items);
+    switch (request.kind) {
+    case ConfirmKind::TrashFolder:
+        return {core::tr("tui.confirm_trash_folder", {{"path", path}, {"notes", notes}, {"folders", folders}}),
+                core::tr("tui.folder_trash_title")};
+    case ConfirmKind::TrashBatch:
+        return {core::tr("tui.confirm_trash_batch", {{"items", items}, {"notes", notes}}),
+                core::tr("tui.batch_trash_title")};
+    case ConfirmKind::Delete:
+        return {core::tr("tui.confirm_delete", {{"path", path}})};
+    case ConfirmKind::Purge:
+        return {core::tr("tui.confirm_purge", {{"path", path}})};
+    case ConfirmKind::DeleteFolder:
+        return {core::tr("tui.confirm_delete_folder", {{"path", path}, {"notes", notes}, {"folders", folders}}),
+                core::tr("tui.folder_delete_title")};
+    case ConfirmKind::DeleteBatch:
+        return {core::tr("tui.confirm_delete_batch", {{"items", items}, {"notes", notes}})};
+    case ConfirmKind::EmptyTrash:
+        return {core::tr("tui.confirm_empty_trash", {{"count", core::count_text("tui.count_notes", request.items)}}),
+                core::tr("tui.empty_trash_title")};
+    }
+    std::unreachable();
+}
 
 void TrashOps::push(Step step) {
     steps_.push_back(std::move(step));
@@ -59,32 +170,9 @@ std::expected<core::TrashItem, core::Error> TrashOps::trash_note(core::NoteStore
     return trashed;
 }
 
-// Depo klasörü not başına çöpe atmaz (remove_folder force notları kalıcı siler): notlar tek tek atılır, sonra
-// boşalan klasör kaldırılır. Arada gelen yeni not NotEmpty verir, klasör ve o not yerinde kalır. Hiç not
-// atılamadıysa klasörler adıma yazılmaz: geri alma senkronun kaldırdığı klasörü geri getirmesin.
-std::optional<core::Error> TrashOps::trash_folder_into(core::NoteStore& store, const Listing& listing,
-                                                       Step& step, const std::string& folder) {
-    std::optional<core::Error> failure;
-    std::size_t trashed_count = 0;
-    for (const std::size_t note : listing.tree().notes_under(folder)) {
-        auto trashed = store.trash(listing.metas()[note].path);
-        if (!trashed) {
-            failure = failure ? failure : trashed.error();
-            continue;  // kalanlar sürer, klasör yerinde kalır
-        }
-        step.notes.push_back(std::move(*trashed));
-        ++trashed_count;
-    }
-    if (!failure)
-        if (auto removed = store.remove_folder(folder, false); !removed)
-            failure = removed.error();
-    if (!failure || trashed_count > 0)
-        std::ranges::copy(listing.tree().folders_under(folder), std::back_inserter(step.folders));
-    return failure;
-}
-
 std::optional<FolderTrashed> TrashOps::trash_folder(core::NoteStore& store, const Listing& listing,
                                                     std::string_view folder, const Prompts& prompts) {
+    std::vector<ShownNote> shown = shown_under(listing, folder);  // sorudan önce: sorulan notlar
     if (const core::FolderNode* node = listing.tree().find(folder); node && node->note_count > 0) {
         const Confirm request{.kind = ConfirmKind::TrashFolder,
                               .path = std::string(folder),
@@ -93,12 +181,13 @@ std::optional<FolderTrashed> TrashOps::trash_folder(core::NoteStore& store, cons
         if (!ask(prompts, request))
             return std::nullopt;
     }
-    Step step{.folder = std::string(folder)};
-    FolderTrashed result;
-    result.failure = trash_folder_into(store, listing, step, step.folder);
-    result.notes = step.notes.size();
-    if (!step.notes.empty() || !result.failure)
-        push(std::move(step));
+    apply_written(shown, prompts);
+    FolderTrash done = trash_shown_folder(store, listing, shown, std::string(folder));
+    const FolderTrashed result{.notes = done.notes.size(), .failure = std::move(done.failure)};
+    if (!done.notes.empty() || !result.failure)
+        push({.notes = std::move(done.notes),
+              .folders = std::move(done.folders),
+              .folder = std::string(folder)});
     return result;
 }
 
@@ -107,19 +196,30 @@ std::optional<BatchReport> TrashOps::trash_items(core::NoteStore& store, const L
     const bool has_notes_in_folder = std::ranges::any_of(items, [&](const TrashTarget& item) {
         return item.is_folder && note_count(listing, item.path.string()) > 0;
     });
+    // Sorudan önce: her öğenin sorulan hâli (klasörde altındaki notlar).
+    std::vector<std::vector<ShownNote>> shown;
+    for (const TrashTarget& item : items)
+        shown.push_back(item.is_folder ? shown_under(listing, item.path.string())
+                                       : std::vector{shown_note(listing, item.path)});
     // Klasörde kaybedilecek not yoksa onaysız: tek satırın kuralı.
     if (has_notes_in_folder &&
         !ask(prompts,
              {.kind = ConfirmKind::TrashBatch, .items = items.size(), .notes = note_count(listing, items)}))
         return std::nullopt;
+    for (std::vector<ShownNote>& notes : shown)
+        apply_written(notes, prompts);
     Step step;
     BatchReport report;
-    for (const TrashTarget& item : items) {
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        const TrashTarget& item = items[i];
         const std::string path = item.path.string();
         std::optional<core::Error> failure;
         if (item.is_folder) {
-            failure = trash_folder_into(store, listing, step, path);
-        } else if (auto trashed = store.trash(item.path)) {
+            FolderTrash done = trash_shown_folder(store, listing, shown[i], path);
+            std::ranges::move(done.notes, std::back_inserter(step.notes));
+            std::ranges::move(done.folders, std::back_inserter(step.folders));
+            failure = std::move(done.failure);
+        } else if (auto trashed = trash_shown(store, shown[i].front())) {
             step.notes.push_back(std::move(*trashed));
         } else {
             failure = trashed.error();
@@ -198,15 +298,26 @@ std::expected<core::NotePath, core::Error> TrashOps::restore_entry(core::NoteSto
     return store.restore(entry.path);
 }
 
-std::expected<void, core::Error> TrashOps::remove_shown_folder(core::NoteStore& store, const Listing& listing,
-                                                               const std::string& folder) {
-    for (const std::size_t note : listing.tree().notes_under(folder)) {
-        auto removed = store.remove(listing.metas()[note].path);
-        // Zaten yok: silinmek istenen hâl; başka hata klasörü olduğu gibi bırakır.
+namespace {
+
+// Kullanıcının gördüğü notları (sorudan önce alınan hâlleriyle) kalıcı siler, sonra boşalan klasörü kaldırır.
+std::expected<void, core::Error> remove_shown_folder(core::NoteStore& store, std::span<const ShownNote> notes,
+                                                     const std::string& folder) {
+    std::optional<core::Error> changed;  // onaydan sonra değişen ilk not: klasörün kalma nedeni
+    for (const ShownNote& note : notes) {
+        auto removed = remove_shown(store, note);
+        // Zaten yok: silinmek istenen hâl. Onaydan sonra değişen not kalır (klasör de); başka hata klasörü
+        // olduğu gibi bırakır.
+        if (!removed && removed.error().code == core::Error::Code::ModifiedExternally) {
+            changed = changed ? changed : removed.error();
+            continue;
+        }
         if (!removed && removed.error().code != core::Error::Code::NotFound)
             return removed;
     }
     auto emptied = store.remove_folder(folder, false);
+    if (!emptied && emptied.error().code == core::Error::Code::NotEmpty && changed)
+        return std::unexpected(std::move(*changed));  // kalan not gösterilmeyen değil, değişen nottur
     if (!emptied && emptied.error().code == core::Error::Code::NotEmpty) {
         core::Error unseen = emptied.error();
         unseen.message_key = "error.folder_unseen_notes";
@@ -214,6 +325,8 @@ std::expected<void, core::Error> TrashOps::remove_shown_folder(core::NoteStore& 
     }
     return emptied;
 }
+
+}  // namespace
 
 std::expected<core::NotePath, core::Error> TrashOps::restore(core::NoteStore& store,
                                                              const core::NotePath& item) {
@@ -239,11 +352,12 @@ BatchReport TrashOps::restore_items(core::NoteStore& store, std::span<const core
     return report;
 }
 
-std::expected<bool, core::Error> TrashOps::remove(core::NoteStore& store, const core::NotePath& path,
-                                                  const Prompts& prompts) {
+std::expected<bool, core::Error> TrashOps::remove(core::NoteStore& store, const Listing& listing,
+                                                  const core::NotePath& path, const Prompts& prompts) {
+    const ShownNote shown = shown_note(listing, path);  // onaydan önce: sorulan hâl
     if (!ask(prompts, {.kind = ConfirmKind::Delete, .path = path.string()}))
         return false;
-    if (auto removed = store.remove(path); !removed)
+    if (auto removed = remove_shown(store, shown); !removed)
         return std::unexpected(removed.error());
     return true;
 }
@@ -265,9 +379,10 @@ std::expected<bool, core::Error> TrashOps::remove_folder(core::NoteStore& store,
                           .path = std::string(folder),
                           .notes = node ? node->note_count : 0,
                           .folders = node ? node->folder_count : 0};
+    const std::vector<ShownNote> shown = shown_under(listing, folder);  // onaydan önce: sayılan notlar
     if (!ask(prompts, request))
         return false;
-    if (auto removed = remove_shown_folder(store, listing, std::string(folder)); !removed)
+    if (auto removed = remove_shown_folder(store, shown, std::string(folder)); !removed)
         return std::unexpected(removed.error());
     return true;
 }
@@ -275,15 +390,21 @@ std::expected<bool, core::Error> TrashOps::remove_folder(core::NoteStore& store,
 std::optional<BatchReport> TrashOps::delete_items(core::NoteStore& store, const Listing& listing,
                                                   std::span<const TrashTarget> items, bool from_trash,
                                                   const Prompts& prompts) {
+    // Onaydan önce: her öğenin sorulan hâli (klasörde altındaki notlar), sonra soru.
+    std::vector<std::vector<ShownNote>> shown;
+    for (const TrashTarget& item : items)
+        shown.push_back(item.is_folder ? shown_under(listing, item.path.string())
+                                       : std::vector{shown_note(listing, item.path)});
     if (!ask(prompts,
              {.kind = ConfirmKind::DeleteBatch, .items = items.size(), .notes = note_count(listing, items)}))
         return std::nullopt;
     BatchReport report;
-    for (const TrashTarget& item : items) {
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        const TrashTarget& item = items[i];
         const auto removed = [&] {
             if (item.is_folder)
-                return remove_shown_folder(store, listing, item.path.string());
-            return from_trash ? store.purge(item.path) : store.remove(item.path);
+                return remove_shown_folder(store, shown[i], item.path.string());
+            return from_trash ? store.purge(item.path) : remove_shown(store, shown[i].front());
         }();
         if (!removed) {
             report.fail(item.path.string(), removed.error());

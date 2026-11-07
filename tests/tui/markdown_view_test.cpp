@@ -218,6 +218,25 @@ TEST_CASE("links show text and a dim url, never a terminal hyperlink escape") {
     CHECK_FALSE(contains(all, "\x1b"));
 }
 
+// GUI önizlemesiyle aynı (MD_FLAG_WIKILINKS): [[hedef]] ayraçsız metniyle bağlantı görünüşünde, hedefi deponun
+// anahtarı (core::link_target); kod içindeki ayraçlar bağlantı değildir.
+TEST_CASE("wiki links render as links with their target, the label replaces the brackets") {
+    const RenderedView view = md("see [[b]] and [[c#part|the *c* note]] but `[[code]]`\n\n# [[head]]\n");
+    REQUIRE_FALSE(view.lines.empty());
+    CHECK(view.lines[0] == "see b and the c note but [[code]]");
+    CHECK(view.wiki_targets == std::vector<std::string>{"b", "c", "head"});
+    const TextLook b = look_of(view, "b and");
+    CHECK(b.underline);
+    CHECK(b.token == TokenKind::Keyword);
+    CHECK(b.wiki_link == 1);
+    CHECK(look_of(view, "the c").wiki_link == 2);
+    CHECK(look_of(view, "c note").italic);  // etiketteki vurgu kalır
+    CHECK(look_of(view, "c note").wiki_link == 2);
+    CHECK(look_of(view, "[[code]]").wiki_link == 0);
+    CHECK(look_of(view, "head").wiki_link == 3);
+    CHECK(look_of(view, "see").wiki_link == 0);
+}
+
 TEST_CASE("bare addresses appear once and a short link text does not hide its url") {
     const std::string all = joined(md("www.ornek.com ve [x](http://x)\n"));
     CHECK(contains(all, "www.ornek.com"));
@@ -232,6 +251,13 @@ TEST_CASE("images become a placeholder with their alt text and no address") {
     CHECK(contains(all, "[görsel]"));
     CHECK_FALSE(contains(all, "iz.le"));
     CHECK_FALSE(contains(all, "yerel.png"));
+}
+
+// Alt metin tek satırdır (HTML alt="...", md4c-html, GUI önizlemesi): zorunlu satır sonu boşluk olur.
+TEST_CASE("a hard break inside image alt text stays on one line") {
+    const TurkishCatalog turkish;
+    const std::string all = joined(md("![kedi\\\nfoto](k.png)\n"));
+    CHECK(contains(all, "[görsel: kedi foto]"));
 }
 
 TEST_CASE("html stays literal text") {
@@ -913,7 +939,8 @@ TEST_CASE("a burst of width changes keeps the previous layout until it settles")
     const tui::Preview& rebuilt = at(kSettle);
     CHECK_FALSE(f.preview.deferred());
     CHECK(f.preview.generation() != settled);
-    check_fits(RenderedView{rebuilt.lines, rebuilt.styled, rebuilt.source_lines}, columns());
+    check_fits(RenderedView{rebuilt.lines, rebuilt.styled, rebuilt.source_lines, rebuilt.wiki_targets},
+               columns());
 
     // Bekleme sürerken eski genişliğe dönüş yeniden üretmez, sonraki değişim de sakin sayılır.
     const std::size_t again = f.preview.generation();
@@ -962,7 +989,8 @@ TEST_CASE("the rendered view follows the pane width and is cached otherwise") {
     CHECK(f.preview.generation() != generation);
     CHECK(f.shown->lines.size() != lines);
     const int columns = tui::editor_viewport({kWidth, kHeight}, f.state.layout()).columns;
-    check_fits(RenderedView{f.shown->lines, f.shown->styled, f.shown->source_lines}, columns);
+    check_fits(RenderedView{f.shown->lines, f.shown->styled, f.shown->source_lines, f.shown->wiki_targets},
+               columns);
 }
 
 TEST_CASE("a moving selection does not read or render until it settles") {
@@ -1088,6 +1116,13 @@ void check_same_view(const tui::Preview& shown, const tui::RenderedView& whole) 
             CHECK(shown.styled[line][i].begin == whole.spans[line][i].begin);
             CHECK(shown.styled[line][i].end == whole.spans[line][i].end);
             CHECK(shown.styled[line][i].look == whole.spans[line][i].look);
+            // Parçaların bağlantı sırası tek geçiştekiyle aynı hedefi gösterir. Sınır aşılınca kalan parçalar
+            // üretilmez, tek geçiş ise bütün notun hedeflerini toplar: listeler değil gösterilenler
+            // karşılaştırılır.
+            if (const std::size_t link = whole.spans[line][i].look.wiki_link; link != 0) {
+                REQUIRE(link <= shown.wiki_targets.size());
+                CHECK(shown.wiki_targets[link - 1] == whole.wiki_targets[link - 1]);
+            }
         }
     }
 }

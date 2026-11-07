@@ -2,7 +2,7 @@
 
 #include "edit/completion.hpp"
 #include "edit/editor_buffer.hpp"
-#include "edit/editor_session.hpp"
+#include "edit/editor_modes.hpp"
 #include "edit/input_line.hpp"
 #include "edit/key.hpp"
 #include "core/lsp_protocol.hpp"
@@ -10,7 +10,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <span>
 #include <string>
 #include <string_view>
@@ -80,27 +79,28 @@ public:
     void open_find(const tui::WordTable* words);
     void step_find(int delta);
     void close_find();
-    const tui::InputLine& find_line() const { return find_line_; }
-    std::span<const tui::ByteRange> find_matches() const { return find_matches_; }
-    std::size_t find_index() const { return find_index_; }
-    std::string find_label() const;  // "3/12"; eşleşme yoksa boş
-    bool find_missed() const { return find_missed_; }  // sorgu dolu, eşleşme yok
+    const tui::InputLine& find_line() const { return modes_.find_line(); }
+    std::span<const tui::ByteRange> find_matches() const { return modes_.find_matches(); }
+    std::size_t find_index() const { return modes_.find_index(); }
+    std::string find_label() const { return modes_.find_label(); }  // "3/12"; eşleşme yoksa boş
+    bool find_missed() const { return modes_.find_missed(); }       // sorgu dolu, eşleşme yok
 
     // --- Tamamlama (gölge öneri, Ctrl+Space listesi) ---
-    const std::string& ghost() const { return ghost_; }
-    const std::vector<std::string>& completion_items() const { return completion_items_; }
-    std::size_t completion_selected() const { return completion_selected_; }
-    const std::string& completion_query() const { return completion_query_; }
+    const std::string& ghost() const { return modes_.ghost(); }
+    const std::vector<std::string>& completion_items() const { return modes_.completion_items(); }
+    std::size_t completion_selected() const { return modes_.completion_selected(); }
+    const std::string& completion_query() const { return modes_.completion_query(); }
     // Her Ctrl+Space açılışında artar; dil sunucusu cevabı yalnız aynı açılışa eklenir.
-    std::uint64_t completion_generation() const { return completion_generation_; }
+    std::uint64_t completion_generation() const { return modes_.completion_generation(); }
     // Dil sunucusunun önerileri açık listeye, sözcük önerilerinin önüne (TUI EditorSession ile aynı kural):
     // etiket temizlenir, ekleme metni yalnız tek satır ve denetim karaktersizse kullanılır.
     void add_completion_items(std::uint64_t generation, std::span<const core::lsp::CompletionItem> items);
 
     // --- Dil sunucusu tanıları (aralıklar bu tampona kısılmış) ---
-    void set_diagnostics(std::vector<tui::DiagnosticMark> marks) { diagnostics_ = std::move(marks); }
-    std::span<const tui::DiagnosticMark> diagnostics() const { return diagnostics_; }
-    const tui::DiagnosticMark* diagnostic_at_cursor() const;  // imlecin üstündeki ya da hemen sonundaki
+    void set_diagnostics(std::vector<tui::DiagnosticMark> marks) { modes_.set_diagnostics(std::move(marks)); }
+    std::span<const tui::DiagnosticMark> diagnostics() const { return modes_.diagnostics(); }
+    // İmlecin üstündeki ya da hemen sonundaki.
+    const tui::DiagnosticMark* diagnostic_at_cursor() const { return modes_.diagnostic_at_cursor(buffer_); }
 
     // Çizimde yalnız görünen satır için; eşik üstünde ya da bilinmeyen tipte boş.
     std::vector<tui::SyntaxSpan> syntax_spans(std::size_t line) const;
@@ -109,15 +109,6 @@ private:
     void handle_editing(tui::Key key, std::string_view text, const tui::WordTable* words);
     void handle_find(tui::Key key, std::string_view text);
     void handle_complete(tui::Key key, std::string_view text);
-    bool apply_motion(tui::Key key);
-    void apply_edit(tui::Key key, std::string_view text);
-    void update_ghost(const tui::WordTable* words);
-    void open_completion(const tui::WordTable* words);
-    void refresh_completion();
-    void insert_completion();
-    void update_find();
-    void recompute_find(std::size_t from);
-    void select_current_match();
 
     tui::EditorBuffer buffer_;
     bool writable_ = false;
@@ -128,19 +119,7 @@ private:
     Mode mode_ = Mode::Editing;
     int columns_ = 80;
     int rows_ = 24;
-    tui::InputLine find_line_{tui::InputKind::Find};
-    std::size_t find_origin_ = 0;
-    std::vector<tui::ByteRange> find_matches_;
-    std::size_t find_index_ = 0;
-    bool find_missed_ = false;
-    std::string ghost_;
-    std::vector<std::string> completion_candidates_;
-    std::vector<std::string> completion_items_;
-    std::string completion_query_;
-    std::size_t completion_selected_ = 0;
-    std::uint64_t completion_generation_ = 0;
-    std::map<std::string, std::string> completion_inserts_;  // dil sunucusu etiketi -> eklenecek metin
-    std::vector<tui::DiagnosticMark> diagnostics_;
+    tui::EditorModes modes_{limits_.completion};  // bul, tamamlama, gölge öneri, tanılar (TUI ile ortak)
 };
 
 }  // namespace noteapp::gui

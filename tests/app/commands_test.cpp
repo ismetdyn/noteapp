@@ -108,6 +108,23 @@ TEST_CASE("remember_command with limit 0 keeps every command") {
     CHECK(recent.front() == "cmd499");
 }
 
+// TUI needs_block ve GUI command_block aynı karar: yank önce, sonra hedef klasör; bağlantı gizliyse yok sayılır.
+TEST_CASE("command_block: each need maps to its reason, paste asks for a yank before a folder") {
+    using app::CommandBlock;
+    using app::CommandNeeds;
+    const app::CommandState none;
+    CHECK(app::command_block(CommandNeeds::Nothing, none) == CommandBlock::None);
+    CHECK(app::command_block(CommandNeeds::Note, none) == CommandBlock::NoNote);
+    CHECK(app::command_block(CommandNeeds::Row, none) == CommandBlock::NoRow);
+    CHECK(app::command_block(CommandNeeds::Links, none) == CommandBlock::NoLinks);
+    CHECK(app::command_block(CommandNeeds::FolderView, none) == CommandBlock::NotFolderView);
+    CHECK(app::command_block(CommandNeeds::Yank, none) == CommandBlock::NothingYanked);
+    CHECK(app::command_block(CommandNeeds::Yank, {.yank = true}) == CommandBlock::PasteNeedsFolder);
+    CHECK(app::command_block(CommandNeeds::Yank, {.yank = true, .paste_folder = true}) == CommandBlock::None);
+    CHECK(app::command_block(CommandNeeds::Sync, none) == CommandBlock::SyncOff);
+    CHECK(app::command_block(CommandNeeds::Sync, {.sync = true}) == CommandBlock::None);
+}
+
 TEST_CASE("parity gap rows name registry commands, carry a plan-parity owner and appear once") {
     std::set<std::pair<test::CommandUi, std::string_view>> seen;
     for (const test::CommandGap& gap : test::kCommandGaps) {

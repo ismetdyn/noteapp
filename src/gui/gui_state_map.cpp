@@ -1,6 +1,7 @@
 #include "app/document.hpp"
 #include "app/map_relations.hpp"
 #include "core/i18n.hpp"
+#include "core/note_views.hpp"
 #include "edit/display_text.hpp"
 #include "gui/gui_state.hpp"
 
@@ -232,6 +233,42 @@ std::optional<std::string> GuiState::map_query_history_step(std::string_view cur
 
 std::vector<std::string> GuiState::map_view_names() {
     return app::view_names(store_);
+}
+
+void GuiState::save_map_view() {
+    if (map_query_.read_query().empty()) {
+        fail(core::Error{core::Error::Code::InvalidQuery, "error.view_needs_query", {}});
+        return;
+    }
+    const auto name = deciders.view_name(core::tr("command.view_save"));
+    if (!name)
+        return;
+    if (const auto saved = map_query_.save_view(store_, *name); !saved) {
+        fail(saved.error());
+        return;
+    }
+    status_ = tui::terminal_safe(core::tr("app.view_saved", {{"name", *name}}));
+    notify(app::NoticeKind::Success, status_);
+    changed();
+}
+
+void GuiState::remove_saved_view(const std::string& name) {
+    // Sorulan görünüm: onay açıkken senkron aynı adı başka sorguyla yeniden kurarsa o silinmez.
+    const auto shown = core::find_view(store_, name);
+    if (!shown) {
+        fail(shown.error());
+        return;
+    }
+    if (!deciders.confirm_delete(core::tr("app.view_remove_question", {{"name", tui::terminal_safe(name)}}),
+                                 core::tr("command.view_remove")))
+        return;
+    if (const auto removed = core::remove_view(store_, name, *shown); !removed) {
+        fail(removed.error());
+        return;
+    }
+    status_ = tui::terminal_safe(core::tr("app.view_removed", {{"name", name}}));
+    notify(app::NoticeKind::Success, status_);
+    changed();
 }
 
 // Yazma onaysız uygulanmaz; vazgeçilen yazmanın metni çubukta kalır. Hata çubuğun altındadır, önceki sonuç ve

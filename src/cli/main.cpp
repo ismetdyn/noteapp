@@ -8,7 +8,6 @@
 #include "core/dll_search.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
-#include "core/migration.hpp"
 #include "core/note_store_impl.hpp"
 #include "core/paths.hpp"
 
@@ -48,17 +47,6 @@ int main(int argc, char** argv) {
         if (!silent)
             std::fprintf(stderr, "%s\n", cli::sanitize_for_terminal(message).c_str());
     }
-
-    // Geçiş bekleyen eski notlarda liste boş görünür: kullanıcı bunu notların kaybı sanmasın. Yazmayı depo
-    // reddeder.
-    const bool is_graph_command = args.kind == cli::ParsedArgs::Kind::Reserved && args.command == "graph";
-    if (args.kind == cli::ParsedArgs::Kind::Reserved && !silent && !is_graph_command &&
-        core::legacy_notes_pending(loaded.config.notes_dir, core::data_dir()))
-        std::fprintf(
-            stderr, "%s\n",
-            cli::sanitize_for_terminal(
-                core::tr("error.migration_required", {{"path", core::path_utf8(loaded.config.notes_dir)}}))
-                .c_str());
 
     int code = cli::kExitInternal;
     // Bellek biterse yığın sarmalanır, işlem geri alınır; çıkış terminate değil.

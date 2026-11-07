@@ -228,6 +228,13 @@ std::expected<std::string, Error> disconnect_map_nodes(core::NoteStore& store, c
     return unrelate_map_notes(store, from, to, relation);
 }
 
+std::string unlink_question(const core::NotePath& from, const core::RelatedNote& relation) {
+    const std::string to = relation.path.string();
+    if (relation.name.empty())
+        return core::tr("app.confirm_unlink", {{"from", from.string()}, {"to", to}});
+    return core::tr("app.confirm_unlink_named", {{"from", from.string()}, {"to", to}, {"name", relation.name}});
+}
+
 std::expected<std::string, Error> unrelate_map_notes(core::NoteStore& store, const MapNode& from,
                                                      const MapNode& to, const core::RelationId& relation) {
     const auto pair = note_pair(from, to);

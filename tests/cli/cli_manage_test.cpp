@@ -2,6 +2,7 @@
 #include "cli/confirm.hpp"
 #include "core/i18n.hpp"
 #include "support/cli_sandbox.hpp"
+#include "support/pty_run.hpp"
 
 #include <doctest/doctest.h>
 #include <fstream>
@@ -159,3 +160,23 @@ TEST_CASE("is_delete_confirmed accepts only the localized yes letters") {
     CHECK_FALSE(is_delete_confirmed("yes"));
     CHECK_FALSE(is_delete_confirmed(""));
 }
+
+#ifdef __linux__
+// SD11b review: onay sorusu açıkken senkron notu değiştirirse `rm` sorulan hâli siler, yenisini değil.
+TEST_CASE("rm keeps a note that changed while the confirmation was open") {
+    const Sandbox box;
+    box.put("a.md", "a");
+    const auto result = run_in_pty(
+        NOTEAPP_NOTE_EXE, {"rm", "a.md"},
+        {.input = "e\n", .input_after = "[e/H]", .before_input = [&] { box.put("a.md", "synced"); }});
+    CHECK(result.exit_code != 0);
+    CHECK(result.terminal.find("onaydan sonra") != std::string::npos);
+    CHECK(box.body("a.md") == "synced");
+
+    // Değişmeyen not soruyla silinir.
+    const auto confirmed =
+        run_in_pty(NOTEAPP_NOTE_EXE, {"rm", "a.md"}, {.input = "e\n", .input_after = "[e/H]"});
+    CHECK(confirmed.exit_code == 0);
+    CHECK_FALSE(box.exists("a.md"));
+}
+#endif

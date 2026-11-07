@@ -1,12 +1,9 @@
 #include "gui/gui_state.hpp"
 
 #include "app/document.hpp"
-#include "app/stray_notice.hpp"
-#include "core/atomic_file.hpp"
+#include "app/ui_prefs.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
-#include "core/note_views.hpp"
-#include "core/paths.hpp"
 #include "core/text.hpp"
 #include "detect/detect.hpp"
 #include "search/fold.hpp"
@@ -14,15 +11,13 @@
 #include "sync/note_status.hpp"
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <iterator>
 #include <span>
-#include <sstream>
 #include <string_view>
-#include <toml++/toml.hpp>
 #include <unordered_set>
 #include <utility>
 
@@ -44,27 +39,6 @@ constexpr int kMaxWindowSide = 16384;
 constexpr double kMinPaneSide = 50.0;
 constexpr double kMaxPaneSide = 8192.0;
 
-std::filesystem::path state_file() {
-    return core::state_dir() / kStateFileName;
-}
-
-// Dosya yok ya da bozuk: varsayılanlar geçerlidir, açılış sürer (not verisi etkilenmez, plan davranış 7).
-std::optional<toml::table> read_state_file() {
-    std::ifstream in(state_file(), std::ios::binary);  // fs::path: Windows'ta Türkçe yol da açılır
-    if (!in)
-        return std::nullopt;
-    const std::string text{std::istreambuf_iterator<char>(in), {}};
-    toml::parse_result parsed = toml::parse(text);
-    if (!parsed)
-        return std::nullopt;
-    return std::move(parsed).table();
-}
-
-std::string_view sort_field_name(search::SortField field) {
-    const auto found =
-        std::ranges::find(app::kSortFieldNames, field, [](const auto& entry) { return entry.first; });
-    return found == app::kSortFieldNames.end() ? std::string_view{} : found->second;
-}
 
 std::chrono::seconds rescan_interval(const core::Config& config) {
     return std::chrono::seconds(std::max(1, config.tuning.rescan_seconds));
@@ -106,30 +80,16 @@ std::optional<TextSelection> first_match(const std::string& text, const std::str
 
 }  // namespace
 
-std::string sync_state_text(core::SyncState state) {
-    switch (state) {
-    case core::SyncState::Synced:
-        return core::tr("gui.sync_state_synced");
-    case core::SyncState::Modified:
-        return core::tr("gui.sync_state_modified");
-    case core::SyncState::New:
-        return core::tr("gui.sync_state_new");
-    case core::SyncState::ConflictCopy:
-        return core::tr("gui.sync_state_conflict");
-    case core::SyncState::SyncOff:
-        break;
-    }
-    return core::tr("gui.sync_off");
-}
-
 GuiState::GuiState(core::Config config)
     : config_(std::move(config)), store_(core::NoteStore::for_config(config_)),
       rescan_at_(std::chrono::steady_clock::now() + rescan_interval(config_)),
-      sync_label_(core::tr("gui.sync_off")),
+      sync_label_(core::tr("app.sync_off")),
       // İşçi iş parçacığından gelir: durumlar UI iş parçacığına aktarılır (tick).
-      sync_status_([this](app::SyncStates states) {
-          post_quiet(
-              [this, states = std::move(states)]() mutable { return apply_sync_states(std::move(states)); });
+      sync_status_([this](app::SyncStates states, std::uint64_t generation) {
+          post_quiet([this, states = std::move(states), generation]() mutable {
+              // Senkron bu arada kapandıysa (cancel) eski durum sync_off'un üstüne yazılmaz.
+              return sync_status_.current(generation) && apply_sync_states(std::move(states));
+          });
       }),
       settings_(config_, deciders,
                 SettingsHost{.flush = [this] { return flush(); },
@@ -146,76 +106,43 @@ GuiState::GuiState(core::Config config)
     // cppcheck-suppress useInitializationList ; tek seferlik kurulum; üye sırasına bağlanmasın
     sync_note_exe = sync::note_executable_beside_self();
     word_tables_.set_store(store_);
-    const search::ViewLookup views = [this](std::string_view name) { return core::view_notes(store_, name); };
-    model_.set_view_lookup(views);
-    model_.listing().set_fuzzy_candidate_chars(config_.limits.search.fuzzy_candidate_chars.cap());
-    model_.listing().set_content_searcher([this](std::string_view text) {
-        return content_index().search(text, config_.limits.search.content_results.cap());
-    });
-    model_.listing().set_edge_source([this] { return app::search_edges(store_); });
-    model_.listing().set_property_source(
-        [this](std::string_view key) { return app::search_properties(store_, key); });
-    model_.listing().set_relation_depth(app::relation_depth(config_));
-    model_.listing().set_global_searcher([this, views](std::string_view query,
-                                                       std::span<const core::NoteMeta> notes,
-                                                       const search::GraphInput& graph) {
-        return search::search_all(query, notes, content_index(), config_.limits.search, views, graph);
-    });
-    load_list_prefs();  // ilk seçim tercih edilen sıranın ilk satırı olsun
+    // TUI ile tek yol: içerik sonuç sınırı süzgeçten sonra kesilir.
+    app::connect_store(model_.listing(), store_, config_,
+                       [this]() -> const search::ContentIndex& { return content_index(); });
+    const app::LoadedUiPrefs saved = app::load_ui_prefs(kStateFileName, prefs_rules());
+    load_list_prefs(saved.prefs);  // ilk seçim tercih edilen sıranın ilk satırı olsun
     rescan();
-    load_gui_state();
+    load_gui_state(saved.prefs);
+    if (!saved.notice.empty())  // bozuk dosya kenara alındı: bir kez söylenir
+        notify(app::NoticeKind::Error, saved.notice);
     start_sync();
-    // Açılış ipucu (TUI ile aynı): yalnız sayı, UI iş parçacığı dışında. Önceki ileti (config uyarısı) kalır,
-    // TUI'de de ileti ipucunun önündedir.
-    stray_probe_ = std::jthread([this, config = config_](const std::stop_token& stop) {
-        if (const std::size_t count = app::count_stray_files(config, stop); count > 0)
-            post([this, count] {
-                if (status_.empty())
-                    status_ = core::tr("gui.stray_notice", {{"count", std::to_string(count)}});
-            });
-    });
 }
 
 GuiState::~GuiState() = default;
 
-// TUI'nin ListPrefs'iyle aynı anahtarlar (`sort`, `sort_descending`, `open_folders`); bilinmeyen değer
-// varsayılanda bırakılır.
-void GuiState::load_list_prefs() {
-    const std::optional<toml::table> table = read_state_file();
-    if (!table)
-        return;
-    app::Listing& listing = model_.listing();
-    search::SortSpec sort = listing.sort();
-    if (const auto name = (*table)["sort"].value<std::string>()) {
-        const auto found =
-            std::ranges::find(app::kSortFieldNames, *name, [](const auto& entry) { return entry.second; });
-        if (found != app::kSortFieldNames.end())
-            sort.field = found->first;
-    }
-    sort.descending = (*table)["sort_descending"].value_or(sort.descending);
-    listing.set_sort(sort);
-    if (const toml::array* open = (*table)["open_folders"].as_array()) {
-        std::set<std::string> folders;
-        for (const toml::node& node : *open)
-            if (auto folder = node.value<std::string>())
-                folders.insert(std::move(*folder));
-        listing.set_open_folders(std::move(folders));
-    }
+app::UiPrefsRules GuiState::prefs_rules() const {
+    return {.keep_history = [limits = search_history_limits()](std::vector<std::string> entries) {
+                return tui::kept_search_history(std::move(entries), limits);
+            },
+            .recent_commands = config_.limits.app.recent_commands,
+            .max_bytes = config_.tuning.max_note_bytes};
 }
 
-void GuiState::load_gui_state() {
-    const std::optional<toml::table> saved = read_state_file();
-    if (!saved)
-        return;
-    const toml::table& table = *saved;
+// Ortak alanlar TUI ile tek kural (app::ui_prefs); bilinmeyen değer varsayılanda bırakılır.
+void GuiState::load_list_prefs(const app::UiPrefs& saved) {
+    app::Listing& listing = model_.listing();
+    listing.set_sort(saved.sort);
+    listing.set_open_folders(saved.open_folders);
+}
 
-    const auto window_side = [&table](const char* key, int fallback) {
-        const auto value = table[key].value<std::int64_t>();
+void GuiState::load_gui_state(const app::UiPrefs& saved) {
+    const auto window_side = [&saved](const char* key, int fallback) {
+        const auto value = app::pref_int(saved, key);
         return value && *value >= kMinWindowSide && *value <= kMaxWindowSide ? static_cast<int>(*value)
                                                                              : fallback;
     };
-    const auto pane_side = [&table](const char* key, float fallback) {
-        const auto value = table[key].value<double>();
+    const auto pane_side = [&saved](const char* key, float fallback) {
+        const auto value = app::pref_number(saved, key);
         return value && *value >= kMinPaneSide && *value <= kMaxPaneSide ? static_cast<float>(*value)
                                                                          : fallback;
     };
@@ -223,63 +150,29 @@ void GuiState::load_gui_state() {
     layout_.height = window_side("height", layout_.height);
     layout_.left_pane_width = pane_side("left_pane_width", layout_.left_pane_width);
     layout_.map_pane_width = pane_side("map_pane_width", layout_.map_pane_width);
-    // Eski dosyadaki folder_pane_height (ayrı klasör bölmesi) okunmaz; bilinmeyen görünüm varsayılana düşer.
-    const auto view_mode = table["view_mode"].value<std::string>();
+    // Bilinmeyen görünüm varsayılana düşer.
+    const auto view_mode = app::pref_string(saved, "view_mode");
     if (view_mode == kViewDetails)
         layout_.browser_view = BrowserView::Details;
     else if (view_mode == kViewMap)
         layout_.browser_view = BrowserView::Map;
-    layout_.row_numbers = table["row_numbers"].value_or(layout_.row_numbers);
+    layout_.row_numbers = app::pref_bool(saved, "row_numbers").value_or(layout_.row_numbers);
     // Bilinmeyen aile adı (elle düzenlenmiş dosya) varsayılanda kalır.
-    const auto font_choice = [&table](const char* key, std::span<const char* const> names,
-                                      std::string& field) {
-        if (const auto name = table[key].value<std::string>();
-            name && std::ranges::find(names, *name) != names.end())
+    const auto font_choice = [&saved](const char* key, std::span<const char* const> names, std::string& field) {
+        if (const auto name = app::pref_string(saved, key); name && std::ranges::find(names, *name) != names.end())
             field = *name;
     };
     font_choice("ui_font", kUiFonts, layout_.ui_font);
     font_choice("editor_font", kEditorFonts, layout_.editor_font);
-    // Ayrıntılar sütunu ve son komutlar TUI'nin adlarıyla; bilinmeyen değer varsayılanda kalır.
-    if (const auto column = table["column"].value<std::string>()) {
-        const auto found =
-            std::ranges::find(kDetailsColumnNames, *column, [](const auto& entry) { return entry.second; });
-        if (found != std::end(kDetailsColumnNames))
-            layout_.column = found->first;
-    }
-    if (const toml::array* recent = table["recent_commands"].as_array()) {
-        for (const toml::node& node : *recent)
-            if (auto id = node.value<std::string>(); id && app::find_command(*id) != nullptr)
-                recent_commands_.push_back(std::move(*id));
-        if (recent_commands_.size() > config_.limits.app.recent_commands.cap())
-            recent_commands_.resize(config_.limits.app.recent_commands.cap());
-    }
-    // TUI'nin `search_history` anahtarı ve süzgeci: dosya elle değişmiş olabilir (sır, bozuk kayıt düşer).
-    if (const toml::array* history = table["search_history"].as_array()) {
-        std::vector<std::string> entries;
-        for (const toml::node& node : *history)
-            if (auto entry = node.value<std::string>())
-                entries.push_back(std::move(*entry));
-        search_history_ = tui::kept_search_history(std::move(entries), search_history_limits());
-    }
+    layout_.column = saved.column;
+    recent_commands_ = saved.recent_commands;
+    search_history_ = saved.search_history;
 
     // Açık sekmeler (SPEC-gui "Sekmeler"); yoksa ya da hiçbiri kalmadıysa son seçili not.
-    if (const toml::array* saved = table["tabs"].as_array()) {
-        app::SavedTabs entries;
-        for (const toml::node& node : *saved) {
-            const toml::table* entry = node.as_table();
-            if (entry == nullptr)
-                continue;
-            if (auto path = (*entry)["path"].value<std::string>())
-                entries.tabs.push_back(
-                    {std::move(*path), (*entry)["pinned"].value_or(false), (*entry)["kept"].value_or(false)});
-        }
-        const auto active = table["active_tab"].value_or(std::int64_t{0});
-        entries.active = active < 0 ? 0 : static_cast<std::size_t>(active);
-        if (restore_tabs(entries))
-            return;
-    }
+    if (!saved.tabs.tabs.empty() && restore_tabs(saved.tabs))
+        return;
     // Son seçili not (SPEC-gui "Diğer"): listede hâlâ varsa seçilir. Değer dosyadan gelir, NotePath doğrular.
-    if (const auto last = table["last_note"].value<std::string>()) {
+    if (const auto last = app::pref_string(saved, "last_note")) {
         if (const auto path = core::NotePath::parse(*last)) {
             if (const int row = model_.index_of(*path); row >= 0)
                 select_row(row);
@@ -288,11 +181,12 @@ void GuiState::load_gui_state() {
 }
 
 void GuiState::save_gui_state() const {
-    toml::table table;
-    table.insert("width", layout_.width);
-    table.insert("height", layout_.height);
-    table.insert("left_pane_width", static_cast<double>(layout_.left_pane_width));
-    table.insert("map_pane_width", static_cast<double>(layout_.map_pane_width));
+    const app::Listing& listing = model_.listing();
+    app::UiPrefs prefs{.sort = listing.sort(),
+                       .column = layout_.column,
+                       .search_history = search_history_,
+                       .open_folders = listing.open_folders(),
+                       .recent_commands = recent_commands_};
     const auto view_mode = [](BrowserView view) {
         switch (view) {
         case BrowserView::Details:
@@ -304,51 +198,19 @@ void GuiState::save_gui_state() const {
         }
         return kViewTree;
     };
-    table.insert("view_mode", view_mode(layout_.browser_view));
-    table.insert("row_numbers", layout_.row_numbers);
-    table.insert("ui_font", layout_.ui_font);
-    table.insert("editor_font", layout_.editor_font);
-    const auto column =
-        std::ranges::find(kDetailsColumnNames, layout_.column, [](const auto& entry) { return entry.first; });
-    table.insert("column", column->second);
-    toml::array recent;
-    for (const std::string& id : recent_commands_)
-        recent.push_back(id);
-    table.insert("recent_commands", std::move(recent));
-    toml::array history;
-    for (const std::string& entry : search_history_)
-        history.push_back(entry);
-    table.insert("search_history", std::move(history));
-    const app::Listing& listing = model_.listing();
-    table.insert("sort", sort_field_name(listing.sort().field));
-    table.insert("sort_descending", listing.sort().descending);
-    toml::array open_folders;
-    for (const std::string& folder : listing.open_folders())
-        if (listing.tree().find(folder) != nullptr)  // gitmiş klasör taşınmaz (TUI prune_open_folders)
-            open_folders.push_back(folder);
-    table.insert("open_folders", std::move(open_folders));
+    prefs.extra = {{"width", std::int64_t{layout_.width}},
+                   {"height", std::int64_t{layout_.height}},
+                   {"left_pane_width", static_cast<double>(layout_.left_pane_width)},
+                   {"map_pane_width", static_cast<double>(layout_.map_pane_width)},
+                   {"view_mode", std::string(view_mode(layout_.browser_view))},
+                   {"row_numbers", layout_.row_numbers},
+                   {"ui_font", layout_.ui_font},
+                   {"editor_font", layout_.editor_font}};
     if (const auto path = current_path())
-        table.insert("last_note", path->string());
+        prefs.extra["last_note"] = path->string();
     // Taslakların yolu yoktur, yazılmaz.
-    toml::array saved_tabs;
-    std::int64_t active_index = 0;
-    for (const NoteTab& tab : tabs_) {
-        const auto note = tab_note(tab);
-        if (!note)
-            continue;
-        if (tab.id == active_tab_)
-            active_index = static_cast<std::int64_t>(saved_tabs.size());
-        saved_tabs.push_back(
-            toml::table{{"path", note->string()}, {"pinned", tab.pinned}, {"kept", tab.kept}});
-    }
-    table.insert("tabs", std::move(saved_tabs));
-    table.insert("active_tab", active_index);
-    std::ostringstream out;
-    out << table;
-    std::error_code ignored;  // yazma aşağıda aynı nedenle başarısız olur ve loglanır
-    std::filesystem::create_directories(core::state_dir(), ignored);
-    if (const auto written = core::write_file_atomically(state_file(), out.str()); !written)
-        core::log_warn("event=gui_state_write_failed detail=" + core::format_error(written.error()));
+    prefs.tabs = tabs_.saved([this](const NoteTab& tab) { return tab_note(tab); });
+    app::save_ui_prefs(kStateFileName, prefs, app::open_folder_filter(listing.tree()));
 }
 
 void GuiState::post(std::function<void()> work) {
@@ -468,15 +330,22 @@ void GuiState::open_picker(Picker kind) {
         for (core::TagCount& tag : store_.tags())
             picker_items_.push_back(
                 {std::move(tag.name), "#" + tag.display + "  (" + std::to_string(tag.count) + ")"});
-    } else if (kind == Picker::View) {
+    } else if (kind == Picker::View || kind == Picker::RemoveView) {
+        // Ad senkronla gelebilir: gizli ve yön karakterleri görünür işarete döner (`daily` ile `daily` +
+        // U+200B ayırt edilir, harita çubuğundaki listeyle aynı); seçim ham adla yapılır.
         for (std::string& name : app::view_names(store_))
-            picker_items_.push_back({name, name});
+            picker_items_.push_back({name, core::terminal_safe(name)});
     }
     picker_ = kind;
 }
 
 // TUI'deki `tag:`/`view:` tamamlamasının sonucu: ad araması, değer argüman olarak.
 void GuiState::pick(const std::string& value) {
+    if (picker_ == Picker::RemoveView) {
+        close_picker();
+        remove_saved_view(value);
+        return;
+    }
     if (picker_ == Picker::None || !leave_settings())
         return;
     std::string query = picker_ == Picker::Tag ? "tag:" : "view:";
@@ -519,6 +388,7 @@ bool GuiState::apply_sync_states(app::SyncStates states) {
         return false;  // her kayıttan sonraki istek çoğunlukla aynı durumları getirir: kare yok
     rows_stale_ = true;                          // Ayrıntılar'ın senkron sütunu
     apply_filter([this] { model_.refresh(); });  // `sync:` süzgeci yeni durumları görsün
+    reload_info();                               // Bilgi panelinin senkron alanı
     return true;
 }
 
@@ -562,25 +432,27 @@ void GuiState::clear_query() {
         set_query({});
 }
 
+// Karar TUI ile ortak (app::search_enter_action): boş, bozuk ya da argümanlı sorgu not açmaz. Odak bu arayüzün.
 void GuiState::search_enter() {
-    // nvALT: eşleşme yoksa Enter, sorguyu ilk satır yaparak yeni not açar. Argümanlı ya da bozuk sorgu not
-    // metni değildir (TUI kuralı).
-    if (current_path() || new_note_) {
-        if (current_path() && !query_error())  // TUI: bulunan, bozuk olmayan arama geçmişe girer
-            remember_query();
-        // Bulunan not TUI gibi incelemede kalır, odak listeye (genel aramada önizlemeye); düzenleme `E` ile.
-        // Taslak düzenlemededir: odak editöre.
-        if (new_note_)
-            request_focus(FocusRequest::Editor);
-        else
-            request_focus(search_mode_ == app::SearchMode::Global ? FocusRequest::Preview : FocusRequest::List);
+    if (new_note_) {  // taslak düzenlemededir: odak editöre
+        request_focus(FocusRequest::Editor);
         return;
     }
-    if (search_mode_ == app::SearchMode::Global)  // TUI: genel aramada eşleşmesiz Enter not açmaz
+    const bool global = search_mode_ == app::SearchMode::Global;
+    switch (app::search_enter_action(search_mode_, current_path().has_value(), query_error().has_value(), query_)) {
+    case app::SearchEnter::Nothing:
         return;
-    if (const auto parsed = search::parse_query(query_); !parsed || !parsed->filters.empty() || parsed->sort)
+    case app::SearchEnter::Remember:
+        remember_query();
+        [[fallthrough]];
+    case app::SearchEnter::Select:
+        // Bulunan not TUI gibi incelemede kalır, odak listeye (genel aramada önizlemeye); düzenleme `E` ile.
+        request_focus(global ? FocusRequest::Preview : FocusRequest::List);
         return;
-    new_note(query_);
+    case app::SearchEnter::CreateNote:
+        new_note(query_);
+        return;
+    }
 }
 
 // ---- Arama satırı ----
@@ -806,36 +678,24 @@ void GuiState::reload_links() {
     reload_inspector();
 }
 
-// TUI'nin ayrıntısıyla aynı alanlar ve aynı "bilinmiyor": eski depodan gelen notta created ya da origin
-// olmayabilir.
+// TUI'nin ayrıntısıyla aynı alanlar ve aynı "bilinmiyor": başka cihazdan ya da `note graph import`la gelen
+// düğümde created ya da origin olmayabilir.
 void GuiState::reload_info() {
     note_info_.clear();
     editor_.set_type(current_type());  // kayıt ya da taşıma tipi değiştirmiş olabilir (bul önerileri)
     if (!shown_)
         return;
     // Kendi kaydımız shown_'ın boyutunu ve zamanını tazelemez (yalnız revizyon); listedeki kayıt taramadan gelir.
-    const int row = model_.index_of(shown_->path);
-    core::NoteMeta meta = core::meta_of(row >= 0 ? model_.note_at(row) : *shown_);
-    const std::string unknown = core::tr("gui.info_unknown");
-    const std::string none = core::tr("gui.info_none");
-    // ponytail: senkron açıkken tek not için depo yeniden açılır (gösterim ve tarama başına); yavaşlarsa TUI'deki
-    // gibi işçi iş parçacığına alınır.
-    std::string sync = unknown;
-    if (const auto filled = sync::fill_sync_status(config_, std::span(&meta, 1)); filled)
-        sync = sync_state_text(meta.sync_status);
-    else
-        core::log_warn("event=note_sync_status_failed detail=" + core::format_error(filled.error()));
-    const std::string type = current_type();
-    const std::string tags = hash_tags(links_.tags);
-    note_info_ = {
-        {core::tr("gui.info_size"), core::human_size(meta.size)},
-        {core::tr("gui.info_updated"), core::local_time_text(meta.updated_at)},
-        {core::tr("gui.info_created"), meta.created_at ? core::local_time_text(*meta.created_at) : unknown},
-        {core::tr("gui.info_sync"), sync},
-        {core::tr("gui.info_origin"), meta.origin.value_or(unknown)},
-        {core::tr("gui.info_type"), type.empty() ? none : type},
-        {core::tr("gui.info_tags"), tags.empty() ? none : tags},
-    };
+    // Senkron durumu TUI gibi işçiden (app::SyncStatusWorker → Listing): UI iş parçacığı depo açmaz.
+    const core::NoteMeta* listed = model_.listing().meta_of(shown_->path);
+    core::NoteMeta meta = listed != nullptr ? *listed : core::meta_of(*shown_);
+    meta.tags = links_.tags;  // son kayıttaki etiketler (bağlantı okumasıyla aynı)
+    // Alanlar ve değerleri TUI'nin satır ayrıntısıyla aynı (app::note_field_text).
+    static constexpr std::array<const char*, app::kNoteFields.size()> kLabels = {
+        "gui.info_size",   "gui.info_updated", "gui.info_created", "gui.info_sync",
+        "gui.info_origin", "gui.info_type",    "gui.info_tags"};
+    for (std::size_t i = 0; i < app::kNoteFields.size(); ++i)
+        note_info_.push_back({core::tr(kLabels[i]), app::note_field_text(meta, app::kNoteFields[i])});
 }
 
 app::PreviewKind GuiState::preview_kind() const {
@@ -908,10 +768,11 @@ void GuiState::show_note(core::NoteInfo info) {  // cppcheck-suppress passedByVa
     // çakışma diyaloğu çıkar.
     if (shown_ && shown_->path == info.path) {
         const app::DiskChange change = app::disk_change(info.revision, doc_.revision(), dirty_);
-        if (change == app::DiskChange::Changed && !doc_.changed_on_disk())
-            status_ = core::tr("gui.changed_on_disk");
         if (change != app::DiskChange::Reload) {
+            const bool known = doc_.changed_on_disk();
             doc_.note_disk_change(change);
+            if (change == app::DiskChange::Changed && !known)
+                status_ = doc_.disk_notice();
             return;
         }
     }
@@ -966,7 +827,7 @@ std::expected<void, core::Error> GuiState::load_text(const core::NoteInfo& info)
 // İkili notta yer tutucu; diğer salt-okunur notlar arındırılmış metinle (başıyla) okunur.
 void GuiState::set_document_text(std::string text) {
     if (binary())
-        set_editor(core::tr("gui.binary_preview"), false);
+        set_editor(core::tr("app.binary_preview"), false);
     else
         set_editor(std::move(text), doc_.writable());
 }
@@ -1069,7 +930,7 @@ void GuiState::editor_changed(std::uint64_t edits_before) {
     if (!editable_ || !(shown_ || new_note_))
         return;
     dirty_ = editor_.dirty();
-    if (NoteTab* tab = find_tab(active_tab_))
+    if (NoteTab* tab = tabs_.active())
         tab->kept = true;  // düzenlenen sekme, sonra açılan notla değişmez
     if (new_note_ && !shown_)
         refresh_draft_type();
@@ -1249,7 +1110,10 @@ void GuiState::focus_search() {
     request_focus(FocusRequest::Search);
 }
 
+// Kasa başka süreçte (`note sync login/logout`) değişmiş olabilir: gösterge açılışta yeniden sorulur.
 void GuiState::show_settings_tab() {
+    if (tab_ != Tab::Settings)
+        settings_.opened();
     tab_ = Tab::Settings;
 }
 
@@ -1258,7 +1122,7 @@ void GuiState::toggle_settings_tab() {
     if (tab_ == Tab::Settings)
         leave_settings();
     else
-        tab_ = Tab::Settings;
+        show_settings_tab();
 }
 
 bool GuiState::leave_settings() {
@@ -1283,7 +1147,7 @@ std::string GuiState::count_label() const {
                     : core::tr("gui.note_count", {{"shown", std::to_string(model_.row_count())},
                                                   {"total", std::to_string(model_.total())}});
     if (const std::size_t marked = marked_count(); marked > 0)
-        label += "  " + core::tr("gui.marked_count", {{"count", std::to_string(marked)}});
+        label += "  " + core::tr("app.marked_count", {{"count", std::to_string(marked)}});
     return label;
 }
 

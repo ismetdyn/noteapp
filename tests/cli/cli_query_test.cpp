@@ -149,6 +149,23 @@ TEST_CASE("query_write_goes_through_the_note_store_guard") {
     CHECK(box.run({"query", "--write", "CREATE (n:X {v: $missing})"}).exit_code == 2);
 }
 
+// Eşitlik: okuma TUI/GUI'nin sorgu çubuğu gibi core::run_user_query'den geçer; not düğümü onaltılık kimlik değil
+// yoluyla görünür. `view run` aynı biçimdedir.
+TEST_CASE("query_read_shows_a_note_node_by_its_path") {
+    const Sandbox box("en");
+    box.put("a.md", "a\n");
+    write_ok(box, {"CREATE (:X)"});
+    const auto result = box.run({"query", "MATCH (n:Note) RETURN n"});
+    INFO(result.err);
+    CHECK(result.exit_code == 0);
+    CHECK(result.out == "n\na.md\n");
+    const auto json = box.run({"query", "--json", "MATCH (n:Note) RETURN n"});
+    CHECK(contains(json.out, "{\"$node\":\""));  // betik kararlı kimliği alır
+
+    REQUIRE(box.run({"view", "save", "notes", "MATCH (n:Note) RETURN n"}).exit_code == 0);
+    CHECK(box.run({"view", "run", "notes"}).out == result.out);
+}
+
 // L4: kullanıcının kendi sorgusu limits.query.*'tan sınırlanır; 0 = sınırsız. Görünüm profili (limits.view.*)
 // bunu etkilemez.
 TEST_CASE("query_row_limit_comes_from_limits_query_and_zero_is_unlimited") {
