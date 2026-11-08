@@ -133,7 +133,8 @@ TEST_CASE("sync.remote_mismatch never echoes the credentials of a hand-written o
 
 TEST_CASE("sync_now checks the remote before touching anything: unknown SSH host, credentials in the URL") {
     const SyncFixture fx;
-    const EnvGuard path("PATH", fs::path(NOTEAPP_FAKE_SSH_DIR));
+    // find_program yalnız mutlak PATH girdisine bakar; Wine'da derleme tanımı sürücüsüz "/build/..." yoludur.
+    const EnvGuard path("PATH", fs::absolute(NOTEAPP_FAKE_SSH_DIR));
     const fs::path a = fx.make_clone(u8"A notları");
     write_file(a / "not.md", "x\n");
     struct Row {
@@ -338,7 +339,7 @@ TEST_CASE("a failed enable leaves no .git and no .gitignore of its own; the note
         CHECK_FALSE(ref_id(fx.remote(), "refs/heads/main").has_value());
     }
     SUBCASE("the SSH host key is unknown (checked before anything is created)") {
-        const EnvGuard path("PATH", fs::path(NOTEAPP_FAKE_SSH_DIR));
+        const EnvGuard path("PATH", fs::absolute(NOTEAPP_FAKE_SSH_DIR));
         const auto result = enable(a, "git@unknown.example:kisi/notlar.git");
         REQUIRE_FALSE(result.has_value());
         CHECK(result.error().message_key == "sync.ssh_host_unknown");

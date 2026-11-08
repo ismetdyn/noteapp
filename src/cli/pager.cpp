@@ -1,6 +1,7 @@
 #include "cli/pager.hpp"
 
 #include "cli/term.hpp"
+#include "core/editor.hpp"
 #include "core/process.hpp"
 
 #include <algorithm>
@@ -10,10 +11,10 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #ifndef _WIN32
 #include <csignal>
-#include <cstdio>
 #endif
 
 namespace noteapp::cli {
@@ -90,17 +91,15 @@ private:
 
 // Pager başladıysa true. Ortam (LESS dahil) kullanıcınındır: üründe setenv yok (core/process.cpp sözleşmesi);
 // varsayılan komut `less -FIRX` bayrakları zaten taşır.
+// Kabuk yok: komut editör komutunun tırnak kuralıyla bölünür ve program find_program'ın bulduğu mutlak yolla
+// başlar (kabuk PATH'in göreli girdilerinde, ör. ".", arardı).
 bool write_to_pager(const std::string& command, std::string_view text) {
-    if (!core::find_program(command.substr(0, command.find(' '))))
+    const std::vector<std::string> argv = core::split_command_line(command);
+    if (argv.empty() || !core::find_program(argv.front()))
         return false;
     std::cout.flush();
     const IgnoreSignalsWhilePaging ignore;
-    FILE* pager = popen(command.c_str(), "w");
-    if (pager == nullptr)
-        return false;
-    std::fwrite(text.data(), 1, text.size(), pager);
-    pclose(pager);
-    return true;
+    return core::run_with_input(argv, text).has_value();
 }
 
 // Gövde std::cout'a yazarken tamponu yönlendirir; istisnada da geri alınır.

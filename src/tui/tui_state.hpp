@@ -286,6 +286,7 @@ public:
     const std::string& map_query_text() const { return map_query_text_; }  // çalışacak (ya da vazgeçilen) metin
     // ListActions'ın sonucu: Ran → vurgu haritaya, metin boşalır; Failed → satır metin ve hatayla yeniden açılır.
     void map_query_finished();
+    void clear_map_query();  // sonuç, hata, vurgu ve etkin görünüm düşer (Esc; notes_dir değişimi)
     void map_query_failed();
     bool map_query_table() const { return map_view() && map_query_.table_shown(); }
     std::size_t map_query_row() const { return map_query_row_; }  // tablonun seçili satırı
@@ -584,7 +585,8 @@ public:
     // Çağıran bilir: senkron kapalıyken `sync.now` soluktur.
     void set_sync_enabled(bool enabled) { sync_enabled_ = enabled; }
     // Palet son kullanılanları değiştirdi: çağıran tercihleri yazar.
-    bool take_prefs_changed() { return std::exchange(prefs_changed_, false); }
+    // Haritanın oturumu (UiPrefs::map) burada tercihlere alınır: değiştiyse dosya yazılır.
+    bool take_prefs_changed();
 
 private:
     struct PaletteState {
@@ -610,7 +612,6 @@ private:
     std::optional<std::string> map_target() const;  // Tab'la seçilen, yoksa haritadaki gösterilen not
     std::optional<Intent> handle_map_explore_key(std::string_view text);
     std::optional<Intent> handle_map_table_key(Key key);
-    void clear_map_query();  // sonuç, hata ve vurgu düşer
     Intent handle_map_input(Key key, std::string_view text);
     Intent handle_map_query_key(Key key, std::string_view text);
     void begin_map_input(MapInputKind kind, std::vector<std::string> candidates, std::string text);

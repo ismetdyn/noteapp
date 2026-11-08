@@ -102,6 +102,9 @@ olarak komuttur; kalan argümanlar o komutun ayrıştırıcısına aynen gider (
 - `rm` onayı reddedilince çare satırı (`y` ya da `-y`/`--yes`).
 
 ## Terminal
+- **TTY** (`cli::stream_is_tty`, `stdin_is_tty`): POSIX'te `isatty`. Windows'ta konsol (`GetConsoleMode` başarılı; NUL
+  sayılmaz) ya da mintty/MSYS2/Cygwin pty'si: `GetFileType` boru ve `FileNameInfo` adı `\msys-<anahtar>-pty<N>…` /
+  `\cygwin-<anahtar>-pty<N>…` (`cli::is_msys_pty_pipe_name`).
 - **Renk** (`cli::color_enabled`, stdout ve stderr ayrı): ilk eşleşen kazanır: `NOTEAPP_COLOR=always|never`;
   `NO_COLOR` boş değilse kapalı; `TERM=dumb` kapalı; akış TTY değilse kapalı; aksi açık. Renk yalnız anlam taşır
   (`find` vurgusu kalın sarı, yardım başlıkları kalın); kapalıyken bilgi kaybolmaz. `NOTEAPP_COLOR=always` boruda da
@@ -110,7 +113,9 @@ olarak komuttur; kalan argümanlar o komutun ayrıştırıcısına aynen gider (
   `help` ve `KOMUT --help`) yalnız stdout TTY iken sayfalanır. Çıktı belleğe alınır; terminal yüksekliğine (sarılan
   satırlar dahil, `TIOCGWINSZ`, yedek `LINES`) sığıyorsa doğrudan basılır, sabit eşik yok. Komut: `NOTEAPP_PAGER` >
   `PAGER` > `less -FIRX`; `more`/`most` -> `less -FIRX`; `cat` ve `--no-pager` kapatır. Ortama (`LESS` dahil)
-  dokunulmaz. Pager açıkken `note` SIGINT/SIGQUIT/SIGPIPE'ı yok sayar (Ctrl-C pager'a kalır), sonra geri yükler.
+  dokunulmaz. Kabuk yok: komut editör komutunun tırnak kuralıyla (`core::split_command_line`) bölünür, program
+  `find_program`'ın bulduğu mutlak yolla başlar (göreli PATH girdisi atlanır), metin stdin borusuna yazılır
+  (`core::run_with_input`). Pager açıkken `note` SIGINT/SIGQUIT/SIGPIPE'ı yok sayar (Ctrl-C pager'a kalır), sonra geri yükler.
   Pager PATH'te yoksa ya da başlamazsa düz çıktı, çıkış kodu komutunki. Pager erken kapanırsa (EPIPE) sessiz biter.
   Terminal temizliği pager'dan önce yapılır. Windows'ta pager yok.
 - **İlerleme:** `note sync` ve `note import` stderr TTY iken (`TERM=dumb` değil) tek satır `Syncing...` /
@@ -178,7 +183,9 @@ olarak komuttur; kalan argümanlar o komutun ayrıştırıcısına aynen gider (
   `--replace` yönlendirmesi; `--replace` sormadan değiştirir.
 - `note sync login [HOST]` / `logout [HOST]`: HOST yoksa `sync.remote`'un host'u, o da yoksa çıkış 2. Token
   TTY'de ekosuz (Windows `ENABLE_ECHO_INPUT`, POSIX `ECHO` kapalı; Ctrl-C dahil her çıkışta geri yüklenir), boruda
-  ilk satırdan okunur; hiçbir yere yazdırılmaz.
+  ilk satırdan okunur; hiçbir yere yazdırılmaz. Eko kapanamıyorsa (Windows mintty/MSYS pty'si konsol değildir)
+  token istenmez: görünür kalacağı söylenir, dosyadan ya da `NOTEAPP_GIT_TOKEN` ile verme önerilir, çıkış 1
+  (`cli::read_hidden_line`).
 - `note sync --background`: iç kullanım (yukarıdaki ayrık süreç ve TUI/GUI `AutoSync`).
 
 ## PDF dışa aktarma

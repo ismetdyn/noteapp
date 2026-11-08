@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <sstream>
 #include <system_error>
 #include <toml++/toml.hpp>
@@ -28,8 +29,9 @@ constexpr std::string_view kOpenFolders = "open_folders";
 constexpr std::string_view kRecentCommands = "recent_commands";
 constexpr std::string_view kActiveTab = "active_tab";
 constexpr std::string_view kTabs = "tabs";
-constexpr std::array kCommonKeys = {kSort,           kSortDescending, kColumn,   kSearchHistory,
-                                    kOpenFolders,    kRecentCommands, kActiveTab, kTabs};
+constexpr std::string_view kMap = "map";
+constexpr std::array kCommonKeys = {
+    kSort, kSortDescending, kColumn, kSearchHistory, kOpenFolders, kRecentCommands, kActiveTab, kTabs, kMap};
 
 template <typename Table, typename Value>
 void value_of(const Table& table, const std::optional<std::string>& name, Value& out) {
@@ -75,6 +77,46 @@ SavedTabs read_tabs(const toml::table& table) {
     return saved;
 }
 
+// Elle düzenlenmiş değerin türü tutmazsa (`1` bool değildir) varsayılan kalır; derinliği
+// MapModel::set_options config sınırına çeker, burada yalnız int'e sığar.
+MapSession read_map(const toml::table& table) {
+    MapSession map;
+    const toml::table* entry = table[kMap].as_table();
+    if (entry == nullptr)
+        return map;
+    const auto flag = [entry](std::string_view key, bool& out) {
+        out = (*entry)[key].value_exact<bool>().value_or(out);
+    };
+    MapOptions& options = map.options;
+    flag("shown", map.shown);
+    flag("whole_graph", options.whole_graph);
+    flag("show_tags", options.show_tags);
+    flag("show_links", options.show_links);
+    flag("show_related", options.show_related);
+    map.view = (*entry)["view"].value_exact<std::string>().value_or(std::string());
+    options.relation = (*entry)["relation"].value_exact<std::string>();
+    options.tag = (*entry)["tag"].value_exact<std::string>().value_or(std::string());
+    const std::int64_t depth = (*entry)["depth"].value_exact<std::int64_t>().value_or(options.depth);
+    options.depth = static_cast<int>(
+        std::clamp<std::int64_t>(depth, MapOptions::kMinDepth, std::numeric_limits<int>::max()));
+    return map;
+}
+
+toml::table map_table(const MapSession& map) {
+    const MapOptions& options = map.options;
+    toml::table entry{{"shown", map.shown},
+                      {"view", map.view},
+                      {"whole_graph", options.whole_graph},
+                      {"depth", std::int64_t{options.depth}},
+                      {"show_tags", options.show_tags},
+                      {"show_links", options.show_links},
+                      {"show_related", options.show_related},
+                      {"tag", options.tag}};
+    if (options.relation)  // yok: süzgeç yok; "" adsız ilişkilerdir
+        entry.insert("relation", *options.relation);
+    return entry;
+}
+
 void read_extra(const toml::table& table, UiPrefs& prefs) {
     for (const auto& [key, node] : table) {
         if (std::ranges::find(kCommonKeys, key.str()) != kCommonKeys.end())
@@ -117,6 +159,7 @@ UiPrefs from_table(const toml::table& table, const UiPrefsRules& rules) {
         if (find_command(id) != nullptr && prefs.recent_commands.size() < rules.recent_commands.cap())
             prefs.recent_commands.push_back(std::move(id));
     prefs.tabs = read_tabs(table);
+    prefs.map = read_map(table);
     read_extra(table, prefs);
     return prefs;
 }
@@ -175,6 +218,7 @@ std::string format_ui_prefs(const UiPrefs& prefs, const std::function<bool(const
         tabs.push_back(toml::table{{"path", tab.path}, {"pinned", tab.pinned}, {"kept", tab.kept}});
     table.insert(kActiveTab, static_cast<std::int64_t>(prefs.tabs.active));
     table.insert(kTabs, std::move(tabs));
+    table.insert(kMap, map_table(prefs.map));
     for (const auto& [key, value] : prefs.extra)
         if (std::ranges::find(kCommonKeys, key) == kCommonKeys.end())
             std::visit([&table, &key](const auto& held) { table.insert(key, held); }, value);

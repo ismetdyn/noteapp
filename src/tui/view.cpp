@@ -10,6 +10,7 @@
 #include "tui/editor_view.hpp"
 #include "tui/input_view.hpp"
 #include "tui/modals.hpp"
+#include "tui/styled_view.hpp"
 
 #include <algorithm>
 #include <array>
@@ -989,9 +990,10 @@ ftxui::Element summary_box(const std::vector<std::string>& lines, int window_hei
 // Ayarlar formu: etiket / değer iki sütun. Kaydet düğmesi, hata ve ipucu satırı sabit kalır; yalnız 12 alan
 // satırı kayar (60x15'te 10 satır görünür), odaklı satır her zaman görünür.
 constexpr int kSettingsWidth = 58;
+constexpr int kSettingsInnerWidth = kSettingsWidth - 2;  // kenarlık
 constexpr int kSettingsLabelWidth = 22;
 constexpr std::size_t kSettingsValueCells = 30;  // uzun yol/URL'de sondaki kısım görünür (imleç orada)
-constexpr int kSettingsFixedLines = 6;           // kenarlık 2 + test + düğme + hata + ipucu
+constexpr int kSettingsFixedLines = 6;           // kenarlık 2 + test + düğme + hata (ilk satırı) + ipucu
 
 ftxui::Element settings_row(const SettingsState::Row& row, bool focused) {
     using namespace ftxui;
@@ -1242,13 +1244,25 @@ ftxui::Element settings_box(const SettingsState& settings, int window_height) {
         std::vector<SettingsState::Row> rows = settings.rows();
         if (settings.token_visible())
             rows.push_back(settings.token_row());
-        const auto visible = static_cast<std::size_t>(std::max(window_height - kSettingsFixedLines, 1));
-        const std::size_t focus_row = std::min(settings.focus(), rows.size() - 1);
-        const std::size_t first = focus_row < visible ? 0 : focus_row + 1 - visible;
         std::string error = settings.error();
         for (const auto& row : rows)
             if (error.empty())
                 error = row.error;
+        // Hata dosya yolunu ve toml++ ayrıntısını (sonda: "nothing was saved", satır/sütun) taşır: denetim
+        // karakteri ham basılmaz, kutu genişliğinde sarılır. Alan satırlarıyla aynı yeri paylaşır, odaklı satıra
+        // yer bırakır; sığmazsa baştan kısalır, sondaki ileti ve konum görünür kalır.
+        const int room = std::max(window_height - kSettingsFixedLines, 1);
+        const std::string safe_error = terminal_safe(error);
+        std::vector<std::string> error_lines = wrap_lines(safe_error, kSettingsInnerWidth, terminal_cell_width);
+        if (std::cmp_greater(error_lines.size(), room)) {
+            const auto budget = static_cast<std::size_t>(room) * kSettingsInnerWidth;
+            error_lines = wrap_lines(tail_cells(safe_error, budget), kSettingsInnerWidth, terminal_cell_width);
+            if (std::cmp_greater(error_lines.size(), room))  // sözcük sınırında kırmak birkaç hücre harcar
+                error_lines.erase(error_lines.begin(), error_lines.end() - room);
+        }
+        const auto visible = static_cast<std::size_t>(std::max(room + 1 - static_cast<int>(error_lines.size()), 1));
+        const std::size_t focus_row = std::min(settings.focus(), rows.size() - 1);
+        const std::size_t first = focus_row < visible ? 0 : focus_row + 1 - visible;
         for (std::size_t i = first; i < rows.size() && i < first + visible; ++i)
             body.push_back(settings_row(rows[i], settings.focus() == i));
         Element test = text("[ " + core::tr("tui.settings_test") + " ]");
@@ -1256,8 +1270,8 @@ ftxui::Element settings_box(const SettingsState& settings, int window_height) {
                              text(terminal_safe(settings.test_result())) | dim | xflex_shrink}));
         Element save = text("[ " + core::tr("app.settings_save") + " ]");
         body.push_back((settings.on_button() ? save | inverted : save) | center);
-        // Hata dosya yolunu ve toml++ ayrıntısını taşır: denetim karakteri ham basılmaz.
-        body.push_back(text(terminal_safe(error)) | color(Color::Red));
+        for (std::string& line : error_lines)
+            body.push_back(text(std::move(line)) | color(Color::Red));
         body.push_back(
             text(core::tr(settings.on_token() ? "tui.settings_token_hints" : "tui.settings_hints")) | dim);
     }

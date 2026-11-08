@@ -449,7 +449,10 @@ public:
     // --- Sorgu çubuğu (F3; akış app::MapQuery, TUI `Q` ile ortak). Oturumluktur. ---
     bool map_query_open() const { return map_query_open_; }
     // Açar ya da kapatır; kapanış sonucu, hatayı ve haritadaki vurguyu kaldırır.
+    // Çubuğu açar ya da kapar; kapatmak sonucu, vurguyu ve etkin görünümü düşürmez (TUI'de `Q` satırı gibi).
     void toggle_map_query();
+    // Haritada Esc (TUI ile aynı sıra): önce sorgunun sonucu, hatası, vurgusu ve etkin görünümü; yoksa yol.
+    void escape_map();
     std::string& map_query_buffer() { return map_query_text_; }  // ImGui doğrudan yazar
     // Programla değişen metin (çalıştırınca boşalır) kutuyu yeniden kurdurur: etkin kutu dış değişikliği görmez.
     std::size_t map_query_generation() const { return map_query_generation_; }
@@ -858,6 +861,9 @@ private:
     app::UiPrefsRules prefs_rules() const;
     void load_list_prefs(const app::UiPrefs& saved);
     void load_gui_state(const app::UiPrefs& saved);
+    void restore_map(const app::MapSession& saved);
+    void clear_map_query();
+    void finish_map_restore(app::ViewRestore::Result done);
     void save_gui_state() const;
     bool run_posted();
     void start_sync();
@@ -1008,6 +1014,7 @@ private:
     // kapanmasını bekler: request_close editör açıkken kapanmaz.
     std::jthread external_;
     app::ImportJob import_{[this](std::function<void()> work) { post(std::move(work)); }};  // post çağırır
+    app::ViewRestore view_restore_;  // açılıştaki görünüm; post çağırır
     // Kendi depo bağlantısıyla arka planda okur; post çağırmaz, yine de UI üyelerinden önce yıkılır.
     static constexpr std::chrono::seconds kWordTableIdle{1};  // TUI ile aynı tempo
     tui::WordTableBuilder word_tables_{

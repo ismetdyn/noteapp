@@ -224,6 +224,13 @@ void add_header_rule(ViewBuilder& view, const std::vector<int>& widths, const In
 
 }  // namespace
 
+std::vector<std::string> wrap_lines(std::string_view text, int width, CellWidthFn cell_width) {
+    std::vector<std::string> lines;
+    for_each_wrapped(text, width, cell_width,
+                     [&](std::size_t begin, std::size_t end) { lines.emplace_back(text.substr(begin, end - begin)); });
+    return lines;
+}
+
 ViewLimits view_limits_of(const core::TuiLimits& limits) {
     return {.source_bytes = limits.view_bytes.cap(),
             .lines = limits.view_lines.cap(),

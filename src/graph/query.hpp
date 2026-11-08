@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <stop_token>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -76,6 +77,9 @@ struct QueryLimits {
     std::size_t max_var_length_hops = 10;  // `*1..N`'deki N
     // Plan ifade düğümü: diğer ad açılımı 64 KiB'lik sorguyu çarpabilir.
     std::size_t max_plan_nodes = 200'000;
+    // İstenince sorgu süre denetiminde durur (LimitExceeded, limit "cancelled"): sınırsız süreli sorgu da
+    // sahibi kapanırken bekletmez.
+    std::stop_token stop = {};
 
     bool operator==(const QueryLimits&) const = default;
 };

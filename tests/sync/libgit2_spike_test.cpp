@@ -1,5 +1,7 @@
 #include "sync/git_runtime.hpp"
 
+#include <array>
+#include <cstddef>
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <fstream>
@@ -71,13 +73,33 @@ std::string read_file(const fs::path& path) {
 }
 
 // Kullanıcının git ayarları (ör. Git for Windows'un core.autocrlf=true'su) testi etkilemesin diye tüm config
-// arama yolları ayar dosyası olmayan bir dizine yönlendirilir.
-void isolate_git_config(const fs::path& empty_dir) {
-    for (const int level : {GIT_CONFIG_LEVEL_PROGRAMDATA, GIT_CONFIG_LEVEL_SYSTEM, GIT_CONFIG_LEVEL_XDG,
-                            GIT_CONFIG_LEVEL_GLOBAL}) {
-        REQUIRE_GIT(git_libgit2_opts(GIT_OPT_SET_SEARCH_PATH, level, git_path(empty_dir).c_str()));
+// arama yolları ayar dosyası olmayan bir dizine yönlendirilir. Arama yolu süreç geneldir ve GitRuntime onu
+// yalnız bir kez yazar: eski yol okunur, yıkımda geri yazılır; sonraki testler GitRuntime'ın yalıtımını
+// görür.
+class IsolatedGitConfig {
+public:
+    explicit IsolatedGitConfig(const fs::path& empty_dir) {
+        for (std::size_t i = 0; i < kLevels.size(); ++i) {
+            git_buf old = GIT_BUF_INIT;
+            REQUIRE_GIT(git_libgit2_opts(GIT_OPT_GET_SEARCH_PATH, kLevels[i], &old));
+            saved_[i].assign(old.ptr, old.size);
+            git_buf_dispose(&old);
+        }
+        for (const int level : kLevels)
+            REQUIRE_GIT(git_libgit2_opts(GIT_OPT_SET_SEARCH_PATH, level, git_path(empty_dir).c_str()));
     }
-}
+    ~IsolatedGitConfig() {
+        for (std::size_t i = 0; i < kLevels.size(); ++i)
+            CHECK(git_libgit2_opts(GIT_OPT_SET_SEARCH_PATH, kLevels[i], saved_[i].c_str()) >= 0);
+    }
+    IsolatedGitConfig(const IsolatedGitConfig&) = delete;
+    IsolatedGitConfig& operator=(const IsolatedGitConfig&) = delete;
+
+private:
+    static constexpr std::array<int, 4> kLevels = {GIT_CONFIG_LEVEL_PROGRAMDATA, GIT_CONFIG_LEVEL_SYSTEM,
+                                                   GIT_CONFIG_LEVEL_XDG, GIT_CONFIG_LEVEL_GLOBAL};
+    std::array<std::string, kLevels.size()> saved_;
+};
 
 // Varsayılan dal kullanıcının init.defaultBranch ayarına bırakılmaz; senkron dalı `main`.
 Repository init_repository(const fs::path& path, bool bare) {
@@ -98,7 +120,7 @@ Repository init_repository(const fs::path& path, bool bare) {
 TEST_CASE("libgit2 commits, pushes to a local bare repo and clones it back") {
     const noteapp::sync::GitRuntime runtime;
     const TempDir root;
-    isolate_git_config(root.path() / "no-config");
+    const IsolatedGitConfig isolated(root.path() / "no-config");
 
     const fs::path work_dir = root.path() / "work";
     const fs::path bare_dir = root.path() / "remote.git";
@@ -154,7 +176,7 @@ TEST_CASE("ssh exec transport lists refs of a GitHub repository (manual)" * doct
     const noteapp::sync::GitRuntime runtime;
     const TempDir root;
     // Kullanıcının url.<base>.insteadOf ayarı git@ adresini sessizce HTTPS'e çevirip SSH'ı atlatmasın.
-    isolate_git_config(root.path() / "no-config");
+    const IsolatedGitConfig isolated(root.path() / "no-config");
     const Repository repo = init_repository(root.path() / "repo", true);
 
     git_remote* remote_raw = nullptr;

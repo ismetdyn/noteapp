@@ -719,8 +719,8 @@ void View::handle_map_input(const NoteMap& map, ImVec2 origin, ImVec2 size, int 
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         if (map_connect_from_)
             map_connect_from_.reset();
-        else if (ImGui::IsWindowFocused() && state_.map_scope().path)  // F2: yol temizlenir
-            queue([this] { state_.clear_map_path(); });
+        else if (ImGui::IsWindowFocused())  // F3 sorgu, sonra F2 yol (TUI sırası)
+            queue([this] { state_.escape_map(); });
     }
     // F2: çift tıklama komşuları açar ya da kapar (Neo4j Browser gibi); ilk tıklama notu açmıştır. Shift
     // basılıyken ikinci basış yeni bir sürüklemedir, çift tıklama sayılmaz.

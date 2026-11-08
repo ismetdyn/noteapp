@@ -77,6 +77,10 @@ struct InlineText {
 // Boşluk sayılan denetim baytları (sekme, satır sonu) boşluğa iner, kalanı terminal_safe kuralıyla arınır.
 std::string display_safe(std::string_view raw);
 
+// Önizlemeyle aynı açgözlü sarma: boşlukta kırar (kırılan boşluk düşer), `width`'ten uzun sözcüğü hücrede keser,
+// '\n' zorunlu satır sonudur. Boş metin tek boş satırdır. `text` geçerli UTF-8 olmalı (terminal_safe çıktısı).
+std::vector<std::string> wrap_lines(std::string_view text, int width, CellWidthFn cell_width);
+
 // Kaynak bayt ofseti -> satır numarası (0 tabanlı).
 class SourceLines {
 public:

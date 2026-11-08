@@ -206,6 +206,24 @@ NoteStore NoteStore::for_config(const Config& config) {
     return store;
 }
 
+NoteStore NoteStore::connection(std::stop_token stop) const {
+    const std::scoped_lock lock(impl_->mutex);
+    NoteStore other(impl_->directory, impl_->slug_max_length);
+    Impl& to = *other.impl_;
+    to.batch_ops = impl_->batch_ops;
+    to.folder_path_bytes = impl_->folder_path_bytes;
+    to.relation_name_bytes = impl_->relation_name_bytes;
+    to.property_cache_keys = impl_->property_cache_keys;
+    to.graph_limits = impl_->graph_limits;
+    to.view_limits = impl_->view_limits;
+    to.view_limits.stop = std::move(stop);
+    to.txn_ops_limit = impl_->txn_ops_limit;
+    to.before_view_run = impl_->before_view_run;
+    to.query_naming_fault = impl_->query_naming_fault;
+    to.view_lookup_fault = impl_->view_lookup_fault;
+    return other;
+}
+
 std::vector<NoteInfo> NoteStore::list() const {
     const std::scoped_lock lock(impl_->mutex);
     const auto snapshot = impl_->current();

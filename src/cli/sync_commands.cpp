@@ -2,6 +2,7 @@
 #include "cli/commands.hpp"
 #include "cli/confirm.hpp"
 #include "cli/highlight.hpp"
+#include "cli/term.hpp"
 #include "core/error.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
@@ -112,6 +113,9 @@ public:
     EchoOff(const EchoOff&) = delete;
     EchoOff& operator=(const EchoOff&) = delete;
 
+    // Eko gerçekten kapandı mı: Windows'ta mintty/MSYS pty'si TTY'dir ama konsol değil, GetConsoleMode düşer.
+    bool active() const { return active_; }
+
 private:
     static void restore() {
         if (!active_)
@@ -138,19 +142,22 @@ private:
     void (*previous_)(int) = SIG_DFL;
 };
 
-std::string read_token(const std::string& host) {
+// nullopt: terminal ekoyu kapatamadı, token istenmedi (ileti yazıldı).
+std::optional<std::string> read_token(const std::string& host) {
     std::string token;
     if (!stdin_is_tty()) {  // boru: ilk satır (store_token boşlukları kırpar)
         std::getline(std::cin, token);
         return token;
     }
-    std::cerr << core::tr("cli.sync_token_prompt", {{"host", host}}) << std::flush;
+    std::optional<std::string> read;
     {
         const EchoOff echo_off;
-        std::getline(std::cin, token);
+        read = read_hidden_line(std::cin, std::cerr, core::tr("cli.sync_token_prompt", {{"host", host}}),
+                                core::tr("cli.sync_token_not_hidden", {{"host", host}}), echo_off.active());
     }
-    std::cerr << '\n';  // Enter ekoya düşmedi: imleç alt satıra
-    return token;
+    if (read)
+        std::cerr << '\n';  // Enter ekoya düşmedi: imleç alt satıra
+    return read;
 }
 
 // HOST verilmezse config.sync.remote'un host'u (kasa hesabı = host, SPEC.md §8).
@@ -322,7 +329,10 @@ int sync_login(const core::Config& config, const std::vector<std::string>& opera
     if (!host)
         return kExitUsage;
     // Token hiçbir yere yazdırılmaz/loglanmaz; hata mesajları da onu taşımaz (store_token sözleşmesi).
-    if (const auto stored = sync::store_token(*host, read_token(*host)); !stored)
+    const std::optional<std::string> token = read_token(*host);
+    if (!token)
+        return kExitUser;
+    if (const auto stored = sync::store_token(*host, *token); !stored)
         return sync_fail(stored.error());
     std::cout << core::tr("cli.sync_login_done", {{"host", *host}}) << '\n';
     return kExitOk;

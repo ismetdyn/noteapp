@@ -61,6 +61,8 @@ Error limit_error(std::string limit) {
 Budget::Budget(const QueryLimits& limits) : limits_(limits), deadline_(deadline_after(limits.max_duration)) {}
 
 Result<void> Budget::check_clock() const {
+    if (limits_.stop.stop_requested())
+        return std::unexpected(limit_error("cancelled"));
     if (std::chrono::steady_clock::now() > deadline_)
         return std::unexpected(limit_error("duration"));
     return {};

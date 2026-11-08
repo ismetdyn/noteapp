@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/note_map.hpp"
 #include "app/tabs.hpp"
 #include "core/folder_tree.hpp"
 #include "core/limits.hpp"
@@ -35,6 +36,17 @@ inline constexpr std::array<std::pair<ListColumn, std::string_view>, 7> kListCol
 // Arayüze özgü düz anahtarın değeri (TUI `list_share`; GUI pencere, bölme, yazı tipi, son not).
 using PrefValue = std::variant<bool, std::int64_t, double, std::string>;
 
+// Haritanın oturumu (SPEC-tui, SPEC-gui "Harita" → "Açılış"): kapanışta harita açıksa açılışta harita,
+// kapsamı ve etkin kayıtlı görünümü geri gelir. Yazılan sorgu metni yazılmaz (geçmişi gibi oturumluk, sır
+// olabilir): geri gelen yalnız görünümün adıdır, açılışta görünüm olarak salt-okunur çalışır
+// (MapQuery::restore_view).
+struct MapSession {
+    bool shown = false;
+    std::string view = {};  // etkin kayıtlı görünüm; boş = yok
+    MapOptions options = {};
+    bool operator==(const MapSession&) const = default;
+};
+
 // Kalıcı arayüz tercihleri (`<state>/tui-state.toml`, `<state>/gui-state.toml`; TOML). İki arayüzün ortak
 // alanları burada tek kuralla okunur ve yazılır; arayüze özgü anahtarlar `extra`dadır.
 struct UiPrefs {
@@ -44,6 +56,7 @@ struct UiPrefs {
     std::set<std::string> open_folders = {};        // ağaçta yerinde açık klasörler
     std::vector<std::string> recent_commands = {};  // palet: en yeni başta
     SavedTabs tabs = {};                            // açık editör sekmeleri
+    MapSession map = {};                            // `[map]` tablosu
     std::map<std::string, PrefValue, std::less<>> extra = {};
 };
 

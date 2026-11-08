@@ -184,6 +184,48 @@ TEST_CASE("find_program locates a program on PATH and ignores the working direct
     CHECK(find_program(kFakeEditor).has_value());  // dizin içeren ad doğrudan denenir
 }
 
+// Çalışma dizinine (ör. klonlanmış bir depoya) konmuş sahte git/xclip/micro, göreli PATH girdisi ("." , boş girdi,
+// node_modules/.bin) yüzünden editörün, panonun ya da git'in yerine geçmemeli; mutlak girdideki araç bulunur.
+TEST_CASE("find_program skips relative PATH entries and finds the tool through an absolute entry") {
+    const TempDir cwd;
+    const fs::path bin = cwd.path() / "bin";
+    fs::create_directories(bin);
+    fs::path tool_name("noteapp-relative-tool");
+    tool_name += fs::path(kFakeEditor).extension();  // Windows: .exe
+    for (const fs::path& dir : {cwd.path(), bin}) {
+        fs::copy_file(kFakeEditor, dir / tool_name);
+        fs::permissions(dir / tool_name, fs::perms::owner_all, fs::perm_options::replace);
+    }
+    const std::string name = utf8(fs::path(tool_name).replace_extension());
+    const char separator = fs::path::preferred_separator == '\\' ? ';' : ':';
+    const fs::path old_cwd = fs::current_path();
+    fs::current_path(cwd.path());
+    std::vector<std::pair<std::string, bool>> found;
+    for (const std::string& path_value :
+         {std::string("."), std::string("bin"), std::string(1, separator) + "/noteapp-no-such-dir",
+          std::string("./bin"), utf8(bin)}) {
+        const ScopedEnv path("PATH", path_value);
+        found.emplace_back(path_value, find_program(name).has_value());
+    }
+    fs::current_path(old_cwd);
+    CHECK(found == std::vector<std::pair<std::string, bool>>{{".", false},
+                                                             {"bin", false},
+                                                             {std::string(1, separator) + "/noteapp-no-such-dir", false},
+                                                             {"./bin", false},
+                                                             {utf8(bin), true}});
+}
+
+#ifdef _WIN32
+// CreateProcess ve cmd.exe (ör. .cmd editörün içinden) yalın adı önce çalışma dizininde arar; bu değişken her
+// çocukta (editör, pano, git yardımcıları, dil sunucusu) onu kapatır.
+TEST_CASE("every child starts with NoDefaultCurrentDirectoryInExePath set") {
+    TempDir dir;
+    const auto dump = dir.path() / "env.txt";
+    REQUIRE(run_and_wait({kFakeEditor}, {{"FAKE_EDITOR_ENV_OUT", utf8(dump)}}).value() == 0);
+    CHECK(slurp(dump).find("NoDefaultCurrentDirectoryInExePath=1") != std::string::npos);
+}
+#endif
+
 TEST_CASE("env overrides can remove a variable from the child's environment") {
     TempDir dir;
     const auto dump = dir.path() / "env.txt";

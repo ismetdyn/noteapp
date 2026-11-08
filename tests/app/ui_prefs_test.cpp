@@ -26,7 +26,7 @@ bool always(const std::string&) {
 bool same(const UiPrefs& a, const UiPrefs& b) {
     return a.sort.field == b.sort.field && a.sort.descending == b.sort.descending && a.column == b.column &&
            a.search_history == b.search_history && a.open_folders == b.open_folders &&
-           a.recent_commands == b.recent_commands && a.tabs == b.tabs && a.extra == b.extra;
+           a.recent_commands == b.recent_commands && a.tabs == b.tabs && a.map == b.map && a.extra == b.extra;
 }
 
 }  // namespace
@@ -39,6 +39,15 @@ TEST_CASE("ui prefs: common fields and interface keys round-trip through TOML") 
     prefs.open_folders = {"work", "iş/alt"};
     prefs.recent_commands = {"sort", "trash"};
     prefs.tabs = {{{"a.md", true, false}, {"b.md", false, true}}, 1};
+    prefs.map = {.shown = true,
+                 .view = "iş günü",
+                 .options = {.whole_graph = true,
+                             .depth = 4,
+                             .show_tags = true,
+                             .show_links = false,
+                             .show_related = true,
+                             .relation = std::string(),  // adsız ilişkiler: "yok"tan ayrı
+                             .tag = "proje"}};
     prefs.extra = {{"list_share", 0.25}, {"width", std::int64_t{900}}, {"ui_font", std::string("inter")},
                    {"row_numbers", true}};
     const UiPrefs back = noteapp::app::parse_ui_prefs(noteapp::app::format_ui_prefs(prefs, always), {});
@@ -137,4 +146,25 @@ TEST_CASE("ui prefs: a state file that exists but cannot be read is set aside to
     CHECK_FALSE(loaded.notice.empty());
     CHECK(std::filesystem::exists(noteapp::core::state_dir() / "y-state.toml.bad"));
     CHECK_FALSE(std::filesystem::exists(file));
+}
+
+// Harita oturumu (`[map]`, TUI ve GUI ortak): yokken varsayılan; elle bozulmuş tür varsayılanda kalır,
+// derinlik en az 1'dir (üstünü MapModel config'le keser); ilişki süzgeci yazılmamışsa yoktur.
+TEST_CASE("ui prefs: the map session defaults when missing and keeps defaults for values of the wrong type") {
+    using noteapp::app::MapOptions;
+    CHECK(noteapp::app::parse_ui_prefs("sort = \"name\"\n", {}).map == noteapp::app::MapSession{});
+    const UiPrefs odd = noteapp::app::parse_ui_prefs(
+        "[map]\nshown = \"yes\"\nview = 3\ndepth = -5\nwhole_graph = 1\nrelation = 2\n", {});
+    CHECK_FALSE(odd.map.shown);
+    CHECK(odd.map.view.empty());
+    CHECK(odd.map.options.depth == MapOptions::kMinDepth);
+    CHECK_FALSE(odd.map.options.whole_graph);
+    CHECK_FALSE(odd.map.options.relation.has_value());
+    const UiPrefs deep = noteapp::app::parse_ui_prefs("[map]\nshown = true\ndepth = 99999999999\n", {});
+    CHECK(deep.map.shown);
+    CHECK(deep.map.options.depth > MapOptions::kDefaultDepth);
+    UiPrefs unfiltered;
+    unfiltered.map.shown = true;
+    CHECK_FALSE(noteapp::app::parse_ui_prefs(noteapp::app::format_ui_prefs(unfiltered, always), {})
+                    .map.options.relation.has_value());
 }

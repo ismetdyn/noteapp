@@ -1,9 +1,13 @@
 // Terminal davranışı: renk politikası, pager, ilerleme satırı, TTY'ye özgü küçükler (SPEC-cli "Terminal").
+#include "cli/term.hpp"
+#include "core/i18n.hpp"
+#include "core/process.hpp"
 #include "support/cli_sandbox.hpp"
 #include "support/pty_run.hpp"
 
 #include <doctest/doctest.h>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <tuple>
@@ -19,6 +23,43 @@ bool contains(const std::string& text, std::string_view part) {
 }
 
 }  // namespace
+
+// mintty pty'si TTY sayılır ama konsol değildir: eko kapanmaz. "Girdi gizli" deyip token'ı görünür okumak yerine
+// token istenmez, görünür olacağı söylenir ve başka yol önerilir.
+TEST_CASE("a secret is asked only when echo is really off; otherwise nothing is read and no 'hidden' prompt shows") {
+    noteapp::core::init_i18n("en");
+    const std::string prompt = noteapp::core::tr("cli.sync_token_prompt", {{"host", "example.org"}});
+    const std::string refusal = noteapp::core::tr("cli.sync_token_not_hidden", {{"host", "example.org"}});
+    REQUIRE(prompt.find("hidden") != std::string::npos);
+
+    std::istringstream visible_in("secret-token\n");
+    std::ostringstream visible_out;
+    CHECK_FALSE(noteapp::cli::read_hidden_line(visible_in, visible_out, prompt, refusal, false).has_value());
+    CHECK(visible_out.str().find("hidden") == std::string::npos);
+    CHECK(visible_out.str().find("NOTEAPP_GIT_TOKEN") != std::string::npos);
+    CHECK(visible_in.tellg() == 0);  // token okunmadı
+
+    std::istringstream hidden_in("secret-token\n");
+    std::ostringstream hidden_out;
+    CHECK(noteapp::cli::read_hidden_line(hidden_in, hidden_out, prompt, refusal, true) == "secret-token");
+    CHECK(hidden_out.str() == prompt);
+}
+
+// mintty/MSYS2/Cygwin terminali Windows'ta adlı borudur; yalnız pty borusu terminal sayılır, sıradan boru
+// (`note show | less`) ve önek dışı adlar sayılmaz.
+TEST_CASE("an MSYS or Cygwin pty pipe name is a terminal, other pipe names are not") {
+    using noteapp::cli::is_msys_pty_pipe_name;
+    CHECK(is_msys_pty_pipe_name(L"\\msys-dd50a72ab4668b33-pty0-to-master"));
+    CHECK(is_msys_pty_pipe_name(L"\\msys-1888ae32e00d56aa-pty12-from-master"));
+    CHECK(is_msys_pty_pipe_name(L"\\cygwin-e022582115c10879-pty4-to-master"));
+    CHECK_FALSE(is_msys_pty_pipe_name(L""));
+    CHECK_FALSE(is_msys_pty_pipe_name(L"\\Win32Pipes.000012a4.00000003"));
+    CHECK_FALSE(is_msys_pty_pipe_name(L"\\msys-dd50a72ab4668b33-pipe-0x1"));
+    CHECK_FALSE(is_msys_pty_pipe_name(L"msys-dd50a72ab4668b33-pty0-to-master"));     // baştaki ayırıcı yok
+    CHECK_FALSE(is_msys_pty_pipe_name(L"\\other-msys-dd50a72ab4668b33-pty0-to-master"));
+    CHECK_FALSE(is_msys_pty_pipe_name(L"\\msys--pty0-to-master"));                   // anahtar boş
+    CHECK_FALSE(is_msys_pty_pipe_name(L"\\cygwin-e022582115c10879-ptyfoo"));        // pty numarası yok
+}
 
 TEST_CASE("NOTEAPP_COLOR=always colors find matches even in a pipe; the default pipe output stays plain") {
     const Sandbox box("en");
@@ -219,6 +260,58 @@ TEST_CASE("note does not set LESS for the pager; the user's environment reaches 
     CHECK(contains(
         run_in_pty(NOTEAPP_NOTE_EXE, {"ls"}, {.env = {{"PAGER", pager}, {"LESS", "-S"}}, .rows = 10}).terminal,
         "LESS=[-S]"));
+}
+
+namespace {
+
+// Çalıştırılabilir kabuk betiği (pager yerine).
+void put_script(const fs::path& file, const std::string& body) {
+    std::ofstream(file, std::ios::binary) << "#!/bin/sh\n" << body << "\n";
+    fs::permissions(file, fs::perms::owner_all, fs::perm_options::replace);
+}
+
+}  // namespace
+
+// Pager kabuksuz, find_program'ın bulduğu mutlak yolla başlar: kabuk PATH'i kendisi arasaydı "." girdisiyle
+// çalışma dizinine (klonlanmış bir depoya) konmuş sahte pager çalışırdı. Argümanlar kabuksuz, editör komutunun
+// tırnak kuralıyla bölünür; pager yalnız göreli girdide bulunuyorsa çıktı doğrudan yazılır.
+TEST_CASE("the pager starts without a shell from an absolute PATH entry, never from the working directory") {
+    const Sandbox box("en");
+    put_notes(box, 20);
+    const auto sed = noteapp::core::find_program("sed");
+    REQUIRE(sed.has_value());
+    const TempDir cwd;
+    const TempDir bin;
+    put_script(cwd.path() / "noteapp-test-pager", "echo FAKE-PAGER-RAN");
+    put_script(bin.path() / "noteapp-test-pager", "exec '" + utf8(*sed) + "' -e \"s/^/$1/\"");
+    const fs::path old_cwd = fs::current_path();
+    fs::current_path(cwd.path());
+    const auto paged = [](const std::string& path, const std::string& pager) {
+        return run_in_pty(NOTEAPP_NOTE_EXE, {"ls"}, {.env = {{"PATH", path}, {"PAGER", pager}}, .rows = 10}).terminal;
+    };
+    const std::string absolute = paged(".:" + utf8(bin.path()), "noteapp-test-pager 'P Q:'");
+    const std::string relative_only = paged(".", "noteapp-test-pager 'P Q:'");
+    fs::current_path(old_cwd);
+    CHECK(contains(absolute, "P Q:n19.md"));
+    CHECK_FALSE(contains(absolute, "FAKE-PAGER-RAN"));
+    CHECK(contains(relative_only, "n19.md"));
+    CHECK_FALSE(contains(relative_only, "FAKE-PAGER-RAN"));
+    CHECK_FALSE(contains(relative_only, "P Q:"));
+}
+
+// Pager kullanıcının programıdır (less, LESSOPEN betiği): senkron token'ını görmez (without_secrets).
+TEST_CASE("the pager does not see the sync token variables") {
+    const Sandbox box("en");
+    put_notes(box, 20);
+    const std::string pager = "sh -c 'echo \"TOKEN=[$NOTEAPP_GIT_TOKEN|$NOTEAPP_GIT_TOKEN_HOST]\"; cat'";
+    const std::string shown = run_in_pty(NOTEAPP_NOTE_EXE, {"ls"},
+                                         {.env = {{"PAGER", pager},
+                                                  {"NOTEAPP_GIT_TOKEN", "s3cret-token"},
+                                                  {"NOTEAPP_GIT_TOKEN_HOST", "h.example"}},
+                                          .rows = 10})
+                                  .terminal;
+    CHECK(contains(shown, "TOKEN=[|]"));
+    CHECK_FALSE(contains(shown, "s3cret-token"));
 }
 
 TEST_CASE("an empty NO_COLOR does not turn color off (no-color.org)") {

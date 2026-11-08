@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -233,6 +234,10 @@ public:
     explicit NoteStore(std::filesystem::path directory, std::size_t slug_max_length = kDefaultSlugMaxLength);
     // Uygulamanın deposu: data_dir()/graph.db. notes_dir'de geçirilmemiş eski not varsa yazmayı reddeder.
     static NoteStore for_config(const Config& config);
+    // Aynı dizin ve ayarlarla ayrı bağlantı (kendi kilidi ve grafı): arka plandaki uzun okuma (açılıştaki
+    // görünüm) bu deponun kilidini tutmaz, UI'nin çağrıları onu beklemez. `stop` istenince bağlantının
+    // görünüm sorguları durur (limits.view.duration sınırsız olsa da). Test dikişleri de taşınır.
+    NoteStore connection(std::stop_token stop = {}) const;
 
     std::vector<NoteInfo> list() const;        // mtime azalan, eşitlikte yol artan
     std::vector<std::string> folders() const;  // göreli, '/' ayırıcılı, sıralı

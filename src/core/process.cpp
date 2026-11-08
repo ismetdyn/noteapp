@@ -5,6 +5,7 @@
 #include "core/unique_handle.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstdlib>
 #include <cwchar>
@@ -114,8 +115,9 @@ bool is_batch_file(const fs::path& p) {
     return _wcsicmp(ext.c_str(), L".bat") == 0 || _wcsicmp(ext.c_str(), L".cmd") == 0;
 }
 
-// Mevcut ortam + geçersiz kılmalar (nullopt: silinir); değişken adları Windows'ta büyük/küçük harfe
-// duyarsızdır.
+// Mevcut ortam + NoDefaultCurrentDirectoryInExePath=1 + geçersiz kılmalar (nullopt: silinir); değişken adları
+// Windows'ta büyük/küçük harfe duyarsızdır. CreateProcess ve cmd.exe (ör. .cmd editörün içinden) yalın adı önce
+// çalışma dizininde arar: find_program'ın göreli PATH kuralı her çocukta da geçsin.
 std::wstring build_environment_block(const EnvOverrides& overrides) {
     std::vector<std::wstring> entries;
     wchar_t* block = GetEnvironmentStringsW();
@@ -124,7 +126,9 @@ std::wstring build_environment_block(const EnvOverrides& overrides) {
     if (block != nullptr)
         FreeEnvironmentStringsW(block);
 
-    for (const auto& [key, value] : overrides) {
+    EnvOverrides all{{"NoDefaultCurrentDirectoryInExePath", "1"}};
+    all.insert(all.end(), overrides.begin(), overrides.end());
+    for (const auto& [key, value] : all) {
         const std::wstring wide_key = to_wide(key);
         std::erase_if(entries, [&](const std::wstring& entry) {
             const std::size_t eq = entry.find(L'=', 1);  // "=C:=..." gibi gizli girdiler 1'den başlar
@@ -266,6 +270,15 @@ int exit_status(int status) {
     return 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);  // sinyalle ölüm: kabuk geleneği
 }
 
+std::expected<int, Error> wait_for_exit(pid_t pid, const std::string& program_name) {
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR)
+            return std::unexpected(spawn_failed(program_name, std::to_string(errno)));
+    }
+    return exit_status(status);
+}
+
 #endif
 
 }  // namespace
@@ -294,9 +307,7 @@ std::expected<SpawnedProcess, Error> spawn_with_stdio(const std::vector<std::str
                                          ? command->application
                                          : fs::absolute(command->application, absolute_error).wstring();
     std::wstring command_line = command->command_line;
-    std::wstring environment;
-    if (!env_overrides.empty())
-        environment = build_environment_block(env_overrides);
+    std::wstring environment = build_environment_block(env_overrides);
 
     // Yalnız standart tutamaçlar devredilir (PROC_THREAD_ATTRIBUTE_HANDLE_LIST): bInheritHandles=TRUE tek başına
     // ebeveynin devredilebilir her tutamacını (ör. stdout'un yönlendirildiği dosya) çocuğa verir. Liste aynı
@@ -325,8 +336,7 @@ std::expected<SpawnedProcess, Error> spawn_with_stdio(const std::vector<std::str
         ok = CreateProcessW(
             application.c_str(), command_line.data(), nullptr, nullptr, TRUE,
             creation_flags | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
-            env_overrides.empty() ? nullptr : environment.data(),
-            working_directory.empty() ? nullptr : working_directory.c_str(), &startup.StartupInfo, &info);
+            environment.data(), working_directory.empty() ? nullptr : working_directory.c_str(), &startup.StartupInfo, &info);
     const DWORD spawn_error = GetLastError();
     if (list_size > 0)
         DeleteProcThreadAttributeList(attributes);
@@ -373,7 +383,8 @@ std::optional<std::string> get_env_utf8(std::string_view name) {
 
 namespace {
 
-// `absolute_only`: çalışma dizinine göre çözülecek hiçbir aday denenmez.
+// Göreli PATH girdisi ("." , boş girdi, node_modules/.bin) her zaman atlanır: çalışma dizinine (klonlanmış bir
+// depoya) konmuş sahte git/xclip/micro aranan aracın yerine geçmesin. `absolute_only`: göreli dizinli ad da reddedilir.
 std::optional<fs::path> search_program(std::string_view name, bool absolute_only) {
     if (name.empty())
         return std::nullopt;
@@ -390,7 +401,7 @@ std::optional<fs::path> search_program(std::string_view name, bool absolute_only
         for (auto dir : split_list(get_env_utf8("PATH").value_or(""), ';')) {
             if (dir.size() >= 2 && dir.front() == '"' && dir.back() == '"')
                 dir = dir.substr(1, dir.size() - 2);
-            if (fs::path entry = path_from_utf8(dir); !absolute_only || entry.is_absolute())
+            if (fs::path entry = path_from_utf8(dir); entry.is_absolute())
                 dirs.push_back(std::move(entry));
         }
     }
@@ -421,7 +432,7 @@ std::optional<fs::path> search_program(std::string_view name, bool absolute_only
         return executable(requested) ? std::optional<fs::path>(requested) : std::nullopt;
     for (const auto& dir : split_list(get_env_utf8("PATH").value_or(""), ':')) {
         const fs::path entry = path_from_utf8(dir);
-        if (absolute_only && !entry.is_absolute())
+        if (!entry.is_absolute())
             continue;
         if (fs::path candidate = entry / requested; executable(candidate))
             return candidate;
@@ -473,9 +484,7 @@ std::expected<int, Error> run_and_wait(const std::vector<std::string>& argv,
     std::wstring application = command->application;
     std::wstring command_line = command->command_line;
 
-    std::wstring environment;
-    if (!env_overrides.empty())
-        environment = build_environment_block(env_overrides);
+    std::wstring environment = build_environment_block(env_overrides);
 
     UniqueHandle null_device;
     if (discard_output) {
@@ -493,7 +502,7 @@ std::expected<int, Error> run_and_wait(const std::vector<std::string>& argv,
     PROCESS_INFORMATION info{};
     const BOOL started = CreateProcessW(
         application.c_str(), command_line.data(), nullptr, nullptr, TRUE, CREATE_UNICODE_ENVIRONMENT,
-        env_overrides.empty() ? nullptr : environment.data(), nullptr, &startup, &info);
+        environment.data(), nullptr, &startup, &info);
     const DWORD spawn_error = GetLastError();
     null_device.reset();
     if (!started)
@@ -516,15 +525,40 @@ std::expected<int, Error> run_and_wait(const std::vector<std::string>& argv,
     posix_spawn_file_actions_destroy(&actions);
     if (!pid)
         return std::unexpected(pid.error());
-
-    int status = 0;
-    while (waitpid(*pid, &status, 0) < 0) {
-        if (errno != EINTR)
-            return std::unexpected(spawn_failed(program_name, std::to_string(errno)));
-    }
-    return exit_status(status);
+    return wait_for_exit(*pid, program_name);
 #endif
 }
+
+#ifndef _WIN32
+std::expected<int, Error> run_with_input(const std::vector<std::string>& argv, std::string_view input) {
+    if (argv.empty())
+        return std::unexpected(Error{Error::Code::InvalidPath, "error.process_empty_command", {}});
+    std::array<int, 2> ends{};
+    if (pipe2(ends.data(), O_CLOEXEC) != 0)
+        return std::unexpected(spawn_failed(argv.front(), std::to_string(errno)));
+    UniqueFd read_end(ends[0]);
+    UniqueFd write_end(ends[1]);
+    // dup2 hedefi (stdin) CLOEXEC taşımaz; iki uç da CLOEXEC: yazma ucu çocuğa geçmez, EOF görünür.
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, read_end.get(), STDIN_FILENO);
+    const auto pid = spawn_posix(argv, without_secrets(), &actions, nullptr);  // pager token'ı görmez
+    posix_spawn_file_actions_destroy(&actions);
+    read_end.reset();
+    if (!pid)
+        return std::unexpected(pid.error());
+    while (!input.empty()) {
+        const ssize_t written = ::write(write_end.get(), input.data(), input.size());
+        if (written < 0 && errno == EINTR)
+            continue;
+        if (written <= 0)
+            break;  // EPIPE: çocuk okumayı bıraktı
+        input.remove_prefix(static_cast<std::size_t>(written));
+    }
+    write_end.reset();  // EOF: pager girdinin bittiğini görür
+    return wait_for_exit(*pid, argv.front());
+}
+#endif
 
 std::expected<ProcessHandle, Error> spawn_detached(const std::vector<std::string>& argv,
                                                    const EnvOverrides& env_overrides) {

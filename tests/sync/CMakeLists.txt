@@ -1,4 +1,5 @@
 noteapp_add_test(sync
+    git_runtime_test.cpp
     libgit2_spike_test.cpp
     sync_basic_test.cpp
     oplog_sync_test.cpp

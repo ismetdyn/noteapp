@@ -254,7 +254,7 @@ std::expected<void, core::Error> check_ssh_host_known(const RemoteEndpoint& endp
                                  : std::format("[{}]:{}", endpoint.host, endpoint.port);
     // ssh-keygen bulduğu satırı (açık host anahtarı) stdout'a yazar: TUI ekranını bozmasın diye çıktı atılır.
     // ponytail: ~/.ssh/config takma adları (Host … HostName) görülmez.
-    const auto exit_code = core::run_and_wait({"ssh-keygen", "-F", name}, {}, true);
+    const auto exit_code = core::run_and_wait({"ssh-keygen", "-F", name}, core::without_secrets(), true);
     if (!exit_code) {
         if (exit_code.error().message_key == "error.process_not_found")
             return std::unexpected(sync_error("sync.ssh_unavailable"));

@@ -13,11 +13,14 @@
 #include "support/test_support.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <doctest/doctest.h>
 #include <expected>
+#include <future>
 #include <limits>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -388,4 +391,130 @@ TEST_CASE("map query: only a shown read can be saved as a view, under the core n
     ran(query, s.store, text);
     query.clear();
     CHECK(query.read_query().empty());
+}
+
+// Kayıtlı görünümü açılışta geri getirme (UiPrefs::map.view): etkin görünüm çalışan, gösterilen okumanın
+// kaydedildiği addır; yazılan sorgu ve clear() onu düşürür. Açılış yalnız görünümü çalıştırır.
+TEST_CASE("map query: the active view follows run, save and clear and is what the state file keeps") {
+    Store s;
+    REQUIRE(core::save_view(s.store, "linked", "MATCH (a:Note)-[:LINKS_TO]->(b) RETURN a, b", false));
+    MapQuery query;
+    CHECK(query.view().empty());
+    REQUIRE(query.run(s.store, "LINKED") == MapQuery::Step::Ran);
+    CHECK(query.view() == "linked");  // kayıtlı yazım
+    CHECK(query.run_view(s.store, "missing") == MapQuery::Step::Failed);
+    CHECK(query.view() == "linked");  // önceki sonuç kalır
+    ran(query, s.store, "MATCH (n:Note) WHERE n.name = 'c' RETURN n");
+    CHECK(query.view().empty());
+    REQUIRE(query.save_view(s.store, "mine"));
+    CHECK(query.view() == "mine");
+    CHECK_FALSE(query.save_view(s.store, "mine"));  // aynı ad ezilmez: etkin görünüm aynı kalır
+    CHECK(query.view() == "mine");
+    query.clear();
+    CHECK(query.view().empty());
+}
+
+// Açılış (UiPrefs::map.view): görünüm işçide yalnız kayıtlı görünüm olarak çalışır (core::run_saved_view);
+// sonucu restored() uygular. Kalıcı hata (yok, yazan) adı düşürür; geçici hata adı korur (inceleme L2).
+TEST_CASE("map query: a restored view shows its result; a missing or writing view drops its name, a passing "
+          "error keeps it") {
+    Store s;
+    REQUIRE(core::save_view(s.store, "linked", "MATCH (a:Note)-[:LINKS_TO]->(b) RETURN a, b", false));
+    {
+        auto raw = noteapp::graph::Graph::open(s.dir.path() / "graph.db");
+        REQUIRE(raw.has_value());
+        REQUIRE(raw->query("CREATE (:View {name: 'writer', query: \"MATCH (n:Note) SET n.status = 'x'\"})",
+                           {}, noteapp::graph::QueryMode::ReadWrite));
+    }
+    using Kind = MapQuery::Restored::Kind;
+    MapQuery query;
+    CHECK(query.restored(core::run_saved_view(s.store, "linked")).kind == Kind::Stale);  // beklenmeyen sonuç
+    CHECK_FALSE(query.outcome().has_value());
+
+    query.begin_restore("linked");
+    CHECK(query.view() == "linked");  // sonuç gelene dek de kaydedilen ad
+    CHECK(query.restored(core::run_saved_view(s.store, "linked")).kind == Kind::Ran);
+    REQUIRE(query.outcome().has_value());
+    CHECK(query.outcome()->highlight.notes == std::set<std::string>{"a.md", "b.md"});
+    CHECK(query.view() == "linked");
+
+    // Arada yazılan sorgu kazanır: geç gelen sonuç onu ezmez.
+    query.begin_restore("linked");
+    ran(query, s.store, "MATCH (n:Note) WHERE n.name = 'c' RETURN n");
+    CHECK(query.restored(core::run_saved_view(s.store, "linked")).kind == Kind::Stale);
+    CHECK(query.outcome()->highlight.notes == std::set<std::string>{"c.md"});
+    CHECK(query.view().empty());
+
+    for (const std::string name : {"writer", "MATCH (n:Note) SET n.status = 'x'"}) {
+        INFO(name);
+        MapQuery fresh;
+        fresh.begin_restore(name);
+        const MapQuery::Restored failed = fresh.restored(core::run_saved_view(s.store, name));
+        CHECK(failed.kind == Kind::Failed);
+        CHECK(failed.notice.find(name) != std::string::npos);
+        CHECK_FALSE(fresh.outcome().has_value());
+        CHECK(fresh.error().empty());  // ileti bir kez, arayüzün bildirimiyle
+        CHECK(fresh.view().empty());   // kalıcı: ad düşer
+        CHECK_FALSE(fresh.confirming());
+    }
+    CHECK(s.count("MATCH (n:Note) WHERE n.status = 'x' RETURN n") == 0);
+
+    MapQuery busy;
+    busy.begin_restore("linked");
+    const core::Error io{core::Error::Code::Io, "error.io", {{"path", "graph.db"}, {"detail", "busy"}}};
+    CHECK(busy.restored(std::unexpected(io)).kind == Kind::Failed);
+    CHECK(busy.view() == "linked");  // geçici: sonraki açılış yeniden dener
+    CHECK_FALSE(busy.outcome().has_value());
+}
+
+TEST_CASE("map query: the restore worker runs the saved view off the calling thread and delivers it") {
+    Store s;
+    REQUIRE(core::save_view(s.store, "linked", "MATCH (a:Note)-[:LINKS_TO]->(b) RETURN a, b", false));
+    std::promise<app::ViewRestore::Result> delivered;
+    auto result = delivered.get_future();
+    {
+        app::ViewRestore worker;
+        worker.start(s.store, "linked",
+                     [&delivered](app::ViewRestore::Result done) { delivered.set_value(std::move(done)); });
+    }  // yıkıcı işi bekler
+    REQUIRE(result.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+    const app::ViewRestore::Result done = result.get();
+    REQUIRE(done.has_value());
+    CHECK(done->result.rows.size() == 1);
+}
+
+// İnceleme (eşzamanlılık, düşük): işçideki istisna süreci düşürmez, hata olarak teslim edilir (geçici: ad
+// kalır).
+TEST_CASE("map query: an exception in the restore worker is delivered as an error") {
+    Store s;
+    REQUIRE(core::save_view(s.store, "linked", "MATCH (a:Note)-[:LINKS_TO]->(b) RETURN a, b", false));
+    s.store.impl().view_lookup_fault = []() -> std::optional<core::Error> {
+        throw std::runtime_error("boom");
+    };
+    std::promise<app::ViewRestore::Result> delivered;
+    auto result = delivered.get_future();
+    {
+        app::ViewRestore worker;
+        worker.start(s.store, "linked",
+                     [&delivered](app::ViewRestore::Result done) { delivered.set_value(std::move(done)); });
+    }
+    const app::ViewRestore::Result done = result.get();
+    REQUIRE_FALSE(done.has_value());
+    CHECK(done.error().code == core::Error::Code::Io);
+    MapQuery query;
+    query.begin_restore("linked");
+    CHECK(query.restored(done).kind == MapQuery::Restored::Kind::Failed);
+    CHECK(query.view() == "linked");
+}
+
+// notes_dir değişince arayüz clear() çağırır: eski depoda yolda olan sonuç yeni depoya uygulanmaz.
+TEST_CASE("map query: a restore result arriving after clear is stale") {
+    Store s;
+    REQUIRE(core::save_view(s.store, "linked", "MATCH (a:Note)-[:LINKS_TO]->(b) RETURN a, b", false));
+    MapQuery query;
+    query.begin_restore("linked");
+    query.clear();
+    CHECK(query.restored(core::run_saved_view(s.store, "linked")).kind == MapQuery::Restored::Kind::Stale);
+    CHECK_FALSE(query.outcome().has_value());
+    CHECK(query.view().empty());
 }

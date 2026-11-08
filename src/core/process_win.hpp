@@ -28,7 +28,7 @@ UniqueHandle open_null_device();
 // metakarakterli argüman reddedilir (Error{InvalidPath, "error.process_unsafe_argument"}). Çocuğa yalnız
 // verilen standart tutamaçlar devredilir; hepsi devredilebilir olmalıdır, aynı tutamaç birden çok kez
 // verilebilir. Çocuk askıda başlar, iş nesnesine atanır, sonra sürdürülür: torunlar da işe katılır.
-// `env_overrides` boşsa ortam aynen devralınır. `working_directory` boş değilse çocuk orada başlar (program
+// Ortam devralınır, üstüne NoDefaultCurrentDirectoryInExePath=1 ve `env_overrides` biner. `working_directory` boş değilse çocuk orada başlar (program
 // yolu önce mutlak yapılır). Hatalar run_and_wait ile aynı.
 std::expected<SpawnedProcess, Error> spawn_with_stdio(const std::vector<std::string>& argv,
                                                       const EnvOverrides& env_overrides, HANDLE stdin_handle,

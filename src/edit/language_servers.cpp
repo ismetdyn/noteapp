@@ -221,11 +221,7 @@ LspClient* LanguageServers::client_for(const ServerKey& key) {
                      : server_launch(config_.servers.at(key.first).at(key.second),
                                      user == config_.settings.end() ? nullptr : &user->second,
                                      workspace_.parent_path());
-#ifdef _WIN32
-    // CreateProcess ve cmd.exe adı yalın programı önce çalışma dizininde arar; bu değişken onu kapatır.
-    if (launch)
-        launch->environment.emplace_back("NoDefaultCurrentDirectoryInExePath=1");
-#endif
+    // Windows: NoDefaultCurrentDirectoryInExePath=1 her çocuğa core::spawn_with_stdio'da verilir.
     if (!launch) {
         // Boş giriş: her karede yeniden denenip loga yazılmasın; bu sunucu oturumda yok.
         clients_.emplace(key, nullptr);

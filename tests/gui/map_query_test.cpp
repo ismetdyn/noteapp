@@ -9,11 +9,14 @@
 #include "window_fixture.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <doctest/doctest.h>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 using gui_test::click_button;
@@ -97,7 +100,8 @@ struct QueryScene {
 
 }  // namespace
 
-TEST_CASE("map query: Q opens the bar; typing and Enter runs a read that lights its notes; closing clears it") {
+TEST_CASE(
+    "map query: Q opens the bar; Enter runs a read that lights its notes; closing keeps it, Esc clears it") {
     QueryScene scene;
     scene.open();
     CHECK_FALSE(scene.has("map_query"));
@@ -120,8 +124,14 @@ TEST_CASE("map query: Q opens the bar; typing and Enter runs a read that lights 
     click_button(*scene.view, "map_query_run");
     CHECK(scene.state->map_query().outcome()->highlight.notes == std::set<std::string>{"c.md"});
 
+    // İnceleme (L3, TUI ile tek kural): çubuğu kapatmak sonucu düşürmez; haritada Esc (TUI gibi) düşürür.
     click_button(*scene.view, "map_query_toggle");
     CHECK_FALSE(scene.has("map_query"));
+    REQUIRE(scene.state->map_query().outcome().has_value());
+    CHECK(scene.lit("c.md"));
+    scene.focus_canvas();
+    press(*scene.view, ImGuiKey_Escape);
+    settle(*scene.view);
     CHECK(scene.state->map_highlighted_nodes().empty());
     CHECK_FALSE(scene.state->map_query().outcome().has_value());
 }
@@ -371,4 +381,78 @@ TEST_CASE(
         return view ? view->query : std::string{};
     };
     CHECK(saved() == rewritten);
+}
+
+namespace {
+
+// Açılıştaki görünüm işçide çalışır: sonucu post edilir, tick UI iş parçacığı gibi koşar (en çok 10 sn).
+template <typename Done> bool tick_until(GuiState& state, Done done) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!done()) {
+        if (std::chrono::steady_clock::now() > until)
+            return false;
+        state.tick(std::chrono::steady_clock::now());
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return true;
+}
+
+// Silinen `mine` görünümünün açılış iletisi kaç kez bildirildi.
+std::size_t told(const GuiState& state, const std::filesystem::path& store_dir) {
+    core::NoteStore store(store_dir);
+    const auto missing = core::find_view(store, "mine");
+    REQUIRE_FALSE(missing.has_value());
+    const std::string text = core::tr("map.view_restore_failed",
+                                      {{"name", "mine"}, {"error", core::format_error(missing.error())}});
+    return static_cast<std::size_t>(
+        std::ranges::count(state.notices().items(), text, &noteapp::app::Notice::text));
+}
+
+}  // namespace
+
+// Hata (kullanıcı 2026-11-08; TUI ile aynı kural, app::MapSession): kapanışta harita açık ve bir görünüm
+// etkinse açılışta harita, kapsamı, sorgu çubuğu ve görünümün vurgusu geri gelir. Görünüm silinmişse harita
+// vurgusuz açılır, neden bir kez bildirilir (yazan görünümün açılışta çalışmadığı app ve TUI testlerinde).
+TEST_CASE("map query: the map and its active view come back after a restart; a removed view is only told") {
+    QueryScene scene;
+    scene.open();
+    scene.state->deciders.view_name = [](const std::string&) { return std::optional<std::string>("mine"); };
+    scene.open_bar();
+    scene.run("MATCH (n:Note) WHERE n.name = 'b' RETURN n");
+    click_button(*scene.view, "map_query_save");
+    CHECK(scene.state->map_query().view() == "mine");
+    REQUIRE(scene.state->request_close());
+    scene.view.reset();
+    scene.state.reset();
+
+    {
+        const auto again = scene.fixture.make_state();
+        CHECK(again->browser_view() == BrowserView::Map);
+        CHECK(again->map_options().whole_graph);
+        CHECK(again->map_query().view() == "mine");
+        REQUIRE(tick_until(*again, [&] { return again->map_query().outcome().has_value(); }));
+        CHECK(again->map_query().outcome()->highlight.notes == std::set<std::string>{"b.md"});
+        CHECK(again->status() ==
+              core::tr("map.query_view", {{"name", "mine"}, {"rows", "1"}, {"notes", "1"}}));
+        REQUIRE(again->request_close());
+    }
+
+    {
+        core::NoteStore store(scene.fixture.store_dir());
+        const auto shown = core::find_view(store, "mine");
+        REQUIRE(shown.has_value());
+        REQUIRE(core::remove_view(store, "mine", *shown));
+    }
+    {
+        const auto gone = scene.fixture.make_state();
+        REQUIRE(tick_until(*gone, [&] { return gone->map_query().view().empty(); }));
+        CHECK(gone->browser_view() == BrowserView::Map);
+        CHECK_FALSE(gone->map_query().outcome().has_value());
+        CHECK(gone->map_query().error().empty());
+        CHECK(told(*gone, scene.fixture.store_dir()) == 1);
+        REQUIRE(gone->request_close());
+    }
+    const auto later = scene.fixture.make_state();  // bir kez: düşen görünüm dosyadan da düştü
+    CHECK(later->browser_view() == BrowserView::Map);
+    CHECK(told(*later, scene.fixture.store_dir()) == 0);
 }

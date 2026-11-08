@@ -17,17 +17,20 @@ namespace noteapp::core {
 using EnvOverrides = std::vector<std::pair<std::string, std::optional<std::string>>>;
 
 // `overrides` + senkron token'ını taşıyan değişkenlerin (NOTEAPP_GIT_TOKEN, NOTEAPP_GIT_TOKEN_HOST)
-// silinmesi. Kullanıcının programlarına (editör, notes-gui) verilir: token yalnız senkronun işidir.
+// silinmesi. Kullanıcının programlarına (editör, pager, ssh-keygen; edit::ChildProcess kendi listesiyle: pano,
+// hunspell, LSP) verilir: token yalnız senkronun ve kendi `note` sürecimizin işidir.
 EnvOverrides without_secrets(EnvOverrides overrides = {});
 
 // Boş değer "tanımsız" sayılır. Windows'ta geniş API ile okunup UTF-8'e çevrilir.
 std::optional<std::string> get_env_utf8(std::string_view name);
 
-// Programı PATH'te arar (Windows: PATHEXT'teki .com/.exe/.bat/.cmd uzantılarıyla; çalışma dizinine
-// bakılmaz). Ad dizin içeriyorsa yalnız o dizine bakılır. Bulunamazsa nullopt.
+// Programı PATH'in yalnız mutlak girdilerinde arar (Windows: PATHEXT'teki .com/.exe/.bat/.cmd uzantılarıyla).
+// Göreli girdi ("." , boş girdi, node_modules/.bin) çalışma dizinine göre çözülürdü, atlanır: oraya konmuş
+// sahte bir araç editörün, git'in ya da panonun yerine geçmesin. Ad dizin içeriyorsa yalnız o yol denenir
+// (kullanıcının açıkça verdiği komut). Bulunamazsa nullopt. Windows'ta her çocuk ayrıca
+// NoDefaultCurrentDirectoryInExePath=1 ile başlar (process_win.hpp).
 std::optional<std::filesystem::path> find_program(std::string_view name);
-// find_program'ın yalnız mutlak yollara bakan eşi (dil sunucuları): göreli PATH girdisi ("." ya da
-// node_modules/.bin) ve göreli dizinli ad çalışma dizinine göre çözülürdü, atlanır. Dönen yol mutlaktır.
+// find_program + göreli dizinli ad da reddedilir (dil sunucuları); dönen yol mutlaktır.
 std::optional<std::filesystem::path> find_program_on_absolute_path(std::string_view name);
 
 // Çalışan ikilinin mutlak yolu (Windows GetModuleFileNameW, Linux /proc/self/exe); bulunamazsa boş.
@@ -41,6 +44,14 @@ std::filesystem::path current_executable();
 // "error.process_spawn_failed"}.
 std::expected<int, Error> run_and_wait(const std::vector<std::string>& argv,
                                        const EnvOverrides& env_overrides = {}, bool discard_output = false);
+
+#ifndef _WIN32
+// run_and_wait gibi kabuksuz başlatır ama çocuğun stdin'i `input`u taşıyan borudur (pager): metin yazılır, boru
+// kapanır, çıkış beklenir; stdout/stderr devralınır, ortam without_secrets(). Çocuk okumayı bırakırsa (pager'dan
+// `q`) kalan yazılmaz, hata değildir; SIGPIPE'ı yok saymak çağıranın işidir. Hatalar run_and_wait ile aynı.
+// ponytail: yalnız POSIX; Windows'ta pager yok (cli/pager.cpp GEÇİCİ), gelince CreateProcess + boru.
+std::expected<int, Error> run_with_input(const std::vector<std::string>& argv, std::string_view input);
+#endif
 
 class ProcessHandle;
 

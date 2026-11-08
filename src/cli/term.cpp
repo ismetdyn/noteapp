@@ -2,7 +2,11 @@
 
 #include "core/process.hpp"
 
+#include <algorithm>
+#include <array>
 #include <charconv>
+#include <cstddef>
+#include <cstring>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -29,6 +33,25 @@ bool is_console(DWORD std_handle) {
     DWORD mode = 0;
     return GetConsoleMode(GetStdHandle(std_handle), &mode) != 0;
 }
+
+// mintty/MSYS/Cygwin pty'si: konsol değil, adı is_msys_pty_pipe_name kalıbında bir boru.
+bool is_msys_pty(DWORD std_handle) {
+    const HANDLE handle = GetStdHandle(std_handle);
+    if (GetFileType(handle) != FILE_TYPE_PIPE)
+        return false;
+    // pty adı ~50 karakterdir; daha uzun ad ERROR_MORE_DATA ile düşer ve zaten pty değildir. Uzunluk ve ad memcpy
+    // ile okunur: FILE_NAME_INFO::FileName tek öğeli dizidir, ötesine indekslemek tanımsız davranıştır.
+    constexpr std::size_t kMaxNameChars = MAX_PATH;
+    constexpr std::size_t kNameOffset = offsetof(FILE_NAME_INFO, FileName);
+    alignas(FILE_NAME_INFO) std::array<std::byte, kNameOffset + kMaxNameChars * sizeof(wchar_t)> buffer{};
+    if (GetFileInformationByHandleEx(handle, FileNameInfo, buffer.data(), static_cast<DWORD>(buffer.size())) == 0)
+        return false;
+    DWORD name_bytes = 0;
+    std::memcpy(&name_bytes, buffer.data() + offsetof(FILE_NAME_INFO, FileNameLength), sizeof name_bytes);
+    std::wstring name(std::min<std::size_t>(name_bytes, buffer.size() - kNameOffset) / sizeof(wchar_t), L'\0');
+    std::memcpy(name.data(), buffer.data() + kNameOffset, name.size() * sizeof(wchar_t));
+    return is_msys_pty_pipe_name(name);
+}
 #endif
 
 unsigned env_number(std::string_view name) {
@@ -41,9 +64,25 @@ unsigned env_number(std::string_view name) {
 
 }  // namespace
 
+bool is_msys_pty_pipe_name(std::wstring_view name) {
+    constexpr std::wstring_view kPty = L"-pty";
+    for (const std::wstring_view prefix : {L"\\msys-", L"\\cygwin-"}) {
+        if (!name.starts_with(prefix))
+            continue;
+        // Önekten sonra boş olmayan anahtar, `-pty` ve pty numarası.
+        const std::wstring_view rest = name.substr(prefix.size());
+        const std::size_t key_end = rest.find(kPty);
+        if (key_end == 0 || key_end == std::wstring_view::npos)
+            return false;
+        const std::wstring_view number = rest.substr(key_end + kPty.size());
+        return !number.empty() && number.front() >= L'0' && number.front() <= L'9';
+    }
+    return false;
+}
+
 bool stdin_is_tty() {
 #ifdef _WIN32
-    return is_console(STD_INPUT_HANDLE);
+    return is_console(STD_INPUT_HANDLE) || is_msys_pty(STD_INPUT_HANDLE);
 #else
     return isatty(STDIN_FILENO) != 0;
 #endif
@@ -51,10 +90,23 @@ bool stdin_is_tty() {
 
 bool stream_is_tty(Stream stream) {
 #ifdef _WIN32
-    return is_console(stream == Stream::Out ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
+    const DWORD handle = stream == Stream::Out ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE;
+    return is_console(handle) || is_msys_pty(handle);
 #else
     return isatty(stream == Stream::Out ? STDOUT_FILENO : STDERR_FILENO) != 0;
 #endif
+}
+
+std::optional<std::string> read_hidden_line(std::istream& in, std::ostream& out, std::string_view prompt,
+                                             std::string_view refusal, bool echo_hidden) {
+    if (!echo_hidden) {
+        out << refusal << '\n';
+        return std::nullopt;
+    }
+    out << prompt << std::flush;
+    std::string line;
+    std::getline(in, line);
+    return line;
 }
 
 bool color_enabled(Stream stream) {

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <doctest/doctest.h>
 #include <limits>
+#include <stop_token>
 #include <string>
 
 using namespace noteapp::graph;
@@ -252,4 +253,27 @@ TEST_CASE("bulk_delete_honours_the_time_budget") {
     const auto delete_time = std::chrono::steady_clock::now() - delete_start;
     MESSAGE("scan_ms=" << std::chrono::duration<double, std::milli>(scan).count() << " detach_delete_4000_ms="
                        << std::chrono::duration<double, std::milli>(delete_time).count());
+}
+
+// İnceleme (eşzamanlılık, düşük): limits.view.duration = 0 (sınırsız) iken takılan görünüm sahibinin
+// kapanışını sonsuz bekletmesin: iptal süre denetiminde sorguyu durdurur.
+TEST_CASE("a cancelled query stops even with an unlimited duration") {
+    GraphFixture f;
+    {
+        WriteTxn txn = begin_write(f.graph);
+        for (int i = 0; i < 4000; ++i) {
+            const NodeId node = new_node_id();
+            GRAPH_OK(txn.put_node(node));
+            GRAPH_OK(txn.add_label(node, "D"));
+        }
+        GRAPH_OK(txn.commit());
+    }
+    std::stop_source stop;
+    QueryLimits limits;
+    limits.max_duration = std::chrono::milliseconds::max();
+    limits.stop = stop.get_token();
+    CHECK(must_query(f.graph, "MATCH (n:D) RETURN count(*)").rows.size() == 1);
+    CHECK(f.graph.query("MATCH (n:D) RETURN count(*)", {}, QueryMode::ReadOnly, limits).has_value());
+    stop.request_stop();
+    check_limit(f.graph, "MATCH (n:D) RETURN count(*)", limits, "cancelled");
 }

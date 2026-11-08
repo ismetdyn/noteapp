@@ -2,9 +2,12 @@
 // tuşları gerçek depoyla: `Q` tek satırlık sorgu (geçmiş ↑↓, Tab görünüm adları), sonuç braille haritada vurgu,
 // `O` liste panelinde tablo, yazmada onay (varsayılan Hayır), `Esc` sonucu kaldırır.
 #include "app/map_relations.hpp"
+#include "app/ui_prefs.hpp"
 #include "core/i18n.hpp"
 #include "core/note_query.hpp"
+#include "core/note_store_impl.hpp"
 #include "core/note_views.hpp"
+#include "core/paths.hpp"
 #include "graph/graph.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
@@ -13,14 +16,19 @@
 #include "tui/view.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <doctest/doctest.h>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/screen.hpp>
+#include <functional>
+#include <future>
 #include <mutex>
 #include <optional>
 #include <set>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <vector>
 
 using namespace noteapp;
 using tui::Intent;
@@ -330,4 +338,202 @@ TEST_CASE("map query: K saves the shown read as a view; view.remove deletes one 
     CHECK_FALSE(s.rename->error().empty());
     REQUIRE(core::find_view(*s.store, "linked"));
     CHECK(core::find_view(*s.store, "linked")->query == text);
+}
+
+namespace {
+
+// Yeniden açılış main'in sırasıyla: liste, durum dosyası, sonra haritanın görünümü (TuiSession kurucusu).
+// İşçinin sonucu main'deki gibi post edilir; settle() onu UI iş parçacığı gibi koşar.
+struct Reopened {
+    tui::TuiState state;
+    tui::StatusLine status;
+    std::mutex posted_mutex;
+    std::vector<std::function<void()>> posted;
+    std::optional<tui::ListActions> actions;  // son üye: işçisi önce katılır
+
+    explicit Reopened(Scene& s) {
+        state.set_window(kWidth, kHeight);
+        state.set_notes(s.store->list());
+        state.set_folders(s.store->folders());
+        state.set_views(app::view_names(*s.store));
+        CHECK(tui::load_list_prefs(state).empty());
+        tui::ListHost host{s.store, s.mutex, s.internal, s.system, state, s.preview, status, [] {}, [] {}};
+        host.post = [this](std::function<void()> work) {
+            const std::scoped_lock lock(posted_mutex);
+            posted.push_back(std::move(work));
+        };
+        actions.emplace(std::move(host));
+        actions->restore_map_view();
+        actions->save_prefs_if_changed();  // main her olaydan sonra çağırır
+    }
+    // Post edilen işi (en çok 10 sn bekleyerek) koşar; geldiyse true.
+    bool settle() {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (std::chrono::steady_clock::now() < until) {
+            std::vector<std::function<void()>> work;
+            {
+                const std::scoped_lock lock(posted_mutex);
+                work.swap(posted);
+            }
+            if (!work.empty()) {
+                for (const auto& item : work)
+                    item();
+                actions->save_prefs_if_changed();
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return false;
+    }
+};
+
+std::string state_file_text() {
+    return noteapp::test::slurp(core::state_dir() / "tui-state.toml");
+}
+
+}  // namespace
+
+// Hata (kullanıcı 2026-11-08): haritada `K` ile görünüm kaydedildi, yeniden açılışta harita gelmedi. Harita,
+// kapsamı ve etkin görünüm tui-state.toml `[map]` tablosunda kalır; açılış görünümü salt-okunur yeniden
+// çalıştırır. Görünüm silinmişse harita vurgusuz açılır, neden bir kez söylenir.
+TEST_CASE("map query: the map, its scope and the view saved with K come back after a restart") {
+    Scene s;
+    const std::string text = "MATCH (n:Note) WHERE n.name = 'b' RETURN n";
+    s.query(text);
+    s.key(Key::Char, "K");
+    type_into(s.rename, "mine");
+    s.actions.handle_rename_key(s.rename, Key::Enter, {});
+    REQUIRE(core::find_view(*s.store, "mine"));
+    s.actions.save_prefs_if_changed();
+    // Yazılan sorgu metni dosyaya girmez (geçmişi gibi oturumluk): yalnız görünümün adı.
+    CHECK(state_file_text().find("MATCH") == std::string::npos);
+
+    {
+        Reopened again(s);
+        CHECK(again.state.map_view());
+        CHECK(again.state.map_model().options().whole_graph);
+        CHECK(again.state.map_query().view() == "mine");
+        REQUIRE(again.settle());
+        REQUIRE(again.state.map_query().outcome().has_value());
+        CHECK(again.state.map_query().outcome()->highlight.notes == std::set<std::string>{"b.md"});
+        CHECK(again.status.message ==
+              core::tr("map.query_view", {{"name", "mine"}, {"rows", "1"}, {"notes", "1"}}));
+    }
+
+    const auto shown = core::find_view(*s.store, "mine");
+    REQUIRE(core::remove_view(*s.store, "mine", *shown));
+    {
+        Reopened gone(s);
+        REQUIRE(gone.settle());
+        CHECK(gone.state.map_view());
+        CHECK_FALSE(gone.state.map_query().outcome().has_value());
+        CHECK(gone.state.map_query().error().empty());
+        const auto missing = core::find_view(*s.store, "mine");
+        REQUIRE_FALSE(missing.has_value());
+        CHECK(gone.status.message ==
+              core::tr("map.view_restore_failed",
+                       {{"name", "mine"}, {"error", core::format_error(missing.error())}}));
+    }
+    const Reopened later(s);  // bir kez: düşen görünüm dosyadan da düştü
+    CHECK(later.state.map_view());
+    CHECK(later.status.message.empty());
+}
+
+TEST_CASE("map query: a synced view that writes is not run at start and changes nothing") {
+    Scene s;
+    {
+        auto raw = graph::Graph::open(s.dir.path() / "graph.db");
+        REQUIRE(raw.has_value());
+        REQUIRE(raw->query("CREATE (:View {name: 'writer', query: \"MATCH (n:Note) SET n.status = 'x'\"})",
+                           {}, graph::QueryMode::ReadWrite)
+                    .has_value());
+    }
+    s.actions.save_prefs_if_changed();
+    app::UiPrefs saved = app::load_ui_prefs("tui-state.toml", {}).prefs;
+    REQUIRE(saved.map.shown);
+    saved.map.view = "writer";  // elle ya da eski oturumdan; senkron görünümü sonra yazan sorguyla kurmuş
+    app::save_ui_prefs("tui-state.toml", saved, {});
+
+    Reopened again(s);
+    REQUIRE(again.settle());
+    CHECK(again.state.map_view());
+    CHECK_FALSE(again.state.map_query().outcome().has_value());
+    CHECK_FALSE(again.state.map_query().confirming());
+    CHECK(again.status.message.find("writer") != std::string::npos);
+    CHECK(s.count("MATCH (n:Note) WHERE n.status = 'x' RETURN n") == 0);
+}
+
+// İnceleme (L1, L2): açılış görünüm sorgusunu beklemez (harita vurgusuz açılır, sonuç gelince yanar); geçici
+// depo hatası (meşgul, G/Ç) kullanıcının görünüm adını dosyadan silmez, sonraki açılış yeniden dener.
+TEST_CASE(
+    "map query: the first frame does not wait for the restored view; a passing store error keeps its name") {
+    Scene s;
+    s.query("MATCH (n:Note) WHERE n.name = 'b' RETURN n");
+    s.key(Key::Char, "K");
+    type_into(s.rename, "mine");
+    s.actions.handle_rename_key(s.rename, Key::Enter, {});
+    REQUIRE(core::find_view(*s.store, "mine"));
+    s.actions.save_prefs_if_changed();
+
+    std::promise<void> release;
+    const std::shared_future<void> released = release.get_future().share();
+    s.store->impl().view_lookup_fault = [released] {
+        released.wait_for(std::chrono::seconds(5));  // eşzamanlı açılış burada takılırdı
+        return std::optional<core::Error>();
+    };
+    {
+        Reopened again(s);
+        CHECK(again.state.map_view());
+        CHECK_FALSE(again.state.map_query().outcome().has_value());
+        CHECK(again.state.map_query().view() == "mine");
+        release.set_value();
+        REQUIRE(again.settle());
+        REQUIRE(again.state.map_query().outcome().has_value());
+        CHECK(again.state.map_query().outcome()->highlight.notes == std::set<std::string>{"b.md"});
+    }
+
+    const core::Error busy{core::Error::Code::Io, "error.io", {{"path", "graph.db"}, {"detail", "busy"}}};
+    s.store->impl().view_lookup_fault = [busy] { return std::optional(busy); };
+    {
+        Reopened flaky(s);
+        REQUIRE(flaky.settle());
+        CHECK(flaky.status.message.find("busy") != std::string::npos);
+        CHECK_FALSE(flaky.state.map_query().outcome().has_value());
+        CHECK(flaky.state.map_query().view() == "mine");
+    }
+    CHECK(app::load_ui_prefs("tui-state.toml", {}).prefs.map.view == "mine");
+    s.store->impl().view_lookup_fault = nullptr;
+    Reopened healed(s);
+    REQUIRE(healed.settle());
+    CHECK(healed.state.map_query().outcome().has_value());
+}
+
+// İnceleme (eşzamanlılık, ORTA): işçideki görünüm UI'nin depo kilidini tutmaz (NoteStore::connection):
+// görünüm sorgusu takılıyken UI'nin depo çağrısı (tarama, liste) hemen döner.
+TEST_CASE("map query: a store call from the UI does not wait for the view restoring in the background") {
+    Scene s;
+    s.query("MATCH (n:Note) WHERE n.name = 'b' RETURN n");
+    s.key(Key::Char, "K");
+    type_into(s.rename, "mine");
+    s.actions.handle_rename_key(s.rename, Key::Enter, {});
+    REQUIRE(core::find_view(*s.store, "mine"));
+    s.actions.save_prefs_if_changed();
+
+    std::promise<void> entered;
+    std::promise<void> release;
+    const std::shared_future<void> released = release.get_future().share();
+    bool released_in_time = false;
+    s.store->impl().view_lookup_fault = [&entered, released, &released_in_time] {
+        entered.set_value();
+        released_in_time = released.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+        return std::optional<core::Error>();
+    };
+    Reopened again(s);
+    REQUIRE(entered.get_future().wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    CHECK(s.store->list().size() == 4);  // kilit görünümdeyse burada 5 sn beklerdi
+    release.set_value();
+    REQUIRE(again.settle());
+    CHECK(released_in_time);
+    CHECK(again.state.map_query().outcome().has_value());
+    s.store->impl().view_lookup_fault = nullptr;
 }

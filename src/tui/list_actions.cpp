@@ -1430,6 +1430,31 @@ void ListActions::moved(const std::string& from, const std::string& to) const {
         host_.on_moved(from, to);
 }
 
+void ListActions::restore_map_view() {
+    const app::MapSession& map = host_.state.list_prefs().map;
+    if (!map.shown || map.view.empty())
+        return;
+    host_.state.map_query().begin_restore(map.view);
+    if (!host_.post)
+        return;
+    const core::NoteStore store = [&] {
+        const std::scoped_lock lock(host_.store_mutex);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- store main'de kurulu, hep dolu
+        return *host_.store;
+    }();
+    view_restore_.start(store, map.view, [this](app::ViewRestore::Result done) {
+        host_.post([this, done = std::move(done)]() mutable { finish_map_restore(std::move(done)); });
+    });
+}
+
+void ListActions::finish_map_restore(app::ViewRestore::Result done) {
+    const app::MapQuery::Restored restored = host_.state.map_query().restored(std::move(done));
+    if (restored.kind == app::MapQuery::Restored::Kind::Failed)
+        host_.status.notify(app::NoticeKind::Error, terminal_safe(restored.notice));
+    else if (restored.kind == app::MapQuery::Restored::Kind::Ran)
+        show_map_query(app::MapQuery::Step::Ran);
+}
+
 void ListActions::save_prefs_if_changed() {
     if (host_.state.take_prefs_changed())
         save_prefs();

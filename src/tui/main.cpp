@@ -334,6 +334,7 @@ private:
     noteapp::search::ContentIndex& ensure_content_index();
     // İçerik, genel ve ilişki aramasını depoya bağlar (depo erişimi liste kilidiyle).
     void connect_search();
+    void load_prefs();
     void show_sync();
     void notify_changed();
     void start_auto_sync();
@@ -492,8 +493,7 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
         status_.message = noteapp::tui::terminal_safe(core::format_error(*issue));
 
     connect_search();
-    if (std::string notice = tui::load_list_prefs(state_, config_.tuning.max_note_bytes); !notice.empty())
-        status_.message += (status_.message.empty() ? "" : "; ") + noteapp::tui::terminal_safe(notice);
+    load_prefs();
     // Geri gelen sekmelerin içeriği ilk etkinleşmede okunur; açılış Listede kalır.
     tabs_.restore(state_.list_prefs().tabs,
                   [this](const core::NotePath& path) { return state_.meta_of(path) != nullptr; });
@@ -657,6 +657,13 @@ std::size_t TuiSession::trash_count() {
 tui::StoreScan TuiSession::scan() {
     const std::scoped_lock lock(list_mutex_);
     return tui::scan_store(store());
+}
+
+// tui-state.toml: liste tercihleri, sonra haritanın görünümü (açılışta salt-okunur yeniden çalışır).
+void TuiSession::load_prefs() {
+    if (std::string notice = tui::load_list_prefs(state_, config_.tuning.max_note_bytes); !notice.empty())
+        status_.message += (status_.message.empty() ? "" : "; ") + noteapp::tui::terminal_safe(notice);
+    list_actions_.restore_map_view();
 }
 
 void TuiSession::connect_search() {
@@ -948,6 +955,7 @@ void TuiSession::apply_settings(const core::Config& next) {
             content_index_.reset();  // ContentIndex eski store'a referans tutar
             store_.emplace(core::NoteStore::for_config(config_));
         }
+        state_.clear_map_query();  // eski deponun sonucu ve yolda olan açılış görünümü yeni depoya uygulanmaz
         word_tables_.set_store(store());
         language_servers_.set_store(store());
         refresh_notes();

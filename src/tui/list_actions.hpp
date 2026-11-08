@@ -123,6 +123,10 @@ public:
     void refresh_trash_view();
     // Palet son kullanılanları değiştirdiyse `tui-state.toml`a yazar.
     void save_prefs_if_changed();
+    // Açılış (load_list_prefs'ten sonra): kapanışta harita açıksa etkin kayıtlı görünüm arka planda yeniden
+    // çalışır (app::ViewRestore: salt-okunur, limits.view.*); harita hemen vurgusuz açılır, sonuç host_.post
+    // ile gelince vurgulanır. Görünüm yoksa ya da hata verirse neden bir kez bildirilir.
+    void restore_map_view();
 
 private:
     void toggle_icons();
@@ -138,6 +142,7 @@ private:
     void delete_note(const core::NotePath& target, const app::Prompts& prompts);
     void empty_trash(const app::Prompts& prompts);
     void save_prefs();
+    void finish_map_restore(app::ViewRestore::Result done);
     void moved(const std::string& from, const std::string& to) const;
     void submit_rename(std::optional<RenameState>& rename);
     void submit_move_to(std::optional<RenameState>& rename);
@@ -211,8 +216,9 @@ private:
     std::filesystem::path export_replace_;  // uyarısı gösterilmiş var olan çıktı; sıradaki Enter onu ezer
     // Sürmekte olan içe almanın girdisi: hiçbir şey alınamazsa yazılanla geri açılır.
     std::optional<RenameState> import_prompt_;
-    // Son üye: işçi ilk durur ve katılır; post'u yukarıdaki üyelere dokunan işler gönderir.
+    // Son üyeler: işçiler ilk durur ve katılır; post'u yukarıdaki üyelere dokunan işler gönderir.
     app::ImportJob import_;
+    app::ViewRestore view_restore_;
 };
 
 }  // namespace noteapp::tui

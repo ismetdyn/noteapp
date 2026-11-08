@@ -1082,7 +1082,18 @@ void TuiState::set_list_prefs(const ListPrefs& prefs) {
         prefs_.recent_commands.resize(recent_commands_limit_.cap());
     if (prefs_.list_share)  // tuning.tui_list_share'i geçer; sütun sınırları okurken uygulanır
         layout_.set_share(*prefs_.list_share);
+    map_.set_options(prefs_.map.options);  // derinlik limits.app.map_depth'e çekilir
+    set_map_view(prefs_.map.shown);
     refilter(false);
+}
+
+bool TuiState::take_prefs_changed() {
+    app::MapSession map{.shown = map_view_, .view = map_query_.view(), .options = map_.options()};
+    if (map != prefs_.map) {
+        prefs_.map = std::move(map);
+        prefs_changed_ = true;
+    }
+    return std::exchange(prefs_changed_, false);
 }
 
 void TuiState::store_list_share() {

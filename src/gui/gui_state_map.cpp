@@ -202,8 +202,16 @@ void GuiState::trash_map_note(const core::NotePath& path) {
 
 void GuiState::toggle_map_query() {
     map_query_open_ = !map_query_open_;
-    if (map_query_open_)
-        return;
+}
+
+void GuiState::escape_map() {
+    if (!map_query_.outcome() && map_query_.error().empty())
+        map_.clear_path();
+    else
+        clear_map_query();
+}
+
+void GuiState::clear_map_query() {
     map_query_.clear();
     map_.set_highlight(std::nullopt);
 }

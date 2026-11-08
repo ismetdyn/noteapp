@@ -6,6 +6,7 @@
 #include "core/log.hpp"
 #include "core/text.hpp"
 #include "detect/detect.hpp"
+#include "edit/display_text.hpp"
 #include "search/fold.hpp"
 #include "search/query.hpp"
 #include "sync/note_status.hpp"
@@ -32,7 +33,6 @@ app::DocumentOptions document_options(const core::Config& config) {
 const char kStateFileName[] = "gui-state.toml";
 constexpr const char* kViewTree = "tree";
 constexpr const char* kViewDetails = "details";
-constexpr const char* kViewMap = "map";
 // Elle bozulmuş gui-state.toml pencereyi ekrandan taşırmasın ya da görünmez yapmasın.
 constexpr int kMinWindowSide = 200;
 constexpr int kMaxWindowSide = 16384;
@@ -150,12 +150,11 @@ void GuiState::load_gui_state(const app::UiPrefs& saved) {
     layout_.height = window_side("height", layout_.height);
     layout_.left_pane_width = pane_side("left_pane_width", layout_.left_pane_width);
     layout_.map_pane_width = pane_side("map_pane_width", layout_.map_pane_width);
-    // Bilinmeyen görünüm varsayılana düşer.
-    const auto view_mode = app::pref_string(saved, "view_mode");
-    if (view_mode == kViewDetails)
-        layout_.browser_view = BrowserView::Details;
-    else if (view_mode == kViewMap)
+    // Bilinmeyen görünüm varsayılana düşer; harita TUI ile ortak `[map]` tablosundadır.
+    if (saved.map.shown)
         layout_.browser_view = BrowserView::Map;
+    else if (app::pref_string(saved, "view_mode") == kViewDetails)
+        layout_.browser_view = BrowserView::Details;
     layout_.row_numbers = app::pref_bool(saved, "row_numbers").value_or(layout_.row_numbers);
     // Bilinmeyen aile adı (elle düzenlenmiş dosya) varsayılanda kalır.
     const auto font_choice = [&saved](const char* key, std::span<const char* const> names, std::string& field) {
@@ -167,6 +166,7 @@ void GuiState::load_gui_state(const app::UiPrefs& saved) {
     layout_.column = saved.column;
     recent_commands_ = saved.recent_commands;
     search_history_ = saved.search_history;
+    restore_map(saved.map);
 
     // Açık sekmeler (SPEC-gui "Sekmeler"); yoksa ya da hiçbiri kalmadıysa son seçili not.
     if (!saved.tabs.tabs.empty() && restore_tabs(saved.tabs))
@@ -180,6 +180,34 @@ void GuiState::load_gui_state(const app::UiPrefs& saved) {
     }
 }
 
+// Kapanışta harita açıksa kapsamı ve etkin görünümü geri gelir (TUI ile aynı kural, app::ViewRestore):
+// görünüm arka planda, salt-okunur çalışır; harita hemen vurgusuz açılır, sonuç post ile gelince vurgulanır.
+// Görünüm yoksa ya da hata verirse neden bir kez bildirilir.
+void GuiState::restore_map(const app::MapSession& saved) {
+    map_.set_options(saved.options);  // derinlik limits.app.map_depth'e çekilir
+    if (!saved.shown || saved.view.empty())
+        return;
+    map_query_.begin_restore(saved.view);
+    view_restore_.start(store_, saved.view, [this](app::ViewRestore::Result done) {
+        post([this, done = std::move(done)]() mutable { finish_map_restore(std::move(done)); });
+    });
+}
+
+void GuiState::finish_map_restore(app::ViewRestore::Result done) {
+    const app::MapQuery::Restored restored = map_query_.restored(std::move(done));
+    if (restored.kind == app::MapQuery::Restored::Kind::Failed) {
+        notify(app::NoticeKind::Error, tui::terminal_safe(restored.notice));
+        return;
+    }
+    if (restored.kind != app::MapQuery::Restored::Kind::Ran)
+        return;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- Ran sonucu doldurur (MapQuery::restored)
+    const app::QueryOutcome& outcome = *map_query_.outcome();
+    map_.set_highlight(outcome.highlight);
+    status_ = tui::terminal_safe(outcome.summary);
+    notify(app::NoticeKind::Info, status_);
+}
+
 void GuiState::save_gui_state() const {
     const app::Listing& listing = model_.listing();
     app::UiPrefs prefs{.sort = listing.sort(),
@@ -187,25 +215,18 @@ void GuiState::save_gui_state() const {
                        .search_history = search_history_,
                        .open_folders = listing.open_folders(),
                        .recent_commands = recent_commands_};
-    const auto view_mode = [](BrowserView view) {
-        switch (view) {
-        case BrowserView::Details:
-            return kViewDetails;
-        case BrowserView::Map:
-            return kViewMap;
-        case BrowserView::Tree:
-            break;
-        }
-        return kViewTree;
-    };
-    prefs.extra = {{"width", std::int64_t{layout_.width}},
-                   {"height", std::int64_t{layout_.height}},
-                   {"left_pane_width", static_cast<double>(layout_.left_pane_width)},
-                   {"map_pane_width", static_cast<double>(layout_.map_pane_width)},
-                   {"view_mode", std::string(view_mode(layout_.browser_view))},
-                   {"row_numbers", layout_.row_numbers},
-                   {"ui_font", layout_.ui_font},
-                   {"editor_font", layout_.editor_font}};
+    prefs.map = {.shown = layout_.browser_view == BrowserView::Map,
+                 .view = map_query_.view(),
+                 .options = map_.options()};
+    prefs.extra = {
+        {"width", std::int64_t{layout_.width}},
+        {"height", std::int64_t{layout_.height}},
+        {"left_pane_width", static_cast<double>(layout_.left_pane_width)},
+        {"map_pane_width", static_cast<double>(layout_.map_pane_width)},
+        {"view_mode", std::string(layout_.browser_view == BrowserView::Details ? kViewDetails : kViewTree)},
+        {"row_numbers", layout_.row_numbers},
+        {"ui_font", layout_.ui_font},
+        {"editor_font", layout_.editor_font}};
     if (const auto path = current_path())
         prefs.extra["last_note"] = path->string();
     // Taslakların yolu yoktur, yazılmaz.

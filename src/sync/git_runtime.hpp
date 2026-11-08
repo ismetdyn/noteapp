@@ -7,8 +7,9 @@ namespace noteapp::sync {
 //
 // Kurucu ayrıca kullanıcının global/XDG/sistem git config'ini devre dışı bırakır (SPEC-sync "Uygulama
 // kararları" 1): core.autocrlf satır sonlarını, url.*.insteadOf remote adresini sessizce değiştirmesin.
-// Her kurulumda yeniden yapılır: son shutdown'dan sonraki init libgit2'nin arama yollarını yeniden tahmin
-// eder.
+// Yalıtım süreçte bir kez yapılır ve libgit2 süreç sonuna dek başlatılmış kalır (git_runtime.cpp): ayar
+// kilitsiz bir globaldir, her kurulumda yazmak iş parçacıkları arasında yarışıyordu. Kurulum ve yıkım her
+// iş parçacığından aynı anda güvenlidir.
 class GitRuntime {
 public:
     // Başarısız init yalnız kaynak tükenmesinde olur ve kurtarılamaz: std::runtime_error fırlatır.

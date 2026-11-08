@@ -1,6 +1,7 @@
 // Gerçek `notes` sahte terminalde: tuş başına yazılan bayt üst sınırı (T75). Süre ölçülmez, yalnız bayt
 // sayılır; bir sonraki tuş önceki karenin bitişini (senkron güncelleme kapanışı) bekler, sonuç makine
 // hızından bağımsızdır.
+#include "core/note_views.hpp"
 #include "support/note_seed.hpp"
 #include "support/run_process.hpp"
 #include "support/test_support.hpp"
@@ -1002,4 +1003,57 @@ TEST_CASE("a paste far over limits.tui.paste_bytes is not kept in memory and say
     CAPTURE(grown);
     CHECK(grown < kPasteMiB * 1024 / 4);  // eskiden metnin tamamı (ve kopyası) bellekteydi
     CHECK(noteapp::test::note_body(f.home.path() / "data", "a.py") == "x = 1\n");
+}
+
+namespace {
+
+// Çıktıda `word` görünene dek okur (en çok kSettleLimit); okunan `seen`e eklenir. Kare boşlukları imleç
+// hareketiyle yazar: tek sözcük aranır.
+bool wait_word(const PtyApp& app, std::string_view word, std::string& seen) {
+    const auto until = std::chrono::steady_clock::now() + kSettleLimit;
+    while (seen.find(word) == std::string::npos && std::chrono::steady_clock::now() < until)
+        app.read_for(std::chrono::milliseconds(50), &seen);
+    return seen.find(word) != std::string::npos;
+}
+
+}  // namespace
+
+// Hata (kullanıcı 2026-11-08) uçtan uca: harita (palet `Map`), okuma (`Q`), `K` ile görünüm, Ctrl+C; yeniden
+// açılışta harita ve görünümün sonucu gelir (tui-state.toml `[map]`).
+TEST_CASE("the map and the view saved with K come back when the TUI is opened again") {
+    const DrawCountFixture f;
+    f.add_note("b.md", "b\n");
+    f.add_note("c.md", "[[b]]\n");
+    {
+        const PtyApp app(NOTEAPP_NOTES_EXE);
+        std::string seen;
+        app.read_frame();
+        wait_quiet(app, kQuiet, kSettleLimit);
+        app.send(":");
+        app.read_frame();
+        app.send("Map");
+        app.read_frame();
+        app.send("\r");
+        REQUIRE(wait_word(app, "depth", seen));
+        app.send("Q");
+        app.read_frame();
+        app.send("MATCH (n:Note) WHERE n.name = 'b' RETURN n\r");
+        REQUIRE(wait_word(app, "highlighted", seen));
+        app.send("K");
+        app.read_frame();
+        app.send("mine\r");
+        REQUIRE(wait_word(app, "mine", seen));
+        app.send("\x03");
+        app.read_until_exit();
+    }
+    noteapp::core::NoteStore store(f.home.path() / "data");
+    REQUIRE(noteapp::core::find_view(store, "mine").has_value());
+
+    const PtyApp again(NOTEAPP_NOTES_EXE);
+    std::string seen;
+    CHECK(wait_word(again, "ran:", seen));  // "View ran: mine — 1 row(s), 1 note(s) highlighted"
+    CHECK(seen.find("query") !=
+          std::string::npos);  // haritanın kapsam satırı: "Q query  O table  K save view"
+    again.send("\x03");
+    again.read_until_exit();
 }

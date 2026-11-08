@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 using namespace noteapp;
 using tui::Key;
@@ -379,8 +380,75 @@ TEST_CASE("the broken-config refusal also tells where the syntax error is") {
     CHECK(s.error().find("at line ") != std::string::npos);
 }
 
+namespace {
+
+// Ayarlar kutusunun içindeki düz metin (biçim kodsuz, arkadaki liste hariç): satırlar sondaki boşluksuz, tek
+// boşlukla birleşir; sarma boşlukta kırdığı için sarılmış cümle yeniden bütün okunur.
+std::string settings_box_text(ftxui::Screen& screen) {
+    const std::string title = " " + core::tr("tui.settings_title") + " ";
+    for (int top = 0; top < screen.dimy(); ++top) {
+        for (int left = 0; left < screen.dimx(); ++left) {
+            if (screen.PixelAt(left, top).character != "╭" || screen.PixelAt(left + 1, top).character != " " ||
+                screen.PixelAt(left + 2, top).character != title.substr(1, 1))
+                continue;
+            int right = left + 1;
+            while (right < screen.dimx() && screen.PixelAt(right, top).character != "╮")
+                ++right;
+            std::string joined;
+            for (int y = top + 1; y < screen.dimy() && screen.PixelAt(left, y).character == "│"; ++y) {
+                std::string row;
+                for (int x = left + 1; x < right; ++x)
+                    row += screen.PixelAt(x, y).character;
+                joined += row.substr(0, row.find_last_not_of(' ') + 1) + " ";
+            }
+            return joined;
+        }
+    }
+    FAIL("settings box not found");
+    return {};
+}
+
+}  // namespace
+
+// Uzun yapılandırma yolunda da "nothing was saved" ve sözdizimi hatasının satır/sütunu görünür: hata satırı kutu
+// genişliğinde sarılır; alan satırlarına yer kalmazsa baştan kısalır, sondaki ileti ve konum kalır.
+TEST_CASE("a long config path still shows that nothing was saved and where the syntax error is") {
+    const TempDir dir;
+    std::filesystem::path home = dir.path();
+#ifdef _WIN32
+    constexpr int kDepth = 3;  // MAX_PATH (260) altında kalsın
+#else
+    constexpr int kDepth = 12;  // en küçük ekranda (60x15) bile sığmaz: kısaltma yolu da sınanır
+#endif
+    for (int i = 0; i < kDepth; ++i)
+        home /= std::string(40, static_cast<char>('a' + i));
+    ScopedEnv env{"NOTEAPP_HOME", home.u8string()};
+    core::init_i18n("en");
+    write_config("editor = \"vim\"\n[sync\nenabled = \n");
+    const auto base = core::load_config().config;
+    SettingsState s(base);
+    focus_row(s, "editor");
+    type(s, "x");
+    REQUIRE_FALSE(s.submit(base));
+    const std::size_t tail_at = s.error().find("nothing was saved.");
+    REQUIRE(tail_at != std::string::npos);
+    const std::string tail = s.error().substr(tail_at);
+    REQUIRE(tail.find("at line 2, column") != std::string::npos);
+    for (const auto& [width, height] : {std::pair{80, 24}, std::pair{60, 15}}) {
+        CAPTURE(width);
+        ftxui::Screen screen = render_settings(s, width, height);
+        const std::string shown = settings_box_text(screen);
+        INFO(shown);
+        CHECK(shown.find(tail) != std::string::npos);
+        CHECK(shown.find(core::tr("tui.settings_hints")) != std::string::npos);  // kutu ekrandan taşmadı
+        CHECK(shown.find(core::tr("tui.settings_editor")) != std::string::npos);  // odaklı alan görünür
+    }
+    ftxui::Screen roomy = render_settings(s, 80, 24);
+    CHECK(settings_box_text(roomy).find("The config file '") != std::string::npos);  // yer varken kısalmaz
+}
+
 // Hata metni dosya yolunu ve toml++ ayrıntısını taşır: ikisi de ham denetim karakteri (CSI, RLO) içerebilir.
-// Hata satırı tek satırdır ve yolla başlar; yol geçici dizinin altında olsaydı denetim karakterleri uzun
+// Hata yolla başlar ve uzunsa baştan kısalır; yol geçici dizinin altında olsaydı denetim karakterleri uzun
 // geçici dizinde (Windows: C:\users\...\Temp\) kesilen kısma düşer, "yok" denetimleri boşuna geçerdi.
 // Göreli NOTEAPP_HOME onları her platformda satırın görünen başına koyar.
 TEST_CASE("the settings error line never draws hidden controls raw") {

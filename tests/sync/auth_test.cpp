@@ -270,8 +270,19 @@ TEST_CASE("the credentials callback passes without a token (non-https remotes)")
     CHECK_FALSE(credentials.error.has_value());
 }
 
+// ssh-keygen kullanıcının programıdır (sarmalayıcı olabilir): senkron token'ını görmez (without_secrets).
+TEST_CASE("the SSH precheck does not hand the sync token to ssh-keygen") {
+    // find_program yalnız mutlak PATH girdisine bakar; Wine'da derleme tanımı sürücüsüz "/build/..." yoludur.
+    const EnvGuard path("PATH", fs::absolute(NOTEAPP_FAKE_SSH_DIR));
+    const EnvGuard token("NOTEAPP_GIT_TOKEN", fs::path("s3cret-token"));
+    const EnvGuard token_host("NOTEAPP_GIT_TOKEN_HOST", fs::path("known.example"));
+    const auto known = noteapp::sync::check_ssh_host_known(noteapp::sync::parse_remote("git@known.example:k/n.git"));
+    CHECK_MESSAGE(known.has_value(), describe(known));
+}
+
 TEST_CASE("SSH precheck asks ssh-keygen -F: a known host passes, an unknown one is sync.ssh_host_unknown") {
-    const EnvGuard path("PATH", fs::path(NOTEAPP_FAKE_SSH_DIR));
+    // find_program yalnız mutlak PATH girdisine bakar; Wine'da derleme tanımı sürücüsüz "/build/..." yoludur.
+    const EnvGuard path("PATH", fs::absolute(NOTEAPP_FAKE_SSH_DIR));
     for (const std::string_view url :
          {"git@known.example:kisi/notlar.git", "ssh://git@known.example/n.git",
           "ssh://git@known.example:22/n.git", "ssh://git@known.example:2222/n.git"}) {
@@ -310,7 +321,7 @@ TEST_CASE("prepare_credentials: https takes the token up front, ssh runs the pre
         CHECK(https->calls == 0);
     }
     {
-        const EnvGuard path("PATH", fs::path(NOTEAPP_FAKE_SSH_DIR));
+        const EnvGuard path("PATH", fs::absolute(NOTEAPP_FAKE_SSH_DIR));
         const auto unknown = noteapp::sync::prepare_credentials("git@unknown.example:kisi/n.git");
         REQUIRE_FALSE(unknown.has_value());
         CHECK(unknown.error().message_key == "sync.ssh_host_unknown");

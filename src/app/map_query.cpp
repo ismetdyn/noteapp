@@ -1,6 +1,7 @@
 #include "app/map_query.hpp"
 
 #include "core/i18n.hpp"
+#include "core/log.hpp"
 #include "core/note_props.hpp"
 #include "core/note_views.hpp"
 #include "core/text.hpp"
@@ -9,6 +10,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <format>
 #include <system_error>
 #include <type_traits>
@@ -236,6 +238,7 @@ std::string query_changes_text(const core::QueryChanges& changes) {
 // sorulmadan görünür.
 MapQuery::Step MapQuery::run(core::NoteStore& store, std::string_view text) {
     pending_.reset();
+    restoring_.reset();
     // Kayıtlı görünümün adı önce çözülür (TUI Tab tamamlaması; GUI de): ad senkronla gelebilir ve Cypher gibi
     // okunabilir (`MATCH (n) DETACH DELETE n`); görünüm her zaman salt-okunur ve görünüm profiliyle çalışır,
     // adı kullanıcının yazması ya da limits.query'li okuması olmaz (inceleme, Sev-2). Arama kırpılmış metinledir;
@@ -254,8 +257,10 @@ MapQuery::Step MapQuery::run(core::NoteStore& store, std::string_view text) {
         return fail(writes.error());
     if (!*writes) {
         const Step step = finish(core::run_user_query(store, text, core::QueryAction::Read, limits_), false);
-        if (step == Step::Ran)
+        if (step == Step::Ran) {
             read_query_ = std::string(text);
+            view_.clear();
+        }
         return step;
     }
     const auto preview = core::run_user_query(store, text, core::QueryAction::Preview, limits_);
@@ -269,19 +274,74 @@ MapQuery::Step MapQuery::run(core::NoteStore& store, std::string_view text) {
 
 MapQuery::Step MapQuery::run_view(const core::NoteStore& store, std::string_view name) {
     pending_.reset();
+    restoring_.reset();
     const Step step = finish(core::run_saved_view(store, name), false, name);
-    if (step == Step::Ran)
+    if (step == Step::Ran) {
         read_query_.clear();  // sonuç görünümündür: kaydedilecek yazılı sorgu yok
+        view_ = std::string(name);
+    }
     return step;
+}
+
+void MapQuery::begin_restore(std::string name) {
+    view_ = name;
+    restoring_ = std::move(name);
+}
+
+MapQuery::Restored MapQuery::restored(std::expected<core::UserQuery, core::Error> done) {
+    if (!restoring_)
+        return {};
+    const std::string name = *std::exchange(restoring_, std::nullopt);
+    if (done) {
+        finish(std::move(done), false, name);
+        read_query_.clear();  // sonuç görünümündür (run_view gibi)
+        return {.kind = Restored::Kind::Ran};
+    }
+    const core::Error::Code code = done.error().code;
+    if (code == core::Error::Code::NotFound || code == core::Error::Code::InvalidQuery)
+        view_.clear();                                // kalıcı: görünüm yok ya da hiç çalışamaz
+    core::log_warn("event=map_view_restore_failed");  // ad güvenilmez (senkron): loga girmez
+    return {.kind = Restored::Kind::Failed,
+            .notice = core::tr("map.view_restore_failed",
+                               {{"name", name}, {"error", core::format_error(done.error())}})};
+}
+
+void ViewRestore::start(core::NoteStore store, std::string name, std::function<void(Result)> deliver) {
+    try {
+        worker_ = std::jthread([store = std::move(store), name, deliver](const std::stop_token& stop) {
+            deliver(run(store, name, stop));
+        });
+    } catch (const std::exception& error) {  // iş parçacığı açılamadı (std::system_error)
+        core::log_warn(std::string("event=map_view_restore_failed detail=") + error.what());
+        deliver(std::unexpected(io_failure(error.what())));
+    }
+}
+
+// İstisna jthread'den kaçarsa std::terminate olurdu: hata olarak teslim edilir (geçici sayılır, ad kalır).
+ViewRestore::Result ViewRestore::run(const core::NoteStore& store, const std::string& name,
+                                     const std::stop_token& stop) {
+    try {
+        return core::run_saved_view(store.connection(stop), name);
+    } catch (const std::exception& error) {
+        core::log_warn(std::string("event=map_view_restore_failed detail=") + error.what());
+        return std::unexpected(io_failure(error.what()));
+    }
+}
+
+core::Error ViewRestore::io_failure(const std::string& detail) {
+    return core::Error{core::Error::Code::Io, "error.io", {{"path", "graph.db"}, {"detail", detail}}};
 }
 
 MapQuery::Step MapQuery::apply(core::NoteStore& store) {
     if (!pending_)
         return Step::Failed;
+    restoring_.reset();
     const std::string text = *std::exchange(pending_, std::nullopt);
     const Step step = finish(core::run_user_query(store, text, core::QueryAction::Write, limits_), true);
-    if (step == Step::Ran)
+    if (step == Step::Ran) {
         read_query_.clear();  // yazan sorgu görünüm olamaz
+        view_.clear();
+    }
     return step;
 }
 
@@ -291,13 +351,18 @@ void MapQuery::clear() {
     outcome_.reset();
     error_.clear();
     read_query_.clear();
+    view_.clear();
+    restoring_.reset();
     table_ = false;
 }
 
-std::expected<void, core::Error> MapQuery::save_view(core::NoteStore& store, std::string_view name) const {
+std::expected<void, core::Error> MapQuery::save_view(core::NoteStore& store, std::string_view name) {
     if (read_query_.empty())
         return std::unexpected(core::Error{core::Error::Code::InvalidQuery, "error.view_needs_query", {}});
-    return core::save_view(store, name, read_query_, false);
+    auto saved = core::save_view(store, name, read_query_, false);
+    if (saved)
+        view_ = std::string(name);
+    return saved;
 }
 
 MapQuery::Step MapQuery::fail(const core::Error& error) {

@@ -12,9 +12,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace noteapp::app {
@@ -83,6 +86,19 @@ public:
     Step run(core::NoteStore& store, std::string_view text);
     // Kayıtlı görünüm (salt-okunur, görünüm profili).
     Step run_view(const core::NoteStore& store, std::string_view name);
+    // Açılış (UiPrefs::map.view): görünüm ViewRestore'la arka planda çalışır; sonucu gelene dek etkin görünüm
+    // budur (view()), arada yazılan durum dosyası adı düşürmez.
+    void begin_restore(std::string name);
+    struct Restored {
+        enum class Kind { Stale, Ran, Failed };
+        Kind kind = Kind::Stale;
+        std::string notice = {};  // Failed: arayüzün bir kez göstereceği ileti (çubukta hata durmaz)
+    };
+    // İşçinin sonucu, UI iş parçacığında. Arada yeni sorgu, yazma ya da clear() geldiyse Stale: hiçbir şey
+    // değişmez. Ran: sonuç run_view'unki gibi gösterilir. Failed: görünüm artık yoksa ya da çalışamıyorsa
+    // (NotFound, InvalidQuery: yazan ya da bozuk) ad düşer; geçici hatada (meşgul, G/Ç, süre ya da sınır) ad
+    // kalır, sonraki açılış yeniden dener.
+    Restored restored(std::expected<core::UserQuery, core::Error> done);
     // Onaylanan yazma: önizlenen metin yeniden ve commit edilerek çalışır (araya giren değişiklik de denetlenir).
     Step apply(core::NoteStore& store);
     void cancel() { pending_.reset(); }
@@ -99,11 +115,15 @@ public:
 
     // Gösterilen sonucun okuma sorgusu (görünüm ya da yazma değil); yoksa boş. `view.save` bunu kaydeder.
     const std::string& read_query() const { return read_query_; }
+    // Gösterilen sonucun kayıtlı görünümü (çalıştırılan ya da gösterilen okumanın kaydedildiği ad). Yalnız
+    // yeni sorgu, yazma ve clear() (TUI ve GUI haritada Esc) boşaltır; çubuğu kapatmak ya da listeye geçmek
+    // boşaltmaz. Durum dosyasına bu yazılır (UiPrefs::map.view).
+    const std::string& view() const { return view_; }
     // Kayıtlı görünüm (palet `view.save`, TUI haritada `K`, GUI çubuğun düğmesi): ad ve sorgu kuralı CLI
     // `note view save` ile aynı (core::save_view: ad baş/son boşluk ve `/` taşımaz, sorgu salt-okunur
     // olmalı). Aynı ad varsa ezilmez (AlreadyExists): önce silinir. Okuma sonucu yoksa InvalidQuery
-    // (error.view_needs_query).
-    std::expected<void, core::Error> save_view(core::NoteStore& store, std::string_view name) const;
+    // (error.view_needs_query). Kaydedilen görünüm etkin görünüm olur (view()).
+    std::expected<void, core::Error> save_view(core::NoteStore& store, std::string_view name);
 
 private:
     Step fail(const core::Error& error);
@@ -116,7 +136,27 @@ private:
     std::optional<QueryOutcome> outcome_;
     std::string error_;
     std::string read_query_;
+    std::string view_;
+    std::optional<std::string> restoring_;  // begin_restore'un adı; sonucu bekleniyor
     bool table_ = false;
+};
+
+// Açılıştaki görünümün işçisi: sorgu UI iş parçacığında ve UI'nin depo kilidinde çalışmaz
+// (NoteStore::connection: ayrı bağlantı), ilk kare ve UI'nin depo çağrıları onu beklemez. Görünüm salt-okunur
+// ve limits.view.* ile çalışır (core::run_saved_view), yazma hiç çalışmaz. `deliver` işçiden (iş parçacığı
+// açılamazsa hemen) çağrılır: arayüz sonucu UI iş parçacığına aktarır (TUI Post, GUI post) ve
+// MapQuery::restored ile uygular. İstisna hata olarak teslim edilir. Yıkıcı sorguyu iptal eder ve bitmesini
+// bekler: sahibinin son üyelerinden olmalı.
+class ViewRestore {
+public:
+    using Result = std::expected<core::UserQuery, core::Error>;
+    void start(core::NoteStore store, std::string name, std::function<void(Result)> deliver);
+
+private:
+    static Result run(const core::NoteStore& store, const std::string& name, const std::stop_token& stop);
+    static core::Error io_failure(const std::string& detail);
+
+    std::jthread worker_;
 };
 
 }  // namespace noteapp::app

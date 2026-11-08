@@ -22,7 +22,7 @@
 
 namespace noteapp::app {
 
-// Harita kapsamı (SPEC-gui "Harita", SPEC-tui "Harita"): oturumluk, durum dosyasına yazılmaz.
+// Harita kapsamı (SPEC-gui "Harita", SPEC-tui "Harita"): durum dosyasının `[map]` tablosu (app::MapSession).
 struct MapOptions {
     static constexpr int kMinDepth = 1;  // üst sınır config'te: limits.app.map_depth (MapModel::max_depth)
     static constexpr int kDefaultDepth = 2;

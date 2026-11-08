@@ -9,9 +9,10 @@ target_compile_definitions(cli_tests PRIVATE NOTEAPP_NOTE_EXE="$<TARGET_FILE:not
                                              NOTEAPP_FAKE_EDITOR="$<TARGET_FILE:fake_editor>")
 # Senkron testleri bare uzak depoyu libgit2 ile kurar ve kasayı sorgular.
 target_link_libraries(cli_tests PRIVATE noteapp_core noteapp_sync noteapp_graph)
-# confirm.hpp gibi yalnız-başlık cli yardımcıları ve saf ayrıştırıcı (args.cpp, G/Ç yok) doğrudan birim test edilir.
+# confirm.hpp gibi yalnız-başlık cli yardımcıları, saf ayrıştırıcı (args.cpp, G/Ç yok) ve pty adı çözümü (term.cpp)
+# doğrudan birim test edilir.
 target_include_directories(cli_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_sources(cli_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/cli/args.cpp)
+target_sources(cli_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/cli/args.cpp ${PROJECT_SOURCE_DIR}/src/cli/term.cpp)
 
 # Üretilen tamamlama betikleri kabukların ayrıştırıcısından geçer, bash (ve kuruluysa zsh) gerçekten tamamlar.
 if(UNIX)

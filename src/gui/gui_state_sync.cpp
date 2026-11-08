@@ -98,6 +98,7 @@ void GuiState::apply_settings(const core::Config& before, const core::Config& af
     if (before.notes_dir != after.notes_dir) {
         // SettingsPage kaydetmeden önce flush ettirdi: tampon temiz, eski dizinin notu bırakılır.
         store_ = core::NoteStore::for_config(config_);
+        clear_map_query();  // eski deponun sonucu ve yolda olan açılış görünümü yeni depoya uygulanmaz
         word_tables_.set_store(store_);
         language_servers_.set_store(store_);
         content_index_.reset();
