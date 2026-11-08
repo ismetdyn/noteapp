@@ -121,6 +121,6 @@ Geliştirme: `ctest --preset linux-gcc-debug --output-on-failure`, `scripts/chec
 
 ## Lisans
 
-Projenin kendi lisansı henüz belirlenmedi (depoda `LICENSE` dosyası yok). Kullanılan bileşenlerin ve gömülü fontların
+[MIT](LICENSE). Kullanılan bileşenlerin ve gömülü fontların
 (DejaVu, Inter, JetBrains Mono) lisansları Windows paketinde `licenses/`, AppImage içinde `usr/share/licenses/noteapp/`
 altındadır.
