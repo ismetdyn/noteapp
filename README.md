@@ -36,6 +36,7 @@ reposu üzerinden cihazlar arasında (Windows ↔ Linux) senkron kalır. Üç ar
 ```bash
 bash scripts/install-local.sh noteapp-0.1.1-x86_64.AppImage   # ~/.local/bin/{note,notes,notes-gui} + tamamlama
 ```
+GUI'li pakette uygulama menüsü girdisi (`~/.local/share/applications/noteapp.desktop`) ve ikonu da kurulur.
 Betik dotfile'lara yazmaz; eksik olan satırı sonunda kendisi gösterir. `~/.local/bin` PATH'te değilse
 `~/.bashrc` / `~/.zshrc`'ye `export PATH="$HOME/.local/bin:$PATH"`. zsh tamamlaması için `~/.zshrc`'de `compinit`'ten
 (oh-my-zsh: `source $ZSH/oh-my-zsh.sh` satırından) önce `fpath=("$HOME/.local/share/zsh/site-functions" $fpath)`.

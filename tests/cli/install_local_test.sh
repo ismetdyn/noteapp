@@ -75,11 +75,36 @@ esac
 INNER
 chmod +x squashfs-root/AppRun
 EOF
+# Paket sözleşmesi (packaging/linux/build-in-container.sh): ikonlar usr/share/icons/hicolor altında.
+repo_icons="$1/resources/icons"
+printf 'mkdir -p %s %s\ncp %q %s\ncp %q %s\n' \
+    squashfs-root/usr/share/icons/hicolor/16x16/apps squashfs-root/usr/share/icons/hicolor/scalable/apps \
+    "$repo_icons/hicolor/16x16/apps/noteapp.png" squashfs-root/usr/share/icons/hicolor/16x16/apps/ \
+    "$repo_icons/noteapp.svg" squashfs-root/usr/share/icons/hicolor/scalable/apps/ >>"$fake_appimage"
 chmod +x "$fake_appimage"
 bash "$script" "$fake_appimage" >/dev/null
 [[ "$("$HOME/.local/bin/notes")" == apprun-notes ]] || die "AppImage notes link"
 [[ -L "$HOME/.local/bin/notes-gui" ]] || die "AppImage gui link"
 [[ "$(readlink "$HOME/.local/bin/notes-gui")" == "$HOME/.local/share/noteapp/1.2.3/AppRun" ]] || die "AppImage link target"
+
+# Menü girdisi packaging/linux/noteapp.desktop'tan türer; Exec kurulan bağa mutlak yolla işaret eder.
+desktop_file="$HOME/.local/share/applications/noteapp.desktop"
+hicolor="$HOME/.local/share/icons/hicolor"
+[[ -f "$desktop_file" ]] || die "desktop entry not installed"
+grep -qxF 'Name=NoteApp' "$desktop_file" || die "desktop entry not derived from the packaged one"
+grep -qxF "Exec=\"$HOME/.local/bin/notes-gui\"" "$desktop_file" || die "desktop Exec is not the installed link"
+grep -qxF "TryExec=$HOME/.local/bin/notes-gui" "$desktop_file" || die "desktop TryExec"
+grep -qxF 'X-Noteapp-Installer=install-local.sh' "$desktop_file" || die "desktop entry has no ownership marker"
+if command -v desktop-file-validate >/dev/null; then
+    desktop-file-validate "$desktop_file" || die "desktop-file-validate rejects the entry"
+fi
+cmp -s "$repo_icons/hicolor/16x16/apps/noteapp.png" "$hicolor/16x16/apps/noteapp.png" || die "png icon not installed"
+cmp -s "$repo_icons/noteapp.svg" "$hicolor/scalable/apps/noteapp.svg" || die "svg icon not installed"
+# İdempotent: aynı içerik, geçici dosya artığı yok.
+desktop_before="$(cat "$desktop_file")"
+bash "$script" "$fake_appimage" >/dev/null
+[[ "$(cat "$desktop_file")" == "$desktop_before" ]] || die "reinstall changed the desktop entry"
+[[ -z "$(find "$HOME/.local/share/applications" "$hicolor" -name '*.new')" ]] || die "desktop temp file left behind"
 
 # Geçersiz girdi: açık hata.
 if bash "$script" "$work/missing" >/dev/null 2>&1; then
@@ -174,6 +199,9 @@ bash "$script" --uninstall >/dev/null 2>&1
 [[ "$(cat "$HOME/.local/share/bash-completion/completions/note")" == mine ]] ||
     die "uninstall touched a foreign completion file"
 [[ ! -L "$bin/note" && ! -L "$bin/notes" ]] || die "our links stayed"
+[[ ! -e "$HOME/.local/share/applications/noteapp.desktop" ]] || die "uninstall left our desktop entry"
+[[ ! -e "$HOME/.local/share/icons/hicolor/16x16/apps/noteapp.png" ]] || die "uninstall left our png icon"
+[[ ! -e "$HOME/.local/share/icons/hicolor/scalable/apps/noteapp.svg" ]] || die "uninstall left our svg icon"
 [[ "$(readlink "$bin/notes-gui")" == /usr/bin/true ]] || die "uninstall touched a foreign link"
 [[ ! -e "$share/9.8.7" && ! -e "$share/1.2.3" ]] || die "version directories stayed"
 [[ "$(cat "$share/graph.db")" == notes ]] || die "uninstall touched the notes database"
@@ -188,4 +216,40 @@ bash "$script" --uninstall >/dev/null || die "uninstall with nothing installed m
 bash "$script" "$fake_tree" >/dev/null
 bash "$script" --uninstall >/dev/null
 [[ ! -e "$HOME/.local/share/noteapp" ]] || die "the emptied directory stayed"
+
+# Yabancı menü girdisi ve ikon ezilmez, kaldırmada da kalır; kurulum yine başarılıdır.
+export HOME="$work/home-desktop"
+apps="$HOME/.local/share/applications"
+hicolor="$HOME/.local/share/icons/hicolor"
+mkdir -p "$apps" "$hicolor/16x16/apps"
+echo mine >"$apps/noteapp.desktop"
+echo mine >"$hicolor/16x16/apps/noteapp.png"
+bash "$script" "$fake_appimage" >/dev/null 2>&1 || die "a foreign desktop entry must not fail the install"
+[[ "$(cat "$apps/noteapp.desktop")" == mine ]] || die "foreign desktop entry was replaced"
+[[ "$(cat "$hicolor/16x16/apps/noteapp.png")" == mine ]] || die "foreign icon was replaced"
+[[ -f "$hicolor/scalable/apps/noteapp.svg" ]] || die "a free icon slot must still be filled"
+bash "$script" --uninstall >/dev/null 2>&1
+[[ "$(cat "$apps/noteapp.desktop")" == mine ]] || die "uninstall touched a foreign desktop entry"
+[[ "$(cat "$hicolor/16x16/apps/noteapp.png")" == mine ]] || die "uninstall touched a foreign icon"
+[[ ! -e "$hicolor/scalable/apps/noteapp.svg" ]] || die "uninstall left our svg icon"
+[[ ! -e "$HOME/.local/share/noteapp" ]] || die "uninstall left the icon list behind"
+
+# cmake install ağacı: ikon aynı hicolor düzeninde share/ altında; yoksa girdi ikonsuz yazılmaz, uyarılır.
+export HOME="$work/home-tree-gui"
+gui_tree="$work/tree-gui"
+cp -a "$fake_tree" "$gui_tree"
+printf '#!/bin/sh\necho fake-gui\n' >"$gui_tree/bin/notes-gui"
+chmod +x "$gui_tree/bin/notes-gui"
+warning="$(bash "$script" "$gui_tree" 2>&1 >/dev/null)" || die "a tree without icons must still install"
+[[ "$warning" == *icon* ]] || die "a missing icon must be reported: $warning"
+[[ ! -e "$HOME/.local/share/applications/noteapp.desktop" ]] || die "desktop entry written without an icon"
+mkdir -p "$gui_tree/share/icons/hicolor/48x48/apps"
+cp "$repo_icons/hicolor/48x48/apps/noteapp.png" "$gui_tree/share/icons/hicolor/48x48/apps/"
+bash "$script" "$gui_tree" >/dev/null
+[[ -f "$HOME/.local/share/applications/noteapp.desktop" ]] || die "desktop entry from a cmake tree"
+cmp -s "$repo_icons/hicolor/48x48/apps/noteapp.png" "$HOME/.local/share/icons/hicolor/48x48/apps/noteapp.png" ||
+    die "icon from a cmake tree"
+bash "$script" --uninstall >/dev/null
+[[ ! -e "$HOME/.local/share/applications/noteapp.desktop" && ! -e "$HOME/.local/share/noteapp" ]] ||
+    die "uninstall after a cmake tree install"
 echo ok
