@@ -252,4 +252,21 @@ cmp -s "$repo_icons/hicolor/48x48/apps/noteapp.png" "$HOME/.local/share/icons/hi
 bash "$script" --uninstall >/dev/null
 [[ ! -e "$HOME/.local/share/applications/noteapp.desktop" && ! -e "$HOME/.local/share/noteapp" ]] ||
     die "uninstall after a cmake tree install"
+
+# Exec satırında tırnaklanamayan yol ya da bozuk şablon yalnız menü girdisini atlar; komutlar yine kurulur.
+export HOME="$work/home-odd\$%dir"
+mkdir -p "$HOME"
+warning="$(bash "$script" "$gui_tree" 2>&1 >/dev/null)" || die "an unquotable path must not fail the install"
+[[ "$warning" == *"desktop entry skipped"* ]] || die "a skipped desktop entry must be reported: $warning"
+[[ -L "$HOME/.local/bin/notes" && -L "$HOME/.local/bin/notes-gui" ]] || die "links not installed with an unquotable path"
+[[ ! -e "$HOME/.local/share/applications/noteapp.desktop" ]] || die "desktop entry written with an unquotable path"
+export HOME="$work/home-template"
+mkdir -p "$HOME" "$work/repo/scripts" "$work/repo/packaging/linux"
+cp "$script" "$work/repo/scripts/"
+grep -v '^Exec=' "$1/packaging/linux/noteapp.desktop" >"$work/repo/packaging/linux/noteapp.desktop"
+warning="$(bash "$work/repo/scripts/install-local.sh" "$gui_tree" 2>&1 >/dev/null)" ||
+    die "a template without Exec must not fail the install"
+[[ "$warning" == *"desktop entry skipped"* ]] || die "a broken template must be reported: $warning"
+[[ -L "$HOME/.local/bin/notes" ]] || die "links not installed with a broken template"
+[[ ! -e "$HOME/.local/share/applications/noteapp.desktop" ]] || die "desktop entry written from a broken template"
 echo ok

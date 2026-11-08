@@ -106,6 +106,16 @@ desktop_entry() {
 install_desktop_entry() {
     local source_dir="$1" icon relative destination
     local -a icons=()
+    # Menü girdisi isteğe bağlı: yazılamıyorsa komutlar yine kurulur, yalnız girdi atlanır.
+    if ! grep -qxF 'Exec=notes-gui' "$desktop_template" 2>/dev/null; then
+        echo "warning: desktop entry skipped: no Exec=notes-gui line in $desktop_template" >&2
+        return 0
+    fi
+    # Exec değeri tırnak içinde kaçışsız durabilmeli.
+    if [[ "$bin" == *[\"\`\$\\%[:cntrl:]]* ]]; then
+        echo "warning: desktop entry skipped: $bin path cannot be quoted in a .desktop Exec line" >&2
+        return 0
+    fi
     for icon in "$source_dir"/*/apps/noteapp.png "$source_dir"/scalable/apps/noteapp.svg; do
         if [[ -f "$icon" ]]; then
             icons+=("${icon#"$source_dir"/}")
@@ -235,9 +245,6 @@ if [[ "$1" == --uninstall ]]; then
 fi
 
 source_path="$(realpath -- "$1")" || die "not found: $1"
-# Şablon depoyla gelir; bozuksa hiçbir şey değişmeden düşer. Exec'e giden yol tırnak içinde kaçışsız durabilmeli.
-grep -qxF 'Exec=notes-gui' "$desktop_template" 2>/dev/null || die "no Exec=notes-gui line in: $desktop_template"
-[[ "$bin" != *[\"\`\$\\%[:cntrl:]]* ]] || die "unsupported characters for a desktop entry in: $bin"
 mkdir -p "$share" "$bin"
 
 # Kesilmiş kurulumun artığı. Taze olanı çalışan başka bir kuruluma ait olabilir.
