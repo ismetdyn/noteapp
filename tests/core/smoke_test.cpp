@@ -5,7 +5,7 @@
 #include <string>
 
 TEST_CASE("version reports the project version") {
-    CHECK(noteapp::core::version() == "0.1.0");
+    CHECK(noteapp::core::version() == NOTEAPP_EXPECTED_VERSION);
 }
 
 // Araç zinciri sınırı (GCC 13): spec'in hata modeli std::expected'a dayanır.

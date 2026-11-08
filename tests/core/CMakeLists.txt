@@ -22,6 +22,8 @@ target_link_libraries(core_tests PRIVATE tomlplusplus::tomlplusplus)
 target_compile_definitions(core_tests PRIVATE TOML_EXCEPTIONS=0)
 # Koddaki sabit i18n anahtarları kaynaktan okunur (i18n_test).
 target_compile_definitions(core_tests PRIVATE NOTEAPP_SOURCE_DIR="${PROJECT_SOURCE_DIR}/src")
+# Beklenen sürüm tek kaynaktan (kök CMakeLists.txt project()) gelir; sürüm yükseltmede test kopyası tutulmaz.
+target_compile_definitions(core_tests PRIVATE NOTEAPP_EXPECTED_VERSION="${PROJECT_VERSION}")
 
 # Graph üzerindeki NoteStore: core_tests'ten ayrı, motora doğrudan bakar.
 noteapp_add_test(note_graph note_graph_test.cpp note_limits_test.cpp note_links_test.cpp note_relations_test.cpp)
