@@ -26,10 +26,21 @@ reposu üzerinden cihazlar arasında (Windows ↔ Linux) senkron kalır. Üç ar
   ./noteapp-0.1.1-x86_64.AppImage note ls      # ilk argüman: note | notes | gui
   ```
   Dosya adı komutu da belirler: `note`, `notes`, `notes-gui` adlı symlink'ler üçünü ayrı komut yapar
-  (`packaging/linux/AppRun`). Günlük kullanım için yerel kurulum daha hızlıdır: `bash scripts/install-local.sh <AppImage>`.
+  (`packaging/linux/AppRun`). Günlük kullanım için yerel kurulum daha hızlıdır (aşağıda).
 - **Windows 11:** `noteapp-0.1.1-windows-x86_64.zip` içinde `note.exe`, `notes.exe`, `notes-gui.exe` ve `licenses/`.
   Açıp çalıştır; üç exe'yi aynı klasörde tut (`notes` ve `notes-gui` `note`'u kendi yanında arar). İmzasızdır,
   SmartScreen uyarısı verebilir.
+
+### Yerel kurulum (bash/zsh)
+
+```bash
+bash scripts/install-local.sh noteapp-0.1.1-x86_64.AppImage   # ~/.local/bin/{note,notes,notes-gui} + tamamlama
+```
+Betik dotfile'lara yazmaz; eksik olan satırı sonunda kendisi gösterir. `~/.local/bin` PATH'te değilse
+`~/.bashrc` / `~/.zshrc`'ye `export PATH="$HOME/.local/bin:$PATH"`. zsh tamamlaması için `~/.zshrc`'de `compinit`'ten
+(oh-my-zsh: `source $ZSH/oh-my-zsh.sh` satırından) önce `fpath=("$HOME/.local/share/zsh/site-functions" $fpath)`.
+GUI'yi terminali meşgul etmeden açmak: `setsid -f notes-gui >/dev/null 2>&1`; kısayol:
+`alias ngui='setsid -f notes-gui >/dev/null 2>&1'`. Kaldırma: `bash scripts/install-local.sh --uninstall`.
 
 ### Kaynaktan derleme
 
