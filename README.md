@@ -1,3 +1,5 @@
+<img src="resources/icons/noteapp.svg" width="96" alt="noteapp">
+
 # noteapp
 
 Terminalde yaşayan biri için hızlı, sunucusuz, sahibine ait bir not uygulaması. Tek uygulama, üç arayüz, ortak bir çekirdek:

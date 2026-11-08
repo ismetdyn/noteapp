@@ -39,6 +39,9 @@ noteapp_embed_files(noteapp_gui gui/icon_font.hpp noteapp::gui embedded_ui_font
     fonts/Inter-Italic.ttf
     fonts/Inter-BoldItalic.ttf
     fonts/JetBrainsMono-Regular.ttf)
+noteapp_embed_files(noteapp_gui gui/icon_font.hpp noteapp::gui embedded_app_icon
+    icons/hicolor/64x64/apps/noteapp.png
+    icons/hicolor/256x256/apps/noteapp.png)
 target_include_directories(noteapp_gui PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(noteapp_gui
     PUBLIC noteapp_app noteapp_edit noteapp_core noteapp_search noteapp_sync imgui

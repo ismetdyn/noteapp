@@ -3,11 +3,13 @@
 #include "gui/view.hpp"
 #include "layout_scenes.hpp"
 
+#include <SDL3/SDL.h>
 #include <cstddef>
 #include <doctest/doctest.h>
 #include <imgui.h>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using gui_test::LayoutScene;
@@ -40,6 +42,21 @@ TEST_CASE("the embedded icon font is a small subset, not the whole Nerd Font") {
     const auto font = noteapp::gui::embedded_icon_font("fonts/NoteappIcons.ttf");
     REQUIRE(font.has_value());
     CHECK(font->size() < kMaxSubsetBytes);
+}
+
+// View::create ikon yüklenemezse sessizce ikonsuz devam eder; bozuk gömülü PNG ancak burada görünür.
+TEST_CASE("the embedded window icons decode to square images of their nominal size") {
+    for (const auto& [resource, size] : {std::pair{"icons/hicolor/64x64/apps/noteapp.png", 64},
+                                         std::pair{"icons/hicolor/256x256/apps/noteapp.png", 256}}) {
+        CAPTURE(resource);
+        const auto png = noteapp::gui::embedded_app_icon(resource);
+        REQUIRE(png.has_value());
+        SDL_Surface* surface = SDL_LoadPNG_IO(SDL_IOFromConstMem(png->data(), png->size()), true);
+        REQUIRE_MESSAGE(surface != nullptr, SDL_GetError());
+        CHECK(surface->w == size);
+        CHECK(surface->h == size);
+        SDL_DestroySurface(surface);
+    }
 }
 
 TEST_CASE("every table glyph is in both selectable UI fonts and has visible pixels in a dummy driver frame") {

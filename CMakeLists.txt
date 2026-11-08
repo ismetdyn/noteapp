@@ -49,6 +49,23 @@ if(NOTEAPP_BUILD_GUI)
     add_subdirectory(src/gui)
 endif()
 
+# Windows: üç exe Explorer'da ve görev çubuğunda aynı uygulama ikonunu taşır (resources/icons,
+# scripts/generate-app-icon.sh). .rc mutlak yolla üretilir: windres göreli yolu derleme dizininden çözerdi.
+if(WIN32)
+    enable_language(RC)
+    set(noteapp_icon "${PROJECT_SOURCE_DIR}/resources/icons/noteapp.ico")
+    set(noteapp_icon_rc "${PROJECT_BINARY_DIR}/noteapp-icon.rc")
+    file(CONFIGURE OUTPUT "${noteapp_icon_rc}" CONTENT "1 ICON \"@noteapp_icon@\"\n" @ONLY)
+    foreach(exe IN ITEMS note notes notes-gui)
+        if(TARGET ${exe})
+            target_sources(${exe} PRIVATE "${noteapp_icon_rc}")
+            # .rc'nin içeriği değişmese de .ico değişince yeniden derlensin; kaynak özelliği hedefin dizinine yazılır.
+            set_source_files_properties("${noteapp_icon_rc}" TARGET_DIRECTORY ${exe}
+                PROPERTIES OBJECT_DEPENDS "${noteapp_icon}")
+        endif()
+    endforeach()
+endif()
+
 if(NOTEAPP_BUILD_FUZZ)
     add_subdirectory(tests/graph/fuzz)
 endif()

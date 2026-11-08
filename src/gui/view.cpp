@@ -57,6 +57,36 @@ int map_zoom_step(SDL_Keycode key) {
     return 0;
 }
 
+using SurfacePtr = std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)>;
+
+SurfacePtr load_app_icon(std::string_view resource) {
+    const auto png = embedded_app_icon(resource);
+    if (!png)
+        return {nullptr, &SDL_DestroySurface};
+    // closeio = true: akış hata yolunda da kapanır; SDL_IOFromConstMem null dönerse SDL_LoadPNG_IO null döner.
+    return {SDL_LoadPNG_IO(SDL_IOFromConstMem(png->data(), png->size()), true), &SDL_DestroySurface};
+}
+
+// 64 px %100 ölçek içindir, 256 px yüksek DPI ve büyük görev çubuğu için alternatif (SDL_SetWindowIcon).
+// Pencere ikonsuz da çalışır: sürücü desteklemezse (dummy, ikon protokolsüz Wayland bileşikçisi) bir kez WARN
+// yazılır, açılış sürer.
+void set_window_icon(SDL_Window* window) {
+    const auto warn = [](const char* step) {
+        core::log_warn(std::string("event=window_icon_failed step=") + step + " detail=" + SDL_GetError());
+    };
+    const SurfacePtr icon = load_app_icon("icons/hicolor/64x64/apps/noteapp.png");
+    if (!icon) {
+        warn("load_64");
+        return;
+    }
+    const SurfacePtr large = load_app_icon("icons/hicolor/256x256/apps/noteapp.png");
+    // Referans ekler; büyük yüzey burada bırakılır. Alternatif olmadan 64 px yine kullanılır.
+    if (!large || !SDL_AddSurfaceAlternateImage(icon.get(), large.get()))
+        warn("alternate_256");
+    if (!SDL_SetWindowIcon(window, icon.get()))  // SDL kopyasını tutar
+        warn("set");
+}
+
 // Gömülü dosya kaynağı: pdf::embedded_font (DejaVu), embedded_ui_font (Inter, JetBrains Mono),
 // embedded_icon_font.
 using EmbeddedFile = std::optional<std::string_view> (*)(std::string_view);
@@ -119,6 +149,7 @@ std::expected<std::unique_ptr<View>, std::string> View::create(GuiState& state) 
                                             SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY));
     if (!platform->window)
         return std::unexpected(sdl_error("SDL_CreateWindow"));
+    set_window_icon(platform->window.get());
     platform->renderer.reset(SDL_CreateRenderer(platform->window.get(), nullptr));
     if (!platform->renderer)
         return std::unexpected(sdl_error("SDL_CreateRenderer"));

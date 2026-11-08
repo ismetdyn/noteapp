@@ -38,6 +38,13 @@ version="${version_output#note }"
 gpg_error="$(gcc-14 -print-file-name=libgpg-error.so.0)"
 [[ -e "$gpg_error" ]] || die "libgpg-error.so.0 not found"
 
+# İkon tek kaynaktan (resources/icons, scripts/generate-app-icon.sh): linuxdeploy boyutu dosyadan okuyup
+# usr/share/icons/hicolor/<boyut>/apps altına koyar; dosya adı .desktop'taki Icon=noteapp ile eşleşmeli.
+icon_args=(--icon-file /src/resources/icons/noteapp.svg)
+for icon in /src/resources/icons/hicolor/*/apps/noteapp.png; do
+    icon_args+=(--icon-file "$icon")
+done
+
 # NO_STRIP: linuxdeploy'un gömülü strip'i yeni ELF bölümlerini tanımıyor; ikililer yukarıda --strip ile soyuldu.
 NO_STRIP=1 /tools/linuxdeploy --appdir "$appdir" \
     --library "$gpg_error" \
@@ -45,8 +52,16 @@ NO_STRIP=1 /tools/linuxdeploy --appdir "$appdir" \
     --executable "$stage/bin/notes" \
     --executable "$stage/bin/notes-gui" \
     --desktop-file "$packaging/noteapp.desktop" \
-    --icon-file "$packaging/noteapp.svg" \
+    "${icon_args[@]}" \
     --custom-apprun "$packaging/AppRun"
+# Paket sözleşmesi: her kaynak boyut hicolor'da aynı yerde; masaüstü .desktop'taki Icon=noteapp'i buradan çözer.
+for icon in /src/resources/icons/hicolor/*/apps/noteapp.png /src/resources/icons/noteapp.svg; do
+    relative="${icon#/src/resources/icons/}"
+    if [[ "$relative" == noteapp.svg ]]; then
+        relative=hicolor/scalable/apps/noteapp.svg
+    fi
+    [[ -f "$appdir/usr/share/icons/$relative" ]] || die "icon missing in AppDir: usr/share/icons/$relative"
+done
 
 # Lisanslar: gömülü bileşenler kendi kaynağından, paylaşımlı kütüphaneler Debian copyright dosyasından.
 licenses="$appdir/usr/share/licenses/noteapp"
