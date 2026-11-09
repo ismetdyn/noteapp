@@ -2,6 +2,7 @@
 
 #include "app/import_files.hpp"
 #include "app/listing.hpp"
+#include "app/pdf_preview.hpp"
 #include "app/settings.hpp"
 #include "cli/command_table.hpp"
 #include "cli/confirm.hpp"
@@ -16,6 +17,7 @@
 #include "core/note_store.hpp"
 #include "core/note_views.hpp"
 #include "core/paths.hpp"
+#include "core/process.hpp"
 #include "core/version.hpp"
 #include "search/content_index.hpp"
 #include "search/fuzzy.hpp"
@@ -689,6 +691,41 @@ int run_ls(const ParsedArgs& args, const core::Config& config) {
     return kExitOk;
 }
 
+namespace {
+
+// PDF'in kendisinden gelen hata (bozuk, şifreli, [limits.pdf] aşımı) kullanıcı kaynaklıdır (1): notun içeriği. İşçi
+// başlatılamazsa fail()'in kuralı.
+int pdf_failure(const core::Error& error) {
+    using Code = core::Error::Code;
+    if (error.code != Code::InvalidDocument && error.code != Code::Encrypted && error.code != Code::LimitExceeded)
+        return fail(error);
+    std::cerr << sanitize_for_terminal(core::format_error(error)) << '\n';
+    return kExitUser;
+}
+
+// PDF notunun metni sayfa sayfa, her sayfanın önünde ayırıcı satır (SPEC-cli "show"). Metin işçide arındırılmıştır
+// (denetim karakteri yok); terminalde yine de düz metin gibi temizlenir. Sayfa hatası stderr'e yazılır, kalan
+// sayfalar sürer, çıkış 1. Ctrl-C süreci her zamanki gibi bitirir (130); işçi ebeveyni ölünce çıkar.
+int show_pdf(std::string_view bytes, const core::Config& config) {
+    int exit_code = kExitOk;
+    const bool tty = stdout_is_tty();
+    const auto read = app::read_pdf_text(
+        bytes, config.limits.pdf, core::note_executable_beside_self(), {},
+        [&](int page, int count, const std::expected<std::string, core::Error>& text) {
+            std::cout << app::pdf_page_separator(page, count) << '\n';
+            if (!text) {
+                std::cout.flush();
+                exit_code = std::max(exit_code, pdf_failure(text.error()));
+                return;
+            }
+            std::cout << (tty ? sanitize_for_terminal(*text) : *text)
+                      << (text->empty() || text->ends_with('\n') ? "" : "\n");
+        });
+    return read ? exit_code : pdf_failure(read.error());
+}
+
+}  // namespace
+
 int run_show(const ParsedArgs& args, const core::Config& config) {
     const auto parsed = parse_browse_args("show", args.rest);
     if (!parsed)
@@ -703,6 +740,8 @@ int run_show(const ParsedArgs& args, const core::Config& config) {
     const auto content = store.read(note->path);
     if (!content)
         return fail(content.error());
+    if (app::is_pdf_type(core::split_note_path(note->path.string()).type))
+        return show_pdf(content->text, config);
     if (core::looks_binary(content->text)) {
         std::cerr << sanitize_for_terminal(core::tr("cli.binary_note", {{"path", note->path.string()}}))
                   << '\n';

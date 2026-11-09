@@ -77,6 +77,7 @@ note -f work/2026 -n plan "ilk taslak"       # klasör + ad → work/2026/plan.m
 note ls "plan tag:iş type:md"                # liste/arama: tag:, type:, in:, rel:, linked:, view:
 note ls prop:durum=bitti                     # özelliğe göre süz
 note show plan                               # en iyi eşleşmeyi yazdır (note edit: editörde aç)
+note show rapor.pdf                          # PDF önizleme: sayfaların metni, sayfa ayırıcılarıyla
 note find bütçe                              # içerik araması → yol:satır: kesit
 note relation add a.md b.md --name kullanır --directed
 note query "MATCH (n:Note)-[:TAGGED]->(t:Tag {name:'iş'}) RETURN n.name"
@@ -109,7 +110,8 @@ Tuşların tamamı: [SPEC-tui.md](SPEC-tui.md).
 Üstte tek araç çubuğu (yeni not/klasör, içe al, yeniden adlandır, taşı, sil, çöp, PDF) ve sağda görünüm seçici:
 **Ağaç**, **Ayrıntılar**, **Harita** (notlar çizge olarak). Solda liste, sağda editör; `Ctrl+K` aramaya odaklanır,
 `Ctrl+N` yeni not, `F5` senkron, `Ctrl+,` ayarlar. Notlar yazmayı bıraktıktan kısa süre sonra kendiliğinden
-kaydedilir. Ayrıntı: [SPEC-gui.md](SPEC-gui.md).
+kaydedilir. PDF önizleme: PDF notu GUI'de sayfa görüntüleriyle (sayfa göstergesiyle), TUI'de metin olarak açılır.
+Ayrıntı: [SPEC-gui.md](SPEC-gui.md).
 
 ## Nasıl çalışır
 

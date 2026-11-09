@@ -199,6 +199,7 @@ struct PdfLimits {
     Limit text_bytes;      // bir sayfadan çıkarılan en çok metin (UTF-8 bayt)
     Limit context_memory;  // belge başına MuPDF'in ayırabileceği en çok bellek
     Limit duration;        // bir sayfanın metin çıkarma ya da çizim süresi; dolunca iş kesilir
+    Limit cache_pages;     // önizlemenin bellekte tuttuğu en çok çizilmiş sayfa (app::PdfPreview, GUI dokuları)
 
     bool operator==(const PdfLimits&) const = default;
 };

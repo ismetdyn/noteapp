@@ -106,6 +106,7 @@ public:
         return {(rect.min_x + rect.max_x) / 2.0F, (rect.min_y + rect.max_y) / 2.0F};
     }
     const std::map<std::string, ItemRect>& item_rects() const { return item_rects_; }
+    std::size_t pdf_texture_count() const;  // PDF önizlemesinin canlı sayfa dokuları (test)
     // Arayüz ölçeğini uygular (stil, yazı, en küçük pencere, bölmeler); dummy sürücüde ekran ölçeği hep 1
     // olduğundan testler de buradan verir.
     void set_ui_scale(float scale);
@@ -228,6 +229,7 @@ private:
     void draw_markdown_preview(float request, bool to_end);
     void draw_preview_links(const PreviewLayout& layout, ImVec2 origin, float top, float bottom);
     void draw_raw_preview();  // limits.tui.view_bytes üstü: neden + ham metin (TUI REVIEW gibi)
+    void draw_pdf_preview();  // view_pdf.cpp: sayfa görüntüleri, sayfa göstergesi
     // csv ve json: TUI REVIEW'un ayrıştırması; not bir kez dizinlenir (app::index_csv, app::index_json), yalnız
     // görünen satırlar ayrıştırılıp çizilir.
     void draw_data_preview();

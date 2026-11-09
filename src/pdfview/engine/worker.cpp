@@ -137,7 +137,8 @@ int serve() {
                                          .render_pixels = limit_of(fields->render_pixels),
                                          .text_bytes = limit_of(fields->text_bytes),
                                          .context_memory = limit_of(fields->context_memory),
-                                         .duration = core::Limit{}};
+                                         .duration = core::Limit{},
+                                         .cache_pages = core::Limit{}};  // önizlemenin, motorun değil
             engine.reset();
             std::string detail;
             // Süre ve iptal motorda yok: ebeveyn tutar ve gerekirse bu süreci öldürür.

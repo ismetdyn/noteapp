@@ -1,5 +1,6 @@
 // note ls / show / edit (T15): en iyi eşleşme kuralı, sıralama ve çıktı sözleşmesi.
 #include "support/cli_sandbox.hpp"
+#include "support/text_pdf.hpp"
 
 #include <chrono>
 #include <doctest/doctest.h>
@@ -151,6 +152,35 @@ TEST_CASE("show refuses a binary note with exit 1") {
     const auto result = box.run({"show", "blob.bin"});
     CHECK(result.exit_code == 1);
     CHECK(result.out.empty());
+}
+
+TEST_CASE("show prints the text of every PDF page under a localized page separator") {
+    const Sandbox box;
+    box.put("docs/report.pdf", text_pdf({"Alpha", "Beta"}));
+
+    const auto result = box.run({"show", "docs/report.pdf"});
+    CHECK(result.exit_code == 0);
+    const auto first = result.out.find("--- sayfa 1/2 ---\n");
+    const auto alpha = result.out.find("Alpha");
+    const auto second = result.out.find("--- sayfa 2/2 ---\n");
+    const auto beta = result.out.find("Beta");
+    REQUIRE(first == 0);
+    REQUIRE(alpha != std::string::npos);
+    REQUIRE(second != std::string::npos);
+    REQUIRE(beta != std::string::npos);
+    CHECK(first < alpha);
+    CHECK(alpha < second);
+    CHECK(second < beta);
+}
+
+TEST_CASE("show of a damaged PDF exits 1 with the localized reason") {
+    const Sandbox box;
+    box.put("broken.pdf", "%PDF-1.7\nnot really\n");
+
+    const auto result = box.run({"show", "broken.pdf"});
+    CHECK(result.exit_code == 1);
+    CHECK(result.out.empty());
+    CHECK(result.err.find("PDF") != std::string::npos);
 }
 
 TEST_CASE("edit opens the best match in the editor and the file changes") {

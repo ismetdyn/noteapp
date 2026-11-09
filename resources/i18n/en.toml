@@ -1448,6 +1448,12 @@ none_shown = "Open a note to see its properties"
 
 # Text both UIs show word for word; a UI-specific wording stays under [tui] or [gui].
 [app]
+pdf_page_separator = "--- page {page}/{count} ---"
+pdf_loading = "Loading the PDF…"
+pdf_page_loading = "Loading page {page}…"
+pdf_page_indicator = "{page} / {count}"
+pdf_truncated = "… text cut at {limit} (limits.tui.view_bytes)"
+pdf_texture_failed = "Could not show the page ({width} x {height} pixels)"
 export_binary = "Binary note cannot be exported: {path}"
 changed_on_disk = "Changed on disk: Ctrl+S asks what to do"
 deleted_on_disk = "Deleted on disk: Ctrl+S asks where to save it"

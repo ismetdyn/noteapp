@@ -36,6 +36,9 @@ noteapp_add_test(tui
 # Yamalı FTXUI ayrıştırıcısı (bracketed paste) doğrudan sınanır; başlığı FTXUI'nin iç kaynağındadır.
 target_include_directories(tui_tests SYSTEM PRIVATE ${ftxui_SOURCE_DIR}/src)
 target_link_libraries(tui_tests PRIVATE ftxui::component)
+# PDF önizlemesi gerçek `note __pdf-worker`ı alt süreçte çalıştırır.
+add_dependencies(tui_tests note)
+target_compile_definitions(tui_tests PRIVATE NOTEAPP_NOTE_EXE="$<TARGET_FILE:note>")
 
 # Markdown önizleme uygunluk koşumu (NY-P): spec örnekleri md4c arşivinin test dizininden okunur.
 noteapp_add_test(md_conformance markdown_conformance_test.cpp)

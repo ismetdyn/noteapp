@@ -311,6 +311,20 @@ Paletteki `view.map` (plan-parity T4, karar 8) liste panelinde notları çizge o
 
 Ölçüm (T69, Release, 80 sütun, üç koşunun en kötüsü, sınır boyutunda girdi): 2 MiB'te karışık md 155 ms, bağlantı 144, kod 120, JSON 86 ile 50 ms bütçesini aştı; 512 KiB'te hepsi 33 ms altına indi ama `[` yığını 85 ms kaldı. 256 KiB'te en kötü `[` yığını 45 ms, JSON 12, uçtan uca genişlik değişimi (karışık md) 9, diğerleri 10 ms ve altı. Üretimi arka iş parçacığına almak yerine sınır düşürüldü: daha büyük not ham metinle zaten okunur, görünüm iptali ve eski sonuç yarışı eklenmez.
 
+## PDF önizleme (PDF3)
+
+Tipi `pdf` olan notun önizlemesi (sağ panel) metindir: önce `PDF yükleniyor…` satırı, ardından sayfalar arka planda
+(`app::PdfPreview`, tek işçi iş parçacığı, `note __pdf-worker`) sırayla okunur ve her biri ayırıcı satırıyla
+(`--- page 3/12 ---`, CLI ile aynı `app::pdf_page_separator`; sayfa göstergesi odur) sona eklenir; okunmayan kısım tek
+`Sayfa N yükleniyor…` satırıdır. Metin yalnız büyür: kaydırma, seçim ve arama yerinde kalır. Sayfalar en çok 4
+sayfa önden istenir, alınan metin oturumdan silinir (tek kopya). Metin `limits.tui.view_bytes`'a ulaşınca okuma durur,
+bekleyen istekler düşer ve son satır kesildiğini söyler (`app.pdf_truncated`; 0 = sınırsız): senkronla gelen PDF
+seçilince bellek sayfa × `text_bytes`'a büyümez. Bozuk/şifreli/sınırı aşan
+belgede yerelleştirilmiş neden, okunamayan sayfada sayfanın yerinde neden. Sınırlar `[limits.pdf]`; her sonuç çizimi
+tetikler (`app_.Post`). Aynı baytlarla yeniden okunan not (yeniden tarama) oturumu korur; başka not seçilince oturum
+kapanır (işçi durur). Kapanışta oturum `app_`'ten önce durur. Geliştirme ağacında `note` yanında değilse neden
+`error.process_not_found` (SPEC-core "PDF yardımcı süreci").
+
 ## Bağlantı bölümü
 
 Seçili notun grafı REVIEW'un altındadır (`src/tui/link_panel.*`, saf model). Veri `NoteStore::links`ten gelir (SPEC-graph "Bağlantılar"), önizlemeyle aynı ertelenmiş yüklemede okunur: gezinmede tuş başına depo okuması yoktur, `kCoalesceMs` içinde son seçim tek okuma yapar. Liste ya da not değişince önizlemeyle birlikte tazelenir. Yeniden tarama grafın `data_version`ını da karşılaştırır (`tui::StoreScan`): listeyi değiştirmeyen, yalnız ilişki ya da bağlantı getiren senkron da bölümü tazeler.

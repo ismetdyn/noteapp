@@ -264,6 +264,22 @@ dal, boşta bekleme, yazar adı, yazar e-postası, token, bağlantı testi) ve s
   yeniden kurar (editör/yazar değişimi çalışan senkronu öldürmez), yeniden kurmadan önce bekleme imleciyle
   `stop(exit_timeout)` çağrılır (T36); her yazma/taşıma/silme/oluşturma `notify_changed`; kapanışta (kayıt akışından sonra) `stop(exit_timeout)`.
 
+## PDF önizleme (PDF3)
+- Tipi `pdf` olan not incelemede sayfa görüntüleriyle gösterilir: sayfalar alt alta, kaydırılır; yalnız görünen sayfalar
+  çizilir. Oturum `app::PdfPreview` (TUI ile ortak; tek işçi iş parçacığı, FIFO istek kuyruğu, `note __pdf-worker`)
+  gösterilen notun yolu ve revizyonu başına bir kez kurulur; başka not gösterilince kapanır. RGBA işçide üretilir,
+  doku (SDL, `SDL_PIXELFORMAT_RGBA32`) UI iş parçacığında kurulur.
+- Görünen sayfalar değişince bekleyen çizim istekleri düşer (`drop_pending`), yürüyen çizim biter (kesmek işçiyi
+  öldürürdü). Süresi dolan ya da hatalı sayfa hatırlanır, yeniden istenmez.
+- Ölçek arayüz ölçeğinin 1,5 katı (1 = 72 dpi); pencereden geniş sayfa küçültülerek sığar. **Yakınlaştırma yok:** GUI'de
+  yeniden kullanılacak yakınlaştırma geleneği yok (`pane.zoom` bölmeyi büyütür). Bütün sayfalar ilk çizilen sayfanın
+  yuvasındadır (öncesinde A4 tahmini).
+- Sağ üstte sayfa göstergesi `3 / 12` (`app.pdf_page_indicator`).
+- Önbellek: `limits.pdf.cache_pages` (32; 0 = sınırsız) hem oturumun çizilmiş sayfalarını hem dokuları sınırlar;
+  görünen sayfa dokusu düşmez.
+- Hata yerinde ve yerelleştirilmiş: açılmayan belge (bozuk, şifreli, sayfa sınırı) sayfaların yerine, okunamayan sayfa
+  (çok yavaş, piksel sınırı) o sayfanın yerine. Bekleyen sayfada `Sayfa N yükleniyor…`.
+
 ## PDF dışa aktarma
 - `Ctrl+E` → yol diyaloğu: ImGui metin alanı + yerel **Browse** (SDL3 dosya diyaloğu). Önce açık not kaydedilir
   (PDF diskteki sürümden üretilir); kayıt başarısızsa dışa aktarma yapılmaz. Elle yazılan yol var olan bir dosyaysa sormadan

@@ -329,7 +329,8 @@ public:
     TuiSession& operator=(const TuiSession&) = delete;
     TuiSession(TuiSession&&) = delete;
     TuiSession& operator=(TuiSession&&) = delete;
-    ~TuiSession() = default;
+    // PDF önizleme işçisi app_'e Post eder; preview_ app_'ten önce bildirildiği için ondan sonra yıkılırdı.
+    ~TuiSession() { preview_.close_pdf(); }
 
     int run();
 
@@ -502,6 +503,8 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
           tui::LanguageServers::kChangeIdle, tui::LanguageServers::kMirrorIdle, tui::kBlockNetworkPaths,
           tui::lsp_limits_of(config_.limits.lsp)) {
     state_.set_icon_style(core::terminal_icon_style(config_.icons));
+    // PDF notunun metni arka planda okunur; her sayfa çizimi tetikler (kapanış görevi tetiklemez: özel olay).
+    preview_.set_pdf(config_.limits.pdf, core::note_executable_beside_self(), [this] { app_.Post(redraw_event()); });
     state_.layout().set_share(config_.tuning.tui_list_share);
     state_.set_recent_commands_limit(config_.limits.app.recent_commands);  // load_list_prefs'ten önce
     state_.set_map_node_limit(config_.limits.app.map_nodes);

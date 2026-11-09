@@ -603,6 +603,7 @@ std::span<const LimitKey> limit_keys() {
         {"pdf.text_bytes", LimitUnit::Bytes, &module_field<&Limits::pdf, &PdfLimits::text_bytes>},
         {"pdf.context_memory", LimitUnit::Bytes, &module_field<&Limits::pdf, &PdfLimits::context_memory>},
         {"pdf.duration", LimitUnit::Milliseconds, &module_field<&Limits::pdf, &PdfLimits::duration>},
+        {"pdf.cache_pages", LimitUnit::Count, &module_field<&Limits::pdf, &PdfLimits::cache_pages>},
     });
     return table;
 }

@@ -727,7 +727,37 @@ app::PreviewKind GuiState::preview_kind() const {
 // Düzenlenemeyen metin (geçersiz UTF-8, NUL) ayrıştırılmaz: md4c ve tablo görünümü geçerli UTF-8 bekler. Boyut
 // reddetmez: view_bytes üstü ham metinle açılır (preview_too_large).
 bool GuiState::can_preview() const {
-    return previewable_type() && !binary() && editable_;
+    return (previewable_type() && !binary() && editable_) || pdf_type();
+}
+
+// Tip uzantıdan (TUI ve CLI ile aynı kural, app::is_pdf_type); bozuk ya da PDF olmayan baytı oturum reddeder.
+bool GuiState::pdf_type() const {
+    return shown_.has_value() && app::is_pdf_type(current_type());
+}
+
+// Baytlar diskten bir kez daha okunur: belge (app::Document) ikili notun yalnız arındırılmış metnini tutar.
+app::PdfPreview* GuiState::pdf_preview() {
+    if (!showing_pdf()) {
+        pdf_.reset();
+        pdf_note_.reset();
+        return nullptr;
+    }
+    if (pdf_note_ == shown_->path && pdf_revision_ == doc_.revision())
+        return pdf_.get();
+    pdf_.reset();  // önce eskisi durur: iki işçi süreci aynı anda yaşamasın
+    pdf_note_ = shown_->path;
+    pdf_revision_ = doc_.revision();
+    ++pdf_serial_;
+    auto content = store_.read(shown_->path);
+    if (!content) {
+        fail(content.error());
+        return nullptr;
+    }
+    app::PdfPreviewOptions options{.limits = config_.limits.pdf,
+                                   .worker = pdf_worker_,
+                                   .on_change = [this] { post([] {}); }};  // yeniden çizim
+    pdf_ = std::make_unique<app::PdfPreview>(std::move(content->text), std::move(options));
+    return pdf_.get();
 }
 
 void GuiState::toggle_preview() {

@@ -10,6 +10,7 @@
 #include "app/map_query.hpp"
 #include "app/note_map.hpp"
 #include "app/notices.hpp"
+#include "app/pdf_preview.hpp"
 #include "app/sync_indicator.hpp"
 #include "app/sync_status_worker.hpp"
 #include "app/tabs.hpp"
@@ -22,6 +23,7 @@
 #include "core/graph_limits.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
+#include "core/process.hpp"
 #include "edit/completion.hpp"
 #include "edit/input_line.hpp"
 #include "edit/language_servers.hpp"
@@ -563,7 +565,18 @@ public:
     // Sınırlar TUI'nin biçimli görünümüyle aynı anahtarlar: limits.tui.view_bytes, view_lines, table_rows,
     // table_columns.
     const core::TuiLimits& view_limits() const { return config_.limits.tui; }
-    bool can_preview() const;  // önizlenen tür ve düzenlenebilir metin
+    bool can_preview() const;  // önizlenen tür ve düzenlenebilir metin, ya da PDF
+
+    // --- PDF önizleme (tip pdf; SPEC-gui "PDF önizleme") ---
+    // İncelemedeki PDF notu sayfa görüntüleriyle gösterilir (dokuları View kurar). Oturum (app::PdfPreview, arka
+    // planda) gösterilen notun yolu ve revizyonu başına bir kez kurulur; View her karede pdf_preview()'u çağırır,
+    // PDF gösterilmiyorsa oturum kapanır (işçi süreci durur).
+    bool pdf_type() const;
+    bool showing_pdf() const { return reviewing() && pdf_type(); }
+    app::PdfPreview* pdf_preview();  // showing_pdf değilse ya da not okunamadıysa nullptr
+    std::uint64_t pdf_serial() const { return pdf_serial_; }  // her yeni oturumda artar: View eski dokuları atar
+    const core::PdfLimits& pdf_limits() const { return config_.limits.pdf; }
+    void set_pdf_worker(std::filesystem::path worker) { pdf_worker_ = std::move(worker); }  // testler: `note` yolu
     // limits.tui.view_bytes'ın üstü: önizleme reddedilmez, TUI REVIEW gibi ham metin ve nedeni gösterilir.
     bool preview_too_large() const { return !view_limits().view_bytes.allows(buffer().size()); }
     // İnceleme (TUI REVIEW): listeden, haritadan ya da bağlantıdan açılan kayıtlı not salt okunur açılır; md,
@@ -1052,6 +1065,12 @@ private:
                                            tui::LanguageServers::kMirrorIdle,
                                            tui::kBlockNetworkPaths,
                                            tui::lsp_limits_of(config_.limits.lsp)};
+    std::filesystem::path pdf_worker_ = core::note_executable_beside_self();
+    std::optional<core::NotePath> pdf_note_;  // oturumun kurulduğu not ve revizyon
+    core::Revision pdf_revision_{};
+    std::uint64_t pdf_serial_ = 0;
+    // İşçisi post eder: posted_ ve wake_'ten önce yıkılır (durdur + bekle), bu yüzden en sonda.
+    std::unique_ptr<app::PdfPreview> pdf_;
 };
 
 }  // namespace noteapp::gui

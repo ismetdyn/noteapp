@@ -13,6 +13,7 @@ noteapp_add_test(app
     map_query_test.cpp
     map_relations_test.cpp
     notices_test.cpp
+    pdf_preview_test.cpp
     settings_test.cpp
     sync_indicator_test.cpp
     sync_status_worker_test.cpp
@@ -28,3 +29,7 @@ noteapp_add_test(app
 target_compile_definitions(app_tests PRIVATE
     NOTEAPP_INSTALL_LOCAL_SCRIPT="${PROJECT_SOURCE_DIR}/scripts/install-local.sh"
     NOTEAPP_DESKTOP_TEMPLATE="${PROJECT_SOURCE_DIR}/packaging/linux/noteapp.desktop")
+# PDF önizlemesi gerçek `note __pdf-worker`ı ve sahte işçiyi (tests/pdfview) alt süreçte çalıştırır.
+add_dependencies(app_tests note fake_pdf_worker)
+target_compile_definitions(app_tests PRIVATE NOTEAPP_NOTE_EXE="$<TARGET_FILE:note>"
+                                            NOTEAPP_FAKE_PDF_WORKER="$<TARGET_FILE:fake_pdf_worker>")

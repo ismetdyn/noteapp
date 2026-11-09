@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/notices.hpp"
+#include "app/pdf_preview.hpp"
 #include "core/note_path.hpp"
 #include "core/note_store.hpp"
 #include "edit/spellcheck.hpp"
@@ -14,11 +15,13 @@
 #include "tui/tui_state.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/terminal.hpp>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -147,6 +150,32 @@ private:
     std::optional<int> settling_width_;
     std::chrono::steady_clock::time_point last_resize_{};
     bool resize_waiting_ = false;
+
+public:
+    // PDF notu (tip pdf) metin olarak gösterilir: sayfalar arka planda (app::PdfPreview) sırayla okunur, her sayfa
+    // ayırıcı satırıyla (app::pdf_page_separator) eklenir, okunmayan kısım tek "yükleniyor" satırıdır. Kurulmazsa
+    // PDF ikili not gibi görünür. `on_change` işçi iş parçacığından gelir: yalnız yeniden çizim ister.
+    void set_pdf(core::PdfLimits limits, std::filesystem::path worker, std::function<void()> on_change);
+    // Oturumu kapatır (işçiyi durdurur, bekler): on_change'in hedefi yıkılmadan önce çağrılır.
+    void close_pdf() { pdf_.reset(); }
+    const app::PdfPreview* pdf() const { return pdf_.get(); }  // test
+
+private:
+    // Önden istenen sayfa: işçi boş beklemez, kesilince en çok bu kadar sayfa boşa okunur. İş birimi, sınır değil.
+    static constexpr int kPdfReadAhead = 4;
+    void start_pdf(std::string bytes);  // load'un PDF yolu: "yükleniyor" satırı, oturum
+    // Gelen sayfaları sona ekler (metin yalnız büyür, kaydırma yerinde kalır); load ve get her çağrıda.
+    void refresh_pdf();
+    void append_preview_line(std::string_view line);
+
+    std::optional<app::PdfPreviewOptions> pdf_options_;
+    std::unique_ptr<app::PdfPreview> pdf_;
+    std::size_t pdf_bytes_hash_ = 0;   // aynı not aynı baytlarla yeniden okununca oturum korunur
+    std::uint64_t pdf_version_ = 0;    // son eklemede görülen PdfPreview::version
+    bool pdf_truncated_ = false;       // metin view_bytes'a ulaştı: okuma durdu
+    int pdf_next_page_ = 0;            // eklenmemiş ilk sayfa
+    std::size_t pdf_loaded_bytes_ = 0;  // eklenen sayfaların metni; ardındaki durum satırı her eklemede yenilenir
+    std::size_t pdf_loaded_lines_ = 0;
 };
 
 struct StatusLine {

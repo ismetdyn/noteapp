@@ -3,13 +3,16 @@
 #include "search/content_index.hpp"
 #include "support/note_seed.hpp"
 #include "support/test_support.hpp"
+#include "support/text_pdf.hpp"
 #include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
 #include "tui/sync_indicator.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <doctest/doctest.h>
 #include <fstream>
@@ -21,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -269,6 +273,72 @@ TEST_CASE("PreviewCache reads text, flags binary notes and reports unreadable on
     tui::Row missing_row{core::NotePath::parse("gone.md").value(), {}, 0, {}};
     CHECK(cache.get(store, &missing_row).kind == tui::Preview::Kind::Error);
     CHECK(cache.get(store, nullptr).kind == tui::Preview::Kind::Empty);
+}
+
+TEST_CASE("PreviewCache shows a PDF note's text under page separators after a loading line") {
+    core::init_i18n("en");
+    test::TempDir dir;
+    test::upsert_note(dir.path(), "doc.pdf", test::text_pdf({"Alpha", "Beta"}));
+    const core::NoteStore store(dir.path());
+    tui::PreviewCache cache;
+    std::atomic<int> changes{0};
+    cache.set_pdf({}, NOTEAPP_NOTE_EXE, [&changes] { ++changes; });
+    tui::Row row{core::NotePath::parse("doc.pdf").value(), {}, 0, {}};
+
+    const auto& loading = cache.get(store, &row);
+    REQUIRE(loading.kind == tui::Preview::Kind::Text);
+    CHECK(loading.lines == std::vector<std::string>{"Loading the PDF…"});
+    // Her duyurudan sonraki yeniden çizim get'i çağırır: açılıştan sonra sayfalar istenir, gelenler eklenir.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (cache.get(store, &row).text.find("Loading") != std::string::npos &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK(changes >= 2);  // açılış ve ilk sayfa kesin; ikinci sayfanın duyurusu saklamadan hemen sonradır
+    const auto& shown = cache.get(store, &row);
+    REQUIRE(shown.lines.size() >= 4);
+    CHECK(shown.lines.front() == "--- page 1/2 ---");
+    CHECK(std::ranges::find(shown.lines, "--- page 2/2 ---") != shown.lines.end());
+    CHECK(shown.text.find("Alpha") < shown.text.find("--- page 2/2 ---"));
+    CHECK(shown.text.find("Beta") > shown.text.find("--- page 2/2 ---"));
+    CHECK(shown.text.find("Loading") == std::string::npos);
+    auto state = sample_state();
+    state.set_preview_line_count(shown.lines.size());
+    const auto screen = render_screen(state, shown);
+    CHECK(contains(screen, "--- page 1/2 ---"));
+    CHECK(contains(screen, "Alpha"));
+    cache.close_pdf();
+}
+
+// Senkronla gelen PDF seçilince bellek sayfa x text_bytes'a (~10 GiB) büyümesin: metin view_bytes'ta kesilir, kalan
+// sayfalar istenmez.
+TEST_CASE("PreviewCache stops reading a PDF at limits.tui.view_bytes and says the text was cut") {
+    core::init_i18n("en");
+    test::TempDir dir;
+    std::vector<std::string> texts;
+    for (int page = 1; page <= 40; ++page)
+        texts.push_back("Page" + std::to_string(page));
+    test::upsert_note(dir.path(), "many.pdf", test::text_pdf(texts));
+    const core::NoteStore store(dir.path());
+    tui::ViewLimits limits;
+    limits.source_bytes = 64;
+    tui::PreviewCache cache(limits);
+    cache.set_pdf({}, NOTEAPP_NOTE_EXE, [] {});
+    tui::Row row{core::NotePath::parse("many.pdf").value(), {}, 0, {}};
+
+    const auto finished = [&] {
+        const std::string& text = cache.get(store, &row).text;
+        return text.find("text cut at") != std::string::npos || text.find("Loading") == std::string::npos;
+    };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!finished() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const auto& shown = cache.get(store, &row);
+    CHECK(shown.text.find("--- page 1/40 ---") == 0);
+    CHECK(shown.lines.back().find("text cut at") != std::string::npos);
+    CHECK(shown.text.find("--- page 40/40 ---") == std::string::npos);
+    REQUIRE(cache.pdf() != nullptr);
+    CHECK(cache.pdf()->pending() == 0);
+    cache.close_pdf();
 }
 
 TEST_CASE("PreviewCache serves the cached note until invalidated") {

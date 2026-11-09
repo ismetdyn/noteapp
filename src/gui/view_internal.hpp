@@ -17,15 +17,18 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlrenderer3.h>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace noteapp::gui {
@@ -129,6 +132,21 @@ struct View::PreviewCache {
     app::PreviewKind data_kind = app::PreviewKind::None;
     std::optional<app::CsvIndex> csv;
     std::optional<app::JsonIndex> json;
+    // PDF: oturumun (GuiState::pdf_serial) ve çizim ölçeğinin sayfa dokuları; ikisinden biri değişince atılır.
+    // limits.pdf.cache_pages'le sınırlı, görünen sayfalar sayılmaz (en uzun süredir görülmeyen düşer). Dokular
+    // platform_'un çizicisinden önce yıkılır (View'da preview_ ondan sonra bildirilir).
+    struct PdfTexture {
+        std::unique_ptr<SDL_Texture, decltype(&SDL_DestroyTexture)> texture{nullptr, &SDL_DestroyTexture};
+        float width = 0.0F;  // piksel
+        float height = 0.0F;
+        std::size_t used = 0;  // son çizildiği kare
+        std::string error;     // doku kurulamadı: sayfanın yerinde yerelleştirilmiş ileti (SDL metni yalnız logda)
+    };
+    std::map<int, PdfTexture> pdf_textures;
+    std::uint64_t pdf_session = 0;
+    float pdf_scale = 0.0F;
+    ImVec2 pdf_page_size{};                       // ilk çizilen sayfanın boyu: bütün sayfaların yuvası
+    std::pair<int, int> pdf_visible{-1, -1};      // geçen karenin görünen sayfaları [ilk, son]
 };
 
 // İçe alma diyaloğunun sonucu (SDL geri çağrısı yazar, View kare dışında boşaltır).

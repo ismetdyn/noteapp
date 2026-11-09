@@ -265,7 +265,16 @@ config'tedir.
   `pages` (10.000; fazlası olan belge açılmaz), `render_pixels` (16.777.216; sayfa başına çizilen piksel, aşan
   yakınlaştırma çizilmez), `text_bytes` (1 MiB; sayfa başına çıkarılan metin), `context_memory` (512 MiB; belge
   başına MuPDF bellek bütçesi), `duration` (10 sn; açılış ve sayfa başına metin çıkarma/çizim süresi, dolunca iş kesilir). Aşım
-  kesilmiş sonuç değil `LimitExceeded` hatasıdır; 0 sınırsız, riski defaults.toml'da.
+  kesilmiş sonuç değil `LimitExceeded` hatasıdır; 0 sınırsız, riski defaults.toml'da. `cache_pages` (32; PDF3)
+  önizlemenin bellekte tuttuğu çizilmiş sayfa sayısıdır (`app::PdfPreview`, GUI dokuları; görünen sayfalar sayılmaz).
+- **PDF önizleme (PDF3, `app/pdf_preview.*`):** üç arayüzün ortak katmanı. `app::is_pdf_type` (uzantı `pdf`, büyük/küçük
+  harf duyarsız) önizlemeyi seçer; `app::pdf_page_separator` ayırıcı satırı; `app::read_pdf_text` bütün metni çağıranın
+  iş parçacığında sayfa sayfa verir (CLI; sayfa hatası okumayı durdurmaz). `app::PdfPreview` belgeyi tek işçi iş
+  parçacığında açar ve metin/çizim isteklerini FIFO, yinelemesiz yürütür; `drop_pending` yalnız bekleyenleri siler,
+  yürüyen biter; çizilmiş sayfalar `cache_pages` ile LRU, metinler düşmez (sayfa sayısı x `text_bytes`); hatalı sayfa
+  (süre dolması dahil) hatırlanır. Her sonuçta `on_change` (veri taşımaz, UpdateWorker gibi); yıkıcı yürüyen çağrıyı
+  keser (işçi ~50 ms'de öldürülür) ve bekler. Senkronla gelen PDF otomatik açılmaz: önizleme yalnız kullanıcının
+  gösterdiği nottadır, arama dizini PDF-SBX'i bekler.
 - **PDF yardımcı süreci (PDF1b, kullanıcı kararı 2026-11-09):** MuPDF'in güvenilmez girdide kesilemeyen döngüleri var
   (xref onarımı, bağlantı hedefinin yavaş sayfa araması, Form XObject çoğalması); döngü döngü yamalamak yerine
   ayrıştırma ayrı süreçtedir. `pdfview::PdfDocument` (MuPDF'siz `noteapp_pdfview`) belge başına bir uzun ömürlü

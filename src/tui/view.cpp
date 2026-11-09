@@ -20,6 +20,7 @@
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/screen/string.hpp>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <ranges>
 #include <span>
@@ -1875,10 +1876,13 @@ const Preview& PreviewCache::load(const Row* row, bool from_trash, const Reader&
             clear_links();
         path_.reset();
         preview_ = {};
+        pdf_.reset();
         return preview_;
     }
-    if (path_ && *path_ == row->path && from_trash_ == from_trash)
+    if (path_ && *path_ == row->path && from_trash_ == from_trash) {
+        refresh_pdf();
         return preview_;
+    }
     clear_links();
     path_ = row->path;
     from_trash_ = from_trash;
@@ -1887,18 +1891,24 @@ const Preview& PreviewCache::load(const Row* row, bool from_trash, const Reader&
     ++revision_;
     auto content = read();
     if (!content) {
+        pdf_.reset();
         preview_.kind = Preview::Kind::Error;
         preview_.error = core::format_error(content.error());
         return preview_;
     }
+    const std::u8string extension = row->path.value().extension().u8string();
+    const std::string type =
+        extension.empty() ? std::string{} : std::string(extension.begin() + 1, extension.end());
+    if (pdf_options_ && app::is_pdf_type(type)) {
+        start_pdf(std::move(content->text));
+        return preview_;
+    }
+    pdf_.reset();
     if (core::looks_binary(content->text)) {
         preview_.kind = Preview::Kind::Binary;
         return preview_;
     }
     preview_.kind = Preview::Kind::Text;
-    const std::u8string extension = row->path.value().extension().u8string();
-    const std::string type =
-        extension.empty() ? std::string{} : std::string(extension.begin() + 1, extension.end());
     preview_.spell_checked = spellcheck_applies_to(type);
     preview_.view_kind = view_kind_for(type);
     preview_.highlight_line_bytes = syntax_limits_.line_bytes;
@@ -1916,6 +1926,93 @@ const Preview& PreviewCache::load(const Row* row, bool from_trash, const Reader&
         preview_.text.erase(0, kBom.size());
     split_preview_lines(preview_);
     return preview_;
+}
+
+void PreviewCache::set_pdf(core::PdfLimits limits, std::filesystem::path worker, std::function<void()> on_change) {
+    pdf_options_ = app::PdfPreviewOptions{std::move(limits), std::move(worker), std::move(on_change)};
+}
+
+// Aynı baytlar (yeniden tarama invalidate etti, not değişmedi) çalışan oturumu korur: işçi yeniden açmaz, metin
+// baştan eklenir (alınmış sayfalar oturumda tutulmadığından yeniden okunur).
+void PreviewCache::start_pdf(std::string bytes) {
+    const std::size_t hash = std::hash<std::string_view>{}(bytes);
+    if (!pdf_ || hash != pdf_bytes_hash_) {
+        pdf_.reset();  // önce eskisi durur: iki işçi süreci aynı anda yaşamasın
+        pdf_ = std::make_unique<app::PdfPreview>(std::move(bytes), *pdf_options_);
+        pdf_bytes_hash_ = hash;
+    }
+    pdf_next_page_ = 0;
+    pdf_truncated_ = false;
+    pdf_loaded_bytes_ = 0;
+    pdf_loaded_lines_ = 0;
+    pdf_version_ = std::numeric_limits<std::uint64_t>::max();  // ilk refresh_pdf durumu okusun
+    preview_.kind = Preview::Kind::Text;
+    preview_.display_only = true;  // metin PDF'in kendisi değil
+    append_preview_line(core::tr("app.pdf_loading"));
+    refresh_pdf();
+}
+
+// Sayfalar sırayla, en çok kPdfReadAhead sayfa önden istenir ve alınınca oturumdan silinir (take_text): metnin tek
+// kopyası buradadır. Metin limits.tui.view_bytes'a (source_bytes) ulaşınca okuma durur, bekleyen istekler düşer ve
+// kesildiği söylenir: senkronla gelen PDF seçilince bellek sayfa x text_bytes'a büyümez (aşım en çok bir sayfa).
+void PreviewCache::refresh_pdf() {
+    if (!pdf_ || pdf_truncated_)
+        return;
+    const std::uint64_t version = pdf_->version();
+    if (version == pdf_version_)
+        return;
+    pdf_version_ = version;
+    const app::PdfPreview::State state = pdf_->state();
+    if (state == app::PdfPreview::State::Opening)
+        return;
+    preview_.text.resize(pdf_loaded_bytes_);
+    preview_.lines.resize(pdf_loaded_lines_);
+    preview_.line_starts.resize(pdf_loaded_lines_);
+    if (state == app::PdfPreview::State::Failed) {
+        append_preview_line(core::format_error(pdf_->open_error().value()));
+        return;
+    }
+    const int count = pdf_->page_count();
+    while (pdf_next_page_ < count) {
+        const auto text = pdf_->take_text(pdf_next_page_);
+        if (!text)
+            break;  // sayfalar sırayla eklenir
+        append_preview_line(app::pdf_page_separator(pdf_next_page_, count));
+        ++pdf_next_page_;
+        if (!*text) {
+            append_preview_line(core::format_error(text->error()));
+            continue;
+        }
+        std::string_view rest = **text;
+        if (rest.ends_with('\n'))
+            rest.remove_suffix(1);
+        while (!rest.empty()) {
+            const std::size_t eol = rest.find('\n');
+            append_preview_line(rest.substr(0, eol));
+            rest.remove_prefix(eol == std::string_view::npos ? rest.size() : eol + 1);
+        }
+        if (preview_.text.size() >= view_limits_.source_bytes && pdf_next_page_ < count) {
+            pdf_truncated_ = true;
+            pdf_->drop_pending();  // yürüyen tek istek biter, sonucu alınmaz
+            append_preview_line(core::tr("app.pdf_truncated", {{"limit", human_size(view_limits_.source_bytes)}}));
+            return;
+        }
+    }
+    pdf_loaded_bytes_ = preview_.text.size();
+    pdf_loaded_lines_ = preview_.lines.size();
+    if (pdf_next_page_ >= count)
+        return;
+    for (int page = pdf_next_page_; page < std::min(count, pdf_next_page_ + kPdfReadAhead); ++page)
+        pdf_->request_text(page);
+    append_preview_line(core::tr("app.pdf_page_loading", {{"page", std::to_string(pdf_next_page_ + 1)}}));
+}
+
+void PreviewCache::append_preview_line(std::string_view line) {
+    if (!preview_.lines.empty())
+        preview_.text += '\n';
+    preview_.line_starts.push_back(preview_.text.size());
+    preview_.text += line;
+    preview_.lines.emplace_back(line);
 }
 
 std::string selected_text(const Preview& preview, const PreviewRange& range) {

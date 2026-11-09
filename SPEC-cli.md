@@ -122,7 +122,14 @@ olarak komuttur; kalan argümanlar o komutun ayrıştırıcısına aynen gider (
 - **İlerleme:** `note sync` ve `note import` stderr TTY iken (`TERM=dumb` değil) tek satır `Syncing...` /
   `Importing n/m...` yazar (içe almada sayaç her girdide aynı satırı yeniler; payda girdilerin ön sayımı, gizliler
   hariç), iş bitince satırı siler (`\r` + `ESC[K`). Boru ve dosya hiçbir ara çıktı görmez.
-- `show` TTY'de son satır sonu yoksa ekler (istem yapışmasın); boruya baytlar aynen. `tags` TTY'de sayıları tek
+- `show` TTY'de son satır sonu yoksa ekler (istem yapışmasın); boruya baytlar aynen.
+- **PDF notu (PDF3):** tipi `pdf` olan notta `show` baytlar yerine sayfaların metnini yazar: her sayfanın önünde
+  yerelleştirilmiş ayırıcı satır (`--- page 3/12 ---`, Türkçe `--- sayfa 3/12 ---`; `app::pdf_page_separator`), metin
+  `note __pdf-worker`'da çıkarılır (`app::read_pdf_text`, `[limits.pdf]`; denetim karakterleri işçide `U+FFFD`, TTY'de
+  ayrıca terminal temizliği). Bozuk, şifreli ya da sınırı aşan PDF çıkış 1 ve stderr'de neden; tek sayfa okunamazsa
+  (bozuk sayfa, `text_bytes`, `duration`) neden stderr'e yazılır, kalan sayfalar sürer, çıkış 1. İşçi başlatılamazsa
+  hata türüne göre (bulunamadı 1, başlatılamadı 3). Ctrl-C süreci her zamanki gibi bitirir (130; işçi ebeveyni ölünce
+  çıkar). Arama dizinine PDF metni girmez (PDF-SBX sonrası). `tags` TTY'de sayıları tek
   sütunda hizalar; boruda TSV aynen.
 
 ## Bayraklar ve çıktı biçimleri

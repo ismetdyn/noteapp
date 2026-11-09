@@ -1037,15 +1037,17 @@ TEST_CASE("limits.pdf has protective defaults, accepts 0 as unlimited and reject
     CHECK(defaults.text_bytes == Limit{1024U * 1024U, "1MiB"});
     CHECK(defaults.context_memory == Limit{512U * 1024U * 1024U, "512MiB"});
     CHECK(defaults.duration == Limit{10000, "10s"});  // ms
+    CHECK(defaults.cache_pages == Limit{32, "32"});
 
-    const LoadedConfig zero = parse_config(
-        "[limits.pdf]\npages = 0\nrender_pixels = 0\ntext_bytes = 0\ncontext_memory = 0\nduration = 0\n");
+    const LoadedConfig zero = parse_config("[limits.pdf]\npages = 0\nrender_pixels = 0\ntext_bytes = 0\n"
+                                           "context_memory = 0\nduration = 0\ncache_pages = 0\n");
     CHECK(zero.warnings.empty());
     CHECK(zero.config.limits.pdf.pages.unlimited());
     CHECK(zero.config.limits.pdf.render_pixels.unlimited());
     CHECK(zero.config.limits.pdf.text_bytes.unlimited());
     CHECK(zero.config.limits.pdf.context_memory.unlimited());
     CHECK(zero.config.limits.pdf.duration.unlimited());
+    CHECK(zero.config.limits.pdf.cache_pages.unlimited());
 
     const LoadedConfig sized =
         parse_config("[limits.pdf]\ncontext_memory = \"1GiB\"\npages = \"5KiB\"\nduration = \"250ms\"\n");

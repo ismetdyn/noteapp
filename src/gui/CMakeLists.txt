@@ -26,6 +26,7 @@ add_library(noteapp_gui
     view_map.cpp
     view_note_editor.cpp
     view_palette.cpp
+    view_pdf.cpp
     view_settings.cpp
     view_tabs.cpp
     view_toolbar.cpp

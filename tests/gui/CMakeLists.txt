@@ -26,6 +26,7 @@ noteapp_add_test(gui
     note_editor_test.cpp
     note_list_model_test.cpp
     palette_test.cpp
+    pdf_preview_test.cpp
     pdf_test.cpp
     preview_layout_test.cpp
     preview_test.cpp

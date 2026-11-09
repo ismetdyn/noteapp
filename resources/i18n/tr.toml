@@ -1450,6 +1450,12 @@ none_shown = "Özelliklerini görmek için bir not açın"
 
 # İki arayüzün birebir aynı gösterdiği metin; arayüze özgü söyleyiş [tui] ya da [gui] altında kalır.
 [app]
+pdf_page_separator = "--- sayfa {page}/{count} ---"
+pdf_loading = "PDF yükleniyor…"
+pdf_page_loading = "Sayfa {page} yükleniyor…"
+pdf_page_indicator = "{page} / {count}"
+pdf_truncated = "… metin {limit} sınırında kesildi (limits.tui.view_bytes)"
+pdf_texture_failed = "Sayfa gösterilemedi ({width} x {height} piksel)"
 export_binary = "İkili not dışa aktarılamaz: {path}"
 changed_on_disk = "Diskte değişti: Ctrl+S ne yapılacağını sorar"
 deleted_on_disk = "Diskte silindi: Ctrl+S nereye kaydedileceğini sorar"

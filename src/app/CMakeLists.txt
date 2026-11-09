@@ -19,6 +19,7 @@ add_library(noteapp_app
     map_relations.cpp
     note_map.cpp
     notices.cpp
+    pdf_preview.cpp
     settings.cpp
     sync_indicator.cpp
     sync_status_worker.cpp
@@ -33,7 +34,7 @@ if(WIN32)
     target_sources(noteapp_app PRIVATE update_install_win.cpp)
 endif()
 target_include_directories(noteapp_app PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(noteapp_app PUBLIC noteapp_core noteapp_search noteapp_sync noteapp_detect
+target_link_libraries(noteapp_app PUBLIC noteapp_core noteapp_search noteapp_sync noteapp_detect noteapp_pdfview
     PRIVATE noteapp_pdf noteapp_net tomlplusplus::tomlplusplus)
 # Durum dosyaları (ui_prefs.cpp) ve sekmelerin `[[tabs]]` bloğu (tabs.cpp): ayrıştırma hatası parse_result ile
 # döner (config.cpp ile aynı mod).

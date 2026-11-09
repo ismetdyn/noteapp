@@ -212,13 +212,15 @@ tool_output_bytes = "1MiB"    # bu süreçlerden okunan çıktı (zip içerik li
 # render_pixels sınırsızsa dev sayfa boyu ya da yakınlaştırma GB'larca piksel tamponu ister; text_bytes
 # sınırsızsa tek sayfa belleği metinle doldurabilir; context_memory sınırsızsa bozuk/kötü niyetli akış (dev görsel,
 # derin iç içe nesne) MuPDF'e süreç belleğini tükettirebilir; duration sınırsızsa iç içe çoğalan Form XObject'li
-# küçük bir sayfa (her düzey bir alttakini 10 kez çizer) saatlerce işlemci yer ve iş parçacığını bırakmaz.
+# küçük bir sayfa (her düzey bir alttakini 10 kez çizer) saatlerce işlemci yer ve iş parçacığını bırakmaz;
+# cache_pages sınırsızsa uzun belgede gezinmek çizilen her sayfayı (sayfa başına MB'larca RGBA) bellekte tutar.
 [limits.pdf]
 pages = 10000                 # açılan belgenin en çok sayfası; fazlası olan belge açılmaz
 render_pixels = 16777216      # çizilen sayfanın en çok pikseli (16 M piksel = 64 MiB RGBA; A4'te ~5,7 kat, 72 dpi tabanı)
 text_bytes = "1MiB"           # bir sayfadan çıkarılan en çok metin (yoğun bir sayfa ~10 KB)
 context_memory = "512MiB"     # belge başına MuPDF bellek bütçesi (önbellek, çözülmüş görsel, font); dolunca hata
 duration = "10s"              # açılış (bozuk dosyada onarım dahil) ve sayfa başına metin çıkarma ya da çizim süresi; dolunca iş kesilir
+cache_pages = 32              # önizlemenin bellekte tuttuğu çizilmiş sayfa (GUI doku önbelleği de); görünen sayfalar sayılmaz
 
 # Sorgu profilleri: [limits.query] kullanıcının kendi sorgusu (`note query`), [limits.view] görünüm (`view:`,
 # `note view run`). Görünüm başka cihazdan gelebilir, kökeni izlenmez: kendi korumalı profilini kullanır.

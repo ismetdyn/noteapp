@@ -124,6 +124,7 @@ void View::draw_right_pane(float canvas_left) {
         state_.inspector().target() ? state_.inspector().rows().size() + kInspectorChromeRows : 0;
     const float inspector_height =
         panel_height(inspector_rows, state_.inspector_open(), available - links_height - info_height);
+    state_.pdf_preview();  // PDF gösterilmiyorsa oturum kapanır, gösteriliyorsa (yeniden) kurulur
     if (state_.showing_preview())
         draw_preview(links_height + info_height + inspector_height);
     else
@@ -622,7 +623,9 @@ void View::draw_preview(float reserved_height) {
         ImGui::SetScrollY(ImGui::GetScrollY() + request);
     }
     preview_link_hovered_ = false;
-    if (state_.preview_too_large())
+    if (state_.showing_pdf())
+        draw_pdf_preview();
+    else if (state_.preview_too_large())
         draw_raw_preview();
     else if (state_.preview_kind() == app::PreviewKind::Markdown)
         draw_markdown_preview(request, lines >= FLT_MAX);  // End: scroll_preview(FLT_MAX)
