@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(noteapp VERSION 0.1.2 LANGUAGES CXX)
+project(noteapp VERSION 0.1.3 LANGUAGES CXX)
 
 option(NOTEAPP_BUILD_GUI "notes-gui (SDL3 + Dear ImGui) derlensin" ON)
 option(NOTEAPP_BUILD_TESTS "Testler derlensin" ON)
