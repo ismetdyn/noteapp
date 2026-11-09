@@ -2,7 +2,7 @@
 # GitHub release varlıklarını üretir (sözleşme: SPEC.md §4 "Release sözleşmesi"; kendi kendini güncelleme buna dayanır).
 # Girdi: scripts/build-appimage.sh ve scripts/build-windows.sh çıktıları (out/). Çıktı out/release/<sürüm>/:
 #   noteapp-<sürüm>-x86_64.AppImage, noteapp-<sürüm>-windows-x86_64.zip (kökte üç exe, noteapp-package.txt ve
-#   licenses/), SHA256SUMS
+#   licenses/), mupdf-<MuPDF sürümü>-source.tar.gz (cmake/Dependencies.cmake), SHA256SUMS
 # Yüklemez: tag v<sürüm> ve yükleme elle. Yeniden çalıştırmak dizini baştan üretir.
 # Kullanım: scripts/make-release.sh <X.Y.Z>
 set -euo pipefail
@@ -37,6 +37,15 @@ done
 # Kurulum açılan pakette bağı reddeder (src/app/update_install.cpp): pakete hiç girmesin.
 [[ -z "$(find "${windows_entries[@]/#/$windows_dir/}" -type l)" ]] || die "$windows_dir has symbolic links"
 
+# MuPDF AGPL-3.0: ikililerle birlikte karşılık gelen kaynak da sunulur (GPLv3 §6(d)). Adres ve SHA256 tek kaynaktan,
+# cmake/Dependencies.cmake'teki FetchContent_Declare(mupdf ...) bloğundan okunur; release tam o arşivi taşır.
+mupdf_pin="$(sed -n '/^FetchContent_Declare(mupdf$/,/)/p' cmake/Dependencies.cmake)"
+mupdf_url="$(sed -n 's/^ *URL \(https:\/\/[^ ]*\.tar\.gz\)$/\1/p' <<<"$mupdf_pin")"
+mupdf_sha256="$(sed -n 's/^ *URL_HASH SHA256=\([0-9a-f]\{64\}\))\{0,1\}$/\1/p' <<<"$mupdf_pin")"
+[[ -n "$mupdf_url" && "$mupdf_url" != *$'\n'* ]] || die "cannot read the MuPDF URL from cmake/Dependencies.cmake"
+[[ "$mupdf_sha256" =~ ^[0-9a-f]{64}$ ]] || die "cannot read the MuPDF SHA256 from cmake/Dependencies.cmake"
+mupdf_name="${mupdf_url##*/}"
+
 mkdir -p out/release
 staging="$(mktemp -d "out/release/.$version.XXXXXX")"
 cleanup() { rm -rf -- "$staging"; }
@@ -64,7 +73,28 @@ printf '%s\n' "noteapp $version for Windows. noteapp updates replace note.exe, n
 touch -d "$marker_date" -- "$marker_dir/$marker_name"
 (cd "$marker_dir" && zip -q -X "$staging/$zip_name" "$marker_name")
 rm -rf -- "$marker_dir"
-(cd "$staging" && sha256sum -- "$appimage_name" "$zip_name" >SHA256SUMS)
+
+# Önce yerel derlemenin FetchContent önbelleği (build/<preset>/_deps), yoksa sabit adresten indirilir. Her iki yolda
+# da yayımlanan kopya sabit SHA256 ile doğrulanır.
+shopt -s nullglob
+mupdf_cached=(build/*/_deps/mupdf-subbuild/mupdf-populate-prefix/src/"$mupdf_name")
+shopt -u nullglob
+if [[ ${#mupdf_cached[@]} -gt 0 ]]; then
+    echo "MuPDF source: ${mupdf_cached[0]}"
+    cp -- "${mupdf_cached[0]}" "$staging/$mupdf_name"
+else
+    command -v curl >/dev/null || die "curl is required to download $mupdf_url"
+    echo "MuPDF source: downloading $mupdf_url"
+    curl --fail --location --silent --show-error --proto =https --proto-redir =https \
+        --output "$staging/$mupdf_name" "$mupdf_url" || die "cannot download $mupdf_url"
+fi
+mupdf_actual="$(sha256sum -- "$staging/$mupdf_name")"
+mupdf_actual="${mupdf_actual%% *}"
+[[ "$mupdf_actual" == "$mupdf_sha256" ]] ||
+    die "$mupdf_name SHA256 is $mupdf_actual, expected $mupdf_sha256 (cmake/Dependencies.cmake)"
+
+# Updater SHA256SUMS'ta yalnız kendi varlığının satırını arar (src/app/updater.cpp sums_entry); ek satır zararsız.
+(cd "$staging" && sha256sum -- "$appimage_name" "$zip_name" "$mupdf_name" >SHA256SUMS)
 
 rm -rf -- "$release_dir"
 mv -T -- "$staging" "$release_dir"

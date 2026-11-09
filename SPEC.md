@@ -104,8 +104,10 @@ bash scripts/make-release.sh 0.1.2
 **Release sözleşmesi** (kendi kendini güncelleme buna dayanır: `src/app/updater.cpp` denetler,
 `src/app/update_install.cpp` kurar): tag `vX.Y.Z`; varlıklar tam olarak `noteapp-X.Y.Z-x86_64.AppImage`,
 `noteapp-X.Y.Z-windows-x86_64.zip` (kökte yalnız `note.exe`, `notes.exe`, `notes-gui.exe`, sahiplik işareti
-`noteapp-package.txt` ve `licenses/`; bağ yok) ve `SHA256SUMS` (`sha256sum` çıktısı, iki varlığın birer satırı); AppImage
-`note X.Y.Z` bildirmeli. AppImage `usr/share/noteapp/install-local.sh` ve yanında `noteapp.desktop` taşır: yerel kurulumun
+`noteapp-package.txt` ve `licenses/`; bağ yok), `mupdf-1.28.6-source.tar.gz` ve `SHA256SUMS` (`sha256sum` çıktısı,
+üç dosyanın birer satırı). MuPDF arşivi AGPL-3.0'ın gerektirdiği karşılık gelen kaynaktır (GPLv3 §6(d)): adresi ve
+SHA256'sı `cmake/Dependencies.cmake`'teki sabittir, make-release.sh uymazsa durur. Updater SHA256SUMS'ta yalnız kendi
+varlığının satırını okur; ek satır onu etkilemez. AppImage `note X.Y.Z` bildirmeli. AppImage `usr/share/noteapp/install-local.sh` ve yanında `noteapp.desktop` taşır: yerel kurulumun
 güncellemesi bu betiği `--keep 2 --expect-version X.Y.Z --progress-dir <dizin>` ile çalıştırır. Güven modeli (TLS +
 aynı release'in SHA256SUMS'u, imza yok): `.engineering/adr/0001-update-trust-model.md`.
 

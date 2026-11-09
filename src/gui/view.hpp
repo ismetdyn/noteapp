@@ -81,6 +81,12 @@ public:
     // Test kancaları.
     std::function<void()> on_modal_frame;  // her diyalog karesinden önce: tuş enjekte eder
     std::chrono::milliseconds update_arm_delay = kUpdateArmDelay;
+    // Kur kilidinin süresini doldurur (kilit yoksa bir şey yapmaz): testler duvar saati beklemeden "süre doldu"
+    // anını kurar; açılış yine idle_step'te olur.
+    void expire_update_arm() {
+        if (update_armed_at_)
+            update_armed_at_ = std::chrono::steady_clock::time_point{};
+    }
     std::size_t frames() const { return frames_; }
     bool search_active() const { return search_active_; }
     bool editor_active() const { return editor_active_; }

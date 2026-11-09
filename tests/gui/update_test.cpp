@@ -332,14 +332,19 @@ TEST_CASE_FIXTURE(UpdateScene, "update: a second click right after Cancel does n
     CHECK(installer.calls() == 0);
     CHECK(github.requests() == 2);  // denetim ve iptal edilen SHA256SUMS
 
-    // Süre dolunca Kur açılır; döngü o an kendiliğinden bir kare çizer.
+    // Süre dolunca Kur açılır; döngü o an kendiliğinden bir kare çizer. Kare süresinden bağımsız: gecikme
+    // uzun, "süre doldu" anını kanca kurar. Önceki 60 sn'lik kilit de doldurulur: aşağıdaki kilit yalnız yeniden
+    // açılıştan gelebilir.
     click_button(*view, button_name(UpdateAction::Close));
-    view->update_arm_delay = std::chrono::milliseconds(30);
+    view->expire_update_arm();
+    view->idle_step(0);
+    view->update_arm_delay = std::chrono::seconds(10);
     run_command(*state, "update");  // yeniden açılış da değişikliktir
+    finish(*state);
     view->draw_frame();
     view->draw_frame();
     CHECK(view->item_rects().at(button_name(UpdateAction::Install)).disabled);
-    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    view->expire_update_arm();
     view->idle_step(0);
     CHECK_FALSE(view->item_rects().at(button_name(UpdateAction::Install)).disabled);
     click_button(*view, button_name(UpdateAction::Install));
