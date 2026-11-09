@@ -48,6 +48,10 @@ yaml = ["yaml-language-server", "--stdio"]               # SchemaStore/CRD kapal
 toml = ["taplo", "lsp", "--no-auto-config", "stdio"]     # şema, katalog ve taplo.toml araması kapalı
 json = ["vscode-json-language-server", "--stdio"]        # $schema yalnız file:// okunur, http(s) indirilmez
 
+# Sürüm denetimi (TUI, GUI açılışı; elle `note update` her zaman çalışır). Ayar ekranında görünmez.
+[update]
+check_interval = "24h"        # açılışta GitHub'a en çok bu aralıkla sorulur; 0 = açılışta denetim yok; 0 ile 1h arası reddedilir (GitHub kimliksiz 60 istek/saat)
+
 # Kullanıcı arayüzünde görünmeyen, davranışı ayarlayan değerler.
 [tuning]
 slug_max_length = 60          # not adı slug'ının en çok karakteri
@@ -189,6 +193,19 @@ pending_reply_bytes = "1MiB"  # sunucu isteklerine bekleyen cevaplar; aşan sunu
 initialize_timeout = "10s"    # initialize cevabı; büyük projede yavaş sunucu için artırılabilir
 write_timeout = "5s"          # sunucu stdin'i bu süre okumazsa takılmış sayılır
 shutdown_timeout = "1s"       # kapanışta shutdown cevabı; ardından 500 ms çıkış beklenir, süreç öldürülür
+
+# Kendi kendini güncelleme. Sunucu cevabı güvenilmezdir. Paket belleğe alınır: download_bytes aynı zamanda
+# indirmenin bellek tavanıdır. 0'ın riski: bayt sınırları sınırsızsa bozuk ya da kötü niyetli sunucu belleği
+# doldurabilir; süreler sınırsızsa takılan bağlantı denetimi (ve `note update`'i) sonsuza dek bekletir.
+[limits.update]
+api_bytes = "1MiB"            # GitHub API cevabı (son sürümün JSON'u)
+sums_bytes = "64KiB"          # SHA256SUMS dosyası
+download_bytes = "512MiB"     # indirilen paket (AppImage ya da zip); API'nin bildirdiği boyut aşıyorsa indirilmez
+connect_timeout = "30s"       # bağlantı kurulumu
+transfer_timeout = "15min"    # isteğin tamamı (indirme dahil)
+install_timeout = "10min"     # kurulumun her çocuk süreci (install-local.sh, tar, note.exe --version); aşılırsa
+                              # süreç öldürülür, değiştirme başlamadıysa kurulu sürüm aynı kalır
+tool_output_bytes = "1MiB"    # bu süreçlerden okunan çıktı (zip içerik listesi, sürüm, betiğin hata çıktısı)
 
 # Sorgu profilleri: [limits.query] kullanıcının kendi sorgusu (`note query`), [limits.view] görünüm (`view:`,
 # `note view run`). Görünüm başka cihazdan gelebilir, kökeni izlenmez: kendi korumalı profilini kullanır.

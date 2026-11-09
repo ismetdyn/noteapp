@@ -48,6 +48,16 @@ struct LspConfig {
     bool operator==(const LspConfig&) const = default;
 };
 
+// [update]: açılışta sürüm denetimi (TUI, GUI). Ayar ekranında görünmez; dosyadan değişir ([tuning] gibi).
+struct UpdateConfig {
+    // GitHub'ın kimliksiz API sınırı saatte 60 istektir: 0 dışında 1 saatten kısa aralık reddedilir.
+    static constexpr std::uint64_t kMinCheckIntervalMs = 60ULL * 60ULL * 1000ULL;
+
+    Limit check_interval;  // ms; 0 = açılışta denetim yok (elle `note update` yine çalışır)
+
+    bool operator==(const UpdateConfig&) const = default;
+};
+
 // defaults.toml `graph_batch_ops`ın yapılandırmasız NoteStore'daki (test, geçiş) karşılığı. Üst değeri sabit
 // değildir; çerçeve sınırı da onu kırpmaz (L4b: işlem kayıtlara bölünür).
 inline constexpr std::size_t kDefaultGraphBatchOps = 30000;
@@ -87,6 +97,7 @@ struct Config {
     std::string icons;  // nerd | off; dosyadaki `auto` nerd okunur
     SyncConfig sync{};
     LspConfig lsp{};
+    UpdateConfig update{};
     Tuning tuning{};
     Limits limits{};  // [limits.<modül>]; 0 = sınırsız (SPEC-core "Sınırlar")
 

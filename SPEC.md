@@ -97,6 +97,19 @@ bash scripts/build-appimage.sh
 ```
 
 ```bash
+# Release varlıkları — önce build-appimage.sh ve build-windows.sh; çıktı out/release/<sürüm>/ (yükleme elle)
+bash scripts/make-release.sh 0.1.2
+```
+
+**Release sözleşmesi** (kendi kendini güncelleme buna dayanır: `src/app/updater.cpp` denetler,
+`src/app/update_install.cpp` kurar): tag `vX.Y.Z`; varlıklar tam olarak `noteapp-X.Y.Z-x86_64.AppImage`,
+`noteapp-X.Y.Z-windows-x86_64.zip` (kökte yalnız `note.exe`, `notes.exe`, `notes-gui.exe`, sahiplik işareti
+`noteapp-package.txt` ve `licenses/`; bağ yok) ve `SHA256SUMS` (`sha256sum` çıktısı, iki varlığın birer satırı); AppImage
+`note X.Y.Z` bildirmeli. AppImage `usr/share/noteapp/install-local.sh` ve yanında `noteapp.desktop` taşır: yerel kurulumun
+güncellemesi bu betiği `--keep 2 --expect-version X.Y.Z --progress-dir <dizin>` ile çalıştırır. Güven modeli (TLS +
+aynı release'in SHA256SUMS'u, imza yok): `.engineering/adr/0001-update-trust-model.md`.
+
+```bash
 # Fedora doğrulaması konteynerde (docker, çalışmıyorsa rootless podman)
 scripts/check-fedora.sh            # fedora:latest imajında derle + ctest (GUI testleri SDL_VIDEO_DRIVER=dummy)
 ```
@@ -127,6 +140,7 @@ cmake/toolchains/mingw-w64-x86_64.cmake → Linux'ta Windows çapraz derleme too
 scripts/check-fedora.sh   → docker (yoksa podman) ile Fedora derleme + test (kontrol noktası doğrulaması)
 scripts/build-windows.sh  → konteynerde Windows .exe üretir (--test: Wine'da test)
 scripts/build-appimage.sh → konteynerde Linux AppImage üretir
+scripts/make-release.sh   → out/'taki AppImage ve Windows ikililerinden release varlıklarını ve SHA256SUMS'u üretir
 scripts/container-engine.sh → çalışan motoru (docker, yoksa podman) seçer; build-windows.sh kullanır
 docker/fedora.Containerfile → Fedora derleme imajı (bağımlılıklar önbellekli)
 docker/windows-cross.Containerfile → Windows çapraz derleme + Wine imajı

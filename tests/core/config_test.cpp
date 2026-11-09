@@ -930,6 +930,81 @@ TEST_CASE("limits.tui and limits.lsp keep today's defaults, accept 0 as unlimite
     CHECK(listed("limits.lsp.shutdown_timeout"));
 }
 
+TEST_CASE("update.check_interval defaults to 24h, accepts 0 as off and rejects intervals under an hour") {
+    const LoadedConfig defaults = parse_config("");
+    CHECK(defaults.warnings.empty());
+    CHECK(defaults.config.update.check_interval == Limit{24U * 60U * 60U * 1000U, "24h"});
+
+    const LoadedConfig off = parse_config("[update]\ncheck_interval = 0\n");
+    CHECK(off.warnings.empty());
+    CHECK(off.config.update.check_interval == Limit{0, "0"});
+
+    const LoadedConfig hourly = parse_config("[update]\ncheck_interval = \"1h\"\n");
+    CHECK(hourly.warnings.empty());
+    CHECK(hourly.config.update.check_interval.value == 60U * 60U * 1000U);
+    CHECK(parse_config("[update]\ncheck_interval = \"7d\"\n").config.update.check_interval.text == "24h");
+
+    for (const char* text : {"[update]\ncheck_interval = \"59min\"\n", "[update]\ncheck_interval = 1\n",
+                             "[update]\ncheck_interval = \"3599999ms\"\n", "[update]\ncheck_interval = -1\n",
+                             "[update]\ncheck_interval = true\n"}) {
+        CAPTURE(text);
+        const LoadedConfig rejected = parse_config(text);
+        CHECK(rejected.config.update.check_interval.text == "24h");
+        CHECK(has_warning_about(rejected, "update.check_interval", "config.invalid_value"));
+    }
+    const LoadedConfig short_interval = parse_config("[update]\ncheck_interval = \"30min\"\n");
+    REQUIRE(short_interval.warnings.size() == 1);
+    CHECK(arg_of(short_interval.warnings[0], "reason") == "must_be_update_interval");
+    CHECK(format_error(short_interval.warnings[0]).find("update.check_interval") != std::string::npos);
+    CHECK(format_error(short_interval.warnings[0]).find("must_be_") == std::string::npos);  // çevrilmiş neden
+    CHECK(has_warning_about(parse_config("[update]\nnope = 1\n"), "update.nope", "config.unknown_key"));
+}
+
+TEST_CASE("save_config keeps a changed update.check_interval and omits the default") {
+    const TempDir tmp(kTurkishUncreated);
+    const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());
+    Config config = parse_config("").config;
+    REQUIRE(save_config(config).has_value());
+    CHECK(slurp(config_file()).find("[update]") == std::string::npos);
+
+    config = parse_config("[update]\ncheck_interval = 0\n").config;
+    REQUIRE(save_config(config).has_value());
+    const LoadedConfig reloaded = load_config();
+    CHECK(reloaded.warnings.empty());
+    CHECK(reloaded.config.update.check_interval == Limit{0, "0"});
+
+    config = parse_config("[update]\ncheck_interval = \"48h\"\n").config;
+    REQUIRE(save_config(config).has_value());
+    CHECK(load_config().config.update.check_interval == Limit{48U * 60U * 60U * 1000U, "48h"});
+}
+
+TEST_CASE("limits.update defaults bound the API, SHA256SUMS and package downloads and accept 0") {
+    const UpdateLimits defaults = parse_config("").config.limits.update;
+    CHECK(defaults.api_bytes == Limit{1024U * 1024U, "1MiB"});
+    CHECK(defaults.sums_bytes == Limit{64U * 1024U, "64KiB"});
+    CHECK(defaults.download_bytes == Limit{512U * 1024U * 1024U, "512MiB"});
+    CHECK(defaults.connect_timeout == Limit{30U * 1000U, "30s"});
+    CHECK(defaults.transfer_timeout == Limit{15U * 60U * 1000U, "15min"});
+    CHECK(defaults.install_timeout == Limit{10U * 60U * 1000U, "10min"});
+    CHECK(defaults.tool_output_bytes == Limit{1024U * 1024U, "1MiB"});
+
+    const LoadedConfig zero = parse_config("[limits.update]\ndownload_bytes = 0\ntransfer_timeout = 0\n"
+                                           "install_timeout = 0\ntool_output_bytes = 0\n");
+    CHECK(zero.warnings.empty());
+    CHECK(zero.config.limits.update.download_bytes.unlimited());
+    CHECK(zero.config.limits.update.transfer_timeout.unlimited());
+    CHECK(zero.config.limits.update.install_timeout.unlimited());
+    CHECK(zero.config.limits.update.tool_output_bytes.unlimited());
+
+    Config c = parse_config("").config;
+    REQUIRE(set_config_value(c, "limits.update.download_bytes", "1GiB"));
+    CHECK(c.limits.update.download_bytes.value == std::uint64_t{1} << 30U);
+    CHECK_FALSE(set_config_value(c, "limits.update.api_bytes", "5s"));
+    const auto entries = limit_entries(c);
+    CHECK(std::ranges::find(entries, std::pair<std::string, std::string>{"limits.update.sums_bytes",
+                                                                         "64KiB"}) != entries.end());
+}
+
 TEST_CASE("limits.app.recent_commands defaults to 20 and accepts 0 as unlimited") {
     CHECK(parse_config("").config.limits.app.recent_commands == Limit{20, "20"});
 

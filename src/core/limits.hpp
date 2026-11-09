@@ -177,6 +177,20 @@ struct LspLimits {
     bool operator==(const LspLimits&) const = default;
 };
 
+// [limits.update]: kendi kendini güncelleme (app::updater). Sunucu cevabı güvenilmezdir; paket belleğe
+// alınır, download_bytes bellek tavanıdır. Süreler HTTP isteğine saniyeye yukarı yuvarlanarak gider.
+struct UpdateLimits {
+    Limit api_bytes;          // GitHub API cevabı (son sürümün JSON'u)
+    Limit sums_bytes;         // SHA256SUMS dosyası
+    Limit download_bytes;     // indirilen paket (AppImage ya da zip)
+    Limit connect_timeout;    // bağlantı kurulumu
+    Limit transfer_timeout;   // isteğin tamamı (indirme dahil)
+    Limit install_timeout;    // kurulumun her çocuk süreci (install-local.sh, tar, note.exe --version)
+    Limit tool_output_bytes;  // bu süreçlerden okunan çıktı (zip listesi, sürüm, betiğin hata çıktısı)
+
+    bool operator==(const UpdateLimits&) const = default;
+};
+
 struct Limits {
     AppLimits app{};
     CoreLimits core{};
@@ -187,6 +201,7 @@ struct Limits {
     QueryLimits view{};
     TuiLimits tui{};
     LspLimits lsp{};
+    UpdateLimits update{};
 
     bool operator==(const Limits&) const = default;
 };

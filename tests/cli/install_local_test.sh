@@ -269,4 +269,90 @@ warning="$(bash "$work/repo/scripts/install-local.sh" "$gui_tree" 2>&1 >/dev/nul
 [[ "$warning" == *"desktop entry skipped"* ]] || die "a broken template must be reported: $warning"
 [[ -L "$HOME/.local/bin/notes" ]] || die "links not installed with a broken template"
 [[ ! -e "$HOME/.local/share/applications/noteapp.desktop" ]] || die "desktop entry written from a broken template"
+# --keep (güncelleme kipi, app::install_update): betik paketteki yerinden (usr/share/noteapp) çalışır. En yeni N sürüm
+# (sort -V: 0.10.0 > 0.9.0), kurulumdan önce bağlanan ve betiği taşıyan (çalışan) sürüm kalır; veri dosyaları kalır.
+export HOME="$work/home-keep"
+share="$HOME/.local/share/noteapp"
+bin="$HOME/.local/bin"
+for old_version in 0.2.0 0.8.0 0.9.0 0.10.0; do
+    mkdir -p "$share/$old_version"
+    printf '#!/bin/sh\nexit 0\n' >"$share/$old_version/AppRun"
+    chmod +x "$share/$old_version/AppRun"
+done
+packaged="$share/0.8.0/usr/share/noteapp"
+mkdir -p "$packaged" "$bin"
+cp "$script" "$packaged/"
+sed 's/^Name=NoteApp$/Name=NoteApp packaged/' "$1/packaging/linux/noteapp.desktop" >"$packaged/noteapp.desktop"
+ln -s "$share/0.2.0/AppRun" "$bin/note"
+echo notes >"$share/graph.db"
+mkdir -p "$share/migration-backup-1/notes/bin"
+printf '#!/bin/sh\n' >"$share/migration-backup-1/notes/bin/note"
+chmod +x "$share/migration-backup-1/notes/bin/note"
+output="$(PATH="/usr/bin:/bin" bash "$packaged/install-local.sh" --keep 2 "$fake_appimage" 2>/dev/null)" ||
+    die "an update install with --keep failed"
+[[ "$(readlink "$bin/note")" == "$share/1.2.3/AppRun" ]] || die "--keep did not install the new version"
+for kept in 1.2.3 0.10.0 0.8.0 0.2.0; do
+    [[ -x "$share/$kept/AppRun" ]] || die "--keep 2 removed $kept"
+done
+[[ ! -e "$share/0.9.0" ]] || die "--keep 2 left an old version: 0.9.0"
+[[ "$(cat "$share/graph.db")" == notes && -x "$share/migration-backup-1/notes/bin/note" ]] ||
+    die "--keep touched the notes data"
+[[ -z "$(find "$share" -maxdepth 1 -name '.install.*')" ]] || die "--keep left the staging directory"
+[[ "$output" != *"not in PATH"* ]] || die "--keep must not print the shell setup guide"
+grep -qxF 'Name=NoteApp packaged' "$HOME/.local/share/applications/noteapp.desktop" ||
+    die "the packaged script must read the template next to it"
+for bad_keep in 0 -1 x; do
+    if bash "$script" --keep "$bad_keep" "$fake_appimage" >/dev/null 2>&1; then
+        die "--keep $bad_keep must be refused"
+    fi
+done
+# --expect-version: paket başka sürüm bildirirse hiçbir şey değişmez (bağ, sürüm dizinleri, committing işareti).
+progress="$work/progress"
+mkdir -p "$progress"
+if bash "$packaged/install-local.sh" --keep 1 --expect-version 9.9.9 --progress-dir "$progress" "$fake_appimage" \
+    >/dev/null 2>&1; then
+    die "a package of another version must be refused"
+fi
+[[ "$(readlink "$bin/note")" == "$share/1.2.3/AppRun" ]] || die "a refused version changed the note link"
+for kept in 1.2.3 0.10.0 0.8.0 0.2.0; do
+    [[ -x "$share/$kept/AppRun" ]] || die "a refused version pruned $kept"
+done
+[[ ! -e "$progress/committing" && ! -e "$progress/committed" ]] || die "a refused version must fail before committing"
+grep -qF 'the package is version 1.2.3, expected 9.9.9' "$progress/stderr.log" ||
+    die "--progress-dir must collect stderr: $(cat "$progress/stderr.log")"
+bash "$packaged/install-local.sh" --keep 2 --expect-version 1.2.3 --progress-dir "$progress" "$fake_appimage" \
+    >/dev/null || die "the expected version must install"
+[[ -e "$progress/committing" ]] || die "an install must mark the point of no return"
+[[ -e "$progress/committed" ]] || die "an install must mark that the links switched"
+
+# Sürüm yol olarak kullanılır: `.`, `..` ve gizli ad reddedilir, veri dizinine dokunulmaz.
+for bad_version in . .. .install.x; do
+    dot_tree="$work/dot-tree"
+    rm -rf "$dot_tree"
+    mkdir -p "$dot_tree/bin"
+    printf '#!/bin/sh\necho "note %s"\n' "$bad_version" >"$dot_tree/bin/note"
+    printf '#!/bin/sh\n' >"$dot_tree/bin/notes"
+    chmod +x "$dot_tree/bin/note" "$dot_tree/bin/notes"
+    if bash "$script" "$dot_tree" >/dev/null 2>&1; then
+        die "version '$bad_version' must be refused"
+    fi
+    [[ "$(cat "$share/graph.db")" == notes && "$(readlink "$bin/note")" == "$share/1.2.3/AppRun" ]] ||
+        die "version '$bad_version' changed the installation"
+done
+
+# İsteğe bağlı adımlar (tamamlama, menü girdisi, ikon) yazılamazsa kurulum yine başarılır ve uyarır.
+export HOME="$work/home-optional"
+mkdir -p "$HOME/.local/share/zsh" "$HOME/.local/share"
+echo blocker >"$HOME/.local/share/zsh/site-functions"
+echo blocker >"$HOME/.local/share/applications"
+completion_tree="$work/tree-completion"
+cp -a "$fake_tree" "$completion_tree"
+printf '#!/bin/sh\necho fake-gui\n' >"$completion_tree/bin/notes-gui"
+chmod +x "$completion_tree/bin/notes-gui"
+mkdir -p "$completion_tree/share/icons/hicolor/48x48/apps"
+cp "$repo_icons/hicolor/48x48/apps/noteapp.png" "$completion_tree/share/icons/hicolor/48x48/apps/"
+warning="$(bash "$script" "$completion_tree" 2>&1 >/dev/null)" || die "a failing optional step must not fail the install"
+[[ -L "$HOME/.local/bin/note" && -L "$HOME/.local/bin/notes-gui" ]] || die "links not installed"
+[[ "$warning" == *"completions were not fully installed"* ]] || die "the completion failure must be reported: $warning"
+[[ "$warning" == *"menu entry was not fully installed"* ]] || die "the menu failure must be reported: $warning"
 echo ok

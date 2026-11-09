@@ -63,6 +63,11 @@ for icon in /src/resources/icons/hicolor/*/apps/noteapp.png /src/resources/icons
     [[ -f "$appdir/usr/share/icons/$relative" ]] || die "icon missing in AppDir: usr/share/icons/$relative"
 done
 
+# Yerel kurulumun güncellemesi (app::install_update) paketteki betiği çalıştırır: kurulum mantığı tek kaynakta kalır.
+# Betik menü şablonunu yanında arar. Yol sözleşmesi: src/app/update_install.cpp kInstallScript.
+install -D -m 755 /src/scripts/install-local.sh "$appdir/usr/share/noteapp/install-local.sh"
+install -m 644 "$packaging/noteapp.desktop" "$appdir/usr/share/noteapp/noteapp.desktop"
+
 # Lisanslar: gömülü bileşenler kendi kaynağından, paylaşımlı kütüphaneler Debian copyright dosyasından.
 licenses="$appdir/usr/share/licenses/noteapp"
 source "$packaging/third-party-licenses.sh"

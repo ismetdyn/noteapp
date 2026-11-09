@@ -19,4 +19,10 @@ noteapp_add_test(app
     tabs_test.cpp
     trash_ops_test.cpp
     ui_args_test.cpp
-    ui_prefs_test.cpp)
+    ui_prefs_test.cpp
+    update_install_test.cpp
+    updater_test.cpp)
+# Yerel kurulum güncellemesi gerçek betiği geçici HOME'da çalıştırır (paketteki kopyası gibi şablonu yanında).
+target_compile_definitions(app_tests PRIVATE
+    NOTEAPP_INSTALL_LOCAL_SCRIPT="${PROJECT_SOURCE_DIR}/scripts/install-local.sh"
+    NOTEAPP_DESKTOP_TEMPLATE="${PROJECT_SOURCE_DIR}/packaging/linux/noteapp.desktop")

@@ -386,6 +386,16 @@ void apply_lsp(Section& s, LspConfig& lsp) {
     s.warn_unknown();
 }
 
+void apply_update(Section& s, UpdateConfig& update) {
+    if (auto v = s.limit_value("check_interval", LimitUnit::Milliseconds)) {
+        if (!v->unlimited() && v->value < UpdateConfig::kMinCheckIntervalMs)
+            s.invalid("check_interval", "must_be_update_interval");
+        else
+            update.check_interval = std::move(*v);
+    }
+    s.warn_unknown();
+}
+
 // Açık/kapalı ayarlar (apply_tuning'in sayısal ayarlarından ayrı).
 void apply_tuning_flags(Section& s, Tuning& tuning) {
     if (auto v = s.boolean("search_relations"))
@@ -576,6 +586,18 @@ std::span<const LimitKey> limit_keys() {
          &module_field<&Limits::lsp, &LspLimits::write_timeout>},
         {"lsp.shutdown_timeout", LimitUnit::Milliseconds,
          &module_field<&Limits::lsp, &LspLimits::shutdown_timeout>},
+        {"update.api_bytes", LimitUnit::Bytes, &module_field<&Limits::update, &UpdateLimits::api_bytes>},
+        {"update.sums_bytes", LimitUnit::Bytes, &module_field<&Limits::update, &UpdateLimits::sums_bytes>},
+        {"update.download_bytes", LimitUnit::Bytes,
+         &module_field<&Limits::update, &UpdateLimits::download_bytes>},
+        {"update.connect_timeout", LimitUnit::Milliseconds,
+         &module_field<&Limits::update, &UpdateLimits::connect_timeout>},
+        {"update.transfer_timeout", LimitUnit::Milliseconds,
+         &module_field<&Limits::update, &UpdateLimits::transfer_timeout>},
+        {"update.install_timeout", LimitUnit::Milliseconds,
+         &module_field<&Limits::update, &UpdateLimits::install_timeout>},
+        {"update.tool_output_bytes", LimitUnit::Bytes,
+         &module_field<&Limits::update, &UpdateLimits::tool_output_bytes>},
     });
     return table;
 }
@@ -640,6 +662,8 @@ void apply(const toml::table& root, Config& config, std::vector<Error>& warnings
         apply_sync(*sync, config.sync);
     if (auto lsp = top.subsection("lsp"))
         apply_lsp(*lsp, config.lsp);
+    if (auto update = top.subsection("update"))
+        apply_update(*update, config.update);
     if (auto tuning = top.subsection("tuning"))
         apply_tuning(*tuning, config.tuning);
     if (auto limits = top.subsection("limits"))
@@ -997,10 +1021,14 @@ std::expected<void, Error> save_config(const Config& config) {
     const std::optional<toml::table> disk_table = table_on_disk(disk_text);
     out << lsp_section_on_disk(disk_table);
 
-    const Tuning defaults = parse_config("").config.tuning;
+    // [update] ve [tuning] ayar ekranında yoktur: yalnız varsayılandan farklıysa yazılır (elle verilen değer
+    // kayıtta kaybolmaz, sonraki sürümün varsayılanı geçerli olur).
+    const Config defaults = parse_config("").config;
+    if (config.update != defaults.update)
+        out << "\n[update]\ncheck_interval = " << limit_toml(config.update.check_interval.text) << "\n";
     std::string tuning;
     for (const TuningKey& entry : tuning_keys()) {
-        if (const std::string value = entry.text(config.tuning); value != entry.text(defaults))
+        if (const std::string value = entry.text(config.tuning); value != entry.text(defaults.tuning))
             tuning += std::string(entry.key) + " = " + value + "\n";
     }
     if (!tuning.empty())

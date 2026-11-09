@@ -24,7 +24,12 @@ add_library(noteapp_app
     sync_status_worker.cpp
     tabs.cpp
     trash_ops.cpp
-    ui_prefs.cpp)
+    ui_prefs.cpp
+    update_install.cpp
+    updater.cpp)
+if(WIN32)
+    target_sources(noteapp_app PRIVATE update_install_win.cpp)
+endif()
 target_include_directories(noteapp_app PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(noteapp_app PUBLIC noteapp_core noteapp_search noteapp_sync noteapp_detect
     PRIVATE noteapp_pdf noteapp_net tomlplusplus::tomlplusplus)
