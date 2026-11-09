@@ -158,6 +158,10 @@ inline constexpr std::array kProp{
     V{"set", "cli.desc_prop_set", kPropSetOptions, K::Note},
     V{"rm", "cli.desc_prop_rm", {}, K::Note},
 };
+inline constexpr std::array kUpdate{
+    O{"--check", "", K::None, "cli.opt_update_check"},
+    O{"--yes", "-y", K::None, "cli.opt_update_yes"},
+};
 inline constexpr std::array kShells{
     V{"zsh", "cli.desc_completion_zsh", {}, K::None},
     V{"bash", "cli.desc_completion_bash", {}, K::None},
@@ -169,10 +173,10 @@ inline constexpr std::array kShells{
 // Hızlı eklemenin (alt komutsuz `note`) seçenekleri.
 inline constexpr std::span<const OptionSpec> kAddOptions = command_table_detail::kAdd;
 
-inline constexpr std::array<CommandSpec, 18> kCommands = [] {
+inline constexpr std::array<CommandSpec, 19> kCommands = [] {
     using namespace command_table_detail;
     using G = CommandGroup;
-    return std::array<CommandSpec, 18>{{
+    return std::array<CommandSpec, 19>{{
         {"ls", "cli.desc_ls", kLs, K::Query, {}, G::Notes, "-l"},
         {"find", "cli.desc_find", kFind, K::Query, {}, G::Notes, "-s"},
         {"show", "cli.desc_show", kNoPagerOnly, K::Note, {}, G::Notes, "-S", "cat"},
@@ -189,6 +193,7 @@ inline constexpr std::array<CommandSpec, 18> kCommands = [] {
         {"prop", "cli.desc_prop", {}, K::None, kProp, G::Notes},
         {"view", "cli.desc_view", {}, K::None, kView, G::Advanced},
         {"import", "cli.desc_import", kImport, K::File, {}, G::Notes, "-i"},
+        {"update", "cli.desc_update", kUpdate, K::None, {}, G::Other},
         {"completion", "cli.desc_completion", {}, K::None, kShells, G::Other},
         {"help", "cli.desc_help", kNoPagerOnly, K::Command, {}, G::Other},
     }};

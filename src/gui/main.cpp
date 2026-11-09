@@ -1,4 +1,5 @@
 #include "app/ui_args.hpp"
+#include "app/update_worker.hpp"
 #include "core/config.hpp"
 #include "core/console.hpp"
 #include "core/dll_search.hpp"
@@ -26,6 +27,7 @@ int main(int argc, char* argv[]) {
     noteapp::core::init_log(loaded.config.tuning.log_max_bytes);
     for (const auto& warning : loaded.warnings)
         noteapp::core::log_warn(noteapp::core::format_error(warning));
+    noteapp::app::cleanup_previous_update();  // önceki güncellemenin artıkları
 
     // Pencere açılmadan: içe alma GUI'de diyalog ve sürükle-bıraktır, komut satırında alt komut yok.
     const auto args = noteapp::app::parse_ui_args(noteapp::core::utf8_arguments(argc, argv), false);

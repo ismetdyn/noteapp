@@ -6,6 +6,15 @@
 namespace noteapp::app {
 
 void NoticeQueue::post(NoticeKind kind, std::string text, Clock::time_point now, std::optional<std::string> folder) {
+    add(kind, std::move(text), now, std::move(folder), std::nullopt);
+}
+
+void NoticeQueue::post_update(std::string text, std::string version, Clock::time_point now) {
+    add(NoticeKind::Info, std::move(text), now, std::nullopt, std::move(version));
+}
+
+void NoticeQueue::add(NoticeKind kind, std::string text, Clock::time_point now,
+                      std::optional<std::string> folder, std::optional<std::string> update_version) {
     const auto same = std::ranges::find_if(
         items_, [&](const Notice& notice) { return notice.kind == kind && notice.text == text; });
     if (same != items_.end()) {
@@ -15,6 +24,8 @@ void NoticeQueue::post(NoticeKind kind, std::string text, Clock::time_point now,
         repeated.posted = now;
         if (folder)
             repeated.folder = std::move(folder);
+        if (update_version)
+            repeated.update_version = std::move(update_version);
         items_.push_back(std::move(repeated));  // en yeni sonda
         return;
     }
@@ -23,7 +34,8 @@ void NoticeQueue::post(NoticeKind kind, std::string text, Clock::time_point now,
                             .text = std::move(text),
                             .posted = now,
                             .repeats = 1,
-                            .folder = std::move(folder)});
+                            .folder = std::move(folder),
+                            .update_version = std::move(update_version)});
 }
 
 void NoticeQueue::dismiss(std::uint64_t id) {

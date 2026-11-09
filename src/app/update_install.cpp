@@ -24,8 +24,13 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
+#include <cerrno>
 #include <csignal>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 #endif
 
 namespace noteapp::app {
@@ -310,6 +315,11 @@ InstallResult install_local(const InstallTarget& target, const ReleaseInfo& rele
                             const core::UpdateLimits& limits, const std::stop_token& stop) {
     // Çalışan sürümün paketindeki betik: güncellemeyi alan her sürüm onu taşır (aynı derlemeye girdi).
     const fs::path share = target.path.parent_path();
+    // Sürüm dizinleri ve geçici dizinler <share>'dedir: iki güncelleme birbirinin budamasına ve açılış temizliği
+    // süren kuruluma karışmasın. Geçici dizinden önce alınır, ondan sonra bırakılır.
+    const auto lock = InstallLock::try_acquire(share);
+    if (!lock)
+        return std::unexpected(lock.error());
     const fs::path script = target.path / kInstallScript;
     const std::optional<fs::path> bash = core::find_program("bash");
     if (!bash)
@@ -523,8 +533,32 @@ std::string args_text(const core::Error& error) {
     return text;
 }
 
+// Yarım kalmış değiştirmenin işareti (önce kalıcı olan) ya da boş.
+std::optional<std::string_view> pending_marker(const fs::path& exe_dir) {
+    for (const std::string_view marker : {kRollbackFailedMarker, kReplacingMarker}) {
+        std::error_code ec;
+        if (fs::exists(fs::symlink_status(exe_dir / marker, ec)))
+            return marker;
+    }
+    return std::nullopt;
+}
+
+// Değiştirme işaretini kaldırır. Kaldırılamazsa loglanır: kalan işaret sonraki kurulumu ve temizliği durdurur.
+void remove_replacing_marker(const fs::path& exe_dir) {
+    std::error_code ec;
+    fs::remove(exe_dir / kReplacingMarker, ec);
+    if (ec)
+        core::log_error("event=update_replacing_marker_not_removed detail=\"" + ec.message() + "\"");
+}
+
 std::expected<void, core::Error> replace_installed(const fs::path& exe_dir, const fs::path& new_root,
                                                    const ReleaseInfo& release, const ZipInstallOps& ops) {
+    // İlk ad değişikliğinden önce: süreç değiştirmenin ortasında ölürse açılış temizliği yedeklere (*.old)
+    // dokunmaz, sonraki kurulum başlamaz. Yazılamazsa değiştirme başlamaz.
+    if (const core::FileWriteResult marked =
+            core::write_new_file(exe_dir / kReplacingMarker, release.version + "\n");
+        marked.ec)
+        return std::unexpected(io_error(exe_dir / kReplacingMarker, marked.ec));
     std::vector<ReplaceStep> steps;
     std::optional<core::Error> failure;
     for (const std::string_view item : replaced_items()) {
@@ -549,18 +583,26 @@ std::expected<void, core::Error> replace_installed(const fs::path& exe_dir, cons
         }
         steps.back().moved_in = true;
     }
-    if (!failure)
+    if (!failure) {
+        remove_replacing_marker(exe_dir);
         return {};
-    if (roll_back(steps, ops))
+    }
+    if (roll_back(steps, ops)) {
+        remove_replacing_marker(exe_dir);
         return std::unexpected(std::move(*failure));
+    }
 
     // Yedekler (*.old) tek kurtarma yoludur: işaret varken temizlik ve yeni güncelleme onlara dokunmaz.
+    // Kalıcı işaret yazıldıysa değiştirme işareti gereksizdir (kullanıcı tek dosya siler); yazılamadıysa
+    // değiştirme işareti korumayı sürdürür.
     core::log_error(std::format("event=update_rollback_failed dir=\"{}\" cause={} cause_args=\"{}\"",
                                 to_utf8(exe_dir), failure->message_key, args_text(*failure)));
     if (const core::FileWriteResult marked =
             core::write_new_file(exe_dir / kRollbackFailedMarker, failure->message_key + "\n");
         marked.ec && !marked.already_exists)
         core::log_error("event=update_rollback_marker_failed detail=\"" + marked.ec.message() + "\"");
+    else
+        remove_replacing_marker(exe_dir);
     return std::unexpected(install_error("update.rollback_failed",
                                          {{"path", to_utf8(exe_dir)}, {"url", release_page_url(release)}}));
 }
@@ -572,6 +614,71 @@ std::string_view trim_line_end(std::string_view text) {
 }
 
 }  // namespace
+
+#ifdef _WIN32
+
+std::expected<InstallLock, core::Error> InstallLock::try_acquire(const fs::path& dir) {
+    const fs::path file = dir / kInstallLockName;
+    // Paylaşım 0: tutulurken başka hiçbir açış (bu süreçteki dahil) geçmez. Tutamaç kapanınca (süreç ölümü
+    // dahil) dosya silinir.
+    HANDLE handle = CreateFileW(file.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE, 0, nullptr, OPEN_ALWAYS,
+                                FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        const DWORD error = GetLastError();
+        if (error == ERROR_SHARING_VIOLATION)
+            return std::unexpected(install_error("update.install_busy", {{"path", to_utf8(dir)}}));
+        return std::unexpected(
+            io_error(file, std::error_code(static_cast<int>(error), std::system_category())));
+    }
+    return InstallLock(handle);
+}
+
+InstallLock::InstallLock(InstallLock&& other) noexcept : handle_(std::exchange(other.handle_, nullptr)) {}
+
+InstallLock::~InstallLock() {
+    if (handle_ != nullptr)
+        CloseHandle(handle_);
+}
+
+#else
+
+std::expected<InstallLock, core::Error> InstallLock::try_acquire(const fs::path& dir) {
+    const fs::path file = dir / kInstallLockName;
+    // Bırakan sahip dosyayı siler: kilitlenen tanım yoldaki dosya değilse (araya silme girdi) yeniden açılır.
+    // Deneme sayısı kapasite değil, aynı anlık yarışın tekrarına karşı pay.
+    for (int attempt = 0; attempt < kStagingAttempts; ++attempt) {
+        const int fd = ::open(file.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, S_IRUSR | S_IWUSR);
+        if (fd < 0)
+            return std::unexpected(io_error(file, std::error_code(errno, std::generic_category())));
+        if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+            const int error = errno;
+            ::close(fd);
+            if (error == EWOULDBLOCK)
+                return std::unexpected(install_error("update.install_busy", {{"path", to_utf8(dir)}}));
+            return std::unexpected(io_error(file, std::error_code(error, std::generic_category())));
+        }
+        struct stat locked{};
+        struct stat current{};
+        if (::fstat(fd, &locked) == 0 && ::lstat(file.c_str(), &current) == 0 &&
+            locked.st_dev == current.st_dev && locked.st_ino == current.st_ino)
+            return InstallLock(fd, file);
+        ::close(fd);
+    }
+    return std::unexpected(install_error("update.install_busy", {{"path", to_utf8(dir)}}));
+}
+
+InstallLock::InstallLock(InstallLock&& other) noexcept
+    : fd_(std::exchange(other.fd_, -1)), file_(std::move(other.file_)) {}
+
+InstallLock::~InstallLock() {
+    if (fd_ < 0)
+        return;
+    // Kilit tutulurken silinir: sonra açan yeni dosyayı kilitler, eski tanımı tutan yeniden dener.
+    ::unlink(file_.c_str());
+    ::close(fd_);
+}
+
+#endif
 
 std::expected<void, core::Error> remove_tree(const fs::path& path) {
     std::error_code ec;
@@ -676,16 +783,22 @@ InstallResult install_update(const InstallTarget& target, const ReleaseInfo& rel
 void cleanup_after_update(const InstallTarget& target) {
     switch (target.kind) {
     case InstallKind::WindowsZip: {
-        std::error_code ec;
-        if (!fs::exists(fs::symlink_status(target.path / kRollbackFailedMarker, ec)))
-            for (const std::string_view item : replaced_items())
-                static_cast<void>(remove_tree(target.path / old_name(item)));  // kullanımda: sonraki açılış
+        // Başka süreç kuruyor (kilit) ya da bir değiştirme yarıda kaldı (işaret): yedekler ve geçici dizin geri
+        // almanın ya da elle kurtarmanın malzemesidir.
+        const auto lock = InstallLock::try_acquire(target.path);
+        if (!lock || pending_marker(target.path))
+            break;
+        for (const std::string_view item : replaced_items())
+            static_cast<void>(remove_tree(target.path / old_name(item)));  // kullanımda: sonraki açılış
         remove_stale_staging(target.path, {kStagingPrefix});
         break;
     }
-    case InstallKind::LocalInstall:
-        remove_stale_staging(target.path.parent_path(), {kStagingPrefix, kScriptStagingPrefix});
+    case InstallKind::LocalInstall: {
+        const fs::path share = target.path.parent_path();
+        if (const auto lock = InstallLock::try_acquire(share); lock)
+            remove_stale_staging(share, {kStagingPrefix, kScriptStagingPrefix});
         break;
+    }
     case InstallKind::DirectAppImage:
     case InstallKind::Unsupported:
         break;
@@ -694,10 +807,16 @@ void cleanup_after_update(const InstallTarget& target) {
 
 InstallResult install_windows_zip(const fs::path& exe_dir, const ReleaseInfo& release, std::string_view bytes,
                                   const ZipInstallOps& ops, std::stop_token stop) {
+    // Önce kilit: süren başka bir kurulumun değiştirme işareti yarım kalmış sanılmasın. Geçici dizinden önce
+    // alınır, ondan sonra bırakılır.
+    const auto lock = InstallLock::try_acquire(exe_dir);
+    if (!lock)
+        return std::unexpected(lock.error());
+    if (const auto marker = pending_marker(exe_dir))
+        return std::unexpected(install_error("update.rollback_pending", {{"path", to_utf8(exe_dir)},
+                                                                         {"url", release_page_url(release)},
+                                                                         {"marker", std::string(*marker)}}));
     std::error_code ec;
-    if (fs::exists(fs::symlink_status(exe_dir / kRollbackFailedMarker, ec)))
-        return std::unexpected(install_error(
-            "update.rollback_pending", {{"path", to_utf8(exe_dir)}, {"url", release_page_url(release)}}));
     auto staging = StagingDir::create(exe_dir);
     if (!staging)
         return std::unexpected(std::move(staging.error()));

@@ -7,6 +7,7 @@
 #include "core/process.hpp"
 #include "support/test_support.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <doctest/doctest.h>
@@ -36,6 +37,9 @@ using noteapp::app::install_windows_zip;
 using noteapp::app::InstallKind;
 using noteapp::app::InstallOutcome;
 using noteapp::app::InstallTarget;
+using noteapp::app::InstallLock;
+using noteapp::app::kInstallLockName;
+using noteapp::app::kReplacingMarker;
 using noteapp::app::kRollbackFailedMarker;
 using noteapp::app::kWindowsPackageMarker;
 using noteapp::app::ReleaseInfo;
@@ -146,7 +150,7 @@ TEST_CASE("update install: every error key the installer produces has a catalog 
               "update.link_not_updated", "update.package_layout", "update.version_mismatch",
               "update.extract_failed", "update.old_in_use", "update.replace_failed",
               "update.rollback_failed", "update.rollback_pending", "update.install_timeout",
-              "update.output_too_large"}) {
+              "update.output_too_large", "update.install_busy"}) {
             CAPTURE(language);
             CAPTURE(key);
             CHECK(noteapp::core::tr(key) != key);
@@ -868,3 +872,106 @@ TEST_CASE("update install: a stop request before the swap leaves the Windows ins
         fixture.check_unchanged();
     }
 }
+
+// --- Süreçler arası güvenlik: kurulum kilidi ve değiştirme işareti ---
+
+TEST_CASE("update install: cleanup keeps the backups while another process holds the install lock") {
+    ZipFixture fixture;
+    REQUIRE(fixture.install().has_value());
+    REQUIRE(fs::exists(fixture.exe_dir / "note.exe.old"));
+    {
+        const auto lock = InstallLock::try_acquire(fixture.exe_dir);  // başka sürecin süren kurulumu
+        REQUIRE(lock.has_value());
+        cleanup_after_update(InstallTarget{InstallKind::WindowsZip, fixture.exe_dir});
+        for (const char* old : kOldFiles)
+            CHECK(fs::exists(fixture.exe_dir / old));
+    }
+    cleanup_after_update(InstallTarget{InstallKind::WindowsZip, fixture.exe_dir});
+    for (const char* old : kOldFiles)
+        CHECK_FALSE(fs::exists(fixture.exe_dir / old));
+    CHECK_FALSE(fs::exists(fixture.exe_dir / kInstallLockName));  // kilit iz bırakmaz
+}
+
+TEST_CASE("update install: cleanup keeps the backups and staging while a replacing marker is left") {
+    ZipFixture fixture;
+    REQUIRE(fixture.install().has_value());
+    write(fixture.exe_dir / kReplacingMarker, "2.0.0\n");  // değiştirmenin ortasında ölmüş süreç
+#ifndef _WIN32
+    fs::create_directories(fixture.exe_dir / ".noteapp-update-stale");
+    fs::last_write_time(fixture.exe_dir / ".noteapp-update-stale",
+                        fs::file_time_type::clock::now() - std::chrono::hours(2));
+#endif
+    cleanup_after_update(InstallTarget{InstallKind::WindowsZip, fixture.exe_dir});
+    for (const char* old : kOldFiles)
+        CHECK(fs::exists(fixture.exe_dir / old));
+#ifndef _WIN32
+    CHECK(fs::exists(fixture.exe_dir / ".noteapp-update-stale"));
+#endif
+}
+
+TEST_CASE("update install: a second installer of the same directory is refused as busy") {
+    ZipFixture fixture;
+    const auto lock = InstallLock::try_acquire(fixture.exe_dir);
+    REQUIRE(lock.has_value());
+    CHECK(error_key(InstallLock::try_acquire(fixture.exe_dir)) == "update.install_busy");
+    const auto result = fixture.install();
+    REQUIRE(error_key(result) == "update.install_busy");
+    CHECK(arg(result.error(), "path") == noteapp::test::utf8(fixture.exe_dir));
+    CHECK_FALSE(fixture.extracted);
+    fixture.check_unchanged();
+}
+
+TEST_CASE("update install: a replacing marker left by a killed update blocks the next install") {
+    ZipFixture fixture;
+    write(fixture.exe_dir / kReplacingMarker, "2.0.0\n");
+    const auto result = fixture.install();
+    REQUIRE(error_key(result) == "update.rollback_pending");
+    CHECK(arg(result.error(), "marker") == std::string(kReplacingMarker));
+    CHECK(fixture.rename_log.empty());
+    CHECK(slurp(fixture.exe_dir / "note.exe") == "old note");
+}
+
+TEST_CASE("update install: the replacing marker exists exactly while the Windows swap runs") {
+    SUBCASE("success removes it") {
+        ZipFixture fixture;
+        ZipInstallOps ops = fixture.ops();
+        const auto rename = ops.rename;
+        std::vector<bool> marked;
+        ops.rename = [&](const fs::path& from, const fs::path& to) {
+            marked.push_back(fs::exists(fixture.exe_dir / kReplacingMarker));
+            return rename(from, to);
+        };
+        REQUIRE(install_windows_zip(fixture.exe_dir, release("2.0.0"), "zip bytes", ops, {}).has_value());
+        REQUIRE_FALSE(marked.empty());
+        CHECK(std::ranges::all_of(marked, [](bool is_marked) { return is_marked; }));
+        CHECK_FALSE(fs::exists(fixture.exe_dir / kReplacingMarker));
+    }
+    SUBCASE("a complete rollback removes it") {
+        ZipFixture fixture;
+        fixture.failing_renames = {{"new/licenses", "licenses"}};
+        CHECK(error_key(fixture.install()) == "update.replace_failed");
+        CHECK_FALSE(fs::exists(fixture.exe_dir / kReplacingMarker));
+        fixture.check_unchanged();
+    }
+}
+
+#ifndef _WIN32
+TEST_CASE("update install: a local install is refused as busy while another holds the lock") {
+    LocalHome local;
+    const fs::path running = local.add_version("1.0.0", true);
+    fs::create_symlink(local.share / "1.0.0/AppRun", local.bin / "note");
+    const InstallTarget target = detect_install_target(running / "usr/bin/note", local.env());
+    REQUIRE(target.kind == InstallKind::LocalInstall);
+    const auto lock = InstallLock::try_acquire(local.share);
+    REQUIRE(lock.has_value());
+    CHECK(error_key(install_update(target, release("2.0.0"), fake_appimage("2.0.0"), limits(), {})) ==
+          "update.install_busy");
+    CHECK(fs::read_symlink(local.bin / "note") == local.share / "1.0.0/AppRun");
+
+    fs::create_directories(local.share / ".noteapp-update-stale");
+    fs::last_write_time(local.share / ".noteapp-update-stale",
+                        fs::file_time_type::clock::now() - std::chrono::hours(2));
+    cleanup_after_update(target);
+    CHECK(fs::exists(local.share / ".noteapp-update-stale"));  // kilit tutulurken dokunulmaz
+}
+#endif

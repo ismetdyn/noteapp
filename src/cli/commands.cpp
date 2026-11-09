@@ -957,6 +957,8 @@ int run_reserved(const ParsedArgs& args, const core::Config& config) {
         return run_prop(args, config);
     if (args.command == "import")
         return run_import(args, config);
+    if (args.command == "update")
+        return run_update(args, config);
     if (args.command == "completion")
         return run_completion(args);
     if (args.command == kCompleteCommand)

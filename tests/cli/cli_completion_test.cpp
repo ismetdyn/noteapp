@@ -16,9 +16,9 @@ using namespace noteapp::test;
 namespace {
 
 // Testin bağımsız kahini: kullanıcıya açık her alt komut. Tablo (command_table.hpp) buradan sapınca düşer.
-constexpr std::array<std::string_view, 15> kCommands = {"ls",    "find",  "show", "edit",   "rm",
-                                                        "mv",    "export", "sync", "config", "query",
-                                                        "graph", "tags",  "view", "import", "completion"};
+constexpr std::array<std::string_view, 16> kCommands = {
+    "ls",    "find", "show", "edit",   "rm",     "mv",     "export",     "sync",
+    "config", "query", "graph", "tags", "view", "import", "update", "completion"};
 
 std::vector<std::string> lines_of(const std::string& text) {
     std::vector<std::string> lines;

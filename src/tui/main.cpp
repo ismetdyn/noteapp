@@ -2,6 +2,7 @@
 #include "app/import_files.hpp"
 #include "app/sync_status_worker.hpp"
 #include "app/ui_args.hpp"
+#include "app/update_worker.hpp"
 #include "core/config.hpp"
 #include "core/console.hpp"
 #include "core/dll_search.hpp"
@@ -1329,6 +1330,7 @@ int main(int argc, char** argv) {
     core::init_log(loaded.config.tuning.log_max_bytes);
     for (const auto& warning : loaded.warnings)
         core::log_warn(core::format_error(warning));
+    app::cleanup_previous_update();  // önceki güncellemenin artıkları
 
     const app::UiArgs args = app::parse_ui_args(core::utf8_arguments(argc, argv), true);
     std::optional<Opening> opening;

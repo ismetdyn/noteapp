@@ -26,6 +26,7 @@ add_library(noteapp_app
     trash_ops.cpp
     ui_prefs.cpp
     update_install.cpp
+    update_worker.cpp
     updater.cpp)
 if(WIN32)
     target_sources(noteapp_app PRIVATE update_install_win.cpp)

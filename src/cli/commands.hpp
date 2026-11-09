@@ -61,6 +61,8 @@ int run_prop(const ParsedArgs& args, const core::Config& config);
 int run_relation_prop(std::span<const std::string> rest, const core::Config& config);
 // `note relation ls NOT`un kimliği (32 küçük ya da büyük hex); başka metin nullopt.
 std::optional<core::RelationId> relation_id_from_hex(std::string_view text);
+// args.rest: [--check] [--yes] (commands_update.cpp; SPEC-cli "Güncelleme").
+int run_update(const ParsedArgs& args, const core::Config& config);
 // args.rest: zsh | bash | fish. Tamamlama betiğini stdout'a yazar (commands_complete.cpp).
 int run_completion(const ParsedArgs& args);
 // args.rest: TÜR [ÖNEK]. Kabuk betiklerinin gizli yardımcısı: adayları satır satır yazar, salt okur.

@@ -1,3 +1,4 @@
+#include "app/update_worker.hpp"
 #include "cli/args.hpp"
 #include "cli/command_table.hpp"
 #include "cli/commands.hpp"
@@ -47,6 +48,11 @@ int main(int argc, char** argv) {
         if (!silent)
             std::fprintf(stderr, "%s\n", cli::sanitize_for_terminal(message).c_str());
     }
+
+    // Önceki güncellemenin artıkları (Windows *.old, bayat geçici dizinler). Kabuk tamamlaması her Tab'da
+    // çalışır: kurulum dizinine dokunmaz.
+    if (!(reserved && args.command == cli::kCompleteCommand))
+        app::cleanup_previous_update();
 
     int code = cli::kExitInternal;
     // Bellek biterse yığın sarmalanır, işlem geri alınır; çıkış terminate değil.

@@ -32,6 +32,7 @@ Terminalden saniyeler içinde not eklemek ve notları betiklenebilir biçimde y�
 | `note graph export --format jsonl [-o DOSYA]`, `note graph import [--overwrite] DOSYA` | Tüm graph'ı JSON satırları olarak çıkar ya da yükle; satırın JSON kuralları ve sınırları SPEC-graph "Sınırlar" (bilinmeyen alanda `null` kabul). İçe aktarma satır aralarında işlemlere bölünür; bir satır tek işlemdir (ya hepsi ya hiç): çerçeveden (`limits.graph.frame_ops`, `frame_bytes`) büyük satır reddedilmez; yineleme işlem yazmaz |
 | `note export --all DİZİN` | Tüm notları bayt bayt düz dosya olarak çıkar |
 | `note --help` · `note help KOMUT` · `note KOMUT -h\|--help` · `note --version` | Yardım (i18n, aşağıda "Yardım"); genel yardım komutları gruplu listeler |
+| `note update [--check] [--yes]` | Yeni sürümü denetler; varsa onayla indirir, doğrular ve kurar (aşağıda "Güncelleme") |
 | `note completion zsh\|bash\|fish` | Kabuk tamamlama betiğini stdout'a yazar (aşağıda "Kabuk tamamlama") |
 | `note -l` · `-s` · `-S` · `-E` · `-d` · `-m` · `-x` · `-T` · `-i` · `-a` · `note cat` | Komutların kısa bayrakları ve `show` eşi (aşağıda "Kısa komut bayrakları") |
 
@@ -187,6 +188,35 @@ olarak komuttur; kalan argümanlar o komutun ayrıştırıcısına aynen gider (
   token istenmez: görünür kalacağı söylenir, dosyadan ya da `NOTEAPP_GIT_TOKEN` ile verme önerilir, çıkış 1
   (`cli::read_hidden_line`).
 - `note sync --background`: iç kullanım (yukarıdaki ayrık süreç ve TUI/GUI `AutoSync`).
+
+## Güncelleme (UPD4)
+
+Mantık `app::UpdateWorker`dadır (TUI ve GUI aynı işçiyi kullanır): denetim `app::check_latest`, indirme
+`app::download_verified` (bellekte, SHA256SUMS ile), kurulum `app::install_update`. Güven modeli:
+`.engineering/adr/0001-update-trust-model.md`. Sınırlar `[limits.update]`.
+
+- `note update --check`: yalnız denetler, hiçbir şey indirmez. stdout'a `noteapp X güncel (son sürüm: Y)` ya da
+  `noteapp Y çıktı (kurulu: X)`; ikisi de çıkış 0. Kendini güncelleyemeyen kurulumda (kaynaktan derleme, sistem
+  geneli, salt okunur) ikinci satır release sayfasıdır (çıkış 0).
+- `note update`: denetler; güncelse çıkış 0, hiçbir şey sorulmaz. Yeni sürüm varsa stdout'a yazar, TTY'de
+  `noteapp Y kurulsun mu? [e/H]` sorar (yanıt `rm`deki gibi tek yerelleştirilmiş evet harfi; başka her şey ve dosya
+  sonu ret, çıkış 1), sonra indirir, doğrular ve kurar; başarıda `noteapp Y kuruldu`, Windows'ta ayrıca "yeniden
+  başlatın" satırı. stderr TTY ise denetim, indirme ve kurulum sırasında tek satırlık ilerleme ("İlerleme").
+- `--yes` (`-y`) sormadan kurar. stdin TTY değilken `--yes` yoksa kurulum reddedilir, çıkış 1 ve `--yes`
+  yönlendirmesi: asla sessiz kurulum yok.
+- Kendini güncelleyemeyen kurulum: `--check`siz çağrı bunu ve release sayfasını stderr'e yazar, çıkış 1.
+- Ağ, rate limit, doğrulama (SHA-256, sürüm) ve kurulum hatası: stderr'de neden, çıkış 3; kurulu sürüm değişmez.
+  Aynı kurulum dizininde başka bir güncelleme sürüyorsa (başka süreç; `app::InstallLock`, yerel kurulumda
+  `<share>`, Windows'ta exe dizini) kurulum başlamaz: "başka bir güncelleme sürüyor", çıkış 3.
+- Ctrl-C denetimi ve indirmeyi iptal eder: hiçbir şey kurulmaz, çıkış 130. Kurulum değiştirmeye başladıktan sonra
+  iptal yok sayılır ve kurulum biter (yarım kurulum kalmaz). Onay isteminde Ctrl-C süreci her zamanki gibi bitirir.
+  Denetim bittikten sonra gelmiş Ctrl-C onaylanan kurulumu iptal etmez. SIGINT devralınmış olarak yok sayılıyorsa
+  (`nohup`, arka plan işi) öyle kalır.- Tamamlanan denetim zamanı ve görülen sürümü `<durum dizini>/update-state.toml`a yazar (TUI/GUI'nin açılış denetimi
+  aralığı buradan sayılır); hata ve iptal yazmaz.
+- Üç arayüz açılışta bir kez önceki güncellemenin artıklarını siler (Windows `*.old`, bayat geçici dizinler;
+  `app::cleanup_previous_update`); kabuk tamamlaması (`__complete`) silmez. Başka süreç kurarken (kilit) ya da
+  yarım kalmış bir Windows değiştirmesinin işareti (`.noteapp-update-replacing`, `.noteapp-rollback-failed`)
+  dururken hiçbir şeye dokunulmaz; işaret dururken sonraki kurulum da başlamaz.
 
 ## PDF dışa aktarma
 
@@ -397,3 +427,7 @@ Etkileşimli seçici (fzf benzeri seçim TUI'nin işi), `mkdir/rmdir` komutları
   `--json`, çıkış kodları ve "depo yok" iletisi aynı.
 - **FIXED** (SD9 inceleme) `find -n N` süzgeçten sonra keser: önce kesildiğinde süzülen isabet yerini harcıyor, `find kelime type:txt -n 1`
   .txt eşleşmesi varken boş dönüyordu. `ls -l -0` NUL akışına ilişki satırı yazmaz. Bozuk argüman iletisi sütunu söyler.
+
+## Değişiklik 2026-11-09 (UPD4 güncelleme komutu)
+- **ADDED** `note update [--check] [--yes]` ("Güncelleme"). `update` artık ayrılmış sözcüktür: `note update` not
+  eklemez (önceden "update" metinli not kaydederdi; `note -a update` hâlâ ekler). Yeni çıkış kodu yok.

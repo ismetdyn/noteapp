@@ -8,11 +8,13 @@ add_executable(note
     commands_import.cpp
     commands_props.cpp
     commands_query.cpp
+    commands_update.cpp
     commands_view.cpp
     help.cpp
     pager.cpp
     sync_commands.cpp
-    term.cpp)
+    term.cpp
+    update_flow.cpp)
 target_include_directories(note PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(note PRIVATE noteapp_app noteapp_core noteapp_detect noteapp_search noteapp_sync noteapp_pdf noteapp_graph)
 noteapp_target_defaults(note)

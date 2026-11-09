@@ -94,3 +94,21 @@ TEST_CASE("notices: a lifetime beyond the clock's range never expires and never 
     CHECK_FALSE(late.next_deadline().has_value());
     CHECK_FALSE(late.expire(Clock::time_point::max()));
 }
+
+TEST_CASE("notices: an update notice carries the version to install; other notices carry none") {
+    NoticeQueue queue(kLife);
+    const Clock::time_point start{};
+    queue.post(NoticeKind::Info, "senkron bitti", start);
+    queue.post_update("noteapp 1.3.0 hazır", "1.3.0", start);
+    REQUIRE(queue.items().size() == 2);
+    CHECK_FALSE(queue.items().front().update_version.has_value());
+    const auto& update = queue.items().back();
+    CHECK(update.kind == NoticeKind::Info);
+    CHECK(update.update_version == "1.3.0");
+    CHECK_FALSE(update.folder.has_value());
+
+    queue.post_update("noteapp 1.3.0 hazır", "1.3.0", start + milliseconds(5));  // aynı metin: yığılmaz
+    REQUIRE(queue.items().size() == 2);
+    CHECK(queue.items().back().repeats == 2);
+    CHECK(queue.items().back().update_version == "1.3.0");
+}

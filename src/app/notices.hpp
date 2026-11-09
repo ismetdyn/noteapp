@@ -21,6 +21,7 @@ struct Notice {
     std::chrono::steady_clock::time_point posted;  // son yineleme anı: süre buradan sayılır
     std::size_t repeats = 1;                       // aynı tür ve metin üst üste gelince artar
     std::optional<std::string> folder;             // "Klasörü aç" eylemi (dışa aktarma)
+    std::optional<std::string> update_version;     // "Güncelle" eylemi: kurulabilecek yeni sürüm (UPD5)
 };
 
 // Bildirim kuyruğu: en yeni sonda. Bilgi ve başarı `tuning.notice_ms` sonra düşer, hata kapatılana dek kalır
@@ -43,6 +44,8 @@ public:
 
     void post(NoticeKind kind, std::string text, Clock::time_point now,
               std::optional<std::string> folder = std::nullopt);
+    // Yeni sürüm bildirimi (Info): arayüz `update_version` ile kurulum onayını açar.
+    void post_update(std::string text, std::string version, Clock::time_point now);
     void dismiss(std::uint64_t id);
     void dismiss_all(NoticeKind kind);  // TUI: sonraki tuş hatayı kapatır
     // Süresi dolanları düşürür; bir şey düştüyse true (yeniden çiz).
@@ -52,6 +55,8 @@ public:
     const std::vector<Notice>& items() const { return items_; }
 
 private:
+    void add(NoticeKind kind, std::string text, Clock::time_point now, std::optional<std::string> folder,
+             std::optional<std::string> update_version);
     bool expires(const Notice& notice) const;
     // Düşme anı; süre saatin kalanını aşarsa (taşma) boş: kendiliğinden kapanmaz.
     std::optional<Clock::time_point> due(const Notice& notice) const;
