@@ -574,10 +574,12 @@ Release sözleşmesi: tag `vX.Y.Z`; varlıklar `noteapp-X.Y.Z-x86_64.AppImage`, 
 
 ## PDF — PDF önizleme (kullanıcı onayı 2026-11-08)
 Kararlar: kütüphane MuPDF (AGPL-3.0; GPL-3.0-or-later ile birleşir, paket lisansları ve README buna göre); kapsam: GUI sayfa görüntüsü (kaydırma, yakınlaştırma, sayfa no), TUI ve CLI metin (`note show x.pdf` metni yazar, sayfa ayırıcılarıyla), arama PDF metnini de bulur. Mantık çekirdekte. Güvenilmeyen girdi: senkronla gelen PDF — sayfa sayısı/boyut/süre/bellek sınırları config'te (0 = sınırsız), çizim/ayrıştırma UI iş parçacığını bloklamaz.
-- [ ] PDF1 MuPDF bağımlılığı + çekirdek (`src/docs/pdf_view*` ya da uygun modül): aç, sayfa sayısı, sayfa metni, sayfayı RGBA'ya çiz (ölçekli), hatalar `core::Error`; Linux + windows-cross derlemesi + DLL kapısı; lisans dosyaları; testler (geçerli PDF, bozuk PDF, şifreli PDF, büyük sayfa sınırı).
+- [x] PDF1 MuPDF bağımlılığı + çekirdek (`src/docs/pdf_view*` ya da uygun modül): aç, sayfa sayısı, sayfa metni, sayfayı RGBA'ya çiz (ölçekli), hatalar `core::Error`; Linux + windows-cross derlemesi + DLL kapısı; lisans dosyaları; testler (geçerli PDF, bozuk PDF, şifreli PDF, büyük sayfa sınırı).
   Durum (2026-11-09): `feat/pdf1-core` 66b6b79 — üç review turu (süre/iptal + MuPDF abort yaması, hata metni sızıntısı, UTF-8 temizliği, bellek başlığı, z_errmsg çakışması); merge EDİLMEDİ: `fz_load_page` bağlantı hedefi araması iptal edilemiyor (Sev-2).
   Karar (kullanıcı 2026-11-09): PDF ayrıştırma ayrı, öldürülebilir süreçte (yardımcı süreç); süre/iptal = süreci öldür, MuPDF bellek hatası uygulamayı çökertmez. AppImage boyut artışı (~+7,5 MB) kabul. Tasarım: cpp-architect → PDF1b.
-- [ ] PDF1b yardımcı süreç yalıtımı (Depends: PDF1, mimari tasarım).
+- [x] PDF1b yardımcı süreç yalıtımı (Depends: PDF1, mimari tasarım).
+  Kanıt: merge 81e4bd7; Linux 20/20 (pdfview 40 test), pdfview 20× yük altında, ASan/UBSan (F2 öncesi), Wine 17/17 (F2'de); kill sınırlı fixture'lar (fan-out, ObjStm /N, link lookup) kill kapalıyken 120 sn timeout; 5 ebeveyn denetimi mutasyonla düşüyor; cpp + security review. ADR 0002.
+- [ ] PDF-SBX yardımcı süreç sandbox'ı (ADR 0002): Linux seccomp/Landlock, Windows kısıtlı token + job sınırları, env allowlist, devralınan fd kapatma (`core/log.cpp:99`, `tui/main.cpp:391` CLOEXEC'siz ofstream). PDF2/PDF3 senkronla gelen PDF'i otomatik açmadan önce.
 - [ ] PDF2 CLI + arama: `note show` PDF metni; içerik dizini PDF metnini indeksler (sınırlı).
 - [ ] PDF3 GUI + TUI önizleme: GUI sayfa görüntüleri (ImGui doku, tembel çizim, önbellek sınırı), TUI metin görünümü; belgeler.
 - [ ] PDF4 security-reviewer (güvenilmeyen PDF ayrıştırma) + bağımsız review.
