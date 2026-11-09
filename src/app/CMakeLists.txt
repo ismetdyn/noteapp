@@ -27,7 +27,7 @@ add_library(noteapp_app
     ui_prefs.cpp)
 target_include_directories(noteapp_app PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(noteapp_app PUBLIC noteapp_core noteapp_search noteapp_sync noteapp_detect
-    PRIVATE noteapp_pdf tomlplusplus::tomlplusplus)
+    PRIVATE noteapp_pdf noteapp_net tomlplusplus::tomlplusplus)
 # Durum dosyaları (ui_prefs.cpp) ve sekmelerin `[[tabs]]` bloğu (tabs.cpp): ayrıştırma hatası parse_result ile
 # döner (config.cpp ile aynı mod).
 target_compile_definitions(noteapp_app PRIVATE TOML_EXCEPTIONS=0)

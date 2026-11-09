@@ -65,7 +65,7 @@ add_compiled_source_notices() {
                     printf "%s\nFiles:\n%s\n", order[i], files[order[i]]
             }' >"$notices"
     done
-    for component in sdl3 libgit2 libharu sqlite; do
+    for component in sdl3 libgit2 libharu sqlite curl; do
         [[ -s "$licenses/$component/SOURCE-NOTICES.txt" ]] || die "no compiled source notices for $component"
     done
     # SQLite'ın lisans dosyası yoktur: kamu malı bildirimi yalnız kaynağın başındadır.
@@ -135,4 +135,6 @@ add_static_component_licenses() {
     # xdiff COPYING'de geçmez; LGPL-2.1 bildirimi yalnız kaynak başlığındadır.
     add_license libgit2-xdiff "$deps/libgit2-src/deps/xdiff/xdiff.h"
     add_license libgit2-xdiff "$deps/libgit2-src/deps/winhttp/COPYING.LGPL"
+    # curl lisansı (MIT türevi); derlenen dosyaların bildirimleri curl/SOURCE-NOTICES.txt'te.
+    add_license curl "$deps/curl-src/COPYING"
 }

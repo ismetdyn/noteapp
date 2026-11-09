@@ -158,6 +158,53 @@ target_compile_options(noteapp_sqlite PRIVATE $<IF:$<C_COMPILER_ID:MSVC>,/w,-w>)
 find_package(Threads REQUIRED)
 target_link_libraries(noteapp_sqlite PUBLIC Threads::Threads)
 
+# HTTPS istemcisi (`noteapp_net`, yalnız güncelleme denetimi). Arşiv curl.se'nin yayımladığı SHA256 ile ve Daniel
+# Stenberg'in imzasıyla (27EDEAF22F3ABCEB50DB9A125CC908FDB71E12C2) doğrulandı. Blok libharu'dan sonradır: libgit2'nin
+# cache'e yazdığı C90'ı yukarıdaki C99 gölgeler.
+# Ayarlar cache değişkeni: curl'ün CA ve bağımlılık seçenekleri option() değil set(CACHE)'tir (CMP0126 eski
+# davranışı normal değişkeni siler); tümü tek biçimde cache'tedir. BUILD_SHARED_LIBS/BUILD_EXAMPLES yukarıda OFF.
+set(BUILD_CURL_EXE OFF CACHE BOOL "")
+set(BUILD_TESTING OFF CACHE BOOL "")
+set(BUILD_LIBCURL_DOCS OFF CACHE BOOL "")
+set(BUILD_MISC_DOCS OFF CACHE BOOL "")
+set(ENABLE_CURL_MANUAL OFF CACHE BOOL "")
+set(CURL_DISABLE_INSTALL ON CACHE BOOL "")
+# Yalnız HTTP(S): 8.23.0 HTTP_ONLY seçeneğini kaldırdı (RELEASE-NOTES "build: drop HTTP_ONLY option"); diğer
+# protokoller tek tek kapatılır. Çalışma anında da CURLOPT_PROTOCOLS_STR=https (src/net/http.cpp).
+foreach(_curl_protocol IN ITEMS DICT FILE FTP GOPHER IMAP IPFS LDAP MQTT POP3 RTSP SMTP TELNET TFTP WEBSOCKETS)
+    set(CURL_DISABLE_${_curl_protocol} ON CACHE BOOL "")
+endforeach()
+# Kimlik bilgisi ve durum taşıyan özellikler kullanılmaz: ~/.netrc okunmaz, çerez motoru yoktur.
+set(CURL_DISABLE_NETRC ON CACHE BOOL "")
+set(CURL_DISABLE_COOKIES ON CACHE BOOL "")
+# zlib kapalı: sistem zlib'i libgit2'nin gömülü zlib'iyle aynı sembolleri farklı sürümden taşırdı (libharu
+# bloğundaki gerekçe). Diğerleri ek bağımlılık ve saldırı yüzeyidir; GitHub API'si için gerekmez.
+set(CURL_ZLIB OFF CACHE STRING "")
+set(CURL_BROTLI OFF CACHE STRING "")
+set(CURL_ZSTD OFF CACHE STRING "")
+set(USE_NGHTTP2 OFF CACHE BOOL "")
+set(USE_LIBIDN2 OFF CACHE BOOL "")
+set(CURL_USE_LIBPSL OFF CACHE BOOL "")
+set(CURL_USE_LIBSSH2 OFF CACHE BOOL "")
+if(WIN32)
+    # Schannel: Windows sertifika deposu ve sistem güncellemeleri; libgit2'nin WinHTTP'si gibi ek kütüphane yok.
+    set(CURL_USE_SCHANNEL ON CACHE BOOL "")
+    set(CURL_USE_OPENSSL OFF CACHE BOOL "")
+else()
+    set(CURL_USE_OPENSSL ON CACHE BOOL "")
+    # Derleme makinesinin CA yolu ikiliye gömülmez: OpenSSL'in varsayılanı (SSL_CERT_FILE/SSL_CERT_DIR ortamı,
+    # yoksa OpenSSL'in kendi dizini) geçerlidir; AppImage'da packaging/linux/AppRun bunları host'a göre kurar.
+    set(CURL_CA_BUNDLE none CACHE STRING "")
+    set(CURL_CA_PATH none CACHE STRING "")
+    set(CURL_CA_FALLBACK ON CACHE BOOL "")
+endif()
+FetchContent_Declare(curl
+    URL https://github.com/curl/curl/releases/download/curl-8_23_0/curl-8.23.0.tar.gz
+    URL_HASH SHA256=e3de77cfa6367083c776a26647fc9f633b538c06c3baa73d931a252ac8f72b49
+    EXCLUDE_FROM_ALL
+    SYSTEM)
+FetchContent_MakeAvailable(curl)
+
 if(NOTEAPP_BUILD_GUI)
     # Not uygulaması ses, oyun kolu, kamera, GPU API'si kullanmaz: kapalı alt sistemler derleme süresini, çalışma zamanı
     # bağımlılığını ve saldırı yüzeyini küçültür. Dialog ve D-Bus açık kalır (portal dosya diyaloğu, sistem teması).

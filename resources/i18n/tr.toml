@@ -1138,6 +1138,16 @@ log_set_aside = "Bu cihazın günlüğü veritabanıyla uyuşmadı; {path} olara
 log_dir_not_regular = "'{path}' bir bağ ya da klasör değil (uzak bir commit onu dosyayla değiştirmiş olabilir). Notlarınız veritabanında güvende; kenara alın ya da depoda düzeltin, sonra yeniden eşitleyin"
 conflict_unresolved = "'{path}' çakışması çözülemedi ({detail}); iki sürüm de veritabanında duruyor, senkron sürüyor"
 
+# HTTPS indirmeleri (net::http_get; güncelleme denetimi). {detail} ağ kütüphanesinin kendi metnidir.
+[net]
+invalid_url = "İndirme adresi geçerli bir https:// adresi değil"
+https_only = "Yalnız kullanıcı adı ve parola içermeyen https:// adreslerine izin verilir (yönlendirmeden sonra da): '{url}'"
+cancelled = "{host} adresinden indirme iptal edildi"
+too_large = "{host} adresinden indirilen veri sınırı ({limit}) aşıyor"
+timeout = "{host} zamanında yanıt vermedi ({detail})"
+tls_failed = "{host} ile güvenli bağlantı doğrulanamadı ({detail}); indirme reddedildi"
+failed = "{host} bağlantısı başarısız ({detail})"
+
 [links]
 incoming = "Gelen ({count})"
 outgoing = "Giden ({count})"

@@ -63,8 +63,8 @@ cmake --build /build/release
 rm -rf /tmp/install
 cmake --install /build/release --prefix /tmp/install --strip
 
-# Yalnız Windows sistem DLLleri kabul edilir: başka bir DLL "kopyala-çalıştır"ı bozar. crypt32, version, winhttp, winmm
-# bilerek listede yok: KnownDLLs dışındadırlar, içe aktarma tablosundaysalar exe yanındaki kopya main öncesi yüklenir
+# Yalnız Windows sistem DLLleri kabul edilir: başka bir DLL "kopyala-çalıştır"ı bozar. crypt32, iphlpapi, version, winhttp,
+# winmm bilerek listede yok: KnownDLLs dışındadırlar, içe aktarma tablosundaysalar exe yanındaki kopya main öncesi yüklenir
 # (cmake/toolchains/mingw-delay-load.cmake).
 system_dlls="^(advapi32|bcrypt|gdi32|imm32|kernel32|msvcrt|ole32|oleaut32|rpcrt4|secur32|setupapi|shell32|shlwapi|user32|ws2_32)\.dll$"
 # PE biçimi: IMAGE_LOAD_CONFIG_DIRECTORY64.DependentLoadFlags 78. baytta; küçük uçlu 0x0800 = LOAD_LIBRARY_SEARCH_SYSTEM32.
@@ -106,7 +106,7 @@ assert_delay_loaded() {
     echo "$exe: $dll.dll loaded from System32 in its own process, no planted DLL ran"
 }
 
-# Exe yanına bırakılan sahte DLLler: DllMain "<dll>.planted" yazar. Prob aynı dört DLLi çağırır; kısıtsız kipi kontrol
+# Exe yanına bırakılan sahte DLLler: DllMain "<dll>.planted" yazar. Prob aynı beş DLLi çağırır; kısıtsız kipi kontrol
 # grubudur (sahteler gerçekten yüklenebiliyor mu), kısıtlı kipi ve gerçek ikililer hiç iz bırakmamalıdır.
 check_dll_planting() {
     local work=/tmp/dll-planting planted gui_run_seconds=10 tui_run_seconds=15
@@ -129,6 +129,7 @@ int stub(void) { return 0; }
 EOF
     cat >"$work/probe.cpp" <<EOF
 #include "core/dll_search.hpp"
+#include <iphlpapi.h>
 #include <timeapi.h>
 #include <wincrypt.h>
 #include <winhttp.h>
@@ -140,13 +141,15 @@ int main(int argc, char**) {
     timeGetTime();
     WinHttpCheckPlatform();
     CertCloseStore(nullptr, 0);
+    ULONG interfaces = 0;
+    GetNumberOfInterfaces(&interfaces);
     return 0;
 }
 EOF
     local delay_dir=/build/release/delay-load dll
     x86_64-w64-mingw32-g++ -std=c++23 -I/src/src -static "$work/probe.cpp" -o "$work/probe.exe" \
-        -L"$delay_dir" -lversion -lwinmm -lwinhttp -lcrypt32 -ldelayimp
-    for dll in version winmm winhttp crypt32; do
+        -L"$delay_dir" -lversion -lwinmm -lwinhttp -lcrypt32 -liphlpapi -ldelayimp
+    for dll in version winmm winhttp crypt32 iphlpapi; do
         sed "2,\$s/\$/=stub/" "$delay_dir/$dll.def" >"$work/$dll-fake.def"
         x86_64-w64-mingw32-gcc -shared -o "$work/$dll.dll" "$work/fake.c" "$work/$dll-fake.def"
     done
@@ -156,7 +159,7 @@ EOF
     wine probe.exe --unrestricted
     planted="$(find . -name "*.planted" | sort | tr "\n" " ")"
     echo "control, unrestricted search: $planted"
-    [[ "$(wc -w <<<"$planted")" -eq 4 ]] || die "control failed: Wine did not load the planted DLLs, the check proves nothing"
+    [[ "$(wc -w <<<"$planted")" -eq 5 ]] || die "control failed: Wine did not load the planted DLLs, the check proves nothing"
     rm -f ./*.planted
 
     wine probe.exe
@@ -255,7 +258,7 @@ for exe in note.exe notes.exe notes-gui.exe; do
 done
 for license in noteapp-icons/LICENSE-NoteappIcons.txt inter/LICENSE-Inter.txt jetbrains-mono/LICENSE-JetBrainsMono.txt \
     sdl3/LICENSE.txt sdl3/SOURCE-NOTICES.txt libgit2/COPYING libgit2/SOURCE-NOTICES.txt \
-    libharu/SOURCE-NOTICES.txt winpthreads/COPYING libstdc++/COPYING.RUNTIME; do
+    libharu/SOURCE-NOTICES.txt curl/COPYING curl/SOURCE-NOTICES.txt winpthreads/COPYING libstdc++/COPYING.RUNTIME; do
     [[ -s "$output_dir/licenses/$license" ]] || die "$output_dir/licenses/$license was not produced"
 done
 ls -l "$output_dir"

@@ -12,4 +12,7 @@ RUN dnf install -y gcc-c++ cmake ninja-build git patch \
 # scripts/check-sanitize.sh için ayrı katman: üstteki paket katmanını geçersiz kılmaz.
 RUN dnf install -y libasan libubsan && dnf clean all
 
+# tests/net: yerel HTTPS sunucusu (Python http.server) ve her koşuda üretilen test CA'sı (openssl CLI).
+RUN dnf install -y python3 openssl && dnf clean all
+
 WORKDIR /src

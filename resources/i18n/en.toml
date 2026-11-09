@@ -1136,6 +1136,16 @@ log_set_aside = "This device's log did not match its database; it was kept as {p
 log_dir_not_regular = "'{path}' is a link or not a folder (a remote commit may have replaced it with a file). Your notes are safe in the database; move it away or fix it in the repository, then sync again"
 conflict_unresolved = "The conflict on '{path}' could not be resolved ({detail}); both versions stay in the database and sync goes on"
 
+# HTTPS downloads (net::http_get; the update check). {detail} is the network library's own text.
+[net]
+invalid_url = "The download address is not a valid https:// address"
+https_only = "Only https:// addresses without a user name or password are allowed (also after redirects): '{url}'"
+cancelled = "The download from {host} was cancelled"
+too_large = "The download from {host} is larger than the limit ({limit})"
+timeout = "{host} did not answer in time ({detail})"
+tls_failed = "The secure connection to {host} could not be verified ({detail}); the download was refused"
+failed = "The connection to {host} failed ({detail})"
+
 [links]
 incoming = "Incoming ({count})"
 outgoing = "Outgoing ({count})"

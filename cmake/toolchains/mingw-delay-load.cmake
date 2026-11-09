@@ -1,13 +1,14 @@
 # Windows'ta bilinen DLL (KnownDLLs) olmayan sistem DLL'leri içe aktarma tablosunda kalırsa, exe'nin yanına bırakılan aynı
-# adlı DLL main'den önce yüklenir (DLL search-order hijack). Bu dört DLL gecikmeli yüklemeye alınır: ilk çağrıya kadar
+# adlı DLL main'den önce yüklenir (DLL search-order hijack). Bu beş DLL gecikmeli yüklemeye alınır: ilk çağrıya kadar
 # yüklenmezler, yüklenirken de main'in ilk satırındaki SetDefaultDllDirectories (src/core/dll_search.hpp) geçerlidir.
 # GNU ld'de /DELAYLOAD yok; dlltool --output-delaylib içe aktarma kütüphanesi üretir. Aynı adla öne konan -L dizini,
-# SDL3 ve libgit2'nin -lversion/-lwinmm/-lwinhttp/-lcrypt32 taleplerini link sırasına bakmadan buraya yönlendirir.
+# SDL3, libgit2 ve curl'ün -lversion/-lwinmm/-lwinhttp/-lcrypt32/-liphlpapi taleplerini link sırasına bakmadan buraya
+# yönlendirir (iphlpapi: curl'ün if_nametoindex'i, yalnız IPv6 bölge kimlikli adreste çağrılır).
 find_program(DLLTOOL dlltool REQUIRED)
 set(NOTEAPP_DELAY_LOAD_DIR ${CMAKE_BINARY_DIR}/delay-load)
 file(MAKE_DIRECTORY ${NOTEAPP_DELAY_LOAD_DIR})
 
-foreach(_dll IN ITEMS version winmm winhttp crypt32)
+foreach(_dll IN ITEMS version winmm winhttp crypt32 iphlpapi)
     # Dolu değişkende find_library aramaz: her turda sıfırlanır.
     unset(_import_library)
     find_library(_import_library NAMES lib${_dll}.a REQUIRED NO_CACHE)
