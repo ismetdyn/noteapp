@@ -60,6 +60,10 @@ enum class Key {
     AltP,
     CtrlPageDown,
     CtrlPageUp,
+    // Panel yakınlaştırma (pane.zoom): her odakta, editörde de; harf `z` metne aittir. Alt+Z (`ESC z`) önce:
+    // GNOME Terminal ve Konsole F11'i kendi tam ekranına ayırır.
+    AltZ,
+    F11,
     // Terminalden yapıştırılan metin (bracketed paste) tek olaydır; metni (satır sonları LF) handle()'a ayrıca
     // verilir. Tuş tuş gelseydi CRLF iki Enter, Tab öneri kabulü, harfler Listede kısayol olurdu.
     Paste,

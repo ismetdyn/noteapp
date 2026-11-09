@@ -356,10 +356,30 @@ void View::run_intents() {
     if (!intents.empty())
         frames_left_ = kFramesAfterEvent;
     import_pending();
+    apply_fullscreen();
     if (state_.take_quit_request())  // `quit`: pencere kapatmayla aynı yol (kaydedilmemiş iş sorulur)
         close_requested_ = true;
     // Kare dışında: Ayrıntılar'da konum değişimi listeyi süzer, kare içinde çizilen satırlar bozulmasın.
     state_.reveal_selection();
+}
+
+// F11 odak kipi (GuiState::toggle_focus_mode): girişte tam ekran, çıkışta kipten önceki hâl; pencere
+// yöneticisi tam ekranı zaten açtıysa açık kalır.
+void View::apply_fullscreen() {
+    const bool wanted = state_.fullscreen();
+    if (wanted == focus_fullscreen_)
+        return;
+    focus_fullscreen_ = wanted;
+    SDL_Window* window = platform_->window.get();
+    if (wanted)
+        fullscreen_before_ = window_fullscreen();
+    if (!SDL_SetWindowFullscreen(window, wanted || fullscreen_before_))
+        core::log_warn(std::string("event=window_fullscreen_failed detail=") + SDL_GetError());
+    frames_left_ = kFramesAfterEvent;
+}
+
+bool View::window_fullscreen() const {
+    return (SDL_GetWindowFlags(platform_->window.get()) & SDL_WINDOW_FULLSCREEN) != 0;
 }
 
 int View::idle_timeout_ms() const {

@@ -142,6 +142,9 @@ std::optional<Key> to_key(const ftxui::Event& event, std::string& text) {
                                               "n");
     static const Event alt_p = Event::Special("\x1B"
                                               "p");
+    // Alt+Z `ESC z`: FTXUI tek özel olay olarak iletir (ESC'den sonraki tek bayt), karakter değildir.
+    static const Event alt_z = Event::Special("\x1B"
+                                              "z");
     static const Event ctrl_page_down = Event::Special("\x1B[6;5~");
     static const Event ctrl_page_up = Event::Special("\x1B[5;5~");
     const std::pair<const Event*, Key> table[] = {
@@ -166,6 +169,7 @@ std::optional<Key> to_key(const ftxui::Event& event, std::string& text) {
         {&Event::F1, Key::F1},
         {&Event::F2, Key::F2},
         {&Event::F9, Key::F9},
+        {&Event::F11, Key::F11},
         {&Event::CtrlU, Key::CtrlU},
         {&Event::CtrlT, Key::CtrlT},
         {&Event::CtrlA, Key::CtrlA},
@@ -198,6 +202,7 @@ std::optional<Key> to_key(const ftxui::Event& event, std::string& text) {
         {&Event::CtrlK, Key::CtrlK},
         {&alt_n, Key::AltN},
         {&alt_p, Key::AltP},
+        {&alt_z, Key::AltZ},
         {&ctrl_page_down, Key::CtrlPageDown},
         {&ctrl_page_up, Key::CtrlPageUp},
     };

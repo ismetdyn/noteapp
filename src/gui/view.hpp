@@ -92,6 +92,7 @@ public:
     bool search_active() const { return search_active_; }
     bool editor_active() const { return editor_active_; }
     bool close_requested() const { return close_requested_; }
+    bool window_fullscreen() const;  // SDL penceresinin SDL_WINDOW_FULLSCREEN bayrağı (F11 odak kipi)
     bool tooltip_visible() const;  // son karede gecikmeli ipucu ekranda (ilk ölçüm karesi gizlidir)
     // Son karede çizilen adlı öğeler (ekran koordinatı): testler fareyle tıklar ve çakışma arar. Ad sabit
     // kimliktir, etiket değil. Klasör satırı "folder:<yol>"; kök "folder:".
@@ -133,6 +134,7 @@ public:
 
 private:
     void pump_events();
+    void apply_fullscreen();
     void render(const std::function<void()>& overlay);
     void apply_theme();
     void apply_window_scale();
@@ -162,6 +164,7 @@ private:
     void draw_picker();
     void draw_toolbar();
     void draw_toolbar_separator(float gap);
+    void draw_zoom_button(float row_start_x, float row_width, float gap);
     void draw_view_switch(float row_start_x, float row_width, float gap);
     void draw_folder_menu(const std::string& folder);
     void draw_note_menu(const core::NotePath& path);
@@ -381,6 +384,8 @@ private:
     int map_zoom_keys_ = 0;                 // SDL tuş kodundan: '+' ve '-' klavye düzeninden bağımsız okunur
     bool map_animating_ = false;            // bu karede yerleşim sürdü: boşta beklemeden yeni kare
     bool close_requested_ = false;
+    bool focus_fullscreen_ = false;   // pencereye uygulanan GuiState::fullscreen()
+    bool fullscreen_before_ = false;  // odak kipinden önce pencere tam ekran mıydı (geri dönüşte o hâl)
     bool rescan_on_focus_ = false;  // diyalogda gelen odak da kaybolmaz: tarama kare dışında çalışır
     bool search_active_ = false;
     bool escape_pressed_ = false;        // bu karede Esc (genel rota): açık tamamlama listesini kapatır

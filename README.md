@@ -101,6 +101,7 @@ Tüm komutlar: `note --help`, tek komut: `note help KOMUT`. Kabuk tamamlama: `no
 | `:` | Komut paleti: her komut adıyla aranır (harita: `view.map`) |
 | `Q` (haritada) | Cypher sorgu satırı |
 | `,` / `F9` | Ayarlar |
+| `z` / `Alt+Z` / `F11` | Paneli yakınlaştır (`Alt+Z` ve `F11` editörde de; terminal `F11`i alabilir; GUI'de `F11` tam ekran + yakınlaştırma) |
 | `q` | Çık |
 
 Tuşların tamamı: [SPEC-tui.md](SPEC-tui.md).

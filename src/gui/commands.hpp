@@ -180,6 +180,8 @@ inline constexpr GuiCommand kGuiCommands[] = {
      [](GuiState& s) { s.resize_pane(1); }},
     {"pane.zoom", ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiKey_Z, CommandScope::Global,
      [](GuiState& s) { s.toggle_zoom(); }},
+    // F11 odak kipi: pane.zoom ile işletim sistemi tam ekranı birlikte (GuiState::toggle_focus_mode).
+    {"pane.zoom", ImGuiKey_F11, CommandScope::Global, [](GuiState& s) { s.toggle_focus_mode(); }},
     {"icons.toggle", 0, CommandScope::Widget, [](GuiState& s) { s.toggle_icons(); }},
     {"update", 0, CommandScope::Widget, [](GuiState& s) { s.open_update(); }},
     {"help", ImGuiKey_F1, CommandScope::Global, [](GuiState& s) { s.show_help(); }},

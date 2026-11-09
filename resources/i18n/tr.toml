@@ -171,15 +171,15 @@ cmd_why_note = "not seçili değil"
 cmd_why_row = "satır seçili değil"
 cmd_why_folder_view = "yalnız klasör görünümünde"
 palette_hints = "↑↓ gez  Enter çalıştır  Esc kapat"
-key_hints_list = ": komut  t çöp  Space aç  o sırala  V sütun  s ara  F1 yardım  Enter düzenle  → önizle  / süz  n ekle  a yeni  d çöpe at  ← üst  u geri al  v seç  y kopya  p yapıştır  m taşı  L ilişkilendir  gg baş  F2 ad değiştir  PgDn sayfa  c kopya  q çık  D kalıcı sil  E harici  x dışa aktar  T etiket  i içe al  r taşı  ^S senkron  Alt+→ detay  I tümü  </> genişlik  z yakınlaştır  Tab içerik  , ayar"
+key_hints_list = ": komut  t çöp  Space aç  o sırala  V sütun  s ara  F1 yardım  Enter düzenle  → önizle  / süz  n ekle  a yeni  d çöpe at  ← üst  u geri al  v seç  y kopya  p yapıştır  m taşı  L ilişkilendir  gg baş  F2 ad değiştir  PgDn sayfa  c kopya  q çık  D kalıcı sil  E harici  x dışa aktar  T etiket  i içe al  r taşı  ^S senkron  Alt+→ detay  I tümü  </> genişlik  z/Alt+Z/F11 yakınlaştır  Tab içerik  , ayar"
 key_hints_search = "Enter tut  Esc kapat  ↑↓ seç  Tab tamamla  ^T içerik  ^P geçmiş  → öneri  F1 yardım  ^O yeni  ^R taşı  ^D çöp  ^S senkron  F9 ayar"
-key_hints_links = "↑↓ seç  Enter aç  Esc geri  L ilişkilendir/kaldır  n ad  f yön çevir  u yönsüz  PgDn sayfa  z yakınlaştır  F1 yardım"
+key_hints_links = "↑↓ seç  Enter aç  Esc geri  L ilişkilendir/kaldır  n ad  f yön çevir  u yönsüz  PgDn sayfa  z/Alt+Z/F11 yakınlaştır  F1 yardım"
 link_label = "İlişkilendir:"
 link_missing = "Bu adda not yok: metin boşa gösteriyor, notta düzeltin"
 unlink_label = "Not"
 unlink_title = "İlişkiyi kaldır"
-key_hints_preview = ": komut  ← liste  e düzenle  ↑↓ kaydır  / bul  b bağlantılar  L ilişkilendir  n/N sonraki  c kopya  R ham/görünüm  q çık  g/G baş/son  J/K 5 satır  ^U/^D yarım sayfa  F2 ad değiştir  z yakınlaştır  </> genişlik  E harici  F1 yardım  , ayar"
-key_hints_editor = "Ctrl+S kaydet  Ctrl+Q çık  Ctrl+F bul  Ctrl+Z geri al  F1 yardım  Ctrl+Y yinele  ^X kes  ^C kopyala  ^V yapıştır  F9 ayar"
+key_hints_preview = ": komut  ← liste  e düzenle  ↑↓ kaydır  / bul  b bağlantılar  L ilişkilendir  n/N sonraki  c kopya  R ham/görünüm  q çık  g/G baş/son  J/K 5 satır  ^U/^D yarım sayfa  F2 ad değiştir  z/Alt+Z/F11 yakınlaştır  </> genişlik  E harici  F1 yardım  , ayar"
+key_hints_editor = "Ctrl+S kaydet  Ctrl+Q çık  Ctrl+F bul  Ctrl+Z geri al  F1 yardım  Alt+Z/F11 yakınlaştır  Ctrl+Y yinele  ^X kes  ^C kopyala  ^V yapıştır  F9 ayar"
 key_hints_editor_readonly = "Ctrl+Q çık  ↑↓ kaydır  Ctrl+F bul  ^C kopyala  F1 yardım"
 find_label = "Bul:"
 note_find_hints = "Enter tut  ↑↓ sonraki  Esc temizle"
@@ -301,7 +301,8 @@ o  V          sıralama, sağ sütun (aşağıda)
 r             taşı / ad ya da tip değiştir
 ^S            şimdi senkronla (önizlemede de)
 Tab           ad / içerik araması
-< >           panel genişliği  z yakınlaştır
+< >           panel genişliği
+z Alt+Z F11   paneli yakınlaştır
 ?             bu yardım
 q             çık
 Esc           süzgeci temizle
@@ -371,7 +372,8 @@ L             nota bağla (girdi, Tab listeler)
               sonra adı: Tab adlar, ^D yönlü
 ← h Esc       listeye dön (Esc önce aramayı siler)
 q             çık
-< >           panel genişliği  z yakınlaştır
+< >           panel genişliği
+z Alt+Z F11   paneli yakınlaştır
 Bağlantılar (önizlemede b ya da tıklama)
 ↑ ↓  k j      seç  PgUp PgDn sayfa sayfa
 Enter         nota git; tıklama da gider
@@ -403,6 +405,7 @@ Yazım denetimi: md, txt; PATH'te hunspell gerekir
 Seçim yoksa satır kesilir/kopyalanır
 Shift+ok seç  Home End
 ^Home ^End  PgUp PgDn  F1 F9
+Alt+Z F11     paneli yakınlaştır (z metne gider)
 ^C ^X ^V sistem panosunu kullanır:
 wl-copy, xclip/xsel, pbcopy, Win32;
 kopyada yedek OSC 52 (75 KB).
@@ -463,6 +466,9 @@ c ise her zaman özgün baytları
 Shift+sürükle terminal metnini seçer
 Her yerde
 F1 yardım  F9 ayarlar (Liste, önizleme: ,)
+Alt+Z F11     paneli yakınlaştır, editörde de
+              (terminal F11'i alabilir);
+              yakınken üst satırda ⤢
 Ctrl+L        ekranı baştan çiz
 ^C çık (editörde kopyalar)
 """
@@ -511,7 +517,7 @@ mode_global = "[tümü]"
 mode_trash = "[çöp]"
 global_label = "Tümü>"
 key_hints_global = "Enter aç  Esc kapat  ↑↓ seç  Tab tamamla  ^P geçmiş  → öneri  F1 yardım"
-key_hints_trash = ": komut  u geri getir  D kalıcı sil  E boşalt  Esc/q geri  v seç  ↑↓ seç  F1 yardım  PgUp/PgDn kaydır  Alt+→ detay  z yakınlaştır"
+key_hints_trash = ": komut  u geri getir  D kalıcı sil  E boşalt  Esc/q geri  v seç  ↑↓ seç  F1 yardım  PgUp/PgDn kaydır  Alt+→ detay  z/Alt+Z/F11 yakınlaştır"
 trash_title = "ÇÖP KUTUSU"
 totals = "Toplam {total}"
 totals_matches = " · {count}"
@@ -521,6 +527,7 @@ breadcrumb_root = "notlar"
 count_items = "{count} öğe"
 count_items_one = "{count} öğe"
 count_notes = "{count} not"
+zoom_marker = "⤢ yakın"
 count_notes_one = "{count} not"
 count_folders = "{count} klasör"
 count_folders_one = "{count} klasör"
@@ -540,7 +547,7 @@ folder_trash_title = "Klasörü çöpe at"
 folder_delete_title = "Klasörü sil"
 confirm_trash_folder = "'{path}' içindeki {notes} çöpe atılsın, klasör ve {folders} kaldırılsın mı?"
 confirm_delete_folder = "'{path}', {notes} ve {folders} ile kalıcı silinsin mi? Bu işlem geri alınamaz."
-key_hints_folder = ": komut  → aç  ← üst  n ekle, ad/ = klasör  F2 ad değiştir  d çöpe at  Space aç  Alt+→ detay  t çöp  o sırala  V sütun  s ara  F1 yardım  Enter aç  c yol kopyala  u geri al  v seç  y kopya  p yapıştır  m taşı  gg baş  D kalıcı sil  q çık  / süz  a yeni  r ad değiştir  ^S senkron  I tümü  </> genişlik  z yakınlaştır  , ayar"
+key_hints_folder = ": komut  → aç  ← üst  n ekle, ad/ = klasör  F2 ad değiştir  d çöpe at  Space aç  Alt+→ detay  t çöp  o sırala  V sütun  s ara  F1 yardım  Enter aç  c yol kopyala  u geri al  v seç  y kopya  p yapıştır  m taşı  gg baş  D kalıcı sil  q çık  / süz  a yeni  r ad değiştir  ^S senkron  I tümü  </> genişlik  z/Alt+Z/F11 yakınlaştır  , ayar"
 rename_label = "Yeni yol:"
 move_to_label = "Taşı:"
 moved_to = "Taşındı: {to}"
@@ -742,6 +749,8 @@ toolbar_move = "Taşı"
 toolbar_move_tip = "Seçili notu klasöre taşı (Ctrl+M); önce bir not seçin"
 toolbar_export = "PDF'e aktar"
 toolbar_export_tip = "Seçili notu PDF olarak dışa aktar (Ctrl+E); önce bir not seçin"
+toolbar_zoom = "Yakınlaştır"
+toolbar_zoom_tip = "Paneli yakınlaştır: not pencereyi doldurur, düzenlerken de (Ctrl+Alt+Z). F11: tam ekran ve yakınlaştırma; yeniden F11 ikisini geri döndürür"
 empty_list_hint = "Gösterilecek not yok. Oluşturmak için Ctrl+N'e ya da Yeni not düğmesine basın."
 empty_title = "Henüz not yok"
 empty_body = "Yeni bir not yazın ya da dosya ve klasörleri içe alın; pencereye sürükleyip de bırakabilirsiniz."

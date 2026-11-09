@@ -27,7 +27,7 @@ notlar/work                          güncelleme↓ · [ad] · 42/5000 · ✓ 14
 - **Toplamlar:** kısayol çubuğunun üstünde, kip hapından sonra klasör görünümünde `Klasör: 12 öğe · Toplam 248 not · sayfa 2/7`, süzgeçte `Toplam 248 not · 12 eşleşme · sayfa 2/7` (eşleşme yalnız süzgeçte; sayfa = seçili satır / panel yüksekliği, kaydırma sanaldır). Editörde aynı satırı durum çubuğu kullanır.
 - **Sağ sütun (`v`):** varsayılan boyut + tarih (`2.0 KiB  12:03`, bugün değilse yalnız tarih). Dar panelde önce tarih, sonra boyut düşer, değer yarım kesilmez; yol en az 16 hücre tutar. `created` ve `origin` boşken "bilinmiyor".
 - **Üst satır:** çöp doluysa en solda `çöp: 3`, tıklayınca çöp görünümü açılır; boşsa yok. Yalnız metin: simge karakterinin genişliği terminale göre değişir, satır kayardı. Çöp görünümünde aynı yerde `ÇÖP KUTUSU` başlığı.
-- **Boyut:** İlk açılışta sol liste pencerenin `tuning.tui_list_share` (0,33) kadarıdır, sağ panel bariz geniştir. Liste ve Önizlemede `<` `>` sol paneli 5 sütun değiştirir (sol en az 16, sağ en az 24 sütun; 60 sütunda da geçerli), `z` odaklı paneli tam ekran yapar ve geri alır (F11 değil: Konsole'un). Fareyle bölücü sürüklenir. Seçilen genişlik `<state>/tui-state.toml`da `list_share` olarak kalır (kullanıcı kararı 2026-11-05): `<` `>` her basışta, sürükleme bırakılınca yazılır; sonraki açılışta `tuning.tui_list_share`'i geçer. Sütun değil pencere oranıdır (seçilen sütunun ortası, `(sütun + 0,5) / pencere`): aynı pencerede aynı sütuna döner, terminal büyüyüp küçülünce liste orantılı kalır. Okurken yukarıdaki sınırlara çekilir (60×15'te de iki panel sığar); 0..1 dışı ya da sayı olmayan değer uyarıyla yok sayılır, config'in oranı geçer. Anahtar silinince config'in oranı döner. Yakınlaştırma oturumluktur. Yakınlaştırmada odak değişirse gösterilen panel de değişir.
+- **Boyut:** İlk açılışta sol liste pencerenin `tuning.tui_list_share` (0,33) kadarıdır, sağ panel bariz geniştir. Liste ve Önizlemede `<` `>` sol paneli 5 sütun değiştirir (sol en az 16, sağ en az 24 sütun; 60 sütunda da geçerli), `z` (Liste, REVIEW, çöp, bağlantılar, özellikler) ve `Alt+Z` / `F11` (her odakta, Editör ve girdi satırları dahil; harf `z` Editörde metindir; `Alt+Z` `ESC z` olarak gelir, FTXUI onu karakter değil tek özel olay sayar) odaklı paneli tam ekran yapar ve geri alır; yakınken üst satırda `⤢ yakın` görünür (senkron metninden sonra, sürümden önce: dar pencerede senkron kısalmadan düşer). Konsole ve GNOME Terminal `F11`i öntanımlı olarak kendi tam ekranına ayırır; orada `Alt+Z` çalışır, bu yüzden ipuçları ve yardım `Alt+Z`yi önce yazar. Fareyle bölücü sürüklenir. Seçilen genişlik `<state>/tui-state.toml`da `list_share` olarak kalır (kullanıcı kararı 2026-11-05): `<` `>` her basışta, sürükleme bırakılınca yazılır; sonraki açılışta `tuning.tui_list_share`'i geçer. Sütun değil pencere oranıdır (seçilen sütunun ortası, `(sütun + 0,5) / pencere`): aynı pencerede aynı sütuna döner, terminal büyüyüp küçülünce liste orantılı kalır. Okurken yukarıdaki sınırlara çekilir (60×15'te de iki panel sığar); 0..1 dışı ya da sayı olmayan değer uyarıyla yok sayılır, config'in oranı geçer. Anahtar silinince config'in oranı döner. Yakınlaştırma oturumluktur. Yakınlaştırmada odak değişirse gösterilen panel de değişir. Yeni not görünümünün (`a`) açtığı yakınlaştırma editörden çıkınca geri alınır; kullanıcının kendi yakınlaştırması (önceden ya da editörde `Alt+Z` / `F11`) kalır.
 - **Fare:** bölücü sürükleme, tekerlek işaretçinin altındaki paneli kaydırır (liste seçimi / önizleme / editörde imleç), satıra tıklama seçer, panele tıklama odaklar; Editörde tıklama imleci o hücreye koyar (numara sütunu metin değildir, üstüne tıklama satır başıdır). Listeye tıklamak editörü kapatmaz (GUI ve `Ctrl+K` gibi): bekleyen düzenleme notuna yazılır, sekme açık kalır, odak listeye geçer; kayıt olmazsa (çakışma sorusu, hata) tıklama yok sayılır. Kapatmak `Ctrl+Q` / `Ctrl+W`'dir. Açık soru, girdi ya da modal fareyi yok sayar. REVIEW'da sürükleme metin seçer (bkz. "Pano"); fare yakalandığı için terminalin kendi seçimi `Shift`+sürükle ile yapılır (yardımda yazar).
 
 ## Tuşlar
@@ -70,7 +70,7 @@ Dört odak vardır: **Liste** (açılış), **Arama**, **Önizleme**, **Editör*
 | `o` | Sıralama menüsü (alt satır): `n` ad, `u` güncelleme, `c` oluşturma, `s` boyut, `r` ters, `Esc` vazgeç; etkin sıra üst satırda |
 | `r` | Ad/klasör/tip diyaloğu; klasörde `F2` |
 | `Ctrl-S` | Şimdi senkronla (Önizlemede de) |
-| `<` `>` `z` | Panel genişliği, yakınlaştırma |
+| `<` `>` `z` `Alt+Z` `F11` | Panel genişliği, yakınlaştırma |
 | `:` | Komut paleti (bkz. "Komut paleti"); REVIEW ve çöpte de |
 | `?` | Yardım |
 | `q` | Çık |
@@ -127,7 +127,7 @@ Sıra ve sağ sütun `<state>/tui-state.toml`'da kalır; bozuk değer varsayıla
 | `←` `h` | Listeye dön |
 | `Esc` | Vurgu varsa temizle, yoksa Listeye dön |
 | `q` | Çık |
-| `<` `>` `z` | Panel genişliği, yakınlaştırma |
+| `<` `>` `z` `Alt+Z` `F11` | Panel genişliği, yakınlaştırma |
 
 Liste komutları içerik panelinde çalışmaz: `a d r s ?` ve `Ctrl-D` `Ctrl-R` `Ctrl-O` `Ctrl-S` `Ctrl-P` `Ctrl-N` `Tab` yok sayılır.
 
@@ -147,10 +147,11 @@ Liste komutları içerik panelinde çalışmaz: `a d r s ?` ve `Ctrl-D` `Ctrl-R`
 | `Home` `End` `PgUp` `PgDn` `Ctrl+Home/End` | Hareket; terminal göndermiyorsa tuş yoktur |
 | `F1` | Yardım; metin yerinde kalır |
 | `F9` | Ayarlar; kaydedilmemiş değişiklikte önce aynı soru |
+| `Alt+Z` `F11` | Paneli yakınlaştır (`pane.zoom`); metne bir şey yazmaz |
 
 `Shift+F3` yoktur: xterm ailesi `ESC [ 1 ; 2 R` gönderir, FTXUI 7.0.3 bunu imleç konumu yanıtı sayıp yutar; önceki eşleşme için `Ctrl+P`.
 
-**Her odakta:** `F1` yardım · `F9` ayarlar. `Ctrl-C` Editör dışında acil çıkıştır, Editörde kopyalar; yardım editörün üstündeyken de çıkmaz. `q` Liste ve Önizlemede çıkar; Editörde ve hiçbir girdi satırında çıkmaz.
+**Her odakta:** `F1` yardım · `F9` ayarlar · `Alt+Z` / `F11` panel yakınlaştırma. `Ctrl-C` Editör dışında acil çıkıştır, Editörde kopyalar; yardım editörün üstündeyken de çıkmaz. `q` Liste ve Önizlemede çıkar; Editörde ve hiçbir girdi satırında çıkmaz.
 
 **Çizim:** terminale yalnız değişen hücre yazılır (`tui/frame_diff`, synchronized update ile sarılı); FTXUI'nin çıktı kancası `cmake/patches/` yamasındadır. Kuyruktaki girdi tek karede işlenir. `Ctrl+L` her odakta ekranı silip baştan çizer; harici editörden dönüş, askıdan dönüş ve boyut değişimi de öyle. Değişiklik yoksa çizim yoktur: otomatik kayıt, dil sunucusu gönderimi ve önizleme ertelemesi beklerken kare kurulmaz; en yakın süre dolunca tek yeniden çizim gönderilir (`TuiSession::wake_due`); yerel gece yarısı da bir uyanma anıdır (listedeki "bugün" saati tarihe döner). Kare isteyen yalnız haritanın yerleşim animasyonudur. Tanı: `NOTEAPP_TUI_DRAW_LOG=<dosya>` her çizimde dosyaya bir satır (terminale yazılan bayt) ekler; `tui_pty` testleri boşta çizim olmadığını bununla sayar.
 
@@ -793,3 +794,8 @@ TUI'de yalnız GUI'de olan özellikler (plan-parity T1, T2; karar 9 ve 10). Eşi
 
 ## Değişiklik 2026-11-09 (UPD5 güncelleme, TUI)
 - **ADDED** Açılışta arka planda güncelleme denetimi, palet `update`, onaylı kurulum penceresi, ayarlarda `update.check_interval` (bkz. "Güncelleme"). Neden: plan UPD5, GUI ile eşitlik.
+
+## Değişiklik 2026-11-09 (yakınlaştırma her yerde, TUI)
+- **ADDED** `F11` her odakta paneli yakınlaştırır (`pane.zoom`, Editör dahil; kayıtta `kInEditor`); üst satırda `⤢ yakın` işareti; ipuçlarında `z/F11`, Editör ipuçlarında `F11`. Neden: kullanıcı isteği (V14 D), yakınlaştırma düzenlerken de kullanılabilsin ve görünsün.
+- **MODIFIED** Editörden çıkış yalnız yeni not görünümünün açtığı yakınlaştırmayı geri alır; kullanıcının yakınlaştırması kalır (önceden hepsi geri alınıyordu). Önceki "F11 değil: Konsole'un" kararı kullanıcı kararıyla değişti; Konsole/GNOME Terminal'de `z` geçerli yoldur.
+- **ADDED** `Alt+Z` (`ESC z`) `pane.zoom`un ikinci her-odak bağıdır, Editör dahil; metne `z` yazmaz. İpuçlarında ve yardımda `F11`den önce gelir (`z/Alt+Z/F11`, Editörde `Alt+Z/F11`). Neden: GNOME Terminal `F11`i kendi tam ekranına ayırır, kullanıcı Ubuntu GNOME'da.

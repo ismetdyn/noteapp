@@ -253,14 +253,23 @@ ftxui::Element top_bar(const TuiState& state, const StatusLine& status, int widt
     const std::string sync = head_ellipsis(terminal_safe(status.sync), room);
     if (!sync.empty())
         right += kGroupSeparator;
-    // Sürüm en düşük önceliktedir: yalnız senkron metni tam sığdıktan sonra kalan yerde görünür; dar
-    // pencerede senkron kısalmadan önce düşer.
+    // Yakınlaştırma işareti ve sürüm senkron metninden sonra gelir: yalnız senkron tam sığdıktan sonra kalan
+    // yerde görünürler, dar pencerede senkron kısalmadan önce düşerler. İşaret sürümden önce yer alır.
+    int spare = room - ftxui::string_width(sync);
+    Element zoom_element = text("");
+    if (state.layout().zoomed()) {
+        const std::string zoom = std::string(kGroupSeparator) + core::tr("tui.zoom_marker");
+        if (spare >= ftxui::string_width(zoom)) {
+            zoom_element = text(zoom) | bold;
+            spare -= ftxui::string_width(zoom);
+        }
+    }
     const std::string version = std::string(kGroupSeparator) + app::version_label();
     Element version_element = text("");
-    if (room - ftxui::string_width(sync) >= ftxui::string_width(version))
+    if (spare >= ftxui::string_width(version))
         version_element = text(version) | dim;
     return hbox({std::move(left), filler(), text(right) | dim, sync_element(sync, status.sync_state),
-                 std::move(version_element)});
+                 std::move(zoom_element), std::move(version_element)});
 }
 
 // `n` görünümünün üst satırı: liste ve sayaçlar gizli, kaydedildiyse notun yolu.

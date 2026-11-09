@@ -842,6 +842,25 @@ TEST_CASE("a bracketed paste is one edit drawn in one frame, and the mode is lef
     CHECK(app.read_until_exit().find("\x1B[?2004l") != std::string::npos);
 }
 
+// Alt+Z gerçek terminalde `ESC z`dir: FTXUI tek özel olay iletmeli, `z` karakteri metne düşmemeli.
+TEST_CASE("Alt+Z (ESC z) in the real editor zooms the pane and types no z") {
+    const DrawCountFixture f;
+    const PtyApp app(NOTEAPP_NOTES_EXE);
+    app.read_frame();
+    wait_quiet(app, kQuiet, kSettleLimit);
+    app.send("\r");  // Enter: tek not editörde, imleç başta
+    app.read_frame();
+    wait_quiet(app, kQuiet, kSettleLimit);
+    app.send("\x1B"
+             "z");
+    CHECK(app.read_frame_text().find("⤢") != std::string::npos);  // üst satırdaki yakınlaştırma işareti
+    wait_quiet(app, kQuiet, kSettleLimit);
+    app.send("y");
+    app.read_frame();
+    app.send("\x13");  // Ctrl+S
+    CHECK(wait_body(app, f.home.path() / "data", "a.py", "yx = 1\n") == "yx = 1\n");
+}
+
 TEST_CASE("a paste into a new note draft keeps its lines; the name comes from the first line") {
     const DrawCountFixture f;
     const PtyApp app(NOTEAPP_NOTES_EXE);

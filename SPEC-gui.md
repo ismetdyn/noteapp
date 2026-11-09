@@ -175,6 +175,7 @@ kaydırmasını ve önizleme düğmesini tutar; bilgi ve bağlantı panelleri il
 | `Ctrl+F` / `F3` / `Shift+F3` | Not içi bul (bul satırı editörün altında) / sonraki / önceki eşleşme (`find`, `find.next`, `find.previous`) |
 | `Ctrl+Z` / `Ctrl+Y` · `Ctrl+C` `Ctrl+X` `Ctrl+V` | Editörde geri al / yinele (EditorBuffer geçmişi) · kopyala (seçim yoksa satır), kes, yapıştır (SDL panosu, yoksa iç pano) |
 | `Ctrl+Space` · `Tab`/`→` | Tamamlama listesi (yazı süzer, `↑↓` `Ctrl+P` `Ctrl+N`, `Enter` ekler, `Esc` kapatır) · satır sonundaki gölge öneriyi al |
+| `Ctrl+Alt+Z` / `F11` | Paneli yakınlaştır (`pane.zoom`: liste gizlenir, editör odaklıyken de) / odak kipi: pencere tam ekran (`SDL_SetWindowFullscreen`) ve yakınlaştırma; yeniden `F11` ikisini kipten önceki hâline döndürür (kip içinde `Ctrl+Alt+Z` ile değişen yakınlaştırma da). Araç çubuğundaki **Yakınlaştır** düğmesi `pane.zoom`dur, yakınken seçili tondadır; simge fontunda uygun glif olmadığı için metindir. Hiçbiri kalıcı değildir |
 
 Eşleşme yokken arama kutusunda `Enter` → sorgu ilk satır olacak şekilde yeni not (nvALT, TUI ile aynı); argümanlı ya da bozuk sorguda yeni not açılmaz.
 
@@ -595,3 +596,6 @@ Arayüz yenilemesinin yerleşim fazı (`.engineering/design/ui-redesign.md` §3.
 
 ## Değişiklik 2026-11-09 (UPD5 güncelleme, GUI)
 - **ADDED** Açılışta arka planda güncelleme denetimi, bildirimde `Kur…`, palet "Güncellemeleri denetle", bekletmeyen onay penceresi, Ayarlar → Genel'de güncelleme aralığı (bkz. "Güncelleme"). Neden: plan UPD5, TUI ile eşitlik.
+
+## Değişiklik 2026-11-09 (yakınlaştırma her yerde, GUI)
+- **ADDED** `F11` odak kipi (tam ekran + `pane.zoom`, ikinci basış ikisini önceki hâline döndürür), araç çubuğunda etkin durumlu **Yakınlaştır** düğmesi (ipucu kısayolları söyler). `pane.zoom` kayıtta Editör bağlamını da kapsar. Neden: kullanıcı isteği (V14 D), yakınlaştırma görünür ve her yerde kullanılabilir olsun.

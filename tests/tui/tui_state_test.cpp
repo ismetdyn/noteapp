@@ -433,6 +433,26 @@ TEST_CASE("List: < and > resize within bounds, z toggles zoom; the keys are iner
     CHECK_FALSE(search.layout().zoomed());
 }
 
+TEST_CASE("F11 toggles zoom in the List, the preview and inside text inputs without typing") {
+    auto list = in_focus(Focus::List);
+    CHECK(list.handle(Key::F11) == Intent::None);
+    CHECK(list.layout().zoomed());
+    list.handle(Key::F11);
+    CHECK_FALSE(list.layout().zoomed());
+
+    auto preview = in_focus(Focus::Preview);
+    preview.handle(Key::F11);
+    CHECK(preview.layout().zoomed());
+    CHECK(preview.focus() == Focus::Preview);
+
+    auto search = in_focus(Focus::Search, {});
+    search.handle(Key::Char, "a");
+    search.handle(Key::F11);
+    CHECK(search.layout().zoomed());
+    CHECK(search.query() == "a");
+    CHECK(search.focus() == Focus::Search);
+}
+
 TEST_CASE("List: slash goes to Search without entering the query") {
     auto s = in_focus(Focus::List);
     CHECK(s.handle(Key::Char, "/") == Intent::None);

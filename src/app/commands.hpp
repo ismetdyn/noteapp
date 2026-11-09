@@ -114,7 +114,7 @@ inline constexpr CommandSpec kCommandRegistry[] = {
     // Panel ve sekme
     {"pane.narrow", "command.pane_narrow", kInList | kInPreview | kInTrash},
     {"pane.wide", "command.pane_wide", kInList | kInPreview | kInTrash},
-    {"pane.zoom", "command.pane_zoom", kInList | kInPreview | kInTrash},
+    {"pane.zoom", "command.pane_zoom", kInList | kInPreview | kInTrash | kInEditor},
     {"tab.open", "command.tab_open", kInList | kInPreview, CommandNeeds::Note},
     {"tab.new", "command.tab_new", kAnywhere},
     {"tab.close", "command.tab_close", kInEditor},

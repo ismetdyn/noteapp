@@ -1370,15 +1370,18 @@ bool TuiState::select_note(const core::NotePath& path) {
     return true;
 }
 
+// Kullanıcının kendi yakınlaştırması kalır; yalnız bu görünümün açtığı yakınlaştırma çıkışta geri alınır.
 void TuiState::open_new_note_view() {
     new_note_view_ = true;
+    auto_zoomed_ = !layout_.zoomed();
     layout_.set_zoomed(true);
 }
 
 void TuiState::leave_editor(std::optional<std::size_t> preview_line) {
     if (new_note_view_) {
         new_note_view_ = false;
-        layout_.set_zoomed(false);
+        if (std::exchange(auto_zoomed_, false))
+            layout_.set_zoomed(false);
         preview_line.reset();  // not listede seçili kalır (on_saved), önizleme baştan
         scroll_to_source_line(0);
     }
@@ -1677,7 +1680,7 @@ bool TuiState::handle_layout_letter(std::string_view text) {
     else if (text == ">")
         resize_list(1);
     else if (text == "z")
-        layout_.toggle_zoom();
+        toggle_zoom();
     else
         return false;
     return true;
@@ -1759,6 +1762,11 @@ Intent TuiState::handle(Key key, std::string_view text) {
     // Haritadan `n`in yeri yalnız açtığı ad satırınındır: satır açıkken tuşlar buraya gelmez (main satıra verir),
     // gelen tuş satırın kapandığını (Esc ya da kayıt) söyler. Sonraki ilgisiz not o yere sabitlenmesin.
     map_new_at_.reset();
+    // Alt+Z ve F11 her odakta (editör, bağlantılar, özellikler, girdi satırları): kendileri metin üretmez.
+    if (key == Key::AltZ || key == Key::F11) {
+        toggle_zoom();
+        return Intent::None;
+    }
     // Editörde her tuş metne aittir (Ctrl-C kopyalar, F2 kaydedilmemiş metni sorar); yalnız yardım ve
     // tablonun editör satırları (sekmeler, Ctrl+K) araya girer. Harf hiçbir zaman: metne gider.
     if (focus_ == Focus::Editor) {
@@ -1926,6 +1934,7 @@ void TuiState::resize_list(int direction) {
 
 void TuiState::toggle_zoom() {
     layout_.toggle_zoom();
+    auto_zoomed_ = false;  // elle verilen karar: editörden çıkış geri almaz
 }
 
 void TuiState::focus_links() {

@@ -57,11 +57,11 @@ struct Fixture {
         REQUIRE(session.is_open());
     }
 
-    ftxui::Screen frame(int width = kWidth, int height = kHeight) {
+    ftxui::Screen frame(int width = kWidth, int height = kHeight, const std::string& sync = "sync off") {
         const auto viewport = tui::editor_viewport({width, height}, state.layout());
         session.layout(viewport.columns, viewport.rows);
         auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width), ftxui::Dimension::Fixed(height));
-        ftxui::Render(screen, tui::render(state, {}, {"sync off", ""}, {width, height}, nullptr, nullptr,
+        ftxui::Render(screen, tui::render(state, {}, {sync, ""}, {width, height}, nullptr, nullptr,
                                           nullptr, nullptr, nullptr, &session));
         return screen;
     }
@@ -508,14 +508,79 @@ TEST_CASE("new note view: closing returns to the normal two panes with the note 
     CHECK(contains(screen, core::tr("tui.frame_list")));
 }
 
-TEST_CASE("new note view: an explicit zoom from before does not survive it") {
+TEST_CASE("new note view: an explicit zoom from before survives it, only its own zoom is undone") {
     Fixture f("metin");
     f.session.handle(Key::CtrlQ);
-    f.state.layout().toggle_zoom();
+    f.state.handle(Key::Char, "z");
+    REQUIRE(f.state.layout().zoomed());
     f.state.open_new_note_view();
     f.session.begin_new_note("");
     f.session.handle(Key::CtrlQ);
+    CHECK(f.state.layout().zoomed());
+}
+
+TEST_CASE("new note view: F11 inside it makes the zoom the user's, leaving keeps it") {
+    Fixture f("metin");
+    f.session.handle(Key::CtrlQ);
+    f.state.open_new_note_view();
+    f.session.begin_new_note("");
+    REQUIRE(f.state.focus() == Focus::Editor);
+    CHECK(f.state.handle(Key::F11) == tui::Intent::None);
     CHECK_FALSE(f.state.layout().zoomed());
+    CHECK(f.state.handle(Key::F11) == tui::Intent::None);
+    CHECK(f.state.layout().zoomed());
+    f.session.handle(Key::CtrlQ);
+    CHECK_FALSE(f.state.new_note_view());
+    CHECK(f.state.layout().zoomed());
+}
+
+TEST_CASE("editor view: F11 zooms while editing, z types into the text, the top line marks the zoom") {
+    Fixture f("metin");
+    REQUIRE(f.state.focus() == Focus::Editor);
+    const auto press = [&f](Key key, std::string_view text = {}) {
+        if (f.state.handle(key, text) == tui::Intent::EditorKey)
+            f.session.handle(key, text);
+    };
+    press(Key::Char, "z");
+    CHECK_FALSE(f.state.layout().zoomed());
+    auto screen = f.frame();
+    CHECK(contains(screen, "zmetin"));
+    CHECK_FALSE(contains(screen, core::tr("tui.zoom_marker")));
+    press(Key::F11);
+    CHECK(f.state.layout().zoomed());
+    CHECK(f.state.focus() == Focus::Editor);
+    screen = f.frame();
+    CHECK(contains(screen, "zmetin"));  // F11 metne bir şey yazmaz
+    CHECK(contains(screen, core::tr("tui.zoom_marker")));
+    CHECK_FALSE(contains(screen, " 1   a.md"));  // liste gizli
+    press(Key::F11);
+    CHECK_FALSE(f.state.layout().zoomed());
+    CHECK_FALSE(contains(f.frame(), core::tr("tui.zoom_marker")));
+}
+
+TEST_CASE("editor view: Alt+Z zooms while editing and types nothing") {
+    Fixture f("metin");
+    REQUIRE(f.state.focus() == Focus::Editor);
+    CHECK(f.state.handle(Key::AltZ) == tui::Intent::None);  // editöre gitmez
+    CHECK(f.state.layout().zoomed());
+    CHECK(f.state.focus() == Focus::Editor);
+    const auto screen = f.frame();
+    CHECK(contains(screen, core::tr("tui.zoom_marker")));
+    CHECK(contains(screen, "metin"));
+    CHECK_FALSE(contains(screen, "zmetin"));
+    f.state.handle(Key::AltZ);
+    CHECK_FALSE(f.state.layout().zoomed());
+}
+
+TEST_CASE("editor view: the zoom marker is dropped before the sync text shortens") {
+    Fixture f("metin");
+    f.state.handle(Key::F11);
+    REQUIRE(f.state.layout().zoomed());
+    CHECK(contains(f.frame(tui::kMinWidth, tui::kMinHeight), core::tr("tui.zoom_marker")));  // 60 sütunda da
+    const std::string sync = "sync failed: " + std::string(40, 'e') + "END";
+    const auto crowded = f.frame(tui::kMinWidth, tui::kMinHeight, sync);
+    CHECK_FALSE(contains(crowded, core::tr("tui.zoom_marker")));
+    CHECK(contains(crowded, "sync failed"));
 }
 
 TEST_CASE("the nvALT draft stays in the right pane of the two panes") {

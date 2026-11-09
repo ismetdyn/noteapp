@@ -171,15 +171,15 @@ cmd_why_note = "no note selected"
 cmd_why_row = "no row selected"
 cmd_why_folder_view = "only in the folder view"
 palette_hints = "↑↓ select  Enter run  Esc close"
-key_hints_list = ": cmd  t trash  Space open  o sort  V col  s search  F1 help  Enter edit  → preview  / filter  n add  a new  d to trash  ← up  u undo  v select  y copy  p paste  m move  L relate  gg top  F2 rename  PgDn page  c copy  q quit  D delete  E external  x export  T tags  i import  r move  ^S sync  Alt+→ details  I all  </> width  z zoom  Tab content  , config"
+key_hints_list = ": cmd  t trash  Space open  o sort  V col  s search  F1 help  Enter edit  → preview  / filter  n add  a new  d to trash  ← up  u undo  v select  y copy  p paste  m move  L relate  gg top  F2 rename  PgDn page  c copy  q quit  D delete  E external  x export  T tags  i import  r move  ^S sync  Alt+→ details  I all  </> width  z/Alt+Z/F11 zoom  Tab content  , config"
 key_hints_search = "Enter keep  Esc close  ↑↓ select  Tab complete  ^T content  ^P history  → accept  F1 help  ^O new  ^R move  ^D trash  ^S sync  F9 config"
-key_hints_preview = ": cmd  ← list  e edit  ↑↓ scroll  / find  b links  L relate  n/N next  c copy  R raw/rendered  q quit  g/G top/end  J/K 5 lines  ^U/^D half page  F2 rename  z zoom  </> width  E external  F1 help  , config"
-key_hints_links = "↑↓ select  Enter open  Esc back  L relate/remove  n rename  f flip  u undirected  PgDn page  z zoom  F1 help"
+key_hints_preview = ": cmd  ← list  e edit  ↑↓ scroll  / find  b links  L relate  n/N next  c copy  R raw/rendered  q quit  g/G top/end  J/K 5 lines  ^U/^D half page  F2 rename  z/Alt+Z/F11 zoom  </> width  E external  F1 help  , config"
+key_hints_links = "↑↓ select  Enter open  Esc back  L relate/remove  n rename  f flip  u undirected  PgDn page  z/Alt+Z/F11 zoom  F1 help"
 link_label = "Relate to:"
 link_missing = "No note has this name: the text points nowhere, fix it in the note"
 unlink_label = "Note"
 unlink_title = "Remove relation"
-key_hints_editor = "Ctrl+S save  Ctrl+Q quit  Ctrl+F find  Ctrl+Z undo  F1 help  Ctrl+Y redo  ^X cut  ^C copy  ^V paste  F9 config"
+key_hints_editor = "Ctrl+S save  Ctrl+Q quit  Ctrl+F find  Ctrl+Z undo  F1 help  Alt+Z/F11 zoom  Ctrl+Y redo  ^X cut  ^C copy  ^V paste  F9 config"
 key_hints_editor_readonly = "Ctrl+Q quit  ↑↓ scroll  Ctrl+F find  ^C copy  F1 help"
 find_label = "Find:"
 note_find_hints = "Enter keep  ↑↓ next  Esc clear"
@@ -301,7 +301,8 @@ o  V          sort, right column (see below)
 r             move / rename / change type
 ^S            sync now (also in the preview)
 Tab           switch name / content search
-< >           pane width  z zoom pane
+< >           pane width
+z Alt+Z F11   zoom the pane
 ?             this help
 q             quit
 Esc           clear filter
@@ -371,7 +372,8 @@ L             relate to a note (input, Tab lists)
               then a name: Tab names, ^D directed
 ← h Esc       back to the list (Esc clears find)
 q             quit
-< >           pane width  z zoom pane
+< >           pane width
+z Alt+Z F11   zoom the pane
 Links (b in the preview, or click)
 ↑ ↓  k j      select  PgUp PgDn by a page
 Enter         open the note; click does too
@@ -402,6 +404,7 @@ Spell check: md, txt; needs hunspell on PATH
 No selection: the line is cut/copied
 Shift+arrows select  Home End
 ^Home ^End  PgUp PgDn  F1 F9
+Alt+Z F11     zoom the pane (z types a z)
 ^C ^X ^V use the system clipboard:
 wl-copy, xclip/xsel, pbcopy, Win32;
 copy falls back to OSC 52 (75 KB).
@@ -461,6 +464,9 @@ c always copies the original bytes
 Shift+drag selects terminal text
 Everywhere
 F1 help  F9 settings (List, preview: ,)
+Alt+Z F11     zoom the pane, also while editing
+              (the terminal may take F11);
+              ⤢ on the top line while zoomed
 Ctrl+L        redraw the screen
 ^C quit (copy in the editor)
 """
@@ -509,7 +515,7 @@ mode_global = "[all]"
 mode_trash = "[trash]"
 global_label = "All>"
 key_hints_global = "Enter open  Esc close  ↑↓ select  Tab complete  ^P history  → accept  F1 help"
-key_hints_trash = ": cmd  u restore  D delete forever  E empty  Esc/q back  v select  ↑↓ select  F1 help  PgUp/PgDn scroll  Alt+→ details  z zoom"
+key_hints_trash = ": cmd  u restore  D delete forever  E empty  Esc/q back  v select  ↑↓ select  F1 help  PgUp/PgDn scroll  Alt+→ details  z/Alt+Z/F11 zoom"
 trash_title = "TRASH"
 totals = "Total {total}"
 totals_matches = " · {count}"
@@ -519,6 +525,7 @@ breadcrumb_root = "notes"
 count_items = "{count} items"
 count_items_one = "{count} item"
 count_notes = "{count} notes"
+zoom_marker = "⤢ zoom"
 count_notes_one = "{count} note"
 count_folders = "{count} folders"
 count_folders_one = "{count} folder"
@@ -538,7 +545,7 @@ folder_trash_title = "Trash folder"
 folder_delete_title = "Delete folder"
 confirm_trash_folder = "Move {notes} in '{path}' to trash and remove the folder and its {folders}?"
 confirm_delete_folder = "Permanently delete '{path}' with {notes} and {folders}? This cannot be undone."
-key_hints_folder = ": cmd  → open  ← up  n add, name/ = folder  F2 rename  d to trash  Space open  Alt+→ details  t trash  o sort  V column  s search  F1 help  Enter open  c copy path  u undo  v select  y copy  p paste  m move  gg top  D delete  q quit  / filter  a new  r rename  ^S sync  I all  </> width  z zoom  , settings"
+key_hints_folder = ": cmd  → open  ← up  n add, name/ = folder  F2 rename  d to trash  Space open  Alt+→ details  t trash  o sort  V column  s search  F1 help  Enter open  c copy path  u undo  v select  y copy  p paste  m move  gg top  D delete  q quit  / filter  a new  r rename  ^S sync  I all  </> width  z/Alt+Z/F11 zoom  , settings"
 rename_label = "New path:"
 move_to_label = "Move to:"
 moved_to = "Moved to: {to}"
@@ -740,6 +747,8 @@ toolbar_move = "Move"
 toolbar_move_tip = "Move the selected note to a folder (Ctrl+M); select a note first"
 toolbar_export = "Export PDF"
 toolbar_export_tip = "Export the selected note as PDF (Ctrl+E); select a note first"
+toolbar_zoom = "Zoom"
+toolbar_zoom_tip = "Zoom the pane: the note fills the window, also while editing (Ctrl+Alt+Z). F11: full screen and zoom; F11 again restores both"
 empty_list_hint = "No notes to show. Press Ctrl+N or the New note button to create one."
 empty_title = "No notes yet"
 empty_body = "Write a new note or import files and folders; you can also drop them on the window."

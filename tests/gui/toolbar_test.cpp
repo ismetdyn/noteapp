@@ -33,6 +33,7 @@ constexpr const char* kExport = "toolbar_export";
 constexpr const char* kRename = "toolbar_rename";
 constexpr const char* kViewTree = "toolbar_view_tree";
 constexpr const char* kViewDetails = "toolbar_view_details";
+constexpr const char* kZoom = "toolbar_zoom";
 const std::string kBinary("bin\0ary", 7);
 
 bool is_disabled(const View& view, const std::string& name) {
@@ -237,7 +238,8 @@ TEST_CASE("every toolbar button has a tooltip naming its shortcut, even when dis
     const std::pair<const char*, const char*> expected[] = {
         {kNewNote, "Ctrl+N"}, {kNewFolder, "New folder"}, {kDelete, "Shift+Del"},
         {kTrash, "Trash"},    {kMove, "Ctrl+M"},          {kExport, "Ctrl+E"},
-        {kRename, "Rename"},  {kViewTree, "one tree"},    {kViewDetails, "current folder"}};
+        {kRename, "Rename"},  {kViewTree, "one tree"},    {kViewDetails, "current folder"},
+        {kZoom, "Ctrl+Alt+Z"}};
     for (const auto& [name, text] : expected) {
         CAPTURE(name);
         const auto [x, y] = scene.view->button_center(name);
@@ -277,8 +279,8 @@ TEST_CASE("toolbar spans the window above both panes and wraps in the smallest w
         const auto& left = rects.at("left_pane");
         float lowest_top = 0.0F;
         float lowest_bottom = 0.0F;
-        for (const char* name :
-             {kNewNote, kNewFolder, kRename, kMove, kDelete, kTrash, kExport, kViewTree, kViewDetails}) {
+        for (const char* name : {kNewNote, kNewFolder, kRename, kMove, kDelete, kTrash, kExport, kZoom, kViewTree,
+                                 kViewDetails}) {
             CAPTURE(name);
             const auto& rect = rects.at(name);
             CHECK(rect.min_x >= 0.0F);
@@ -314,4 +316,64 @@ TEST_CASE(
     settle(*scene.view);
     gui_test::type_text(*scene.view, "x");
     CHECK_FALSE(scene.view->item_rects().contains("editor_placeholder"));  // yazınca kalkar
+}
+
+TEST_CASE("toolbar Zoom button toggles pane zoom: the list pane hides and comes back") {
+    ToolbarScene scene;
+    scene.fixture.add_note("a.md", "a\n");
+    scene.open();
+    REQUIRE(scene.view->item_rects().contains("left_pane"));
+    click_button(*scene.view, kZoom);
+    settle(*scene.view);
+    CHECK(scene.state->zoomed());
+    CHECK_FALSE(scene.view->item_rects().contains("left_pane"));
+    CHECK(scene.view->item_rects().contains(kZoom));  // yakınken de çubukta, etkin tonda
+    click_button(*scene.view, kZoom);
+    settle(*scene.view);
+    CHECK_FALSE(scene.state->zoomed());
+    CHECK(scene.view->item_rects().contains("left_pane"));
+}
+
+TEST_CASE("F11 is focus mode: full screen and pane zoom; F11 again restores both") {
+    ToolbarScene scene;
+    scene.open();
+    REQUIRE_FALSE(scene.view->window_fullscreen());
+    gui_test::press(*scene.view, ImGuiKey_F11);
+    CHECK(scene.state->zoomed());
+    CHECK(scene.state->fullscreen());
+    CHECK(scene.view->window_fullscreen());  // dummy SDL sürücüsü pencere bayrağını tutar
+    gui_test::press(*scene.view, ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiKey_Z);  // kip içinde zoom değişebilir
+    CHECK_FALSE(scene.state->zoomed());
+    gui_test::press(*scene.view, ImGuiKey_F11);
+    CHECK_FALSE(scene.state->zoomed());
+    CHECK_FALSE(scene.state->fullscreen());
+    CHECK_FALSE(scene.view->window_fullscreen());
+
+    // Kipten önce yakınsa çıkışta da yakın kalır.
+    gui_test::press(*scene.view, ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiKey_Z);
+    gui_test::press(*scene.view, ImGuiKey_F11);
+    gui_test::press(*scene.view, ImGuiKey_F11);
+    CHECK(scene.state->zoomed());
+    CHECK_FALSE(scene.view->window_fullscreen());
+}
+
+TEST_CASE("the pane zoom shortcut and F11 work while the editor has focus and type nothing") {
+    ToolbarScene scene;
+    scene.open();
+    click_button(*scene.view, kNewNote);
+    settle(*scene.view);
+    REQUIRE(scene.view->editor_active());
+    gui_test::press(*scene.view, ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiKey_Z);
+    settle(*scene.view);
+    CHECK(scene.state->zoomed());
+    CHECK(scene.view->editor_active());
+    gui_test::press(*scene.view, ImGuiKey_F11);
+    settle(*scene.view);
+    CHECK(scene.view->window_fullscreen());
+    CHECK(scene.view->editor_active());
+    CHECK(scene.state->buffer().empty());
+    gui_test::press(*scene.view, ImGuiKey_F11);
+    settle(*scene.view);
+    CHECK(scene.state->zoomed());  // F11'den önceki Ctrl+Alt+Z yakınlaştırması kalır
+    CHECK_FALSE(scene.view->window_fullscreen());
 }

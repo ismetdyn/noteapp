@@ -148,7 +148,10 @@ std::span<const Command> TuiState::commands() {
         // Panel
         {"pane.narrow", "<", kEverywhere, act<&TuiState::resize_list, -1>},
         {"pane.wide", ">", kEverywhere, act<&TuiState::resize_list, 1>},
-        {"pane.zoom", "z", kEverywhere, act<&TuiState::toggle_zoom>},
+        // Alt+Z ve F11 her odakta, editörde de (TuiState::handle); `z` yalnız harfin metne gitmediği
+        // görünümlerde. Alt+Z önce: çoğu terminal F11'i kendine ayırır.
+        {"pane.zoom", "Alt+Z", kEverywhere | kInEditor, act<&TuiState::toggle_zoom>, Nothing, Key::AltZ, "z"},
+        {"pane.zoom", "F11", kEverywhere | kInEditor, act<&TuiState::toggle_zoom>, Nothing, Key::F11},
         // Uygulama. F1 ve F9 her odakta app_intent'tedir; `?` ve `,` yalnız şu görünümlerde.
         {"sync.now", "^S", kInBrowse, emit<Intent::SyncNow>, Sync, Key::CtrlS},
         {"icons.toggle", "", kEverywhere, emit<Intent::ToggleIcons>},

@@ -394,6 +394,7 @@ void View::draw_toolbar() {
             ImGui::SetItemTooltip("%s\n%s", text.c_str(), tip.c_str());
         ImGui::EndDisabled();
     }
+    draw_zoom_button(row_start_x, row_width, gap);
     if (ImGui::BeginPopup("##import_menu")) {
         if (ImGui::MenuItem(core::tr("gui.import_files").c_str()))
             queue([this] { state_.request_import(GuiState::ImportRequest::Files); });
@@ -405,6 +406,29 @@ void View::draw_toolbar() {
     }
     draw_view_switch(row_start_x, row_width, gap);
     ImGui::PopItemFlag();
+}
+
+// pane.zoom düğmesi kendi grubunda; simge fontunda uygun glif yok, metin. Yakınken görünüm seçicinin etkin
+// segmenti gibi seçili tondadır.
+void View::draw_zoom_button(float row_start_x, float row_width, float gap) {
+    const std::string label = core::tr("gui.toolbar_zoom");
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    if (flow_after_previous(gap + spacing + button_width(label), row_start_x, row_width))
+        draw_toolbar_separator(gap);
+    const bool zoomed = state_.zoomed();
+    const theme::Theme& colors = theme::current();
+    // Hayalet düğme zemini saydama çevirir; etkin hâl rengi kendisi verir (Secondary renk basmaz).
+    if (zoomed) {
+        ImGui::PushStyleColor(ImGuiCol_Button, colors.selected);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colors.selected);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, colors.selected);
+        ImGui::PushStyleColor(ImGuiCol_Text, colors.text);
+    }
+    if (button("toolbar_zoom", label, zoomed ? ButtonKind::Secondary : ButtonKind::Ghost))
+        queue_command(gui_command("pane.zoom"));
+    if (zoomed)
+        ImGui::PopStyleColor(4);
+    ImGui::SetItemTooltip("%s", core::tr("gui.toolbar_zoom_tip").c_str());
 }
 
 void View::draw_toolbar_separator(float gap) {

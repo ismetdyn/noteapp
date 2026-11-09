@@ -697,6 +697,17 @@ public:
     void resize_pane(int direction);  // pane.narrow / pane.wide: sol bölme
     void toggle_zoom() { zoomed_ = !zoomed_; }
     bool zoomed() const { return zoomed_; }
+    // F11 odak kipi: pencere tam ekran ve pane.zoom. İkinci basış ikisini kipten önceki hâline döndürür;
+    // kip içinde Ctrl+Alt+Z ile verilen zoom da geri alınır. Pencereyi view uygular (fullscreen()).
+    void toggle_focus_mode() {
+        if (focus_mode_zoom_) {
+            zoomed_ = *std::exchange(focus_mode_zoom_, std::nullopt);
+            return;
+        }
+        focus_mode_zoom_ = zoomed_;
+        zoomed_ = true;
+    }
+    bool fullscreen() const { return focus_mode_zoom_.has_value(); }
     void toggle_icons();  // icons ayarı: config.toml'a yazılır (TUI ile aynı)
     void request_quit() { quit_requested_ = true; }
     bool take_quit_request() { return std::exchange(quit_requested_, false); }
@@ -979,6 +990,7 @@ private:
     float preview_rows_ = 1.0F;
     float preview_scroll_ = 0.0F;
     bool zoomed_ = false;
+    std::optional<bool> focus_mode_zoom_;  // odak kipindeyken: kipten önceki zoomed_
     bool quit_requested_ = false;
     app::TrashOps trash_{config_.limits.app.trash_undo_steps};  // çöp kuralı TUI ile ortak
     app::NoticeQueue notices_{app::NoticeQueue::lifetime_of(config_.tuning.notice_ms.value)};

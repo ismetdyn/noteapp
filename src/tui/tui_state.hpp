@@ -798,6 +798,7 @@ private:
     std::optional<PreviewSelection> preview_selection_;
     PaneLayout layout_;
     bool new_note_view_ = false;
+    bool auto_zoomed_ = false;  // yakınlaştırmayı yeni not görünümü açtı (kullanıcı değil)
     std::set<std::string> marks_;
     std::set<std::string> trash_marks_;
     std::optional<PendingYank> yank_;
