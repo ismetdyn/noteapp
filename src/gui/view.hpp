@@ -29,6 +29,7 @@ struct GuiCommand;
 enum class CommandScope;
 struct PreviewFonts;
 struct PreviewLayout;
+class PreviewSelection;
 
 // Düğme dili (.engineering/design/ui-redesign.md §3.4): ikincil dolgu, hayalet (zeminsiz; GhostDanger üzerine
 // gelince yıkıcı renkte), birincil (accent_fill) ve yıkıcı (danger_fill).
@@ -107,6 +108,7 @@ public:
     }
     const std::map<std::string, ItemRect>& item_rects() const { return item_rects_; }
     std::size_t pdf_texture_count() const;  // PDF önizlemesinin canlı sayfa dokuları (test)
+    const PreviewSelection& preview_selection() const;  // önizlemenin fare seçimi (test)
     // Arayüz ölçeğini uygular (stil, yazı, en küçük pencere, bölmeler); dummy sürücüde ekran ölçeği hep 1
     // olduğundan testler de buradan verir.
     void set_ui_scale(float scale);
@@ -228,6 +230,7 @@ private:
     // request: bu karede istenen klavye kaydırması (piksel); to_end: sona atlama (End).
     void draw_markdown_preview(float request, bool to_end);
     void draw_preview_links(const PreviewLayout& layout, ImVec2 origin, float top, float bottom);
+    void copy_preview_selection();  // görüntülenen seçili metin panoya (TUI önizleme seçimi gibi)
     void draw_raw_preview();  // limits.tui.view_bytes üstü: neden + ham metin (TUI REVIEW gibi)
     void draw_pdf_preview();  // view_pdf.cpp: sayfa görüntüleri, sayfa göstergesi
     // csv ve json: TUI REVIEW'un ayrıştırması; not bir kez dizinlenir (app::index_csv, app::index_json), yalnız

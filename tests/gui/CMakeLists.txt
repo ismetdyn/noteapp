@@ -29,6 +29,7 @@ noteapp_add_test(gui
     pdf_preview_test.cpp
     pdf_test.cpp
     preview_layout_test.cpp
+    preview_select_test.cpp
     preview_test.cpp
     row_numbers_test.cpp
     save_test.cpp

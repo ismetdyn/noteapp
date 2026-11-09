@@ -17,6 +17,7 @@
 #include <imgui_stdlib.h>
 #include <optional>
 #include <string_view>
+#include <tuple>
 
 namespace noteapp::gui {
 
@@ -85,6 +86,31 @@ bool quiet_header(const std::string& label) {
     ImGui::GetWindowDrawList()->AddLine(ImVec2(min.x, y), ImVec2(max.x, y),
                                         ImGui::GetColorU32(ImGuiCol_Separator));
     return open;
+}
+
+// Çok satırlı TextUnformatted'in yalnız görünen satırlarını seçime kaydeder (satır yüksekliği yazı boyu,
+// ImGui'nin çok satırlı çizimi gibi). Çizimden önce çağrılır: vurgu metnin altında kalır.
+void record_text_lines(std::string_view text, PreviewSelection& selection) {
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    const float row = ImGui::GetFontSize();
+    const float clip_top = ImGui::GetWindowDrawList()->GetClipRectMin().y;
+    const float clip_bottom = ImGui::GetWindowDrawList()->GetClipRectMax().y;
+    std::size_t begin = 0;
+    for (std::uint64_t number = 0;; ++number) {
+        const float y = at.y + (static_cast<float>(number) * row);
+        if (y > clip_bottom)
+            break;
+        const std::size_t end = std::min(text.find('\n', begin), text.size());
+        if (y + row >= clip_top) {
+            std::string_view line = text.substr(begin, end - begin);
+            if (line.ends_with('\r'))
+                line.remove_suffix(1);
+            selection.add(number, static_cast<double>(number), line, ImVec2(at.x, y), row, ImGui::GetFont(), row);
+        }
+        if (end == text.size())
+            break;
+        begin = end + 1;
+    }
 }
 
 }  // namespace
@@ -613,8 +639,20 @@ void View::draw_preview(float reserved_height) {
     // sonraki karede.
     const float line = ImGui::GetTextLineHeightWithSpacing();
     state_.set_preview_rows(ImGui::GetWindowHeight() / line);
-    if (ImGui::IsWindowFocused())
-        run_scope_commands(CommandScope::Preview);
+    PreviewSelection& selection = preview_->selection;
+    const auto shown = std::tuple(state_.active_tab(), state_.preview_kind(), state_.buffer().size(),
+                                  state_.showing_pdf(), state_.preview_too_large());
+    if (shown != preview_->selection_source) {
+        preview_->selection_source = shown;
+        selection.clear();
+    }
+    if (ImGui::IsWindowFocused()) {
+        // Seçim varken Ctrl+C onu (görüntülenen metin) kopyalar; yoksa notun özgün baytlarını (TUI `c`).
+        if (!selection.empty() && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_C))
+            copy_preview_selection();
+        else
+            run_scope_commands(CommandScope::Preview);
+    }
     // Klavye isteği piksel olarak; ImGui onu sonraki karede uygular.
     float request = 0.0F;
     const float lines = state_.take_preview_scroll();
@@ -623,6 +661,7 @@ void View::draw_preview(float reserved_height) {
         ImGui::SetScrollY(ImGui::GetScrollY() + request);
     }
     preview_link_hovered_ = false;
+    selection.begin_frame();
     if (state_.showing_pdf())
         draw_pdf_preview();
     else if (state_.preview_too_large())
@@ -631,12 +670,35 @@ void View::draw_preview(float reserved_height) {
         draw_markdown_preview(request, lines >= FLT_MAX);  // End: scroll_preview(FLT_MAX)
     else
         draw_data_preview();
-    // Metne çift tık düzenlemeye geçer (bağlantı kendi tıkını alır).
-    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !preview_link_hovered_ &&
+    bool word_selected = false;
+    if (!state_.showing_pdf()) {
+        // Seçim iç alanda başlar (kaydırma çubuğu dışı); bağlantı düğmesine basılmışken de (bağlantıdan sürükleme
+        // seçer). Sağ tık menüsü seçimi kopyalar.
+        word_selected =
+            selection.update(ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                             ImGui::GetCurrentWindow()->InnerClipRect.Contains(ImGui::GetIO().MousePos));
+        if (ImGui::BeginPopupContextWindow("##preview_menu")) {
+            if (ImGui::MenuItem(core::tr("gui.preview_copy").c_str(), "Ctrl+C", false, !selection.empty()))
+                copy_preview_selection();
+            ImGui::EndPopup();
+        }
+    }
+    // Metne çift tık düzenlemeye geçer (bağlantı kendi tıkını, sözcük seçimi kendi çift tıkını alır).
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !preview_link_hovered_ && !word_selected &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
         queue([this] { state_.begin_edit(); });
     ImGui::EndChild();
     remember_item_center("preview");
+}
+
+void View::copy_preview_selection() {
+    std::string text = preview_->selection.selected_text();
+    if (!text.empty())
+        queue([this, text = std::move(text)] { state_.copy_to_clipboard(text); });
+}
+
+const PreviewSelection& View::preview_selection() const {
+    return preview_->selection;
 }
 
 void View::draw_markdown_preview(float request, bool to_end) {
@@ -646,10 +708,12 @@ void View::draw_markdown_preview(float request, bool to_end) {
     if (cache.source != state_.buffer() || cache.document.chunk_limits() != chunk_limits) {
         cache.source = state_.buffer();
         cache.document.reset(cache.source, chunk_limits);
+        cache.selection.clear();
     }
     if (cache.missing != state_.links().missing) {
         cache.missing = state_.links().missing;
         cache.document.relayout();
+        cache.selection.clear();
     }
     cache.document.set_highlight_line_bytes(state_.view_limits().highlight_line_bytes.cap());
     // Okuma ölçüsü (G10): satır en çok 46 em (UI boyu; 15 px'te ≈ 690 px, 65–75 karakter), geniş pencerede
@@ -658,6 +722,10 @@ void View::draw_markdown_preview(float request, bool to_end) {
     const float width =
         std::min(available, kPreviewMeasureEms * kFontPixels * ImGui::GetStyle().FontScaleDpi);
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::floor((available - width) / 2.0F));
+    if (const std::pair layout(width, ImGui::GetFontSize()); layout != cache.selection_layout) {
+        cache.selection_layout = layout;
+        cache.selection.clear();
+    }
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const float scrolled = ImGui::GetScrollY();
     // Görünen yükseklik kaydırma çubuğu ve kenarlıksız (InnerRect): ImGui'nin en büyük kaydırması da ona göredir,
@@ -675,7 +743,10 @@ void View::draw_markdown_preview(float request, bool to_end) {
     const ImVec2 origin(start.x, start.y + scrolled - top);
     for (const PreviewDocument::Placed& placed : cache.document.visible(top, bottom)) {
         const ImVec2 chunk_origin(origin.x, origin.y + placed.top);
-        draw_preview_layout(*placed.layout, chunk_origin, top - placed.top, bottom - placed.top);
+        // Anahtar parça ve koşu sırası: parça yeniden yerleşince aynı sırayı üretir (aynı genişlik ve yazı).
+        constexpr int kChunkKeyShift = 32;
+        draw_preview_layout(*placed.layout, chunk_origin, top - placed.top, bottom - placed.top, &cache.selection,
+                            static_cast<std::uint64_t>(placed.chunk) << kChunkKeyShift, placed.top);
         ImGui::PushID(static_cast<int>(placed.chunk));
         draw_preview_links(*placed.layout, chunk_origin, top - placed.top, bottom - placed.top);
         ImGui::PopID();
@@ -696,13 +767,18 @@ void View::draw_markdown_preview(float request, bool to_end) {
 
 // Yerleşimin [top, bottom] aralığındaki bağlantıları tıklanır yapar; `origin` yerleşimin ekrandaki sol üstü.
 void View::draw_preview_links(const PreviewLayout& layout, ImVec2 origin, float top, float bottom) {
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool dragged =
+        io.MouseDragMaxDistanceSqr[ImGuiMouseButton_Left] >= io.MouseDragThreshold * io.MouseDragThreshold;
     for (std::size_t index = 0; index < layout.hits.size(); ++index) {
         const PreviewHit& hit = layout.hits[index];
         if (hit.max.y < top || hit.min.y > bottom)
             continue;
         ImGui::SetCursorScreenPos(ImVec2(origin.x + hit.min.x, origin.y + hit.min.y));
         ImGui::PushID(static_cast<int>(index));
-        const bool clicked = ImGui::InvisibleButton("##link", ImVec2(hit.max.x - hit.min.x, hit.max.y - hit.min.y));
+        // Bağlantıda başlayan sürükleme metin seçer, bağlantıyı açmaz.
+        const bool clicked =
+            ImGui::InvisibleButton("##link", ImVec2(hit.max.x - hit.min.x, hit.max.y - hit.min.y)) && !dragged;
         const bool new_tab = new_tab_click(clicked);
         ImGui::PopID();
         const std::string target(hit.target);
@@ -747,6 +823,8 @@ void View::draw_raw_preview() {
         for (; index < clipper.DisplayEnd; ++index) {
             const std::string_view row = rows.next().value_or(std::string_view{});
             const ImVec2 at = ImGui::GetCursorScreenPos();
+            preview_->selection.add(static_cast<std::uint64_t>(index), index, row, at, ImGui::GetTextLineHeight(),
+                                    ImGui::GetFont(), ImGui::GetFontSize());
             if (row.empty())
                 ImGui::TextUnformatted("");
             else
@@ -765,6 +843,7 @@ void View::draw_data_preview() {
     if (cache.data_source != state_.buffer() || cache.data_kind != kind) {
         cache.data_source = state_.buffer();
         cache.data_kind = kind;
+        cache.selection.clear();
         cache.csv.reset();
         cache.json.reset();
         if (kind == app::PreviewKind::Csv)
@@ -785,6 +864,7 @@ void View::draw_data_preview() {
         "%s", core::tr(kind == app::PreviewKind::Csv ? "gui.preview_not_table" : "gui.preview_invalid_json")
                   .c_str());
     ImGui::PushFont(fonts().mono, 0.0F);
+    record_text_lines(cache.data_source, cache.selection);
     ImGui::TextUnformatted(cache.data_source.data(), cache.data_source.data() + cache.data_source.size());
     ImGui::PopFont();
 }
@@ -808,12 +888,19 @@ void View::draw_csv_table(const app::CsvIndex& index) {
             std::size_t row = first;
             for (const app::CsvRow& csv :
                  app::csv_rows(preview_->data_source, index, first, count, static_cast<std::size_t>(columns))) {
-                ImGui::TableNextRow(row++ == 0 ? ImGuiTableRowFlags_Headers : ImGuiTableRowFlags_None);
+                const std::size_t shown_row = row++;
+                ImGui::TableNextRow(shown_row == 0 ? ImGuiTableRowFlags_Headers : ImGuiTableRowFlags_None);
                 for (int column = 0; column < columns && static_cast<std::size_t>(column) < csv.cells.size();
                      ++column) {
                     if (!ImGui::TableSetColumnIndex(column))
                         continue;  // yatayda görünmeyen sütun
                     const std::string text = printable(csv.cells[static_cast<std::size_t>(column)]);
+                    // Anahtar satır ve sütun (sütun < IMGUI_TABLE_MAX_COLUMNS); seçim satır satır, hücreler boşlukla.
+                    constexpr int kCellKeyShift = 16;
+                    preview_->selection.add(
+                        (static_cast<std::uint64_t>(shown_row) << kCellKeyShift) | static_cast<std::uint64_t>(column),
+                        static_cast<double>(shown_row), text, ImGui::GetCursorScreenPos(),
+                        ImGui::GetTextLineHeight(), ImGui::GetFont(), ImGui::GetFontSize());
                     ImGui::TextUnformatted(text.data(), text.data() + text.size());
                 }
             }
@@ -857,6 +944,8 @@ void View::draw_json_lines(const app::JsonIndex& index) {
             const float indent = std::min(static_cast<float>(line.depth) * indent_width, max_indent);
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
             const ImVec2 start = ImGui::GetCursorScreenPos();
+            preview_->selection.add(static_cast<std::uint64_t>(number), number, printable(line.text), start,
+                                    ImGui::GetTextLineHeight(), ImGui::GetFont(), ImGui::GetFontSize());
             spans.clear();
             tui::highlight_line(tui::SyntaxLanguage::Json, line.text, tui::kInitialSyntaxState, &spans,
                                 line_bytes);

@@ -5,6 +5,7 @@
 #include "pdf/markdown_blocks.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <imgui.h>
 #include <optional>
@@ -17,6 +18,8 @@
 namespace noteapp::gui {
 
 // Önizlemenin yazı aileleri; hepsi atlasta yüklü olmalı (View::create).
+class PreviewSelection;
+
 struct PreviewFonts {
     ImFont* regular = nullptr;
     ImFont* bold = nullptr;
@@ -148,7 +151,10 @@ private:
 std::span<const PreviewRun> visible_runs(const PreviewLayout& layout, float top, float bottom);
 
 // Yalnız [top, bottom] dikey aralığındaki (yerleşim koordinatı) kutu ve koşuları geçerli pencereye çizer;
-// `origin` yerleşimin ekrandaki sol üstü.
-void draw_preview_layout(const PreviewLayout& layout, ImVec2 origin, float top, float bottom);
+// `origin` yerleşimin ekrandaki sol üstü. `selection` verilirse çizilen koşular ona kaydedilir: anahtar
+// `key_base | koşu sırası`, satır kimliği `line_base + line_top` (belge koordinatı).
+void draw_preview_layout(const PreviewLayout& layout, ImVec2 origin, float top, float bottom,
+                         PreviewSelection* selection = nullptr, std::uint64_t key_base = 0,
+                         double line_base = 0.0);
 
 }  // namespace noteapp::gui

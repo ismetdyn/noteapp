@@ -18,6 +18,7 @@ add_library(noteapp_gui
     note_list_model.cpp
     save_dialog.cpp
     settings_page.cpp
+    text_selection.cpp
     theme.cpp
     view.cpp
     view_browser.cpp

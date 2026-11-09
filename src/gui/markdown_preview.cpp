@@ -1,6 +1,7 @@
 #include "gui/markdown_preview.hpp"
 
 #include "app/data_preview.hpp"
+#include "gui/text_selection.hpp"
 #include "gui/theme.hpp"
 
 #include <algorithm>
@@ -455,7 +456,8 @@ std::span<const PreviewRun> visible_runs(const PreviewLayout& layout, float top,
     return {first, last};
 }
 
-void draw_preview_layout(const PreviewLayout& layout, ImVec2 origin, float top, float bottom) {
+void draw_preview_layout(const PreviewLayout& layout, ImVec2 origin, float top, float bottom,
+                         PreviewSelection* selection, std::uint64_t key_base, double line_base) {
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     // Kod bloğu ve satır içi kod aynı zemin: tuvale karşı ≥ 1,5, metne karşı ≥ 4,5 (theme_test).
     const ImU32 background = theme::current().code_bg;
@@ -483,6 +485,10 @@ void draw_preview_layout(const PreviewLayout& layout, ImVec2 origin, float top, 
                                      ImVec2(pos.x + run.width + pad, pos.y + run.size), background,
                                      kInlineCodeRounding * scale);
         }
+        if (selection != nullptr)  // satırın tam yüksekliği: vurgu ve isabet satır boyunca
+            selection->add(key_base | static_cast<std::uint64_t>(&run - layout.runs.data()),
+                           line_base + run.line_top, run.text, ImVec2(pos.x, origin.y + run.line_top),
+                           run.line_bottom - run.line_top, run.font, run.size, run.width);
         draw_list->AddText(run.font, run.size, pos, color, run.text.data(), run.text.data() + run.text.size());
         if (run.underline)
             draw_list->AddLine(ImVec2(pos.x, pos.y + run.size), ImVec2(pos.x + run.width, pos.y + run.size), color);

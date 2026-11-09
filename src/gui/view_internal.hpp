@@ -8,6 +8,7 @@
 #include "edit/syntax.hpp"
 #include "gui/icon_font.hpp"
 #include "gui/markdown_preview.hpp"
+#include "gui/text_selection.hpp"
 #include "gui/theme.hpp"
 #include "gui/view.hpp"
 #include "pdf/markdown_blocks.hpp"
@@ -28,6 +29,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -132,6 +134,11 @@ struct View::PreviewCache {
     app::PreviewKind data_kind = app::PreviewKind::None;
     std::optional<app::CsvIndex> csv;
     std::optional<app::JsonIndex> json;
+    // Fareyle seçim, bütün metin önizlemelerinde (md, csv, json, ham metin). Gösterilen metin (sekme, tür, boy,
+    // ham/biçimli) değişince kalkar; md'de yerleşim (genişlik, yazı boyu) değişince de: anahtarı koşu sırasıdır.
+    PreviewSelection selection;
+    std::tuple<std::uint64_t, app::PreviewKind, std::size_t, bool, bool> selection_source;
+    std::pair<float, float> selection_layout;
     // PDF: oturumun (GuiState::pdf_serial) ve çizim ölçeğinin sayfa dokuları; ikisinden biri değişince atılır.
     // limits.pdf.cache_pages'le sınırlı, görünen sayfalar sayılmaz (en uzun süredir görülmeyen düşer). Dokular
     // platform_'un çizicisinden önce yıkılır (View'da preview_ ondan sonra bildirilir).
