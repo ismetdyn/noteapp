@@ -11,6 +11,7 @@
 #include "core/log.hpp"
 #include "core/note_store_impl.hpp"
 #include "core/paths.hpp"
+#include "pdfview/engine/worker.hpp"
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -18,6 +19,7 @@
 #endif
 #include <cstdio>
 #include <new>
+#include <string_view>
 
 int main(int argc, char** argv) {
     using namespace noteapp;
@@ -28,6 +30,10 @@ int main(int argc, char** argv) {
     _setmode(_fileno(stdout), _O_BINARY);
     _setmode(_fileno(stderr), _O_BINARY);
 #endif
+    // PDF işçisi (pdfview::PdfDocument başlatır): ikili stdio, config/log/argüman ayrıştırma yok. Gizli alt komut;
+    // yardımda ve tamamlamada görünmez.
+    if (argc == 2 && std::string_view(argv[1]) == "__pdf-worker")
+        return pdfview::run_pdf_worker();
     const core::ConsoleUtf8Scope utf8_console;
 
     const core::LoadedConfig loaded = core::load_config();

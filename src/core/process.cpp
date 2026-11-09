@@ -471,6 +471,15 @@ fs::path current_executable() {
 #endif
 }
 
+fs::path note_executable_beside_self() {
+#ifdef _WIN32
+    constexpr const char* kName = "note.exe";
+#else
+    constexpr const char* kName = "note";
+#endif
+    return current_executable().parent_path() / kName;
+}
+
 std::expected<int, Error> run_and_wait(const std::vector<std::string>& argv,
                                        const EnvOverrides& env_overrides, bool discard_output) {
     if (argv.empty())

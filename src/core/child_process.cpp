@@ -1,4 +1,4 @@
-#include "edit/child_process.hpp"
+#include "core/child_process.hpp"
 
 #include "core/process.hpp"
 #include "core/unique_handle.hpp"
@@ -25,7 +25,7 @@
 extern char** environ;
 #endif
 
-namespace noteapp::tui {
+namespace noteapp::core {
 
 namespace {
 
@@ -512,4 +512,4 @@ ChildProcess::~ChildProcess() {
     close_fds();
 }
 
-}  // namespace noteapp::tui
+}  // namespace noteapp::core

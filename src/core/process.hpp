@@ -17,8 +17,8 @@ namespace noteapp::core {
 using EnvOverrides = std::vector<std::pair<std::string, std::optional<std::string>>>;
 
 // `overrides` + senkron token'ını taşıyan değişkenlerin (NOTEAPP_GIT_TOKEN, NOTEAPP_GIT_TOKEN_HOST)
-// silinmesi. Kullanıcının programlarına (editör, pager, ssh-keygen; edit::ChildProcess kendi listesiyle: pano,
-// hunspell, LSP) verilir: token yalnız senkronun ve kendi `note` sürecimizin işidir.
+// silinmesi. Kullanıcının programlarına (editör, pager, ssh-keygen; core::ChildProcess kendi
+// listesiyle: pano, hunspell, LSP) verilir: token yalnız senkronun ve kendi `note` sürecimizin işidir.
 EnvOverrides without_secrets(EnvOverrides overrides = {});
 
 // Boş değer "tanımsız" sayılır. Windows'ta geniş API ile okunup UTF-8'e çevrilir.
@@ -36,6 +36,10 @@ std::optional<std::filesystem::path> find_program_on_absolute_path(std::string_v
 // Çalışan ikilinin mutlak yolu (Windows GetModuleFileNameW, Linux /proc/self/exe); bulunamazsa boş.
 // TUI/GUI `note`'u kendi dizininde, CLI arka plan senkronu için kendini bununla bulur.
 std::filesystem::path current_executable();
+
+// Ön yüzlerin (TUI/GUI) ve PDF işçisinin `note` ikilisi: çalışan ikilinin yanındaki `note` (Windows'ta `note.exe`).
+// Kendi yolu bulunamazsa yalnız ad kalır: PATH'te aranır.
+std::filesystem::path note_executable_beside_self();
 
 // Kabuksuz başlatır; çocuk stdin/stdout/stderr'i devralır (editör terminali kullanır) ve çıkış kodu
 // beklenir. `env_overrides` mevcut ortamın üstüne biner. `discard_output`: çocuğun stdout/stderr'i

@@ -598,6 +598,11 @@ std::span<const LimitKey> limit_keys() {
          &module_field<&Limits::update, &UpdateLimits::install_timeout>},
         {"update.tool_output_bytes", LimitUnit::Bytes,
          &module_field<&Limits::update, &UpdateLimits::tool_output_bytes>},
+        {"pdf.pages", LimitUnit::Count, &module_field<&Limits::pdf, &PdfLimits::pages>},
+        {"pdf.render_pixels", LimitUnit::Count, &module_field<&Limits::pdf, &PdfLimits::render_pixels>},
+        {"pdf.text_bytes", LimitUnit::Bytes, &module_field<&Limits::pdf, &PdfLimits::text_bytes>},
+        {"pdf.context_memory", LimitUnit::Bytes, &module_field<&Limits::pdf, &PdfLimits::context_memory>},
+        {"pdf.duration", LimitUnit::Milliseconds, &module_field<&Limits::pdf, &PdfLimits::duration>},
     });
     return table;
 }

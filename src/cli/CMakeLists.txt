@@ -16,7 +16,9 @@ add_executable(note
     term.cpp
     update_flow.cpp)
 target_include_directories(note PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(note PRIVATE noteapp_app noteapp_core noteapp_detect noteapp_search noteapp_sync noteapp_pdf noteapp_graph)
+# noteapp_pdfengine: `note __pdf-worker` (PDF işçisi, MuPDF) bu ikilide; TUI/GUI MuPDF bağlamaz.
+target_link_libraries(note PRIVATE noteapp_app noteapp_core noteapp_detect noteapp_search noteapp_sync noteapp_pdf noteapp_graph
+    noteapp_pdfengine)
 noteapp_target_defaults(note)
 
 install(TARGETS note RUNTIME DESTINATION bin)

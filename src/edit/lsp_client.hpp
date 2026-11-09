@@ -44,7 +44,7 @@ struct LspClientLimits {
 // yöntemlerin hepsi kilidi kısa tutup döner: G/Ç yalnız işçidedir, UI asla beklemez. Çökme, EOF, çerçeve
 // hatası ya da zaman aşımında istemci oturum boyunca durur (yeniden başlatma yok). Sunucu metinleri (tanı
 // mesajı, öneri etiketi) ham döner; ekrana basmadan önce temizlik UI katmanındadır.
-// ChildProcess TUI'de olduğundan burada; ChildProcess core'a taşınınca bu dosya da GUI için taşınabilir.
+// Sunucu süreci core::ChildProcess'tir (TUI ve GUI aynı istemciyi kullanır).
 class LspClient {
 public:
     // `limits.lsp.initialize_timeout` varsayılanı.

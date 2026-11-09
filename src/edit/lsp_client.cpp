@@ -1,7 +1,7 @@
 #include "edit/lsp_client.hpp"
 
+#include "core/child_process.hpp"
 #include "core/log.hpp"
-#include "edit/child_process.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -17,6 +17,8 @@
 #endif
 
 namespace noteapp::tui {
+
+using core::ChildProcess;
 
 namespace {
 

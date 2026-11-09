@@ -1,4 +1,4 @@
-#include "edit/child_process.hpp"
+#include "core/child_process.hpp"
 
 #include "support/process_probe.hpp"
 #include "support/test_support.hpp"
@@ -12,7 +12,7 @@
 #include <string>
 #include <thread>
 
-using noteapp::tui::ChildProcess;
+using noteapp::core::ChildProcess;
 using namespace noteapp::test;
 using namespace std::chrono_literals;
 

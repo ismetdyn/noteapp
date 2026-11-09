@@ -258,6 +258,34 @@ config'tedir.
   sınırıdır, config'te değildir. `view_bytes` GUI önizlemesinin de sınırıdır: kullanıcı bir sınır verirse üstündeki not iki arayüzde de
   reddedilmez, biçimlenmeden ham metinle ve nedeniyle (anahtar adı dahil) gösterilir. Varsayılan sınırsızdır: md, csv ve
   json biçimli görünümü parça parça üretilir (SPEC-tui "REVIEW biçimli görünüm", SPEC-gui "Önizleme").
+- **PDF okuma (PDF1):** `[limits.pdf]` güvenilmez PDF'in (senkronla gelir) sınırlarıdır, okuyan `pdfview::PdfDocument`:
+  `pages` (10.000; fazlası olan belge açılmaz), `render_pixels` (16.777.216; sayfa başına çizilen piksel, aşan
+  yakınlaştırma çizilmez), `text_bytes` (1 MiB; sayfa başına çıkarılan metin), `context_memory` (512 MiB; belge
+  başına MuPDF bellek bütçesi), `duration` (10 sn; açılış ve sayfa başına metin çıkarma/çizim süresi, dolunca iş kesilir). Aşım
+  kesilmiş sonuç değil `LimitExceeded` hatasıdır; 0 sınırsız, riski defaults.toml'da.
+- **PDF yardımcı süreci (PDF1b, kullanıcı kararı 2026-11-09):** MuPDF'in güvenilmez girdide kesilemeyen döngüleri var
+  (xref onarımı, bağlantı hedefinin yavaş sayfa araması, Form XObject çoğalması); döngü döngü yamalamak yerine
+  ayrıştırma ayrı süreçtedir. `pdfview::PdfDocument` (MuPDF'siz `noteapp_pdfview`) belge başına bir uzun ömürlü
+  `note __pdf-worker` başlatır (`core::ChildProcess`, stdin/stdout boruları; gizli alt komut, config/log yok, stdin
+  terminalse 2 ile çıkar, stdin EOF'unda 0). Tel protokolü `pdfview/protocol.hpp`: küçük-sonlu 16 baytlık başlık
+  `{u32 tür, u32 0, u64 uzunluk}`, sıkı istek/cevap; Open `{sürüm, ebeveyn pid, dört sınır}` + baytlar, Text, Render;
+  cevaplar Opened (`page_count ≤ pages`), Text (`≤ text_bytes`), Rendered (uzunluk tam `8 + w·h·4`, `w·h ≤
+  render_pixels`), Failed `{neden, a, b}` + en çok 256 bayt ayrıntı. Uymayan çerçeve bozuk sayılır. İşçi i18n
+  anahtarı ya da kullanıcı metni göndermez: ebeveyn `core::Error`'u kendi değerleriyle kurar, ayrıntı yalnız loga
+  (`terminal_safe`), metne `clean_text` yeniden uygulanır. Süre ve durdurma ebeveyndedir (50 ms'lik bekleme
+  dilimleri): süre dolunca, durdurmada, çöküşte ya da bozuk çerçevede işçi öldürülüp toplanır, çağrı
+  `pdf_too_slow`/`Cancelled`/`pdf_invalid`·`pdf_page_invalid` döner ve belge geçerli kalır; sonraki çağrı işçiyi
+  yeniden başlatır, baytları yeniden açtırır ve sayfa sayısının aynı olduğunu denetler. Öksüz işçi: Linux'ta işçi
+  saniyede bir `getppid()`'i Open'daki ebeveyn pid'iyle karşılaştırır (PR_SET_PDEATHSIG değil), Windows'ta
+  KILL_ON_JOB_CLOSE iş nesnesi. MuPDF'i yalnız `note` bağlar (`noteapp_pdfengine`); `notes` ve `notes-gui`
+  bağlamaz (ctest `pdfview_link_check`). İşçinin yolu API'de açık parametredir; ön yüzler
+  `core::note_executable_beside_self()` verir. Geliştirme ağacında `notes`/`notes-gui` `note`'u kendi dizininde
+  bulamazsa PDF açılamaz (`error.process_not_found`); otomatik senkronla aynı durum, kurulu pakette yoktur. OS
+  bellek sınırı (rlimit, iş nesnesi) ertelendi: bellek `context_memory` bütçesiyle sınırlıdır. **Yetki sınırı
+  değildir** (ADR 0002): işçi kum havuzunda değildir, kullanıcının hesabıyla ve ebeveynin ortamıyla (senkron token'ı
+  ve AppImage değişkenleri düşer) çalışır. Ayrı süreç askıda kalmayı ve çöküşü sınırlar; MuPDF'te kod çalıştıran bir
+  PDF `~/.ssh`'i, kimlik bilgilerini, `/proc/<ebeveyn>/environ`'u okuyabilir ve not deposunu değiştirebilir. OS kum
+  havuzu, ortam allowlist'i ve devralınan fd'lerin kapatılması ertelenmiş işlerdir.
 - **Uygulama (L1):** `[limits.app]` `recent_commands` (20), `trash_undo_steps` (0), `tabs` (0), `map_nodes` (2.000) ve
   `map_depth` (6; harita çevre kapsamının en çok adımı, `MapOptions::kMaxDepth` sabiti yerine; TUI `1`–`9` tuşları ve GUI
   adımlayıcısı `app::MapModel::max_depth`'ten okur, sınır küçülürse geçerli derinlik ona iner) ve `query_cell_bytes`

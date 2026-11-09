@@ -1,13 +1,15 @@
 #include "edit/spellcheck.hpp"
 
+#include "core/child_process.hpp"
 #include "core/text.hpp"
-#include "edit/child_process.hpp"
 
 #include <algorithm>
 #include <optional>
 #include <utility>
 
 namespace noteapp::tui {
+
+using core::ChildProcess;
 
 namespace {
 

@@ -4,6 +4,7 @@
 #include "app/ui_prefs.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
+#include "core/process.hpp"
 #include "core/text.hpp"
 #include "detect/detect.hpp"
 #include "edit/display_text.hpp"
@@ -104,7 +105,7 @@ GuiState::GuiState(core::Config config)
                                  notify(ok ? app::NoticeKind::Success : app::NoticeKind::Error, std::move(text));
                              }}) {
     // cppcheck-suppress useInitializationList ; tek seferlik kurulum; üye sırasına bağlanmasın
-    sync_note_exe = sync::note_executable_beside_self();
+    sync_note_exe = core::note_executable_beside_self();
     word_tables_.set_store(store_);
     // TUI ile tek yol: içerik sonuç sınırı süzgeçten sonra kesilir.
     app::connect_store(model_.listing(), store_, config_,

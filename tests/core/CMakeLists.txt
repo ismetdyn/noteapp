@@ -1,4 +1,5 @@
 noteapp_add_test(core
+    child_process_test.cpp
     config_test.cpp
     editor_test.cpp
     file_icons_test.cpp

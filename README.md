@@ -138,3 +138,7 @@ Geliştirme: `ctest --preset linux-gcc-debug --output-on-failure`, `scripts/chec
 [GPL-3.0-or-later](LICENSE). Kullanılan bileşenlerin ve gömülü fontların
 (DejaVu, Inter, JetBrains Mono) lisansları Windows paketinde `licenses/`, AppImage içinde `usr/share/licenses/noteapp/`
 altındadır.
+
+Dağıtılan paketler PDF okuma için [MuPDF](https://mupdf.com)'i (Artifex) **AGPL-3.0** ile içerir; birleşik ikili
+GPL-3.0-or-later ve AGPL-3.0 koşullarıyla dağıtılır. MuPDF'in kaynağı `cmake/Dependencies.cmake`'te sabitlenen
+sürümdür (mupdf.com arşivi), lisans metni pakette `licenses/mupdf/` altındadır.

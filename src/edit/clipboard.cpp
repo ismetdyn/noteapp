@@ -1,8 +1,8 @@
 #include "edit/clipboard.hpp"
 
+#include "core/child_process.hpp"
 #include "core/i18n.hpp"
 #include "core/text.hpp"
-#include "edit/child_process.hpp"
 #include "edit/display_text.hpp"
 
 #include <array>
@@ -19,6 +19,8 @@
 #endif
 
 namespace noteapp::tui {
+
+using core::ChildProcess;
 
 namespace {
 

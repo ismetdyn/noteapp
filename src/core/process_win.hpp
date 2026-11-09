@@ -1,6 +1,6 @@
 #pragma once
 
-// Windows'ta süreç başlatmanın ortak parçaları: core::spawn_detached ve tui::ChildProcess aynı yolu kullanır
+// Windows'ta süreç başlatmanın ortak parçaları: core::spawn_detached ve core::ChildProcess aynı yolu kullanır
 // (program arama, .bat/.cmd reddi, yalnız verilen tutamaçların devri, iş nesnesi). Yalnız .cpp'ler içerir.
 #ifdef _WIN32
 

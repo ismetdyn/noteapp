@@ -65,15 +65,22 @@ add_compiled_source_notices() {
                     printf "%s\nFiles:\n%s\n", order[i], files[order[i]]
             }' >"$notices"
     done
-    for component in sdl3 libgit2 libharu sqlite curl; do
+    for component in sdl3 libgit2 libharu sqlite curl mupdf; do
         [[ -s "$licenses/$component/SOURCE-NOTICES.txt" ]] || die "no compiled source notices for $component"
     done
     # SQLite'ın lisans dosyası yoktur: kamu malı bildirimi yalnız kaynağın başındadır.
     grep -q "The author disclaims copyright" "$licenses/sqlite/SOURCE-NOTICES.txt" ||
         die "SQLite public domain notice missing"
     # Yorum ayrıştırıcısının kaçırdığı (ör. kod sonundaki yorum) lisans satırı sessizce paketten düşmesin.
+    # Kalıba uyan ama lisans metni olmayan kod (yalnız bu dosyalar, sabit sürüm): glyphlist.h Adobe glif adlarıdır
+    # ("copyright", "copyrightsans"); color-icc-create.c'nin "Copyright Artifex Software 2020"si MuPDF'in ürettiği ICC
+    # profiline yazılan etiket dizgesidir, dosya MuPDF'indir ve lisansı mupdf/COPYING'dedir.
+    local not_notices=" mupdf-src/source/fitz/glyphlist.h mupdf-src/source/fitz/color-icc-create.c "
     local missed
     missed="$(sed "s#^#$deps/#" <<<"$inputs" | while IFS= read -r input; do
+        if [[ "$not_notices" == *" ${input#"$deps"/} "* ]]; then
+            continue
+        fi
         if [[ -f "$input" ]] && LC_ALL=C grep -Eq "$notice_marker" "$input" &&
             ! grep -qF "  ${input#"$deps"/}" "$licenses/$(cut -d/ -f1 <<<"${input#"$deps"/}" | sed 's/-src$//')/SOURCE-NOTICES.txt"; then
             echo "$input"
@@ -137,4 +144,15 @@ add_static_component_licenses() {
     add_license libgit2-xdiff "$deps/libgit2-src/deps/winhttp/COPYING.LGPL"
     # curl lisansı (MIT türevi); derlenen dosyaların bildirimleri curl/SOURCE-NOTICES.txt'te.
     add_license curl "$deps/curl-src/COPYING"
+    # MuPDF (AGPL-3.0) ve derlenen gömülü üçüncü partileri (cmake/MuPDF.cmake); URW Base14 fontları ikiliye gömülür.
+    add_license mupdf "$deps/mupdf-src/COPYING"
+    add_license mupdf-freetype "$deps/mupdf-src/thirdparty/freetype/LICENSE.TXT"
+    add_license mupdf-freetype "$deps/mupdf-src/thirdparty/freetype/docs/FTL.TXT"
+    add_license mupdf-jbig2dec "$deps/mupdf-src/thirdparty/jbig2dec/LICENSE"
+    add_license mupdf-jbig2dec "$deps/mupdf-src/thirdparty/jbig2dec/COPYING"
+    # libjpeg'in lisansı README'nin LEGAL ISSUES bölümündedir; README'nin kopyada kalmasını ister.
+    add_license mupdf-libjpeg "$deps/mupdf-src/thirdparty/libjpeg/README"
+    add_license mupdf-openjpeg "$deps/mupdf-src/thirdparty/openjpeg/LICENSE"
+    add_license mupdf-zlib "$deps/mupdf-src/thirdparty/zlib/LICENSE"
+    add_license mupdf-urw-fonts "$deps/mupdf-src/resources/fonts/urw/OFL.txt"
 }

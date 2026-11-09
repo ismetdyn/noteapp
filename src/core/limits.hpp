@@ -191,6 +191,18 @@ struct UpdateLimits {
     bool operator==(const UpdateLimits&) const = default;
 };
 
+// [limits.pdf]: PDF okuma (src/pdfview). PDF senkronla gelir: güvenilmez girdi, varsayılanlar korumadır; 0'ın
+// riski defaults.toml'da yazılıdır.
+struct PdfLimits {
+    Limit pages;           // açılan belgenin en çok sayfası; fazlası olan belge açılmaz
+    Limit render_pixels;   // çizilen bir sayfanın en çok pikseli (genişlik x yükseklik)
+    Limit text_bytes;      // bir sayfadan çıkarılan en çok metin (UTF-8 bayt)
+    Limit context_memory;  // belge başına MuPDF'in ayırabileceği en çok bellek
+    Limit duration;        // bir sayfanın metin çıkarma ya da çizim süresi; dolunca iş kesilir
+
+    bool operator==(const PdfLimits&) const = default;
+};
+
 struct Limits {
     AppLimits app{};
     CoreLimits core{};
@@ -202,6 +214,7 @@ struct Limits {
     TuiLimits tui{};
     LspLimits lsp{};
     UpdateLimits update{};
+    PdfLimits pdf{};
 
     bool operator==(const Limits&) const = default;
 };

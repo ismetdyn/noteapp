@@ -1,5 +1,6 @@
 add_library(noteapp_core
     atomic_file.cpp
+    child_process.cpp
     i18n.cpp
     log.cpp
     limits.cpp

@@ -24,16 +24,6 @@ std::string utf8(const fs::path& path) {
 
 }  // namespace
 
-fs::path note_executable_beside_self() {
-#ifdef _WIN32
-    constexpr const char* kName = "note.exe";
-#else
-    constexpr const char* kName = "note";
-#endif
-    // Kendi yolu bulunamazsa yalnız ad kalır: PATH'te aranır.
-    return core::current_executable().parent_path() / kName;
-}
-
 AutoSync::AutoSync(const core::Config& config, fs::path note_exe, StatusCallback on_status)
     : idle_(config.sync.idle_seconds), timeout_(config.tuning.sync_timeout_seconds),
       note_exe_(std::move(note_exe)), on_status_(std::move(on_status)), service_(config) {

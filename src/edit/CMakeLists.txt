@@ -1,9 +1,8 @@
-# Editör yığını (tampon, sözdizimi, yazım, tamamlama, bul, giriş satırı, pano, çocuk süreç, LSP): TUI ve GUI aynı
+# Editör yığını (tampon, sözdizimi, yazım, tamamlama, bul, giriş satırı, pano, LSP): TUI ve GUI aynı
 # modeli kullanır, yalnız çizim arayüzdedir. FTXUI, ImGui ve SDL bağımlılığı yoktur; arayüz başlığı da eklenmez
 # (aşağıdaki denetim).
 # Ad alanı tarihsel olarak noteapp::tui kaldı (A8: yalnız taşıma).
 add_library(noteapp_edit
-    child_process.cpp
     clipboard.cpp
     completion.cpp
     editor_buffer.cpp

@@ -8,9 +8,9 @@
 #include <string_view>
 #include <vector>
 
-namespace noteapp::tui {
+namespace noteapp::core {
 
-// Pano araçları, hunspell ve dil sunucuları için stdin/stdout borulu, kabuksuz çocuk süreç. Kendi süreç grubundadır
+// Pano araçları, hunspell, dil sunucuları ve PDF işçisi için stdin/stdout borulu, kabuksuz çocuk süreç. Kendi süreç grubundadır
 // (Windows: kapanınca öldüren iş nesnesi); yıkıcı bitmemişse ağacı öldürür ve toplar: askıda çocuk bırakılmaz.
 // Ortamdan AppImage değişkenleri (SSL_CERT_*, LD_*) ve senkron token'ı düşer, `extra_env` ("AD=değer") üstüne
 // biner. Windows'ta program PATHEXT ile bulunur, .bat/.cmd cmd.exe ile çalışır ve metakarakterli argüman
@@ -62,4 +62,4 @@ private:
 #endif
 };
 
-}  // namespace noteapp::tui
+}  // namespace noteapp::core

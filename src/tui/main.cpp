@@ -699,7 +699,7 @@ void TuiSession::notify_changed() {
 void TuiSession::start_auto_sync() {
     sync_indicator_.restore(noteapp::sync::SyncService(config_).status());
     show_sync();
-    auto_sync_.emplace(config_, noteapp::sync::note_executable_beside_self(),
+    auto_sync_.emplace(config_, noteapp::core::note_executable_beside_self(),
                        [this](const noteapp::sync::SyncStatus& result, bool running) {
                            app_.Post([this, result, running] {
                                if (!auto_sync_)

@@ -13,9 +13,6 @@
 
 namespace noteapp::sync {
 
-// Ön yüzlerin (TUI/GUI) `note` ikilisi: çalışan ikilinin yanındaki `note` (Windows'ta `note.exe`).
-std::filesystem::path note_executable_beside_self();
-
 // TUI/GUI arka plan senkronu (SPEC-sync karar 3): tek işçi iş parçacığı; her senkron ayrı bir
 // `note sync --background` sürecidir. Süreç `tuning.sync_timeout_seconds` içinde bitmezse sonlandırılır ve
 // durum "sync.timeout" olur (asılı ssh arayüzü kilitlemez; sonraki senkron artıkları temizler).
@@ -27,7 +24,7 @@ public:
     // Callback içinden notify_changed/request_now çağrılabilir; stop() ve yıkıcı çağrılamaz (kilitlenir).
     using StatusCallback = std::function<void(const SyncStatus& status, bool running)>;
 
-    // `note_exe`: senkronu koşacak `note` ikilisi (ön yüzler note_executable_beside_self()). Süreler
+    // `note_exe`: senkronu koşacak `note` ikilisi (ön yüzler core::note_executable_beside_self()). Süreler
     // config'ten: sync.idle_seconds (debounce), tuning.sync_timeout_seconds (bir senkronun üst sınırı).
     // Yalnız `config.sync.enabled` iken kurulmalı; `note sync --background` de kapalıyken hiçbir şey yapmaz.
     AutoSync(const core::Config& config, std::filesystem::path note_exe, StatusCallback on_status);

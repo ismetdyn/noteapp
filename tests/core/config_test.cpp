@@ -1005,6 +1005,32 @@ TEST_CASE("limits.update defaults bound the API, SHA256SUMS and package download
                                                                          "64KiB"}) != entries.end());
 }
 
+// PDF1: güvenilmez PDF'in sınırları config'tedir; varsayılanlar korumadır, 0 = sınırsız.
+TEST_CASE("limits.pdf has protective defaults, accepts 0 as unlimited and rejects a wrong unit") {
+    const PdfLimits defaults = parse_config("").config.limits.pdf;
+    CHECK(defaults.pages == Limit{10000, "10000"});
+    CHECK(defaults.render_pixels == Limit{16777216, "16777216"});
+    CHECK(defaults.text_bytes == Limit{1024U * 1024U, "1MiB"});
+    CHECK(defaults.context_memory == Limit{512U * 1024U * 1024U, "512MiB"});
+    CHECK(defaults.duration == Limit{10000, "10s"});  // ms
+
+    const LoadedConfig zero = parse_config(
+        "[limits.pdf]\npages = 0\nrender_pixels = 0\ntext_bytes = 0\ncontext_memory = 0\nduration = 0\n");
+    CHECK(zero.warnings.empty());
+    CHECK(zero.config.limits.pdf.pages.unlimited());
+    CHECK(zero.config.limits.pdf.render_pixels.unlimited());
+    CHECK(zero.config.limits.pdf.text_bytes.unlimited());
+    CHECK(zero.config.limits.pdf.context_memory.unlimited());
+    CHECK(zero.config.limits.pdf.duration.unlimited());
+
+    const LoadedConfig sized =
+        parse_config("[limits.pdf]\ncontext_memory = \"1GiB\"\npages = \"5KiB\"\nduration = \"250ms\"\n");
+    CHECK(sized.config.limits.pdf.context_memory.value == 1024U * 1024U * 1024U);
+    CHECK(sized.config.limits.pdf.duration.value == 250U);
+    CHECK(sized.config.limits.pdf.pages == Limit{10000, "10000"});  // sayıya bayt eki: geçersiz, varsayılan kalır
+    CHECK(has_warning_about(sized, "limits.pdf.pages", "config.invalid_value"));
+}
+
 TEST_CASE("limits.app.recent_commands defaults to 20 and accepts 0 as unlimited") {
     CHECK(parse_config("").config.limits.app.recent_commands == Limit{20, "20"});
 

@@ -205,6 +205,15 @@ FetchContent_Declare(curl
     SYSTEM)
 FetchContent_MakeAvailable(curl)
 
+# PDF okuma (`noteapp_pdfview`, AGPL-3.0). Kaynak arşivi gömülü üçüncü partileri (thirdparty/) ve üretilmiş font
+# dosyalarını taşır; GitHub etiket arşivi alt modülsüzdür. SHA256 mupdf.com/releases'ta yayımlanan değerdir.
+# MuPDF'in CMake'i yoktur (Makefile): hedefler cmake/MuPDF.cmake'te kurulur; gerekçe orada.
+FetchContent_Declare(mupdf
+    URL https://casper.mupdf.com/downloads/archive/mupdf-1.28.6-source.tar.gz
+    URL_HASH SHA256=dc85000640a45d90ca9b77b061f6ca67cce0c4d4fbecf8819647baf573eef101)
+FetchContent_MakeAvailable(mupdf)
+include(${CMAKE_CURRENT_LIST_DIR}/MuPDF.cmake)
+
 if(NOTEAPP_BUILD_GUI)
     # Not uygulaması ses, oyun kolu, kamera, GPU API'si kullanmaz: kapalı alt sistemler derleme süresini, çalışma zamanı
     # bağımlılığını ve saldırı yüzeyini küçültür. Dialog ve D-Bus açık kalır (portal dosya diyaloğu, sistem teması).

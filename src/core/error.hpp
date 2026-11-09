@@ -20,7 +20,11 @@ struct Error {
         EditorNotFound,
         EditorFailed,
         PartialCopy,  // çok işlemli kopya yarıda kaldı: yazılanlar yerinde, yeni adla yinelenmez
-        InvalidQuery  // görünümün Cypher sorgusu reddedildi (bozuk, yazan, not döndürmeyen)
+        InvalidQuery,     // görünümün Cypher sorgusu reddedildi (bozuk, yazan, not döndürmeyen)
+        InvalidDocument,  // belge (PDF) okunamadı: bozuk, kesik ya da desteklenmeyen biçim
+        Encrypted,        // belge parola korumalı; parola desteklenmez
+        LimitExceeded,    // güvenilmez girdi bir [limits.*] sınırını aştı; iş yapılmadı
+        Cancelled         // çağıran işi durdurdu (std::stop_token); sonuç yok, hata kullanıcıya gösterilmez
     };
 
     Code code{};
