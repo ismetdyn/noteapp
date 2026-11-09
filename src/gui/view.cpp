@@ -1,5 +1,6 @@
 #include "gui/view.hpp"
 
+#include "app/update_controller.hpp"
 #include "core/file_icon_table.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
@@ -145,7 +146,9 @@ std::expected<std::unique_ptr<View>, std::string> View::create(GuiState& state) 
     if (!platform->sdl.ok)
         return std::unexpected(sdl_error("SDL_Init"));
 
-    platform->window.reset(SDL_CreateWindow("noteapp", state.layout().width, state.layout().height,
+    // Başlıkta kurulu sürüm ("noteapp 0.1.2"): yerleşimden yer almadan her zaman görünür.
+    platform->window.reset(SDL_CreateWindow(app::version_label().c_str(), state.layout().width,
+                                            state.layout().height,
                                             SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY));
     if (!platform->window)
         return std::unexpected(sdl_error("SDL_CreateWindow"));

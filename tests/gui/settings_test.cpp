@@ -132,7 +132,7 @@ struct SettingsFixture : WindowFixture {
 
 // Senkron grubu formun sonundadır; 650 piksellik varsayılan pencerede kaydırmadan görünmez. Satırı tıklayan
 // testler pencereyi uzatır (sığma ve kaydırma layout_test'te denetlenir).
-constexpr int kTallWindowHeight = 1000;
+constexpr int kTallWindowHeight = 1100;
 
 void show_settings(GuiState& state, View& view) {
     state.show_settings_tab();
@@ -852,6 +852,7 @@ TEST_CASE_FIXTURE(SettingsFixture, "the token row states why it is locked and wh
 TEST_CASE_FIXTURE(SettingsFixture,
                   "sync off locks the sync fields but keeps their values and the token row") {
     auto state = make_state_wired();
+    state->layout().height = kTallWindowHeight;
     auto view = make_view(*state);
     SettingsPage& page = state->settings();
     show_settings(*state, *view);

@@ -32,8 +32,9 @@ public:
     // Replace: origin değiştirme onayı "evet" ile bitti; çağıran submit(config, true) çağırır. Test:
     // "Bağlantıyı test et"e basıldı; çağıran begin_test ile adayı alır, senkronu işçide koşar.
     // Quit / SubmitAndQuit: çıkış sorusunda (ask_before_quit) At / Kaydet; çağıran uygulamadan çıkar (Kaydet
-    // yalnız başarılıysa).
-    enum class Outcome { Editing, Cancel, Submit, Replace, Test, Quit, SubmitAndQuit };
+    // yalnız başarılıysa). CheckUpdates: "Güncellemeleri denetle"ye basıldı; çağıran palet `update` akışını
+    // koşar (app::UpdateController::open), form açık kalır.
+    enum class Outcome { Editing, Cancel, Submit, Replace, Test, Quit, SubmitAndQuit, CheckUpdates };
 
     explicit SettingsState(const core::Config& config, SettingsServices services = {});
 
@@ -61,8 +62,9 @@ public:
     std::size_t focus() const { return focus_; }
     bool on_button() const { return focus_ == slot_count() - 1; }
     bool on_test() const { return focus_ == slot_count() - 2; }
-    // Satırlar + (token) + bağlantı testi + Kaydet.
-    std::size_t slot_count() const { return rows().size() + (token_visible() ? 1 : 0) + 2; }
+    bool on_update() const { return focus_ == slot_count() - 3; }
+    // Satırlar + (token) + güncelleme denetimi + bağlantı testi + Kaydet.
+    std::size_t slot_count() const { return rows().size() + (token_visible() ? 1 : 0) + 3; }
     bool changed() const { return form_.changed(); }
     const std::string& error() const { return form_.error(); }  // forma ait (satıra değil) hata
     // Değişiklikle Esc'te açılan Kaydet / At / Vazgeç sorusunun seçili düğmesi; kapalıysa nullopt.

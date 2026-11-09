@@ -270,6 +270,7 @@ private:
                            void (GuiState::*apply)(const std::string&));
     void draw_token_row();
     void draw_connection_test_row();
+    void draw_update_check_row();
     bool button(const std::string& name, const std::string& label, ButtonKind kind = ButtonKind::Secondary);
     struct DialogAnswer {
         bool ok = false;

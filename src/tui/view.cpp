@@ -2,6 +2,7 @@
 
 #include "app/listing.hpp"
 #include "app/map_relations.hpp"
+#include "app/update_controller.hpp"
 #include "core/file_stat.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
@@ -251,7 +252,14 @@ ftxui::Element top_bar(const TuiState& state, const StatusLine& status, int widt
     const std::string sync = head_ellipsis(terminal_safe(status.sync), room);
     if (!sync.empty())
         right += kGroupSeparator;
-    return hbox({std::move(left), filler(), text(right) | dim, sync_element(sync, status.sync_state)});
+    // Sürüm en düşük önceliktedir: yalnız senkron metni tam sığdıktan sonra kalan yerde görünür; dar
+    // pencerede senkron kısalmadan önce düşer.
+    const std::string version = std::string(kGroupSeparator) + app::version_label();
+    Element version_element = text("");
+    if (room - ftxui::string_width(sync) >= ftxui::string_width(version))
+        version_element = text(version) | dim;
+    return hbox({std::move(left), filler(), text(right) | dim, sync_element(sync, status.sync_state),
+                 std::move(version_element)});
 }
 
 // `n` görünümünün üst satırı: liste ve sayaçlar gizli, kaydedildiyse notun yolu.
@@ -993,7 +1001,7 @@ constexpr int kSettingsWidth = 58;
 constexpr int kSettingsInnerWidth = kSettingsWidth - 2;  // kenarlık
 constexpr int kSettingsLabelWidth = 22;
 constexpr std::size_t kSettingsValueCells = 30;  // uzun yol/URL'de sondaki kısım görünür (imleç orada)
-constexpr int kSettingsFixedLines = 6;           // kenarlık 2 + test + düğme + hata (ilk satırı) + ipucu
+constexpr int kSettingsFixedLines = 7;           // kenarlık 2 + 3 düğme satırı + hata (ilk satırı) + ipucu
 
 ftxui::Element settings_row(const SettingsState::Row& row, bool focused) {
     using namespace ftxui;
@@ -1265,6 +1273,11 @@ ftxui::Element settings_box(const SettingsState& settings, int window_height) {
         const std::size_t first = focus_row < visible ? 0 : focus_row + 1 - visible;
         for (std::size_t i = first; i < rows.size() && i < first + visible; ++i)
             body.push_back(settings_row(rows[i], settings.focus() == i));
+        // Güncelleme denetimi (palet `update` ile aynı akış) ve kurulu sürüm; sürüm yanında durur ki ne
+        // denetlendiği görünsün.
+        Element update = text("[ " + core::tr("command.update") + " ]");
+        body.push_back(hbox({settings.on_update() ? update | inverted : update, text("  "),
+                             text(app::version_label()) | dim}));
         Element test = text("[ " + core::tr("tui.settings_test") + " ]");
         body.push_back(hbox({settings.on_test() ? test | inverted : test, text(" "),
                              text(terminal_safe(settings.test_result())) | dim | xflex_shrink}));
@@ -1366,7 +1379,8 @@ ftxui::Element update_box(const UpdateDialogState& update) {
            size(WIDTH, EQUAL, kDialogWidth) | clear_under;
 }
 
-// Birden çoğu açıksa öncelik: yardım > onay > diyalog > ayarlar > güncelleme.
+// Birden çoğu açıksa öncelik: yardım > onay > diyalog > güncelleme > ayarlar. Güncelleme penceresi Ayarlar'ın
+// "Güncellemeleri denetle" düğmesiyle formun üstünde açılır; kapanınca form yerinde kalır.
 ftxui::Element open_modal(const TuiState& state, const HelpState* help, const ConfirmState* confirm,
                           const SaveDialogState* dialog, const SettingsState* settings,
                           const UpdateDialogState* update, int window_height) {
@@ -1376,10 +1390,10 @@ ftxui::Element open_modal(const TuiState& state, const HelpState* help, const Co
         return confirm_box(*confirm);
     if (dialog)
         return save_dialog_box(*dialog);
-    if (settings)
-        return settings_box(*settings, window_height);
     if (update)
         return update_box(*update);
+    if (settings)
+        return settings_box(*settings, window_height);
     if (state.palette_open())
         return palette_box(state, window_height);
     return state.summary().empty() ? nullptr : summary_box(state.summary(), window_height);

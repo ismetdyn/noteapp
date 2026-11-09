@@ -119,6 +119,8 @@ SettingsState::Outcome SettingsState::handle_key(Key key, std::string_view text)
             return Outcome::Submit;
         if (on_test())
             return Outcome::Test;
+        if (on_update())
+            return Outcome::CheckUpdates;
         if (on_token() && !form_.token.empty()) {
             form_.store_token();  // kasaya yazar, odak yerinde kalır
             return Outcome::Editing;
@@ -134,7 +136,7 @@ SettingsState::Outcome SettingsState::handle_key(Key key, std::string_view text)
     default:
         break;
     }
-    if (on_button() || on_test())
+    if (on_button() || on_test() || on_update())
         return Outcome::Editing;
     if (on_token()) {
         switch (key) {

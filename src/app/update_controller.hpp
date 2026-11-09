@@ -33,6 +33,10 @@ struct UpdateView {
 
 UpdateView update_view(const UpdateStatus& status, std::string_view current_version);
 
+// Ayarlar ekranında "Güncellemeleri denetle" düğmesinin yanındaki sürüm metni ("noteapp 0.1.2"); iki arayüzde
+// aynı biçim.
+std::string version_label();
+
 // TUI ve GUI'nin güncelleme akışı (SPEC-tui / SPEC-gui "Güncelleme"): açılış denetimi, palet komutu, pencere
 // ve bildirimler. Yalnız UI iş parçacığından çağrılır; işçinin on_change'i (işçi iş parçacığı) UI iş
 // parçacığına changed() çağrısını gönderir (TUI Post, GUI post). Arayüz yalnız çizer ve girdiyi act()'e

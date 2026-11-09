@@ -2,10 +2,13 @@
 // burada palet komutu, pencerenin tuşları, çizim ve bildirimin ipucu, sahte HTTP ve kurulumla uçtan uca akış.
 // Ağa çıkılmaz; durum dosyası geçici NOTEAPP_HOME'dadır.
 #include "app/update_controller.hpp"
+#include "core/config.hpp"
 #include "core/i18n.hpp"
+#include "core/version.hpp"
 #include "support/test_support.hpp"
 #include "support/update_fixture.hpp"
 #include "tui/modals.hpp"
+#include "tui/settings.hpp"
 #include "tui/tui_state.hpp"
 #include "tui/view.hpp"
 
@@ -245,4 +248,88 @@ TEST_CASE("update flow: Cancel in the window stops the download and installs not
     CHECK(installer.calls() == 0);
     dialog->show(controller.view());
     CHECK(dialog->view().actions == std::vector{UpdateAction::Install, UpdateAction::Close});
+}
+
+TEST_CASE("update button: Settings shows Check for updates with the installed version") {
+    const Home home;
+    const tui::SettingsState settings(core::parse_config("").config);
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth), ftxui::Dimension::Fixed(kHeight));
+    const tui::StatusLine status{"sync off", ""};
+    ftxui::Render(screen, tui::render(sample_state(), {}, status, {kWidth, kHeight}, nullptr, nullptr,
+                                      nullptr, &settings));
+    const std::string text = screen.ToString();
+    CHECK(has(text, "[ " + core::tr("command.update") + " ]"));
+    CHECK(has(text, "noteapp " + std::string(core::version())));
+    CHECK(app::version_label() == "noteapp " + std::string(core::version()));
+}
+
+namespace {
+
+std::string top_line(int width, const tui::StatusLine& status) {
+    tui::TuiState state = sample_state();
+    state.set_window(width, kHeight);
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width), ftxui::Dimension::Fixed(kHeight));
+    ftxui::Render(screen, tui::render(state, {}, status, {width, kHeight}));
+    const std::string text = screen.ToString();
+    return text.substr(0, text.find('\n'));
+}
+
+}  // namespace
+
+TEST_CASE("version: the TUI top bar ends with the installed version when there is room") {
+    const Home home;
+    const std::string line = top_line(kWidth, {"sync off", ""});
+    CHECK(has(line, "sync off · noteapp " + std::string(core::version())));
+}
+
+TEST_CASE("version: a narrow top bar drops the version before it shortens the sync text") {
+    const Home home;
+    const std::string sync = "✓ synced at 09:05";
+    const std::string version = app::version_label();
+    bool seen_both = false;
+    bool seen_sync_only = false;
+    for (int width = kWidth; width >= 40; --width) {
+        CAPTURE(width);
+        const std::string line = top_line(width, {sync, ""});
+        const bool full_sync = has(line, sync);
+        const bool shows_version = has(line, version);
+        CHECK_FALSE((shows_version && !full_sync));  // senkron kısaldıysa sürüm çoktan düşmüştür
+        seen_both = seen_both || (full_sync && shows_version);
+        seen_sync_only = seen_sync_only || (full_sync && !shows_version);
+    }
+    CHECK(seen_both);
+    CHECK(seen_sync_only);  // sürüm düştüğü genişlikte senkron hâlâ tam
+}
+
+TEST_CASE("update button: Enter on it in Settings runs the palette's check; the window opens over the form") {
+    const Home home;
+    test::FakeGitHub github;
+    github.publish("1.3.0");
+    test::FakeInstaller installer;
+    app::UpdateController controller(test::update_settings("1.2.3"), deps(github, installer));
+    tui::StatusLine status{"sync off", ""};
+    tui::SettingsState settings(core::parse_config("").config);
+    for (int i = 0; i < 3; ++i)
+        settings.handle(Key::ShiftTab);  // ilk satırdan geri: Kaydet, bağlantı testi, güncelleme
+    REQUIRE(settings.on_update());
+    REQUIRE(settings.handle(Key::Enter) == tui::SettingsState::Outcome::CheckUpdates);
+
+    // TuiSession'ın CheckUpdates'te yaptığı: palet `update` ile aynı yol.
+    std::optional<UpdateDialogState> dialog;
+    controller.open(status.notices);
+    dialog.emplace();
+    settle(controller, status);
+    CHECK(github.requests() == 1);
+    dialog->show(controller.view());
+    CHECK(dialog->view().actions == std::vector{UpdateAction::Install, UpdateAction::Close});
+
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth), ftxui::Dimension::Fixed(kHeight));
+    ftxui::Render(screen, tui::render(sample_state(), {}, status, {kWidth, kHeight}, nullptr, nullptr,
+                                      nullptr, &settings, nullptr, nullptr, nullptr, nullptr, {}, &*dialog));
+    const std::string text = screen.ToString();
+    CHECK(has(text, dialog->view().lines.front()));
+    CHECK_FALSE(has(text, core::tr("tui.settings_title")));  // form altta kalır, kapanınca geri gelir
+    press(controller, dialog, Key::Enter);  // Kapat
+    CHECK_FALSE(dialog.has_value());
+    CHECK(installer.calls() == 0);
 }

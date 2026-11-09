@@ -1,3 +1,4 @@
+#include "app/update_controller.hpp"
 #include "core/i18n.hpp"
 #include "search/content_index.hpp"
 #include "support/note_seed.hpp"
@@ -733,7 +734,7 @@ TEST_CASE("top line: the right group is dim and split by middle dots, the sync s
         const tui::StatusLine status{.sync = sync, .message = {}, .notice = {}, .sync_state = sync_state};
         ftxui::Render(screen, tui::render(sample_state(), text_preview({}), status, {kWidth, kHeight}));
         const std::string top = row_text(screen, 0);
-        CHECK(top.ends_with("↓ · [name] · 3 notes · " + sync));
+        CHECK(top.ends_with("↓ · [name] · 3 notes · " + sync + " · " + app::version_label()));
         const auto shown = find_text(screen, sync);
         REQUIRE(shown);
         CHECK(shown->second == 0);

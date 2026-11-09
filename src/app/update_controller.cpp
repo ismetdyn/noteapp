@@ -2,6 +2,7 @@
 
 #include "core/i18n.hpp"
 #include "core/log.hpp"
+#include "core/version.hpp"
 
 #include <cstdint>
 #include <limits>
@@ -26,6 +27,10 @@ std::string done_text(const UpdateDone& done) {
 }
 
 }  // namespace
+
+std::string version_label() {
+    return core::tr("app.version_label", {{"version", std::string(core::version())}});
+}
 
 const char* update_action_label(UpdateAction action) {
     switch (action) {

@@ -441,6 +441,9 @@ SPEC-cli "Güncelleme"); burada yalnız tuşlar ve çizim var.
   döner: `Enter` ancak `←`/`→`/`Tab` ile `Kur`a gidilince kurar; `Esc` kapatır; harf kısayolu yok. İndirme ve kurulum
   sürerken `İptal` `Kapat`; ilerleme (`indiriliyor…`, `kuruluyor…`) pencerede. Bitince "kuruldu" (Windows'ta ayrıca
   "yeniden başlatın"), hata yerelleştirilmiş nedeniyle. Pencere işlem sürerken kapatılabilir: sonuç bildirim olur.
+- **Ayarlar düğmesi:** F2 formunda alan (ve token) satırlarının altında `[ Güncellemeleri denetle ]`, yanında kurulu
+  sürüm (`noteapp 0.1.2`); `Enter` palet `update` akışını koşar, pencere formun üstünde açılır, kapanınca form kalır.
+- **Sürüm:** üst çubuğun sağ ucunda ` · noteapp 0.1.2`, en düşük öncelikle: dar pencerede senkron metni kısalmadan düşer.
 - **Çıkış:** süren denetim ve indirme iptal edilir, beklenmez. Değiştirme evresindeki kurulum iptali yok sayar; çıkış onu
   bekler ve terminale "Güncellemenin kurulması bekleniyor..." yazar.
 

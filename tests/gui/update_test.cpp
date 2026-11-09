@@ -9,6 +9,7 @@
 #include "support/update_fixture.hpp"
 #include "window_fixture.hpp"
 
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -283,6 +284,44 @@ TEST_CASE_FIXTURE(UpdateScene,
     gui_test::settle(*view);
     CHECK(drawn(*view, "setting_label:update.check_interval"));
     CHECK(drawn(*view, "setting_hint:update.check_interval"));
+}
+
+TEST_CASE_FIXTURE(UpdateScene, "update: Settings' Check for updates button runs the palette's check") {
+    auto state = make_updating_state();
+    auto view = make_view(*state);
+    state->show_settings_tab();
+    gui_test::settle(*view);
+    REQUIRE(drawn(*view, "update_check"));
+    CHECK_FALSE(state->update_open());
+    click_button(*view, "update_check");
+    CHECK(state->update_open());
+    finish(*state);
+    CHECK(github.requests() == 1);
+    CHECK(state->update_view().actions == std::vector{UpdateAction::Install, UpdateAction::Close});
+    view->draw_frame();
+    CHECK(drawn(*view, "update_dialog"));
+    CHECK(installer.calls() == 0);
+}
+
+TEST_CASE_FIXTURE(UpdateScene, "update: the window title always shows the installed version") {
+    auto state = make_state();
+    auto view = make_view(*state);
+    int count = 0;
+    const std::unique_ptr<SDL_Window*, decltype(&SDL_free)> windows(SDL_GetWindows(&count), &SDL_free);
+    REQUIRE(count == 1);
+    CHECK(std::string(SDL_GetWindowTitle(windows.get()[0])) ==
+          "noteapp " + std::string(noteapp::core::version()));
+}
+
+TEST_CASE_FIXTURE(UpdateScene, "update: Settings shows the installed version beside the button") {
+    auto state = make_state();
+    auto view = make_view(*state);
+    const gui_test::RenderedText rendered;
+    state->show_settings_tab();
+    gui_test::settle(*view);
+    CHECK(drawn(*view, "version"));
+    CHECK(rendered.contains("noteapp " + std::string(noteapp::core::version())));
+    CHECK(rendered.contains(tr("command.update")));
 }
 
 // İnceleme (güvenlik, Sev-3): denetim biterken Kur İptal'in yerine (ilk düğme) geçer. Pencere yeni satırlarla

@@ -1,3 +1,4 @@
+#include "app/update_controller.hpp"
 #include "core/i18n.hpp"
 #include "core/text.hpp"
 #include "gui/view_internal.hpp"
@@ -237,6 +238,22 @@ void View::draw_connection_test_row() {
     remember_item_center("test_result");
 }
 
+// update.check_interval'ın altında: palet `update` ile aynı akış (denetim, sonra bildirim ya da pencere) ve
+// kurulu sürüm; sürüm yanında durur ki ne denetlendiği görünsün.
+void View::draw_update_check_row() {
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(1);
+    const float row_start_x = ImGui::GetCursorScreenPos().x;
+    const float row_width = ImGui::GetContentRegionAvail().x;
+    if (button("update_check", core::tr("command.update")))
+        queue([this] { state_.open_update(); });
+    const std::string version = app::version_label();
+    flow_after_previous(text_width(version), row_start_x, row_width);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", version.c_str());
+    remember_item_center("version");
+}
+
 void View::draw_settings_form() {
     const float label_width = settings_label_width(state_.settings(), ImGui::GetContentRegionAvail().x);
     ImGui::SeparatorText(core::tr("gui.settings_group_general").c_str());
@@ -244,6 +261,7 @@ void View::draw_settings_form() {
     if (begin_form_table("##general", label_width)) {
         for (const char* key : kGeneralKeys)
             draw_setting_field(key);
+        draw_update_check_row();
         ImGui::EndTable();
     }
     ImGui::SeparatorText(core::tr("gui.settings_group_sync").c_str());

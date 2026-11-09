@@ -171,14 +171,14 @@ TEST_CASE("the token row exists only for an https remote and lives outside the 1
         }());
         CHECK_FALSE(s.token_visible());
         CHECK(s.rows().size() == 14);
-        CHECK(s.slot_count() == 16);  // yalnız bağlantı testi ve Kaydet düğmeleri eklenir
+        CHECK(s.slot_count() == 17);  // yalnız güncelleme, bağlantı testi ve Kaydet düğmeleri eklenir
     }
     auto c = w.config();
     c.sync.remote = "https://GitHub.com/me/notes.git";
     const auto s = w.form(c);
     CHECK(s.token_visible());
     CHECK(s.rows().size() == 14);
-    CHECK(s.slot_count() == 17);
+    CHECK(s.slot_count() == 18);
     CHECK(s.token_row().kind == SettingsState::Kind::Token);
 }
 
@@ -192,7 +192,7 @@ TEST_CASE("the token row appears and disappears while the remote is being edited
     CHECK_FALSE(s.token_visible());
 }
 
-TEST_CASE("focus runs rows, then the token row, the connection test, then the save button") {
+TEST_CASE("focus runs rows, then the token row, the update check, the connection test, then Save") {
     World w;
     auto c = w.config();
     c.sync.remote = "https://github.com/me/notes.git";
@@ -201,9 +201,12 @@ TEST_CASE("focus runs rows, then the token row, the connection test, then the sa
     CHECK(s.focus() == 14);
     CHECK_FALSE(s.on_button());
     s.handle(Key::Down);
+    CHECK(s.on_update());
+    s.handle(Key::Down);
     CHECK(s.on_test());
     s.handle(Key::Down);
     CHECK(s.on_button());
+    s.handle(Key::Up);
     s.handle(Key::Up);
     s.handle(Key::Up);
     CHECK(s.on_token());
@@ -311,7 +314,7 @@ TEST_CASE("Enter on an empty token row just moves on") {
     auto s = w.form(c);
     focus_token(s);
     s.handle(Key::Enter);
-    CHECK(s.on_test());
+    CHECK(s.on_update());
     CHECK(w.vault.calls.empty());
 }
 

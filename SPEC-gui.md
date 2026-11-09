@@ -121,6 +121,9 @@ Akış TUI ile ortaktır (`app::UpdateController`; denetim ve kurulum `app::Upda
   `Ayrıntılar…`); süresi dolmaz, tıklanınca ya da pencere açılınca kalkar. Güncel ve hata yalnız loga yazılır.
 - **Palet** "Güncellemeleri denetle" (`update`, kısayolu yok; Ayarlar açıkken de koşar): pencereyi açar, bulunmuş ya da
   kurulmuş sürüm yoksa denetler.
+- **Ayarlar düğmesi:** Ayarlar → Genel'de `update.check_interval`ın altında "Güncellemeleri denetle", yanında kurulu
+  sürüm (`noteapp 0.1.2`); tıklama palet `update` akışını koşar.
+- **Sürüm:** pencere başlığı kurulu sürümü taşır (`noteapp 0.1.2`); yerleşimden yer almaz.
 - **Pencere:** bekletmeyen modal (her karede çizilir, işçinin ilerlemesi görünür; arkadaki kısayollar kapalı). Sürüm,
   kurulu sürüm ve release sayfası; `Kur` `Kapat` (kendini güncelleyemeyen kurulumda `Bağlantıyı kopyala`: panoya).
   Klavye imleci `Kapat`ta başlar: `Enter` ve `Esc` kapatır, kurulum yalnız `Kur`la. İndirme ve kurulum sürerken

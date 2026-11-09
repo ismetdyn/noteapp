@@ -1010,6 +1010,9 @@ void TuiSession::handle_settings_key(tui::SettingsState& settings, const Key key
         if (auto candidate = settings.begin_test(config_))
             start_connection_test(std::move(*candidate));
         break;
+    case tui::SettingsState::Outcome::CheckUpdates:
+        run_intent(tui::Intent::CheckUpdates, key, text);  // palet `update` ile aynı akış; form açık kalır
+        break;
     case tui::SettingsState::Outcome::Quit:
         app_.Exit();
         break;
@@ -1051,12 +1054,18 @@ void TuiSession::handle_modal_key(const Key key, const std::string& text) {
     // Çıkışta geçici dosya silinmez: yazılan metin state dizininde kalır. Kaydedilmemiş Ayarlar önce sorar
     // (GUI pencere kapanışı gibi); soru açıkken Ctrl+C onu açık tutar.
     if (tui::quits_from_modal(key, state_.focus())) {
-        if (!settings_ || !settings_->ask_before_quit())
+        if (!settings_ || !settings_->ask_before_quit()) {
             app_.Exit();
+        } else if (update_dialog_) {  // soru formdadır: üstteki güncelleme penceresi onu örtmesin
+            update_.act(app::UpdateAction::Close);
+            update_dialog_.reset();
+        }
     } else if (help_) {
         if (!help_->handle(key, text))
             help_.reset();
-    } else if (settings_)
+    } else if (update_dialog_)  // Ayarlar'ın düğmesiyle formun üstünde açılır (render'daki sıra)
+        handle_update_key(key);
+    else if (settings_)
         handle_settings_key(*settings_, key, text);
     else if (confirm_) {
         switch (confirm_->handle(key, text)) {
@@ -1073,8 +1082,6 @@ void TuiSession::handle_modal_key(const Key key, const std::string& text) {
         handle_new_row_key(*new_row_, key, text);
     else if (rename_)
         list_actions_.handle_rename_key(rename_, key, text);
-    else if (update_dialog_)
-        handle_update_key(key);
     else
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- any_open: kalan tek açık modal diyalogdur
         handle_dialog_key(*dialog_, key, text);
