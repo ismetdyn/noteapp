@@ -592,3 +592,4 @@ Kaynak: kullanıcı v0.1.3 sonrası ("tui'de pdf düz metin, format bozuk"; "ful
 - [x] C GUI önizlemede seçim: md/json/csv/txt fareyle seçim + Ctrl+C (TUI eşitliği).
 - [x] D Tam ekran: pane.zoom her yerde (düzenleyici dahil); F11 (TUI ek kısayol, GUI gerçek pencere tam ekranı); GUI araç çubuğu düğmesi; iki arayüzde yakınlaştırma göstergesi.
 - [ ] V14 doğrulama: tam Linux + Wine + AppImage bir kez → v0.1.4.
+  Durum (2026-11-09 17:45, kullanıcı ara verdi): main dc3a1cf push EDİLMEDİ (origin 5 geride). Dal `release/v0.1.4` (worktree agent-afe0cabd74b779445): 20b0f51 sürüm 0.1.4 + bc2869d Windows release derleme düzeltmesi. Kapılar yarıda: Linux ctest, Wine, AppImage, make-release, host update-check yeniden koşulacak (volume'ler noteapp-rel-*).
