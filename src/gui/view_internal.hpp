@@ -8,6 +8,7 @@
 #include "edit/syntax.hpp"
 #include "gui/icon_font.hpp"
 #include "gui/markdown_preview.hpp"
+#include "gui/pdf_selection.hpp"
 #include "gui/text_selection.hpp"
 #include "gui/theme.hpp"
 #include "gui/view.hpp"
@@ -154,6 +155,7 @@ struct View::PreviewCache {
     float pdf_scale = 0.0F;
     ImVec2 pdf_page_size{};                       // ilk çizilen sayfanın boyu: bütün sayfaların yuvası
     std::pair<int, int> pdf_visible{-1, -1};      // geçen karenin görünen sayfaları [ilk, son]
+    PdfSelection pdf_text;                        // metin katmanı ve seçim; oturum değişince atılır
 };
 
 // İçe alma diyaloğunun sonucu (SDL geri çağrısı yazar, View kare dışında boşaltır).

@@ -111,7 +111,8 @@ Tuşların tamamı: [SPEC-tui.md](SPEC-tui.md).
 Üstte tek araç çubuğu (yeni not/klasör, içe al, yeniden adlandır, taşı, sil, çöp, PDF) ve sağda görünüm seçici:
 **Ağaç**, **Ayrıntılar**, **Harita** (notlar çizge olarak). Solda liste, sağda editör; `Ctrl+K` aramaya odaklanır,
 `Ctrl+N` yeni not, `F5` senkron, `Ctrl+,` ayarlar. Notlar yazmayı bıraktıktan kısa süre sonra kendiliğinden
-kaydedilir. PDF önizleme: PDF notu GUI'de sayfa görüntüleriyle (sayfa göstergesiyle), TUI'de metin olarak açılır.
+kaydedilir. PDF önizleme: PDF notu GUI'de sayfa görüntüleriyle (sayfa göstergesiyle; metin fareyle seçilip
+kopyalanır), TUI'de biçimli metin olarak (başlıklar, kalın/italik, sarılan paragraflar; seçilip kopyalanır) açılır.
 Ayrıntı: [SPEC-gui.md](SPEC-gui.md).
 
 ## Nasıl çalışır

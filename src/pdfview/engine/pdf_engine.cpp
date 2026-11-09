@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <mupdf/fitz.h>
 #include <mupdf/pdf.h>
@@ -131,6 +132,28 @@ bool mupdf_page_text(fz_context* ctx, pdf_document* doc, int index, fz_buffer** 
     return true;
 }
 
+// Yapılı metin (stext) ve sayfa kutusu; sayfa burada düşer (stext yazı tiplerini kendisi tutar).
+bool mupdf_page_stext(fz_context* ctx, pdf_document* doc, int index, int flags, fz_stext_page** out, fz_rect* bounds,
+                      Failure* failure) noexcept {
+    fz_page* page = nullptr;
+    fz_var(page);
+    fz_try(ctx) {
+        page = fz_load_page(ctx, &doc->super, index);
+        *bounds = fz_bound_page(ctx, page);
+        fz_stext_options options{};
+        options.flags = flags;
+        *out = fz_new_stext_page_from_page(ctx, page, &options);
+    }
+    fz_always(ctx) {
+        fz_drop_page(ctx, page);
+    }
+    fz_catch(ctx) {
+        record_failure(ctx, failure);
+        return false;
+    }
+    return true;
+}
+
 // Sayfayı yükler ve `scale` kat çizimin piksel kutusunu hesaplar (fz_new_pixmap_from_page ile aynı yuvarlama).
 bool mupdf_page_box(fz_context* ctx, pdf_document* doc, int index, float scale, fz_page** page_out, fz_irect* box,
                     Failure* failure) noexcept {
@@ -182,6 +205,130 @@ struct BufferDrop {
 struct PageDrop {
     fz_context* ctx;
     void operator()(fz_page* page) const noexcept { fz_drop_page(ctx, page); }
+};
+
+struct StextDrop {
+    fz_context* ctx;
+    void operator()(fz_stext_page* page) const noexcept { fz_drop_stext_page(ctx, page); }
+};
+
+// Yapılı metnin seçenekleri: sayfa dışındaki karakterler atılır (FZ_STEXT_CLIP), satır sonu tiresi işaretlenir
+// (FZ_STEXT_DEHYPHENATE). FZ_STEXT_SEGMENT + FZ_STEXT_PARAGRAPH_BREAK ölçüldü (SPEC-core "Yapılı sayfa metni"):
+// tek sütunda blok yapısı aynı kalır, iki sütunda sütunları ayırıp okuma sırasını düzeltir (yoksa aynı taban
+// çizgisindeki iki sütunun satırları sırayla karışır). MuPDF bunları deneysel sayar; süre sınırı işçiyi yine keser.
+constexpr int kStextFlags = FZ_STEXT_DEHYPHENATE | FZ_STEXT_CLIP | FZ_STEXT_SEGMENT | FZ_STEXT_PARAGRAPH_BREAK;
+constexpr float kSpanSizeTolerance = 0.5F;  // punto; bu kadar farklı boy aynı parçada kalır
+constexpr char32_t kReplacementChar = 0xFFFD;
+
+float clamped(float value, float low, float high) {
+    return std::isfinite(value) ? std::clamp(value, low, high) : low;
+}
+
+// MuPDF'in karakteri (belgenin ToUnicode'u, düşmanca olabilir) tek kod noktasına iner: geçersiz, vekil ve denetim
+// karakterleri U+FFFD, boşluk sayılan denetimler (sekme, satır sonu) boşluk olur. Kod noktası sayısı istemcinin
+// kenar sayısıdır.
+char32_t display_char(int c) {
+    if (c == '\t' || c == '\n' || c == '\r')
+        return U' ';
+    if (c < 0x20 || (c >= 0x7F && c < 0xA0) || (c >= 0xD800 && c <= 0xDFFF) || c > 0x10FFFF)
+        return kReplacementChar;
+    return static_cast<char32_t>(c);
+}
+
+void append_utf8(std::string& out, char32_t cp) {
+    constexpr unsigned kSix = 6;
+    if (cp < 0x80) {
+        out += static_cast<char>(cp);
+    } else if (cp < 0x800) {
+        out += static_cast<char>(0xC0U | (cp >> kSix));
+        out += static_cast<char>(0x80U | (cp & 0x3FU));
+    } else if (cp < 0x10000) {
+        out += static_cast<char>(0xE0U | (cp >> (2 * kSix)));
+        out += static_cast<char>(0x80U | ((cp >> kSix) & 0x3FU));
+        out += static_cast<char>(0x80U | (cp & 0x3FU));
+    } else {
+        out += static_cast<char>(0xF0U | (cp >> (3 * kSix)));
+        out += static_cast<char>(0x80U | ((cp >> (2 * kSix)) & 0x3FU));
+        out += static_cast<char>(0x80U | ((cp >> kSix) & 0x3FU));
+        out += static_cast<char>(0x80U | (cp & 0x3FU));
+    }
+}
+
+std::size_t utf8_length(char32_t cp) {
+    if (cp < 0x80)
+        return 1;
+    if (cp < 0x800)
+        return 2;
+    return cp < 0x10000 ? 3 : 4;
+}
+
+// stext'i PageText'e çevirir (fz_try dışında; yalnız alan okur, fz_font_is_* atmaz). Boş satır ve blok atılır,
+// kutular sayfaya kırpılır. Metin `cap`'i aşınca saklama durur ama sayım sürer (hatadaki boy gerçek boydur).
+struct StextReader {
+    fz_context* ctx;
+    fz_rect bounds;
+    std::uint64_t cap;
+    PageText page;
+    std::uint64_t text_bytes = 0;
+
+    void read(fz_stext_block* first) {
+        // Yapı blokları (FZ_STEXT_SEGMENT, yapı ağacı) iç içedir: özyinelemesiz, açık yığınla derinlik öncelikli.
+        std::vector<fz_stext_block*> pending{first};
+        while (!pending.empty()) {
+            fz_stext_block* block = pending.back();
+            pending.pop_back();
+            if (block == nullptr)
+                continue;
+            pending.push_back(block->next);
+            if (block->type == FZ_STEXT_BLOCK_STRUCT && block->u.s.down != nullptr)
+                pending.push_back(block->u.s.down->first_block);
+            else if (block->type == FZ_STEXT_BLOCK_TEXT)
+                add_block(*block);
+        }
+    }
+
+    void add_block(const fz_stext_block& block) {
+        TextBlock out;
+        for (const fz_stext_line* line = block.u.t.first_line; line != nullptr; line = line->next)
+            add_line(*line, out);
+        if (!out.lines.empty())
+            page.blocks.push_back(std::move(out));
+    }
+
+    void add_line(const fz_stext_line& line, TextBlock& block) {
+        TextLine out;
+        out.top = clamped(line.bbox.y0 - bounds.y0, 0.0F, page.height);
+        out.bottom = clamped(line.bbox.y1 - bounds.y0, out.top, page.height);
+        out.joined = (line.flags & FZ_STEXT_LINE_FLAGS_JOINED) != 0;
+        for (const fz_stext_char* ch = line.first_char; ch != nullptr; ch = ch->next)
+            add_char(*ch, out);
+        if (!out.spans.empty())
+            block.lines.push_back(std::move(out));
+    }
+
+    void add_char(const fz_stext_char& ch, TextLine& line) {
+        const char32_t cp = display_char(ch.c);
+        text_bytes += utf8_length(cp);
+        if (text_bytes > cap)
+            return;
+        std::uint8_t style = 0;
+        if ((ch.flags & FZ_STEXT_BOLD) != 0 || fz_font_is_bold(ctx, ch.font) != 0)
+            style |= kStyleBold;
+        if (fz_font_is_italic(ctx, ch.font) != 0)
+            style |= kStyleItalic;
+        if (fz_font_is_monospaced(ctx, ch.font) != 0)
+            style |= kStyleMono;
+        const float size = std::isfinite(ch.size) && ch.size > 0.0F ? ch.size : 0.0F;
+        if (line.spans.empty() || line.spans.back().style != style ||
+            std::abs(line.spans.back().size - size) > kSpanSizeTolerance)
+            line.spans.push_back(TextSpan{.text = {}, .style = style, .size = size, .edges = {}});
+        TextSpan& span = line.spans.back();
+        append_utf8(span.text, cp);
+        const fz_rect box = fz_rect_from_quad(ch.quad);
+        const float left = clamped(box.x0 - bounds.x0, 0.0F, page.width);
+        span.edges.push_back(left);
+        span.edges.push_back(clamped(box.x1 - bounds.x0, left, page.width));
+    }
 };
 
 constexpr int kBytesPerPixel = 4;
@@ -334,6 +481,31 @@ std::expected<std::string, core::Error> PdfEngine::page_text(int page) {
     if (!impl.limits.text_bytes.allows(text.size()))
         return std::unexpected(too_large(text.size()));  // geçersiz baytlar U+FFFD olunca büyüyebilir
     return text;
+}
+
+std::expected<PageText, core::Error> PdfEngine::page_structure(int page) {
+    Impl& impl = *impl_;
+    impl.require_page(page);
+    impl.begin_operation();
+    fz_stext_page* raw_text = nullptr;
+    fz_rect bounds{};
+    Failure failure;
+    const bool extracted =
+        mupdf_page_stext(impl.ctx, impl.opened.doc, page, kStextFlags, &raw_text, &bounds, &failure);
+    const std::unique_ptr<fz_stext_page, StextDrop> text(raw_text, StextDrop{impl.ctx});
+    if (!extracted)
+        return std::unexpected(impl.failure_error(failure, page));
+    StextReader reader{.ctx = impl.ctx, .bounds = bounds, .cap = impl.limits.text_bytes.cap(), .page = {}};
+    // MuPDF boş sayfa kutusunu büyütür; yine de istemci 1 pt altını reddeder.
+    reader.page.width = std::max(bounds.x1 - bounds.x0, 1.0F);
+    reader.page.height = std::max(bounds.y1 - bounds.y0, 1.0F);
+    reader.read(text->first_block);
+    if (!impl.limits.text_bytes.allows(reader.text_bytes))
+        return std::unexpected(core::Error{core::Error::Code::LimitExceeded, "error.pdf_text_too_large",
+                                           {{"page", page_label(page)},
+                                            {"size", std::to_string(reader.text_bytes)},
+                                            {"limit", impl.limits.text_bytes.text}}});
+    return std::move(reader.page);
 }
 
 std::expected<RenderedPage, core::Error> PdfEngine::render_page(int page, float scale) {

@@ -48,7 +48,7 @@ constexpr auto kExitCodeWait = std::chrono::milliseconds(100);
 // ya da çıktı); Broken: bozuk çerçeve ya da G/Ç hatası, işçi canlı olabilir.
 enum class Io { Ok, Deadline, Stopped, Eof, Broken, NoMemory };
 
-enum class Operation { Open, Text, Render };
+enum class Operation { Open, Text, Structured, Render };
 
 std::string_view operation_name(Operation operation) {
     switch (operation) {
@@ -56,6 +56,8 @@ std::string_view operation_name(Operation operation) {
         return "open";
     case Operation::Text:
         return "page_text";
+    case Operation::Structured:
+        return "page_structure";
     case Operation::Render:
         return "render_page";
     }
@@ -250,6 +252,7 @@ struct PdfDocument::Impl {
         proto::Kind kind{};
         std::uint32_t page_count = 0;
         std::string text;
+        PageText structured;
         RenderedPage rendered;
         proto::Failure failure;
         std::uint32_t width = 0;  // NoMemory için
@@ -299,6 +302,24 @@ struct PdfDocument::Impl {
                 return Io::Broken;  // text_bytes = 0 (sınırsız) iken dev metin gönderildi
             }
         }
+        case proto::Kind::StructuredResult: {
+            // Yük metinden büyüktür (kutular) ama sınırı text_bytes'tan türer; bayt geldikçe büyür.
+            if (header->length > proto::structured_length_cap(limits.text_bytes.cap()) ||
+                header->length > payload.max_size())
+                return Io::Broken;
+            try {
+                if (const Io io = read_string(payload, static_cast<std::size_t>(header->length), deadline, stop);
+                    io != Io::Ok)
+                    return io;
+                std::optional<PageText> page = proto::decode_structured(payload, limits.text_bytes.cap());
+                if (!page)
+                    return Io::Broken;
+                reply.structured = std::move(*page);
+            } catch (const std::bad_alloc&) {
+                return Io::Broken;  // text_bytes = 0 (sınırsız) iken dev yük gönderildi
+            }
+            return Io::Ok;
+        }
         case proto::Kind::Rendered: {
             if (header->length < proto::kRenderedFieldBytes)
                 return Io::Broken;
@@ -327,6 +348,7 @@ struct PdfDocument::Impl {
         }
         case proto::Kind::Open:
         case proto::Kind::Text:
+        case proto::Kind::Structured:
         case proto::Kind::Render:
         case proto::Kind::Failed:
             break;
@@ -451,6 +473,31 @@ std::expected<std::string, core::Error> PdfDocument::page_text(int page, std::st
                                             {"size", std::to_string(text.size())},
                                             {"limit", impl.limits.text_bytes.text}}});
     return text;
+}
+
+std::expected<PageText, core::Error> PdfDocument::page_structure(int page, std::stop_token stop) {
+    Impl& impl = *impl_;
+    impl.require_page(page);
+    Impl::Reply reply;
+    if (auto error = impl.transact(proto::encode_structured_request(static_cast<std::uint32_t>(page)),
+                                   proto::Kind::StructuredResult, Operation::Structured, page, reply,
+                                   deadline_for(impl.limits.duration), stop))
+        return std::unexpected(std::move(*error));
+    // Metin geçerli UTF-8 diye denetlendi; denetim karakterleri bu sürecin kuralıyla yeniden temizlenir. Her
+    // karakter tek kod noktası kalır (U+FFFD), kenar sayısı bozulmaz.
+    std::uint64_t size = 0;
+    for (TextBlock& block : reply.structured.blocks)
+        for (TextLine& line : block.lines)
+            for (TextSpan& span : line.spans) {
+                span.text = detail::clean_text(span.text);
+                size += span.text.size();
+            }
+    if (!impl.limits.text_bytes.allows(size))
+        return std::unexpected(core::Error{core::Error::Code::LimitExceeded, "error.pdf_text_too_large",
+                                           {{"page", page_label(page)},
+                                            {"size", std::to_string(size)},
+                                            {"limit", impl.limits.text_bytes.text}}});
+    return std::move(reply.structured);
 }
 
 std::expected<RenderedPage, core::Error> PdfDocument::render_page(int page, float scale, std::stop_token stop) {

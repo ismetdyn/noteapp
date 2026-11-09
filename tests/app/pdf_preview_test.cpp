@@ -1,6 +1,7 @@
 // app::PdfPreview: gerçek `note __pdf-worker` ve sahte işçiyle (tests/support/fake_pdf_worker.cpp) kuyruk, düşürme,
 // önbellek sınırı, süre dolan sayfanın hatırlanması, duyuru ve kapanış.
 #include "app/pdf_preview.hpp"
+#include "app/pdf_text.hpp"
 
 #include "core/i18n.hpp"
 #include "support/test_support.hpp"
@@ -59,6 +60,12 @@ struct Changes {
     }
 };
 
+// Sayfanın yapılı metninin düz hali (seçim metni kuralı).
+std::string plain(const PdfPreview::Text& text) {
+    const noteapp::app::PdfTextLayer layer(text.value());
+    return layer.text(0, layer.size());
+}
+
 PdfPreviewOptions options(Changes& changes, const char* worker = NOTEAPP_NOTE_EXE) {
     PdfPreviewOptions result;
     result.worker = worker;
@@ -79,8 +86,8 @@ TEST_CASE("pdf preview opens in the background, serves text requests in order an
     CHECK(preview.state() == PdfPreview::State::Ready);
     CHECK(preview.page_count() == 3);
     REQUIRE(preview.text(2)->has_value());
-    CHECK(preview.text(2)->value().find("Gamma") != std::string::npos);
-    CHECK(preview.text(0)->value().find("Alpha") != std::string::npos);
+    CHECK(plain(*preview.text(2)) == "Gamma");
+    CHECK(plain(*preview.text(0)) == "Alpha");
     CHECK_FALSE(preview.text(1).has_value());  // istenmeyen sayfa okunmaz
     CHECK(preview.pending() == 0);
     CHECK(changes.seen() == 3);
@@ -141,7 +148,7 @@ TEST_CASE("pdf preview remembers a page that timed out and does not request it a
     REQUIRE(slow.has_value());
     REQUIRE_FALSE(slow->has_value());
     CHECK(slow->error().message_key == "error.pdf_too_slow");
-    CHECK(preview.text(1)->value().find("calm") != std::string::npos);
+    CHECK(plain(*preview.text(1)) == "calm");
     const auto version = preview.version();
     preview.request_render(0, 1.0F);  // hatırlanır: kuyruğa girmez
     CHECK(preview.pending() == 0);

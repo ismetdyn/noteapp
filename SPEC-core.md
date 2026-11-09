@@ -280,9 +280,10 @@ config'tedir.
   ayrıştırma ayrı süreçtedir. `pdfview::PdfDocument` (MuPDF'siz `noteapp_pdfview`) belge başına bir uzun ömürlü
   `note __pdf-worker` başlatır (`core::ChildProcess`, stdin/stdout boruları; gizli alt komut, config/log yok, stdin
   terminalse 2 ile çıkar, stdin EOF'unda 0). Tel protokolü `pdfview/protocol.hpp`: küçük-sonlu 16 baytlık başlık
-  `{u32 tür, u32 0, u64 uzunluk}`, sıkı istek/cevap; Open `{sürüm, ebeveyn pid, dört sınır}` + baytlar, Text, Render;
-  cevaplar Opened (`page_count ≤ pages`), Text (`≤ text_bytes`), Rendered (uzunluk tam `8 + w·h·4`, `w·h ≤
-  render_pixels`), Failed `{neden, a, b}` + en çok 256 bayt ayrıntı. Uymayan çerçeve bozuk sayılır. İşçi i18n
+  `{u32 tür, u32 0, u64 uzunluk}`, sıkı istek/cevap; Open `{sürüm (2), ebeveyn pid, dört sınır}` + baytlar, Text,
+  Structured, Render; cevaplar Opened (`page_count ≤ pages`), Text (`≤ text_bytes`), StructuredResult (aşağıda),
+  Rendered (uzunluk tam `8 + w·h·4`, `w·h ≤ render_pixels`), Failed `{neden, a, b}` + en çok 256 bayt ayrıntı. Uymayan
+  çerçeve bozuk sayılır. İşçi i18n
   anahtarı ya da kullanıcı metni göndermez: ebeveyn `core::Error`'u kendi değerleriyle kurar, ayrıntı yalnız loga
   (`terminal_safe`), metne `clean_text` yeniden uygulanır. Süre ve durdurma ebeveyndedir (50 ms'lik bekleme
   dilimleri): süre dolunca, durdurmada, çöküşte ya da bozuk çerçevede işçi öldürülüp toplanır, çağrı
@@ -298,6 +299,28 @@ config'tedir.
   ve AppImage değişkenleri düşer) çalışır. Ayrı süreç askıda kalmayı ve çöküşü sınırlar; MuPDF'te kod çalıştıran bir
   PDF `~/.ssh`'i, kimlik bilgilerini, `/proc/<ebeveyn>/environ`'u okuyabilir ve not deposunu değiştirebilir. OS kum
   havuzu, ortam allowlist'i ve devralınan fd'lerin kapatılması ertelenmiş işlerdir.
+- **Yapılı sayfa metni (V14):** `PdfDocument::page_structure` sayfanın metnini bloklar → satırlar → aynı biçimli
+  parçalar olarak verir (`pdfview/structured_text.hpp`): parça `{metin, biçim (kalın/italik/eş aralıklı), punto}` ve
+  her kod noktası için yatay kutu `{x0, x1}`; satır dikey kutu `{top, bottom}` ve tireyle bölünmüş sözcük işareti
+  (`joined`, MuPDF `FZ_STEXT_DEHYPHENATE`); sayfa boyu punto. Koordinatlar sayfa kutusunun sol üstünden; işçi sayfa
+  dışındaki karakterleri atar (`FZ_STEXT_CLIP`), kutuları sayfaya kırpar, metni `clean_text` kuralıyla geçerli UTF-8
+  yapar (kod noktası başına bir kutu kalır). StructuredResult yükü `{f32 w, f32 h, u32 blok}`, blok `{u32 satır}`,
+  satır `{u8 bayrak, f32 top, f32 bottom, u32 parça}`, parça `{u8 biçim, f32 punto, u32 bayt, metin, kod noktası
+  başına f32 x0, f32 x1}`. Ebeveyn katı okur (`protocol::decode_structured`) ve her ihlali bozuk çerçeve sayar (işçi
+  öldürülür, `pdf_page_invalid`): kısa ya da artık bayt; boş blok/satır/parça; bilinmeyen biçim ya da bayrak biti;
+  geçersiz UTF-8; sonlu olmayan sayı; 1 pt'den küçük sayfa boyu; sayfa kutusunun ±1 pt dışındaki ya da ters kutu;
+  toplam metin `> text_bytes`; çerçeve `> 12 + 35·text_bytes` (her öğe boş olmadığından metin baytı başına en çok yük). Sayılar yalnız döngü
+  sınırıdır, bayt geldikçe büyünür: yalan sayı bellek ayırtmaz. Metne `clean_text` yeniden uygulanır. Yeni sınır yok.
+  `FZ_STEXT_SEGMENT` ve `FZ_STEXT_PARAGRAPH_BREAK` ölçüldü ve alındı (2026-11-09): tek sütunlu markdown dışa
+  aktarımında (başlık, paragraflar, liste) blok yapısı birebir aynı; iki sütunlu sayfada bunlarsız aynı taban
+  çizgisindeki sol ve sağ satırlar tek blokta sırayla karışıyordu, bunlarla sütunlar ayrı bloklarda okuma
+  sırasındadır. MuPDF ikisini deneysel sayar; yavaşlık süre sınırıyla kesilir. İç içe yapı blokları özyinelemesiz
+  yürünür.
+  Biçimleme (başlık, paragraf) ve seçim kuralları MuPDF'siz `app/pdf_text.hpp`'dedir (SPEC-tui, SPEC-gui "PDF
+  önizleme"): başlık satırın baskın puntosunun sayfanın baskın gövde puntosuna oranından (≥ 1,6 h1, ≥ 1,3 h2,
+  ≥ 1,12 h3), paragraf blok içindeki satırların birleşmesinden (aralık açılırsa, ilk satır girintiliyse ya da satır
+  liste imiyle başlarsa yeni paragraf; tireyle bölünmüş sözcük tiresiz birleşir). CLI `note show` düz metni (Text)
+  kullanmayı sürdürür.
 - **Uygulama (L1):** `[limits.app]` `recent_commands` (20), `trash_undo_steps` (0), `tabs` (0), `map_nodes` (2.000) ve
   `map_depth` (6; harita çevre kapsamının en çok adımı, `MapOptions::kMaxDepth` sabiti yerine; TUI `1`–`9` tuşları ve GUI
   adımlayıcısı `app::MapModel::max_depth`'ten okur, sınır küçülürse geçerli derinlik ona iner) ve `query_cell_bytes`
@@ -427,3 +450,6 @@ Bu bölüm yukarıdaki "Yazma", "Listeleme", "Klasörler", "Yol güvenliği" ve 
   `gui_state.cpp`'deki iki `kContentResultLimit = 1000` kopyasının yerine). Bkz. "Sınırlar".
 - **MODIFIED** `tuning.max_note_bytes` `core::Limit` oldu: `0 = sınırsız`, birimli yazım kabul edilir (A33).
 - **MODIFIED** `set_config_value` ve `note config list/get/set` `limits.*` anahtarlarını kabul eder.
+
+## Değişiklik 2026-11-09 (V14 yapılı PDF metni)
+- **ADDED** PDF işçi protokolü sürüm 2: Structured isteği ve StructuredResult cevabı (sayfanın bloklar → satırlar → biçimli parçalar modeli, karakter kutuları, sayfa boyu), ebeveynde katı doğrulama (bkz. "Yapılı sayfa metni"). Text değişmedi (CLI). Neden: plan V14, TUI biçimli PDF ve GUI metin seçimi.

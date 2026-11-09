@@ -277,6 +277,16 @@ dal, boşta bekleme, yazar adı, yazar e-postası, token, bağlantı testi) ve s
   yeniden kullanılacak yakınlaştırma geleneği yok (`pane.zoom` bölmeyi büyütür). Bütün sayfalar ilk çizilen sayfanın
   yuvasındadır (öncesinde A4 tahmini).
 - Sağ üstte sayfa göstergesi `3 / 12` (`app.pdf_page_indicator`).
+- **Metin seçimi (V14):** her görünen sayfanın görüntüsünün üstünde görünmez metin katmanı (`app::PdfTextLayer`,
+  yapılı sayfa metninden; SPEC-core "Yapılı sayfa metni"). Sürükleme karakterleri okuma sırasıyla, satırlar boyunca
+  seçer; çift tık sözcüğü seçer (düzenlemeye geçmez); vurgu editörün seçim rengidir (`ImGuiCol_TextSelectedBg`).
+  Kopyalama öteki önizlemelerin seçimiyle tek kuraldır (`View::draw_preview`): odaktaki önizlemede seçim varsa
+  `Ctrl+C` ve sağ tık menüsünün "Kopyala"sı (`gui.preview_copy`) onu kopyalar, yoksa `Ctrl+C` notu kopyalar. PDF
+  seçiminin metninde blok içindeki satırlar boşlukla, tireyle bölünmüş sözcük tiresiz, bloklar satır sonuyla
+  birleşir. Seçim tek sayfadadır:
+  sürükleme sayfanın altına (üstüne) taşarsa sayfanın sonuna (başına) dek seçer, sayfalar arası seçim yok. Metin
+  yalnız görünen sayfalar için istenir ve dokularla aynı sınırla (`limits.pdf.cache_pages`, görünenler sayılmaz)
+  tutulur; okunamayan sayfanın metni yeniden istenmez (sayfa seçilemez).
 - Önbellek: `limits.pdf.cache_pages` (32; 0 = sınırsız) hem oturumun çizilmiş sayfalarını hem dokuları sınırlar;
   görünen sayfa dokusu düşmez.
 - Hata yerinde ve yerelleştirilmiş: açılmayan belge (bozuk, şifreli, sayfa sınırı) sayfaların yerine, okunamayan sayfa
@@ -599,3 +609,6 @@ Arayüz yenilemesinin yerleşim fazı (`.engineering/design/ui-redesign.md` §3.
 
 ## Değişiklik 2026-11-09 (yakınlaştırma her yerde, GUI)
 - **ADDED** `F11` odak kipi (tam ekran + `pane.zoom`, ikinci basış ikisini önceki hâline döndürür), araç çubuğunda etkin durumlu **Yakınlaştır** düğmesi (ipucu kısayolları söyler). `pane.zoom` kayıtta Editör bağlamını da kapsar. Neden: kullanıcı isteği (V14 D), yakınlaştırma görünür ve her yerde kullanılabilir olsun.
+
+## Değişiklik 2026-11-09 (V14 PDF metin seçimi, GUI)
+- **ADDED** PDF sayfalarında metin katmanı: sürükleme ve çift tıkla seçim, `Ctrl+C` ve sağ tık "Kopyala" (bkz. "PDF önizleme"). Sayfalar arası seçim yok. Neden: plan V14, TUI ile eşitlik.

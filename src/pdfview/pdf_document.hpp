@@ -3,6 +3,7 @@
 #include "core/error.hpp"
 #include "core/limits.hpp"
 #include "pdfview/rendered_page.hpp"
+#include "pdfview/structured_text.hpp"
 
 #include <expected>
 #include <filesystem>
@@ -48,6 +49,12 @@ public:
     // tek vekil ve geçersiz dizi U+FFFD olur. Ön koşul: 0 <= page < page_count() (ihlal bug'dır: std::abort).
     // Metin limits.text_bytes'ı aşarsa LimitExceeded; sayfa bozuksa InvalidDocument.
     std::expected<std::string, core::Error> page_text(int page, std::stop_token stop = {});
+
+    // Sayfanın yapılı metni (structured_text.hpp; PdfEngine::page_structure). İşçinin cevabı katı denetlenir
+    // (protocol::decode_structured: sayılar, uzunluklar, sonlu ve sayfa içi koordinatlar, UTF-8, toplam metin
+    // text_bytes); ihlal bozuk çerçevedir: işçi öldürülür, InvalidDocument (`error.pdf_page_invalid`). Metin
+    // page_text'in kuralıyla yeniden temizlenir. Ön koşul ve diğer hatalar page_text gibi.
+    std::expected<PageText, core::Error> page_structure(int page, std::stop_token stop = {});
 
     // Sayfayı `scale` kat (1 = 72 dpi) RGBA çizer. Ön koşul: 0 <= page < page_count(), scale sonlu ve > 0 (ihlal
     // bug'dır: std::abort). Piksel sayısı limits.render_pixels'ı aşarsa LimitExceeded; tampon ayrılamazsa

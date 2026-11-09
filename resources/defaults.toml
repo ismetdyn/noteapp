@@ -210,7 +210,8 @@ tool_output_bytes = "1MiB"    # bu süreçlerden okunan çıktı (zip içerik li
 # PDF okuma (önizleme, metin). PDF senkronla gelir: güvenilmez girdi. Aşım hatadır, kesilmiş sonuç değil.
 # 0'ın riski: pages sınırsızsa milyonlarca boş sayfalı küçük dosya sayfa başına iş (metin, arama) üretir;
 # render_pixels sınırsızsa dev sayfa boyu ya da yakınlaştırma GB'larca piksel tamponu ister; text_bytes
-# sınırsızsa tek sayfa belleği metinle doldurabilir; context_memory sınırsızsa bozuk/kötü niyetli akış (dev görsel,
+# sınırsızsa tek sayfa belleği metinle doldurabilir (önizlemenin yapılı metni karakter kutuları ve blok/satır/parça
+# yapısıyla en kötü durumda metin baytı başına ~200 bayt tutar: 1 MiB'lık sayfa ~200 MiB); context_memory sınırsızsa bozuk/kötü niyetli akış (dev görsel,
 # derin iç içe nesne) MuPDF'e süreç belleğini tükettirebilir; duration sınırsızsa iç içe çoğalan Form XObject'li
 # küçük bir sayfa (her düzey bir alttakini 10 kez çizer) saatlerce işlemci yer ve iş parçacığını bırakmaz;
 # cache_pages sınırsızsa uzun belgede gezinmek çizilen her sayfayı (sayfa başına MB'larca RGBA) bellekte tutar.

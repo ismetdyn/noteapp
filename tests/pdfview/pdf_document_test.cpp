@@ -124,6 +124,11 @@ TEST_CASE("the worker returns byte-identical text and RGBA to the in-process eng
             REQUIRE(text);
             REQUIRE(expected_text);
             CHECK(*text == *expected_text);
+            const auto structure = document.page_structure(page);
+            const auto expected_structure = engine->page_structure(page);
+            REQUIRE(structure);
+            REQUIRE(expected_structure);
+            CHECK(*structure == *expected_structure);
             // RGBA her bayt değerini taşır (0x0A, 0x0D, 0x1A dahil): Windows'ta ikili kip boru gidiş-dönüşü.
             const auto image = document.render_page(page, 1.5F);
             const auto expected_image = engine->render_page(page, 1.5F);
@@ -386,6 +391,52 @@ TEST_CASE("a misbehaving worker gives a clean error, is reaped and never reaches
         CHECK(contains(*text, "\xEF\xBF\xBD"));  // U+FFFD
         CHECK(text->starts_with("a"));
         CHECK(text->ends_with("d"));
+    }
+    SUBCASE("a hostile structured page is a broken frame and the worker is replaced") {
+        for (const std::string_view name :
+             {"structured-huge-count", "structured-nan", "structured-off-page", "structured-bad-utf8"}) {
+            CAPTURE(name);
+            auto opened = open_fake(name);
+            REQUIRE(opened);
+            const auto text = opened->page_structure(0);
+            CHECK_FALSE(text);
+            if (text)
+                continue;  // her kip ayrı raporlansın
+            CHECK(text.error().code == core::Error::Code::InvalidDocument);
+            CHECK(text.error().message_key == "error.pdf_page_invalid");
+            CHECK(contains(read_log(), "operation=page_structure page=1 exit_code=- reason=broken"));
+        }
+    }
+    SUBCASE("a structured page over text_bytes is a broken frame") {
+        core::PdfLimits limits = unlimited();
+        limits.text_bytes = limit_of(4);
+        auto opened = open_fake("structured-over-cap", limits);
+        REQUIRE(opened);
+        const auto text = opened->page_structure(0);
+        REQUIRE_FALSE(text);
+        CHECK(text.error().message_key == "error.pdf_page_invalid");
+    }
+    SUBCASE("a structured frame longer than its text_bytes-derived cap is refused before any payload arrives") {
+        // İşçi yalnız başlığı gönderip bekler: sınır denetimi olmasa istemci süre dolana dek yükü beklerdi.
+        core::PdfLimits limits = with_duration();
+        limits.text_bytes = limit_of(4);
+        auto opened = open_fake("structured-over-frame", limits);
+        REQUIRE(opened);
+        const auto started = Clock::now();
+        const auto text = opened->page_structure(0);
+        CHECK(Clock::now() - started < kShortDuration);
+        REQUIRE_FALSE(text);
+        CHECK(text.error().message_key == "error.pdf_page_invalid");
+    }
+    SUBCASE("the client cleans control characters in a structured page, keeping one box per character") {
+        auto opened = open_fake("structured-dirty");
+        REQUIRE(opened);
+        const auto page = opened->page_structure(0);
+        REQUIRE(page);
+        REQUIRE(page->blocks.size() == 1);
+        const pdfview::TextSpan& span = page->blocks[0].lines[0].spans[0];
+        CHECK(span.text == "a\xEF\xBF\xBD" "b\xEF\xBF\xBD" "c");
+        CHECK(span.edges.size() == 10);
     }
     SUBCASE("a respawned worker reporting another page count makes the document invalid") {
         auto opened = open_fake("die-after-2");

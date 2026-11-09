@@ -20,6 +20,7 @@ add_library(noteapp_app
     note_map.cpp
     notices.cpp
     pdf_preview.cpp
+    pdf_text.cpp
     settings.cpp
     sync_indicator.cpp
     sync_status_worker.cpp

@@ -2,6 +2,7 @@
 
 #include "app/listing.hpp"
 #include "app/map_relations.hpp"
+#include "app/pdf_text.hpp"
 #include "app/update_controller.hpp"
 #include "core/file_stat.hpp"
 #include "core/i18n.hpp"
@@ -11,6 +12,7 @@
 #include "tui/editor_view.hpp"
 #include "tui/input_view.hpp"
 #include "tui/modals.hpp"
+#include "tui/pdf_view.hpp"
 #include "tui/styled_view.hpp"
 
 #include <algorithm>
@@ -1839,6 +1841,8 @@ bool PreviewCache::update_rendered(bool wanted, int width, std::chrono::steady_c
 const Preview& PreviewCache::publish(TuiState& state, std::chrono::steady_clock::time_point now) {
     state.set_links(links_, links_generation_, path_);
     const int width = editor_viewport({state.window_width(), state.window_height()}, state.layout()).columns;
+    if (pdf_ && width != pdf_width_)
+        layout_pdf(width);
     const bool wanted = state.review_rendered() && preview_.kind == Preview::Kind::Text &&
                         preview_.view_kind != ViewKind::None;
     if (update_rendered(wanted, width, now)) {
@@ -1954,10 +1958,13 @@ void PreviewCache::start_pdf(std::string bytes) {
     pdf_truncated_ = false;
     pdf_loaded_bytes_ = 0;
     pdf_loaded_lines_ = 0;
+    pdf_pages_.clear();
     pdf_version_ = std::numeric_limits<std::uint64_t>::max();  // ilk refresh_pdf durumu okusun
+    // Gösterilen metin biçimli görünümdür (markdown'ınki gibi): seçim onu kopyalar, özgün baytları değil.
     preview_.kind = Preview::Kind::Text;
-    preview_.display_only = true;  // metin PDF'in kendisi değil
-    append_preview_line(core::tr("app.pdf_loading"));
+    preview_.rendered = true;
+    pdf_status_ = core::tr("app.pdf_loading");
+    show_pdf_status();
     refresh_pdf();
 }
 
@@ -1974,54 +1981,85 @@ void PreviewCache::refresh_pdf() {
     const app::PdfPreview::State state = pdf_->state();
     if (state == app::PdfPreview::State::Opening)
         return;
-    preview_.text.resize(pdf_loaded_bytes_);
-    preview_.lines.resize(pdf_loaded_lines_);
-    preview_.line_starts.resize(pdf_loaded_lines_);
+    cut_pdf_status();
     if (state == app::PdfPreview::State::Failed) {
-        append_preview_line(core::format_error(pdf_->open_error().value()));
+        pdf_status_ = core::format_error(pdf_->open_error().value());
+        show_pdf_status();
         return;
     }
     const int count = pdf_->page_count();
+    pdf_status_.clear();
     while (pdf_next_page_ < count) {
-        const auto text = pdf_->take_text(pdf_next_page_);
+        auto text = pdf_->take_text(pdf_next_page_);
         if (!text)
             break;  // sayfalar sırayla eklenir
-        append_preview_line(app::pdf_page_separator(pdf_next_page_, count));
+        PdfPageView page{.page = pdf_next_page_, .blocks = {}, .error = {}};
+        if (*text)
+            page.blocks = app::pdf_page_blocks(**text);
+        else
+            page.error = core::format_error(text->error());
         ++pdf_next_page_;
-        if (!*text) {
-            append_preview_line(core::format_error(text->error()));
-            continue;
-        }
-        std::string_view rest = **text;
-        if (rest.ends_with('\n'))
-            rest.remove_suffix(1);
-        while (!rest.empty()) {
-            const std::size_t eol = rest.find('\n');
-            append_preview_line(rest.substr(0, eol));
-            rest.remove_prefix(eol == std::string_view::npos ? rest.size() : eol + 1);
-        }
+        append_pdf_view(render_pdf_page(app::pdf_page_separator(page.page, count), page.blocks, page.error,
+                                        pdf_width_, terminal_cell_width));
+        pdf_pages_.push_back(std::move(page));
+        pdf_loaded_bytes_ = preview_.text.size();
+        pdf_loaded_lines_ = preview_.lines.size();
         if (preview_.text.size() >= view_limits_.source_bytes && pdf_next_page_ < count) {
             pdf_truncated_ = true;
             pdf_->drop_pending();  // yürüyen tek istek biter, sonucu alınmaz
-            append_preview_line(core::tr("app.pdf_truncated", {{"limit", human_size(view_limits_.source_bytes)}}));
+            pdf_status_ = core::tr("app.pdf_truncated", {{"limit", human_size(view_limits_.source_bytes)}});
+            show_pdf_status();
             return;
         }
     }
-    pdf_loaded_bytes_ = preview_.text.size();
-    pdf_loaded_lines_ = preview_.lines.size();
-    if (pdf_next_page_ >= count)
-        return;
-    for (int page = pdf_next_page_; page < std::min(count, pdf_next_page_ + kPdfReadAhead); ++page)
-        pdf_->request_text(page);
-    append_preview_line(core::tr("app.pdf_page_loading", {{"page", std::to_string(pdf_next_page_ + 1)}}));
+    if (pdf_next_page_ < count) {
+        for (int page = pdf_next_page_; page < std::min(count, pdf_next_page_ + kPdfReadAhead); ++page)
+            pdf_->request_text(page);
+        pdf_status_ = core::tr("app.pdf_page_loading", {{"page", std::to_string(pdf_next_page_ + 1)}});
+    }
+    show_pdf_status();
 }
 
-void PreviewCache::append_preview_line(std::string_view line) {
-    if (!preview_.lines.empty())
+void PreviewCache::layout_pdf(int width) {
+    pdf_width_ = width;
+    preview_.text.clear();
+    preview_.lines.clear();
+    preview_.line_starts.clear();
+    preview_.styled.clear();
+    preview_.source_lines.clear();
+    const int count = pdf_ ? pdf_->page_count() : 0;
+    for (const PdfPageView& page : pdf_pages_)
+        append_pdf_view(render_pdf_page(app::pdf_page_separator(page.page, count), page.blocks, page.error, width,
+                                        terminal_cell_width));
+    pdf_loaded_bytes_ = preview_.text.size();
+    pdf_loaded_lines_ = preview_.lines.size();
+    show_pdf_status();
+    ++generation_;  // satırlar değişti: seçim ve eşleşmeler eski yerleşime ait
+}
+
+// append_rendered gibi: her satır '\n' ile biter, seçim metni görüntülenen satırlardır.
+void PreviewCache::append_pdf_view(RenderedView view) {
+    for (std::size_t i = 0; i < view.lines.size(); ++i) {
+        preview_.line_starts.push_back(preview_.text.size());
+        preview_.text += view.lines[i];
         preview_.text += '\n';
-    preview_.line_starts.push_back(preview_.text.size());
-    preview_.text += line;
-    preview_.lines.emplace_back(line);
+        preview_.lines.push_back(std::move(view.lines[i]));
+        preview_.styled.push_back(std::move(view.spans[i]));
+        preview_.source_lines.push_back(preview_.source_lines.size());
+    }
+}
+
+void PreviewCache::cut_pdf_status() {
+    preview_.text.resize(pdf_loaded_bytes_);
+    preview_.lines.resize(pdf_loaded_lines_);
+    preview_.line_starts.resize(pdf_loaded_lines_);
+    preview_.styled.resize(pdf_loaded_lines_);
+    preview_.source_lines.resize(pdf_loaded_lines_);
+}
+
+void PreviewCache::show_pdf_status() {
+    if (!pdf_status_.empty())
+        append_pdf_view(render_pdf_note(pdf_status_, pdf_width_, terminal_cell_width));
 }
 
 std::string selected_text(const Preview& preview, const PreviewRange& range) {

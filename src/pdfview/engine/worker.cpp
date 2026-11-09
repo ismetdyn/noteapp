@@ -160,6 +160,15 @@ int serve() {
                          : proto::encode_failed(to_failure(text.error(), engine->last_failure_detail()));
             break;
         }
+        case proto::Kind::Structured: {
+            const std::optional<std::uint32_t> page = proto::decode_text_request(payload);
+            if (!engine || !page || *page >= static_cast<std::uint32_t>(engine->page_count()))
+                return kBadRequest;
+            const auto text = engine->page_structure(static_cast<int>(*page));
+            reply = text ? proto::encode_structured_result(*text)
+                         : proto::encode_failed(to_failure(text.error(), engine->last_failure_detail()));
+            break;
+        }
         case proto::Kind::Render: {
             const std::optional<proto::RenderRequest> request = proto::decode_render_request(payload);
             if (!engine || !request || request->page >= static_cast<std::uint32_t>(engine->page_count()) ||
@@ -184,6 +193,7 @@ int serve() {
         case proto::Kind::Opened:
         case proto::Kind::TextResult:
         case proto::Kind::Rendered:
+        case proto::Kind::StructuredResult:
         case proto::Kind::Failed:
             return kBadRequest;
         }

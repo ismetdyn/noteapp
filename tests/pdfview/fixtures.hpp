@@ -28,6 +28,8 @@ struct Passwords {
 std::string ascii_pdf(int pages, Passwords passwords = {});
 // Uygulamanın PDF dışa aktarmasıyla (gömülü DejaVu, ToUnicode) tek sayfa düz metin.
 std::string exported_pdf(std::string_view text);
+// Aynı yolla markdown: başlıklar büyük ve kalın, **kalın**, *italik*, `kod` biçimli yazı tipleriyle.
+std::string exported_markdown_pdf(std::string_view markdown);
 
 // ---- Küçük PDF yazıcısı: nesneleri numaralar, doğru xref tablosu yazar ----
 

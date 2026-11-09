@@ -14,6 +14,7 @@ noteapp_add_test(app
     map_relations_test.cpp
     notices_test.cpp
     pdf_preview_test.cpp
+    pdf_text_test.cpp
     settings_test.cpp
     sync_indicator_test.cpp
     sync_status_worker_test.cpp

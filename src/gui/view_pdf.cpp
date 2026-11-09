@@ -1,5 +1,7 @@
 // PDF önizlemesi (SPEC-gui "PDF önizleme"): sayfalar alt alta, yalnız görünenler çizilir. RGBA'yı işçi üretir
-// (app::PdfPreview); doku burada, UI iş parçacığında kurulur.
+// (app::PdfPreview); doku burada, UI iş parçacığında kurulur. Sayfa görüntüsünün üstünde görünmez metin katmanı
+// (app::PdfTextLayer): sürükleme karakter seçer, çift tık sözcük seçer; Ctrl+C ve sağ tık "Kopyala" öteki
+// önizlemelerle ortak yoldan (View::draw_preview) kopyalar.
 #include "core/i18n.hpp"
 #include "core/log.hpp"
 #include "gui/view_internal.hpp"
@@ -8,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <tuple>
 
 namespace noteapp::gui {
 
@@ -25,6 +28,23 @@ ImVec2 fit_into(ImVec2 size, ImVec2 box) {
     return {std::floor(size.x * factor), std::floor(size.y * factor)};
 }
 
+// Sayfanın ekrandaki görüntüsü: punto <-> piksel.
+struct PageFrame {
+    ImVec2 top;
+    ImVec2 scale;  // piksel / punto
+    ImVec2 to_screen(float x, float y) const { return {top.x + (x * scale.x), top.y + (y * scale.y)}; }
+    ImVec2 to_page(ImVec2 screen) const { return {(screen.x - top.x) / scale.x, (screen.y - top.y) / scale.y}; }
+};
+
+// Sayfanın altına (üstüne) çekilen fare son (ilk) karaktere kadar seçer; yan taşmada en yakın satır.
+std::size_t drag_caret(const app::PdfTextLayer& layer, ImVec2 at) {
+    if (at.y > layer.height())
+        return layer.size();
+    if (at.y < 0.0F)
+        return 0;
+    return layer.caret_at(at.x, at.y);
+}
+
 }  // namespace
 
 std::size_t View::pdf_texture_count() const {
@@ -39,6 +59,8 @@ void View::draw_pdf_preview() {
     PreviewCache& cache = *preview_;
     const float ui = ImGui::GetStyle().FontScaleDpi;
     const float scale = kPdfScale * ui;
+    if (cache.pdf_session != state_.pdf_serial())
+        cache.pdf_text.reset();  // metin ölçekten bağımsız: yalnız oturumla atılır
     if (cache.pdf_session != state_.pdf_serial() || cache.pdf_scale != scale) {
         cache.pdf_textures.clear();  // geçen karenin çizim listesi çoktan sunuldu
         cache.pdf_session = state_.pdf_serial();
@@ -119,6 +141,7 @@ void View::draw_pdf_preview() {
             draw->AddImage(ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(
                                found->second.texture.get()))),
                            top, ImVec2(top.x + size.x, top.y + size.y));
+            draw_pdf_text_layer(*pdf, page, top, size);
         }
         else {
             if (found != cache.pdf_textures.end())
@@ -155,6 +178,19 @@ void View::draw_pdf_preview() {
             break;
         cache.pdf_textures.erase(oldest);
     }
+    PdfSelection& text = cache.pdf_text;
+    while (text.pages.size() > cap) {
+        auto oldest = text.pages.end();
+        for (auto entry = text.pages.begin(); entry != text.pages.end(); ++entry)
+            if ((entry->first < first || entry->first > last) &&
+                (oldest == text.pages.end() || entry->second.used < oldest->second.used))
+                oldest = entry;
+        if (oldest == text.pages.end())
+            break;
+        if (oldest->first == text.page)
+            text.clear_selection();
+        text.pages.erase(oldest);
+    }
 
     // Sayfa göstergesi "3 / 12": görünen alanın sağ üstünde, sayfaların üstünde; yarısından çoğu geçen sayfa
     // sonrakine sayılır.
@@ -169,6 +205,77 @@ void View::draw_pdf_preview() {
     ImGui::SetCursorScreenPos(ImVec2(at.x + padding.x, at.y + padding.y));
     ImGui::TextUnformatted(label.c_str());
     remember_rect("pdf_indicator", at, end);
+}
+
+// Sayfanın metin katmanı: görüntünün üstünde görünmez düğme (fare), seçimin vurgusu. Metin yalnız görünen sayfa için
+// istenir; gelen sonuç oturumdan alınır (take_text) ve burada tutulur. Okunamayan sayfanın hatası da tutulur:
+// sayfa seçilemez, her karede yeniden istenmez (görüntü hatası ayrıca görünür).
+void View::draw_pdf_text_layer(app::PdfPreview& pdf, int page, ImVec2 top, ImVec2 size) {
+    PdfSelection& text = preview_->pdf_text;
+    auto found = text.pages.find(page);
+    if (found == text.pages.end()) {
+        auto taken = pdf.take_text(page);
+        if (!taken) {
+            pdf.request_text(page);
+            return;
+        }
+        PdfSelection::Page entry;
+        if (*taken)
+            entry.layer.emplace(**taken);
+        else
+            core::log_warn("event=pdf_text_layer_failed page=" + std::to_string(page + 1) + " error=" +
+                           taken->error().message_key);
+        found = text.pages.insert_or_assign(page, std::move(entry)).first;
+    }
+    found->second.used = frames_;
+    if (!found->second.layer || found->second.layer->size() == 0)
+        return;
+    const app::PdfTextLayer& layer = *found->second.layer;
+    const PageFrame frame{top, ImVec2(size.x / layer.width(), size.y / layer.height())};
+
+    ImGui::SetCursorScreenPos(top);
+    ImGui::InvisibleButton(("##pdf_text" + std::to_string(page)).c_str(), size);
+    const ImVec2 mouse = frame.to_page(ImGui::GetIO().MousePos);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_TextInput);
+        preview_link_hovered_ = true;  // çift tık sözcük seçer, düzenlemeye geçmez
+    }
+    if (ImGui::IsItemActivated()) {
+        text.page = page;
+        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            std::tie(text.anchor, text.caret) = layer.word_at(mouse.x, mouse.y);
+        } else {
+            text.anchor = text.caret = drag_caret(layer, mouse);
+        }
+    } else if (ImGui::IsItemActive() && text.page == page && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0F)) {
+        text.caret = drag_caret(layer, mouse);
+    }
+
+    if (text.page != page || !text.active())
+        return;
+    const auto [begin, end] = text.range();
+    const ImU32 color = ImGui::GetColorU32(ImGuiCol_TextSelectedBg);  // editörün seçim rengi
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    // Uzun seçimin (tümü) yalnız görünen satırları çizim listesine girer.
+    const float clip_top = draw->GetClipRectMin().y;
+    const float clip_bottom = draw->GetClipRectMax().y;
+    for (const app::PdfRect& box : layer.boxes(begin, end)) {
+        const ImVec2 min = frame.to_screen(box.left, box.top);
+        const ImVec2 max = frame.to_screen(box.right, box.bottom);
+        if (max.y >= clip_top && min.y <= clip_bottom)
+            draw->AddRectFilled(min, max, color);
+    }
+    remember_rect("pdf_selection", frame.to_screen(0.0F, 0.0F), frame.to_screen(layer.width(), layer.height()));
+}
+
+// Kopyalama (Ctrl+C, sağ tık) bütün önizlemelerle ortak kuraldır: draw_preview seçim varsa bunu çağırır.
+std::string View::pdf_selected_text() const {
+    const PdfSelection& selection = preview_->pdf_text;
+    const auto found = selection.pages.find(selection.page);
+    if (!selection.active() || found == selection.pages.end() || !found->second.layer)
+        return {};
+    const auto [begin, end] = selection.range();
+    return found->second.layer->text(begin, end);
 }
 
 }  // namespace noteapp::gui

@@ -314,10 +314,16 @@ Paletteki `view.map` (plan-parity T4, karar 8) liste panelinde notları çizge o
 
 ## PDF önizleme (PDF3)
 
-Tipi `pdf` olan notun önizlemesi (sağ panel) metindir: önce `PDF yükleniyor…` satırı, ardından sayfalar arka planda
-(`app::PdfPreview`, tek işçi iş parçacığı, `note __pdf-worker`) sırayla okunur ve her biri ayırıcı satırıyla
-(`--- page 3/12 ---`, CLI ile aynı `app::pdf_page_separator`; sayfa göstergesi odur) sona eklenir; okunmayan kısım tek
-`Sayfa N yükleniyor…` satırıdır. Metin yalnız büyür: kaydırma, seçim ve arama yerinde kalır. Sayfalar en çok 4
+Tipi `pdf` olan notun önizlemesi (sağ panel) biçimli metindir: önce `PDF yükleniyor…` satırı, ardından sayfalar arka
+planda (`app::PdfPreview`, tek işçi iş parçacığı, `note __pdf-worker`) sırayla okunur ve her biri soluk ayırıcı
+satırıyla (`--- page 3/12 ---`, CLI ile aynı `app::pdf_page_separator`; sayfa göstergesi odur) sona eklenir; okunmayan
+kısım tek `Sayfa N yükleniyor…` satırıdır. Sayfa yapılı metinden (SPEC-core "Yapılı sayfa metni") bloklara çevrilir
+(`app::pdf_page_blocks`) ve markdown'ın biçimli görünümüyle aynı görünüşte çizilir (`tui::render_pdf_page`): başlık
+soluk `#` imi ve başlık rengiyle (h1 altı çizili), kalın/italik/eş aralıklı parçalar, panel genişliğine sarılan
+paragraflar, bloklar arasında boş satır; liste imli satırlar kendi satırında kalır. Panel genişliği değişince eklenmiş
+sayfalar yeniden sarılır (seçim düşer). Fare seçimi ve `c` gösterilen metni kopyalar (V14; önceden PDF'te kopya
+reddediliyordu); ret yalnız geçersiz UTF-8 notta kalır (`app.copy_refused_utf8`). Metin yalnız büyür: kaydırma, seçim
+ve arama yerinde kalır. Sayfalar en çok 4
 sayfa önden istenir, alınan metin oturumdan silinir (tek kopya). Metin `limits.tui.view_bytes`'a ulaşınca okuma durur,
 bekleyen istekler düşer ve son satır kesildiğini söyler (`app.pdf_truncated`; 0 = sınırsız): senkronla gelen PDF
 seçilince bellek sayfa × `text_bytes`'a büyümez. Bozuk/şifreli/sınırı aşan
@@ -799,3 +805,7 @@ TUI'de yalnız GUI'de olan özellikler (plan-parity T1, T2; karar 9 ve 10). Eşi
 - **ADDED** `F11` her odakta paneli yakınlaştırır (`pane.zoom`, Editör dahil; kayıtta `kInEditor`); üst satırda `⤢ yakın` işareti; ipuçlarında `z/F11`, Editör ipuçlarında `F11`. Neden: kullanıcı isteği (V14 D), yakınlaştırma düzenlerken de kullanılabilsin ve görünsün.
 - **MODIFIED** Editörden çıkış yalnız yeni not görünümünün açtığı yakınlaştırmayı geri alır; kullanıcının yakınlaştırması kalır (önceden hepsi geri alınıyordu). Önceki "F11 değil: Konsole'un" kararı kullanıcı kararıyla değişti; Konsole/GNOME Terminal'de `z` geçerli yoldur.
 - **ADDED** `Alt+Z` (`ESC z`) `pane.zoom`un ikinci her-odak bağıdır, Editör dahil; metne `z` yazmaz. İpuçlarında ve yardımda `F11`den önce gelir (`z/Alt+Z/F11`, Editörde `Alt+Z/F11`). Neden: GNOME Terminal `F11`i kendi tam ekranına ayırır, kullanıcı Ubuntu GNOME'da.
+
+## Değişiklik 2026-11-09 (V14 biçimli PDF, TUI)
+- **MODIFIED** PDF önizlemesi düz satırlar yerine markdown görünüşünde biçimli metin (başlık, kalın/italik, sarılan paragraflar); genişlik değişince yeniden sarılır (bkz. "PDF önizleme"). Neden: plan V14.
+- **FIXED** PDF önizlemesinde fare seçimi kopyalanmıyor, yanıltıcı "geçerli UTF-8 değil" iletisi çıkıyordu: gösterilen metin kopyalanır. Neden: plan V14.

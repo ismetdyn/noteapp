@@ -121,6 +121,84 @@ TEST_CASE("page text is valid UTF-8 without control characters even when ToUnico
     CHECK(contains(*text, "\xEF\xBF\xBD"));  // eşlenen denetim karakterleri görünür U+FFFD oldu
 }
 
+TEST_CASE("structured text keeps font size and bold per span with one box per character inside the page") {
+    PdfEngine document =
+        open_ok(exported_markdown_pdf("# Başlık\n\nDüz metin **kalın** son.\n\nİkinci paragraf.\n"));
+    const auto page = document.page_structure(0);
+    REQUIRE(page);
+    CHECK(page->width > 0.0F);
+    CHECK(page->height > 0.0F);
+    std::string all;
+    const pdfview::TextSpan* heading = nullptr;
+    const pdfview::TextSpan* bold = nullptr;
+    const pdfview::TextSpan* body = nullptr;
+    for (const auto& block : page->blocks) {
+        REQUIRE_FALSE(block.lines.empty());
+        for (const auto& line : block.lines) {
+            REQUIRE_FALSE(line.spans.empty());
+            CHECK(line.top >= 0.0F);
+            CHECK(line.top <= line.bottom);
+            CHECK(line.bottom <= page->height);
+            for (const auto& span : line.spans) {
+                CHECK(core::is_valid_utf8(span.text));
+                const auto chars = static_cast<std::size_t>(std::ranges::count_if(
+                    span.text, [](char c) { return (static_cast<unsigned char>(c) & 0xC0U) != 0x80U; }));
+                REQUIRE(span.edges.size() == chars * 2);
+                for (std::size_t i = 0; i < span.edges.size(); i += 2) {
+                    CHECK(span.edges[i] >= 0.0F);
+                    CHECK(span.edges[i] <= span.edges[i + 1]);
+                    CHECK(span.edges[i + 1] <= page->width);
+                }
+                all += span.text;
+                if (contains(span.text, "Başlık"))
+                    heading = &span;
+                if (contains(span.text, "kalın"))
+                    bold = &span;
+                if (contains(span.text, "Düz"))
+                    body = &span;
+            }
+        }
+    }
+    CAPTURE(all);
+    REQUIRE(heading != nullptr);
+    REQUIRE(bold != nullptr);
+    REQUIRE(body != nullptr);
+    CHECK(heading->size > body->size * 1.3F);
+    CHECK((bold->style & pdfview::kStyleBold) != 0);
+    CHECK((body->style & pdfview::kStyleBold) == 0);
+    CHECK(all.find("Başlık") < all.find("Düz"));
+    CHECK(all.find("Düz") < all.find("İkinci"));
+}
+
+TEST_CASE("structured text of a hostile ToUnicode is clean UTF-8 and counts against text_bytes") {
+    PdfEngine document = open_ok(hostile_to_unicode_pdf());
+    const auto page = document.page_structure(0);
+    REQUIRE(page);
+    std::uint64_t bytes = 0;
+    for (const auto& block : page->blocks)
+        for (const auto& line : block.lines)
+            for (const auto& span : line.spans) {
+                CAPTURE(span.text);
+                CHECK(core::is_valid_utf8(span.text));
+                CHECK(std::ranges::none_of(span.text, [](char c) {
+                    const auto byte = static_cast<unsigned char>(c);
+                    return byte < 0x20 || byte == 0x7F;
+                }));
+                CHECK_FALSE(contains(span.text, "\xC2\x9B"));
+                bytes += span.text.size();
+            }
+    REQUIRE(bytes > 1);
+    core::PdfLimits limits = unlimited();
+    limits.text_bytes = limit_of(bytes - 1);
+    const auto refused = open_ok(hostile_to_unicode_pdf(), limits).page_structure(0);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().message_key == "error.pdf_text_too_large");
+    limits.text_bytes = limit_of(bytes);
+    const auto exact = open_ok(hostile_to_unicode_pdf(), limits).page_structure(0);
+    REQUIRE(exact);
+    CHECK(*exact == *page);
+}
+
 TEST_CASE("renders a page as opaque RGBA at the requested scale") {
     PdfEngine document = open_ok(ascii_pdf(1));
     const auto rendered = document.render_page(0, 2.0F);

@@ -647,8 +647,9 @@ void View::draw_preview(float reserved_height) {
         selection.clear();
     }
     if (ImGui::IsWindowFocused()) {
-        // Seçim varken Ctrl+C onu (görüntülenen metin) kopyalar; yoksa notun özgün baytlarını (TUI `c`).
-        if (!selection.empty() && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_C))
+        // Seçim varken Ctrl+C onu (görüntülenen metin; PDF'te sayfanın metin katmanı) kopyalar; yoksa notun özgün
+        // baytlarını (TUI `c`).
+        if (preview_has_selection() && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_C))
             copy_preview_selection();
         else
             run_scope_commands(CommandScope::Preview);
@@ -673,15 +674,16 @@ void View::draw_preview(float reserved_height) {
     bool word_selected = false;
     if (!state_.showing_pdf()) {
         // Seçim iç alanda başlar (kaydırma çubuğu dışı); bağlantı düğmesine basılmışken de (bağlantıdan sürükleme
-        // seçer). Sağ tık menüsü seçimi kopyalar.
+        // seçer). PDF'in seçimi sayfanın metin katmanındadır (view_pdf.cpp).
         word_selected =
             selection.update(ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
                              ImGui::GetCurrentWindow()->InnerClipRect.Contains(ImGui::GetIO().MousePos));
-        if (ImGui::BeginPopupContextWindow("##preview_menu")) {
-            if (ImGui::MenuItem(core::tr("gui.preview_copy").c_str(), "Ctrl+C", false, !selection.empty()))
-                copy_preview_selection();
-            ImGui::EndPopup();
-        }
+    }
+    // Sağ tık menüsü seçimi kopyalar (bütün önizlemeler, PDF dahil).
+    if (ImGui::BeginPopupContextWindow("##preview_menu")) {
+        if (ImGui::MenuItem(core::tr("gui.preview_copy").c_str(), "Ctrl+C", false, preview_has_selection()))
+            copy_preview_selection();
+        ImGui::EndPopup();
     }
     // Metne çift tık düzenlemeye geçer (bağlantı kendi tıkını, sözcük seçimi kendi çift tıkını alır).
     if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !preview_link_hovered_ && !word_selected &&
@@ -691,8 +693,12 @@ void View::draw_preview(float reserved_height) {
     remember_item_center("preview");
 }
 
+bool View::preview_has_selection() const {
+    return state_.showing_pdf() ? preview_->pdf_text.active() : !preview_->selection.empty();
+}
+
 void View::copy_preview_selection() {
-    std::string text = preview_->selection.selected_text();
+    std::string text = state_.showing_pdf() ? pdf_selected_text() : preview_->selection.selected_text();
     if (!text.empty())
         queue([this, text = std::move(text)] { state_.copy_to_clipboard(text); });
 }

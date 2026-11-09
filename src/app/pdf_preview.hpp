@@ -3,6 +3,7 @@
 #include "core/error.hpp"
 #include "core/limits.hpp"
 #include "pdfview/rendered_page.hpp"
+#include "pdfview/structured_text.hpp"
 
 #include <condition_variable>
 #include <cstdint>
@@ -21,7 +22,7 @@
 #include <thread>
 #include <utility>
 
-// PDF önizlemesi (CLI `note show`, TUI metni, GUI sayfa görüntüleri): üç arayüz aynı kuralı buradan çağırır. Okuma
+// PDF önizlemesi (CLI `note show`, TUI biçimli metni, GUI sayfa görüntüleri ve metin katmanı): üç arayüz aynı kuralı buradan çağırır. Okuma
 // pdfview::PdfDocument'tadır (öldürülebilir yardımcı süreç); çağrıları bloklar, burada UI iş parçacığı dışında koşar.
 namespace noteapp::app {
 
@@ -49,17 +50,19 @@ struct PdfPreviewOptions {
 };
 
 // Açık bir PDF'in arka plan oturumu: tek işçi iş parçacığı belgeyi açar, istekleri FIFO sırayla yürütür. Aynı
-// istek (kuyrukta, yürüyen, sonucu var ya da başarısız olmuş) yinelenmez. Başarısız sayfa (süre dolması dahil)
+// istek (kuyrukta, yürüyen, sonucu var ya da başarısız olmuş) yinelenmez. Metin sayfanın yapılı metnidir
+// (pdfview::PdfDocument::page_structure; biçimleme ve seçim app/pdf_text.hpp). Başarısız sayfa (süre dolması dahil)
 // hatasıyla hatırlanır, yeniden istenmez: kaydırma her karede aynı yavaş sayfayı yeniden başlatmaz. Çizilmiş
 // sayfalar en çok limits.cache_pages tanedir (en az kullanılan düşer; 0 = sınırsız). Metinler take_text ile
-// alınana dek kalır: çağıran ne kadar istediğini kendi sınırıyla tutar (TUI: limits.tui.view_bytes).
+// alınana dek kalır: çağıran ne kadar istediğini kendi sınırıyla tutar (TUI: limits.tui.view_bytes; GUI: görünen
+// sayfalar, limits.pdf.cache_pages'lik kendi önbelleğinde).
 //
 // drop_pending() yalnız bekleyen istekleri siler; yürüyen istek biter (onu kesmek işçiyi öldürür, sonraki istek
 // yeniden başlatırdı). Yıkıcı yürüyen isteği keser (işçi ~50 ms içinde öldürülür) ve iş parçacığını bekler.
 // Üyeler UI iş parçacığından çağrılır; kilitlidir.
 class PdfPreview {
 public:
-    using Text = std::expected<std::string, core::Error>;
+    using Text = std::expected<pdfview::PageText, core::Error>;
     using Page = std::expected<std::shared_ptr<const pdfview::RenderedPage>, core::Error>;
     enum class State { Opening, Ready, Failed };
 

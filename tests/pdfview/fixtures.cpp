@@ -73,13 +73,25 @@ std::string ascii_pdf(int pages, Passwords passwords) {
     return saved_bytes(doc.get());
 }
 
-std::string exported_pdf(std::string_view text) {
+namespace {
+
+std::string export_as(std::string_view text, pdf::NoteFormat format) {
     const test::TempDir dir;
     const auto out = dir.path() / "fixture.pdf";
-    const auto result = pdf::export_pdf(text, pdf::NoteFormat::PlainText, out);
+    const auto result = pdf::export_pdf(text, format, out);
     if (!result)
         FAIL(core::format_error(result.error()));
     return test::slurp(out);
+}
+
+}  // namespace
+
+std::string exported_markdown_pdf(std::string_view markdown) {
+    return export_as(markdown, pdf::NoteFormat::Markdown);
+}
+
+std::string exported_pdf(std::string_view text) {
+    return export_as(text, pdf::NoteFormat::PlainText);
 }
 
 std::string ref(int number) {

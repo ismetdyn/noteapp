@@ -1,5 +1,7 @@
 #pragma once
 
+#include "pdfview/structured_text.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -11,20 +13,32 @@
 // tanımlanan katı denetimlerden geçirir, uymayanı bozuk çerçeve sayar (işçi öldürülür).
 namespace noteapp::pdfview::protocol {
 
-inline constexpr std::uint32_t kVersion = 1;
+inline constexpr std::uint32_t kVersion = 2;  // 2: Structured
 inline constexpr std::size_t kHeaderBytes = 16;     // {u32 kind, u32 reserved = 0, u64 length}
 inline constexpr std::size_t kOpenFieldBytes = 44;  // {u32 version, u64 parent_pid, u64 x4 sınır}
 inline constexpr std::size_t kFailedFieldBytes = 20;  // {u32 reason, u64 a, u64 b}
 inline constexpr std::size_t kMaxFailedDetail = 256;
 inline constexpr std::size_t kRenderedFieldBytes = 8;  // {u32 width, u32 height}
+// StructuredResult yükü: {f32 width, f32 height, u32 blok sayısı} ve bloklar; her blok {u32 satır sayısı} ve
+// satırlar; satır {u8 bayrak (bit 0 joined), f32 top, f32 bottom, u32 parça sayısı} ve parçalar; parça {u8 style,
+// f32 size, u32 metin baytı, metin, kod noktası başına f32 x0, f32 x1}. Sayılar ve uzunluklar güvenilmez: yük bayt
+// bayt okunur, sayıdan önceden ayırma yapılmaz.
+inline constexpr std::size_t kStructuredHeadBytes = 12;
+// Boş öğe yoktur (blokta satır, satırda parça, parçada karakter var): yükün metin baytı başına en çoğu
+// 4 (blok) + 13 (satır) + 9 (parça) + 1 (bayt) + 8 (kenarlar); çerçeve sınırı text_bytes'tan türer.
+inline constexpr std::uint64_t kStructuredBytesPerTextByte = 35;
+// Koordinatların sayfa kutusunun dışına taşabileceği pay (punto): işçi kutuları sayfaya kırpar, yuvarlama payı.
+inline constexpr float kPageTolerance = 1.0F;
 
 enum class Kind : std::uint32_t {
     Open = 1,
     Text = 2,
     Render = 3,
+    Structured = 4,  // yük: {u32 page}
     Opened = 0x81,
     TextResult = 0x82,
     Rendered = 0x83,
+    StructuredResult = 0x84,
     Failed = 0xFF,
 };
 
@@ -76,6 +90,7 @@ std::string encode_open_head(const OpenFields& fields, std::uint64_t pdf_size);
 std::optional<OpenFields> decode_open(std::string_view payload);
 
 std::string encode_text_request(std::uint32_t page);
+std::string encode_structured_request(std::uint32_t page);  // yükü decode_text_request okur
 std::string encode_render_request(std::uint32_t page, float scale);
 std::optional<std::uint32_t> decode_text_request(std::string_view payload);  // uzunluk tam 4 değilse nullopt
 struct RenderRequest {
@@ -87,9 +102,19 @@ std::optional<RenderRequest> decode_render_request(std::string_view payload);  /
 std::string encode_opened(std::uint32_t page_count);
 std::string encode_text_result(std::string_view text);
 std::string encode_rendered(std::uint32_t width, std::uint32_t height, std::string_view rgba);
+std::string encode_structured_result(const PageText& page);
 std::string encode_failed(const Failure& failure);  // detail kMaxFailedDetail'e kesilir
 // Uzunluk [kFailedFieldBytes, + kMaxFailedDetail] dışında ya da neden bilinmiyorsa nullopt.
 std::optional<Failure> decode_failed(std::string_view payload);
+
+// StructuredResult yükünün en çok boyu: kStructuredHeadBytes + text_cap * kStructuredBytesPerTextByte (taşarsa
+// uint64 en büyüğü). `text_cap`: limits.text_bytes.cap().
+std::uint64_t structured_length_cap(std::uint64_t text_cap);
+// Katı okuma; herhangi bir ihlalde nullopt (bozuk çerçeve): kısa ya da artık bayt, sonlu olmayan ya da sayfa
+// kutusunun (± kPageTolerance) dışındaki koordinat, ters kutu (x0 > x1, top > bottom), boş blok/satır/parça,
+// bilinmeyen biçim ya da bayrak biti, geçersiz UTF-8, toplam metnin `text_cap`'i aşması. Sayfa boyu sonlu ve >= 1 pt.
+// Metin temizlenmez (denetim karakterleri kalır): çağıran detail::clean_text'ten geçirir.
+std::optional<PageText> decode_structured(std::string_view payload, std::uint64_t text_cap);
 
 // Rendered yükünün beklenen boyu: 8 + w·h·4; taşarsa nullopt.
 std::optional<std::uint64_t> rendered_length(std::uint32_t width, std::uint32_t height);

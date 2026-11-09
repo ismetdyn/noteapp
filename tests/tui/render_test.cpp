@@ -309,6 +309,59 @@ TEST_CASE("PreviewCache shows a PDF note's text under page separators after a lo
     cache.close_pdf();
 }
 
+TEST_CASE("PreviewCache formats a PDF page like markdown, wraps it to the pane and copies the shown text") {
+    core::init_i18n("en");
+    test::TempDir dir;
+    // 14 pt başlık, 6 pt gövdenin iki satırı (sarılmış tek paragraf), kalın parça; hepsi 200 pt sayfaya sığar.
+    pdftest::PdfBuilder builder;
+    const std::string content =
+        "BT /F1 14 Tf 10 80 Td (Title) Tj ET "
+        "BT /F1 6 Tf 10 60 Td (alpha beta gamma delta epsilon zeta eta theta iota) Tj ET "
+        "BT /F1 6 Tf 10 53 Td (kappa lambda mu) Tj /F2 6 Tf ( nu xi) Tj ET";
+    const std::string fonts =
+        "<< /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> "
+        "/F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> >> >>";
+    test::upsert_note(dir.path(), "styled.pdf", test::text_pdf_detail::finish(builder, {{fonts, content}}));
+    const core::NoteStore store(dir.path());
+    tui::PreviewCache cache;
+    cache.set_pdf({}, NOTEAPP_NOTE_EXE, [] {});
+    tui::Row row{core::NotePath::parse("styled.pdf").value(), {}, 0, {}};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (cache.get(store, &row).text.find("Loading") != std::string::npos &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const tui::Preview& shown = cache.get(store, &row);
+    CAPTURE(shown.text);
+    CHECK(shown.rendered);
+    CHECK_FALSE(shown.display_only);  // gösterilen metin kopyalanır
+    REQUIRE(shown.lines.size() == shown.styled.size());
+    const auto heading = std::ranges::find(shown.lines, "# Title");
+    REQUIRE(heading != shown.lines.end());
+    const auto& heading_spans = shown.styled[static_cast<std::size_t>(heading - shown.lines.begin())];
+    CHECK(std::ranges::any_of(heading_spans, [](const tui::StyledSpan& span) { return span.look.bold; }));
+    // Satırlar paragrafa birleşir, varsayılan 80 sütuna tek satırda sığar; kalın parça kalın görünür.
+    const auto body = std::ranges::find(shown.lines, "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi");
+    REQUIRE(body != shown.lines.end());
+    const std::size_t body_line = static_cast<std::size_t>(body - shown.lines.begin());
+    CHECK(std::ranges::any_of(shown.styled[body_line], [&](const tui::StyledSpan& span) {
+        return span.look.bold &&
+               shown.lines[body_line].substr(span.begin, span.end - span.begin).find("nu xi") != std::string::npos;
+    }));
+    const std::string copied = tui::selected_text(shown, {.begin_line = body_line, .begin_offset = 0,
+                                                          .end_line = body_line, .end_offset = 10});
+    CHECK(copied == "alpha beta");
+
+    // Panel daralınca aynı sayfa yeniden sarılır (publish genişliği bildirir).
+    tui::TuiState state;
+    state.set_notes({note("styled.pdf", 0)});
+    state.set_window(40, 30);
+    const tui::Preview& narrow = cache.throttled(state, store, std::chrono::steady_clock::now());
+    CHECK(std::ranges::find(narrow.lines, "# Title") != narrow.lines.end());
+    CHECK(std::ranges::none_of(narrow.lines, [](const std::string& line) { return line.size() > 40; }));
+    CHECK(narrow.text.find("alpha beta") != std::string::npos);
+    cache.close_pdf();
+}
+
 // Senkronla gelen PDF seçilince bellek sayfa x text_bytes'a (~10 GiB) büyümesin: metin view_bytes'ta kesilir, kalan
 // sayfalar istenmez.
 TEST_CASE("PreviewCache stops reading a PDF at limits.tui.view_bytes and says the text was cut") {

@@ -234,8 +234,12 @@ private:
     void draw_markdown_preview(float request, bool to_end);
     void draw_preview_links(const PreviewLayout& layout, ImVec2 origin, float top, float bottom);
     void copy_preview_selection();  // görüntülenen seçili metin panoya (TUI önizleme seçimi gibi)
+    bool preview_has_selection() const;  // gösterilen önizlemede (PDF dahil) boş olmayan seçim
     void draw_raw_preview();  // limits.tui.view_bytes üstü: neden + ham metin (TUI REVIEW gibi)
     void draw_pdf_preview();  // view_pdf.cpp: sayfa görüntüleri, sayfa göstergesi
+    // view_pdf.cpp: sayfa görüntüsünün üstündeki metin katmanı (seçim, vurgu) ve kopyalama (Ctrl+C, sağ tık).
+    void draw_pdf_text_layer(app::PdfPreview& pdf, int page, ImVec2 top, ImVec2 size);
+    std::string pdf_selected_text() const;  // view_pdf.cpp: PDF seçiminin metni (yoksa boş)
     // csv ve json: TUI REVIEW'un ayrıştırması; not bir kez dizinlenir (app::index_csv, app::index_json), yalnız
     // görünen satırlar ayrıştırılıp çizilir.
     void draw_data_preview();

@@ -3,6 +3,7 @@
 #include "core/error.hpp"
 #include "core/limits.hpp"
 #include "pdfview/rendered_page.hpp"
+#include "pdfview/structured_text.hpp"
 
 #include <expected>
 #include <memory>
@@ -48,6 +49,12 @@ public:
     // dizi U+FFFD olur. Ön koşul: 0 <= page < page_count() (ihlal bug'dır: std::abort). Metin limits.text_bytes'ı
     // aşarsa LimitExceeded; sayfa bozuksa InvalidDocument.
     std::expected<std::string, core::Error> page_text(int page);
+
+    // Sayfanın yapılı metni (bloklar, satırlar, biçimli parçalar, karakter kutuları; structured_text.hpp). Metin
+    // geçerli UTF-8'dir: denetim karakterleri ve geçersiz kod noktaları U+FFFD, sekme ve satır sonu boşluk olur.
+    // Sayfa dışındaki karakterler atılır, kutular sayfaya kırpılır. Ön koşul ve hatalar page_text gibi (toplam
+    // metin limits.text_bytes).
+    std::expected<PageText, core::Error> page_structure(int page);
 
     // Sayfayı `scale` kat (1 = 72 dpi) çizer. Ön koşul: 0 <= page < page_count(), scale sonlu ve > 0 (ihlal
     // bug'dır: std::abort). Piksel sayısı limits.render_pixels'ı aşarsa çizmeden LimitExceeded. Boş MediaBox'ı

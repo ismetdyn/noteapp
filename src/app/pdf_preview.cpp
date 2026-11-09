@@ -185,7 +185,7 @@ void PdfPreview::run(std::string bytes, const std::stop_token& stop) {
                 in_flight_ = next;
             }
             if (next.kind == Kind::Text) {
-                auto text = document->page_text(next.page, stop);
+                auto text = document->page_structure(next.page, stop);
                 if (!text && is_cancelled(text.error()))
                     return;
                 const std::scoped_lock lock(mutex_);

@@ -152,9 +152,12 @@ private:
     bool resize_waiting_ = false;
 
 public:
-    // PDF notu (tip pdf) metin olarak gösterilir: sayfalar arka planda (app::PdfPreview) sırayla okunur, her sayfa
-    // ayırıcı satırıyla (app::pdf_page_separator) eklenir, okunmayan kısım tek "yükleniyor" satırıdır. Kurulmazsa
-    // PDF ikili not gibi görünür. `on_change` işçi iş parçacığından gelir: yalnız yeniden çizim ister.
+    // PDF notu (tip pdf) biçimli metin olarak gösterilir: sayfalar arka planda (app::PdfPreview) sırayla okunur,
+    // yapılı metinden bloklara (app::pdf_page_blocks) çevrilir ve markdown görünümüyle aynı görünüşte, panel
+    // genişliğine sarılarak (render_pdf_page) ayırıcı satırının (app::pdf_page_separator) altına eklenir; okunmayan
+    // kısım tek "yükleniyor" satırıdır. Gösterilen metin seçilip kopyalanır. Genişlik değişince eklenmiş sayfalar
+    // yeniden sarılır. Kurulmazsa PDF ikili not gibi görünür. `on_change` işçi iş parçacığından gelir: yalnız
+    // yeniden çizim ister.
     void set_pdf(core::PdfLimits limits, std::filesystem::path worker, std::function<void()> on_change);
     // Oturumu kapatır (işçiyi durdurur, bekler): on_change'in hedefi yıkılmadan önce çağrılır.
     void close_pdf() { pdf_.reset(); }
@@ -163,10 +166,16 @@ public:
 private:
     // Önden istenen sayfa: işçi boş beklemez, kesilince en çok bu kadar sayfa boşa okunur. İş birimi, sınır değil.
     static constexpr int kPdfReadAhead = 4;
+    // Görünüm sarılmadan önce panelin genişliği bilinmiyorsa (publish'ten önce) bu genişlik kullanılır.
+    static constexpr int kPdfDefaultWidth = 80;
     void start_pdf(std::string bytes);  // load'un PDF yolu: "yükleniyor" satırı, oturum
     // Gelen sayfaları sona ekler (metin yalnız büyür, kaydırma yerinde kalır); load ve get her çağrıda.
     void refresh_pdf();
-    void append_preview_line(std::string_view line);
+    // Eklenmiş sayfaları ve durum satırını `width`'e yeniden sarar (publish, genişlik değişince).
+    void layout_pdf(int width);
+    void append_pdf_view(RenderedView view);
+    void cut_pdf_status();  // durum satırını atar: sayfa metni pdf_loaded_* uzunluğuna döner
+    void show_pdf_status();  // pdf_status_'u (boş değilse) sona ekler
 
     std::optional<app::PdfPreviewOptions> pdf_options_;
     std::unique_ptr<app::PdfPreview> pdf_;
@@ -176,6 +185,16 @@ private:
     int pdf_next_page_ = 0;            // eklenmemiş ilk sayfa
     std::size_t pdf_loaded_bytes_ = 0;  // eklenen sayfaların metni; ardındaki durum satırı her eklemede yenilenir
     std::size_t pdf_loaded_lines_ = 0;
+    // Eklenmiş sayfalar (bloklar ya da hata): genişlik değişince yeniden sarılır; metnin tek kopyası burada ve
+    // preview_'dadır (view_bytes sınırı preview_.text'e bakar).
+    struct PdfPageView {
+        int page = 0;
+        std::vector<pdf::Block> blocks;
+        std::string error;
+    };
+    std::vector<PdfPageView> pdf_pages_;
+    std::string pdf_status_;  // son satır: yükleniyor, kesildi ya da açılış hatası; boş = yok
+    int pdf_width_ = kPdfDefaultWidth;
 };
 
 struct StatusLine {

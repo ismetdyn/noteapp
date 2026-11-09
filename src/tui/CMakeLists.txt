@@ -3,6 +3,7 @@ add_library(noteapp_tui
     view.cpp
     frame_diff.cpp
     markdown_view.cpp
+    pdf_view.cpp
     styled_view.cpp
     data_view.cpp
     commands.cpp
