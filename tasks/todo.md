@@ -568,12 +568,16 @@ Release sözleşmesi: tag `vX.Y.Z`; varlıklar `noteapp-X.Y.Z-x86_64.AppImage`, 
   Kanıt UPD1 (2026-11-09): merge 97b3ec6; Linux 18/18, `ctest -R net` 3×23/23, Wine 16/16; cpp + security review, düzeltme turu (VERIFYHOST testi, URL/proxy parolası iletiden çıktı, TLS≥1.2, başlık izin listesi) RED kanıtlı; curl 8.23.0 CVE 0.
   Kanıt UPD2+3: merge 6321935; Linux 18/18, install_local_test ok, Wine 16/16, zamanlama testleri 20/20; cpp ×2 + security review, iki düzeltme turu (iptal/zaman aşımı, --expect-version, zip sahiplik işareti, rollback işareti, committed işareti) 30+ mutasyon RED; ADR `.engineering/adr/0001-update-trust-model.md`.
 - [ ] UPD4 worker + CLI (Depends: UPD1–3): `src/app/update_worker.*`, `src/app/notices.hpp`, `src/app/commands.hpp`, `src/cli/commands_update.cpp`, `command_table.hpp`, help/completion.
+- [ ] UPD4 durum: `feat/upd4-worker-cli` 7ce50f9+5230d6a; Linux 18/18, Wine 16/16, RED kanıtlı; review sürüyor. Açık: süreçler arası kurulum kilidi (cleanup `.old` silmesi ↔ eşzamanlı kurulum).
 - [ ] UPD5 TUI + GUI + belgeler (Depends: UPD4): palet komutu, bildirim eylemi, onay modalı, açılış kontrolü bloklamaz; SPEC-*, README.
 - [ ] UPD6 security-reviewer + bağımsız review, tam doğrulama (Linux, Wine, AppImage), push; v0.1.2 release. Release'e MuPDF kaynak arşivi de eklenir (AGPL/GPLv3 §6(d); `make-release.sh`). Sistem CA keşfi probe'u: Ubuntu native, Fedora native, AppImage başka dağıtımda (SSL_CERT_* ayarsız).
 
 ## PDF — PDF önizleme (kullanıcı onayı 2026-11-08)
 Kararlar: kütüphane MuPDF (AGPL-3.0; GPL-3.0-or-later ile birleşir, paket lisansları ve README buna göre); kapsam: GUI sayfa görüntüsü (kaydırma, yakınlaştırma, sayfa no), TUI ve CLI metin (`note show x.pdf` metni yazar, sayfa ayırıcılarıyla), arama PDF metnini de bulur. Mantık çekirdekte. Güvenilmeyen girdi: senkronla gelen PDF — sayfa sayısı/boyut/süre/bellek sınırları config'te (0 = sınırsız), çizim/ayrıştırma UI iş parçacığını bloklamaz.
 - [ ] PDF1 MuPDF bağımlılığı + çekirdek (`src/docs/pdf_view*` ya da uygun modül): aç, sayfa sayısı, sayfa metni, sayfayı RGBA'ya çiz (ölçekli), hatalar `core::Error`; Linux + windows-cross derlemesi + DLL kapısı; lisans dosyaları; testler (geçerli PDF, bozuk PDF, şifreli PDF, büyük sayfa sınırı).
+  Durum (2026-11-09): `feat/pdf1-core` 66b6b79 — üç review turu (süre/iptal + MuPDF abort yaması, hata metni sızıntısı, UTF-8 temizliği, bellek başlığı, z_errmsg çakışması); merge EDİLMEDİ: `fz_load_page` bağlantı hedefi araması iptal edilemiyor (Sev-2).
+  Karar (kullanıcı 2026-11-09): PDF ayrıştırma ayrı, öldürülebilir süreçte (yardımcı süreç); süre/iptal = süreci öldür, MuPDF bellek hatası uygulamayı çökertmez. AppImage boyut artışı (~+7,5 MB) kabul. Tasarım: cpp-architect → PDF1b.
+- [ ] PDF1b yardımcı süreç yalıtımı (Depends: PDF1, mimari tasarım).
 - [ ] PDF2 CLI + arama: `note show` PDF metni; içerik dizini PDF metnini indeksler (sınırlı).
 - [ ] PDF3 GUI + TUI önizleme: GUI sayfa görüntüleri (ImGui doku, tembel çizim, önbellek sınırı), TUI metin görünümü; belgeler.
 - [ ] PDF4 security-reviewer (güvenilmeyen PDF ayrıştırma) + bağımsız review.
