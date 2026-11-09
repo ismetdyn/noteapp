@@ -30,6 +30,7 @@ noteapp_add_test(tui
     sync_indicator_test.cpp
     tabs_test.cpp
     tags_test.cpp
+    update_test.cpp
     views_test.cpp
     wiki_follow_test.cpp)
 # Yamalı FTXUI ayrıştırıcısı (bracketed paste) doğrudan sınanır; başlığı FTXUI'nin iç kaynağındadır.

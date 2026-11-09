@@ -14,6 +14,7 @@
 #include "app/sync_status_worker.hpp"
 #include "app/tabs.hpp"
 #include "app/trash_ops.hpp"
+#include "app/update_controller.hpp"
 #include "core/config.hpp"
 #include "core/error.hpp"
 #include "core/file_icons.hpp"
@@ -712,6 +713,19 @@ public:
     void dismiss_notice(std::uint64_t id) { notices_.dismiss(id); }
     void open_notice_folder(std::uint64_t id);  // dışa aktarmanın klasörü; açılamazsa hata bildirimi
 
+    // --- Güncelleme (SPEC-gui "Güncelleme"; akış app::UpdateController, TUI ile ortak) ---
+    // İşçinin bağımlılıkları, ilk kullanımda okunur: üretimde ağ ve gerçek kurulum, testlerde sahteleri.
+    std::function<app::UpdateWorkerDeps()> update_deps = app::default_update_deps;
+    // Açılış denetimi (main, pencere açıldıktan sonra): update.check_interval dolduysa işçide, beklemeden.
+    void check_updates_on_startup();
+    void open_update();  // palet `update` ve bildirimin Kur…/Ayrıntılar… düğmesi
+    bool update_open() const { return update_ && update_->is_open(); }
+    app::UpdateView update_view() const { return update_ ? update_->view() : app::UpdateView{}; }
+    // Pencerenin düğmesi; CopyLink release sayfasını panoya yazar (deciders.copy_text).
+    void update_action(app::UpdateAction action);
+    // Bildirimin düğmesi: kurulabilir sürüm bekliyorsa Kur…, yoksa Ayrıntılar….
+    bool update_installable() const;
+
     // --- Durum çubuğu ---
     const std::string& status() const { return status_; }
     // İleti bir hata mı (kayıt, işlem, içe alma, config ve depo uyarısı): durum çubuğunda danger rengi.
@@ -874,6 +888,8 @@ private:
     tui::SearchHistoryLimits search_history_limits() const;
     void remember_query();
     void apply_settings(const core::Config& before, const core::Config& after);
+    app::UpdateController& updates();  // ilk kullanımda update_deps ile kurulur
+    void update_changed();             // işçinin on_change'i, UI iş parçacığında (post)
 
     // Sekmeler. Kimlikle aranır: kayıt akışı tarar, tarama sekme kapatabilir; sıra numarası kayardı.
     std::optional<core::NotePath> tab_note(const NoteTab& tab) const;
@@ -1007,6 +1023,9 @@ private:
     std::function<void()> wake_;
     // Sıra önemli: bu üçünün işçileri post çağırır, yukarıdaki üyelerden önce yıkılmalı.
     app::SyncStatusWorker sync_status_;  // `sync:` süzgecinin not durumları, UI iş parçacığı dışında
+    // Güncelleme işçisi post çağırır: posted_ ve wake_'ten önce yıkılır (iptal + bekleme).
+    std::unique_ptr<app::UpdateController> update_;
+    bool quit_after_update_ = false;  // kapanış, değiştirme evresindeki kurulumu bekliyor
     SettingsPage settings_;
     std::unique_ptr<sync::AutoSync> auto_sync_;
     bool external_running_ = false;

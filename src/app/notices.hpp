@@ -24,10 +24,10 @@ struct Notice {
     std::optional<std::string> update_version;     // "Güncelle" eylemi: kurulabilecek yeni sürüm (UPD5)
 };
 
-// Bildirim kuyruğu: en yeni sonda. Bilgi ve başarı `tuning.notice_ms` sonra düşer, hata kapatılana dek kalır
-// (0 = hiçbiri kendiliğinden düşmez). Aynı tür ve metin yeni kutu açmaz: var olanın süresi tazelenir, sayısı
-// artar. Süre dolumu bir uyanma anıdır (next_deadline), yoklama değil: boşta kare üretilmez. Kuyruk sınırsızdır;
-// arayüz sığanı çizer.
+// Bildirim kuyruğu: en yeni sonda. Bilgi ve başarı `tuning.notice_ms` sonra düşer, hata ve yeni sürüm
+// bildirimi kapatılana dek kalır (0 = hiçbiri kendiliğinden düşmez). Aynı tür ve metin yeni kutu açmaz: var
+// olanın süresi tazelenir, sayısı artar. Süre dolumu bir uyanma anıdır (next_deadline), yoklama değil: boşta
+// kare üretilmez. Kuyruk sınırsızdır; arayüz sığanı çizer.
 class NoticeQueue {
 public:
     using Clock = std::chrono::steady_clock;
@@ -44,10 +44,13 @@ public:
 
     void post(NoticeKind kind, std::string text, Clock::time_point now,
               std::optional<std::string> folder = std::nullopt);
-    // Yeni sürüm bildirimi (Info): arayüz `update_version` ile kurulum onayını açar.
+    // Yeni sürüm bildirimi (Info): arayüz `update_version` ile güncelleme penceresini açar. Süresi dolmaz:
+    // kapatılana ya da kullanıcı ona davranana (dismiss_update) dek kalır; açılış denetimi en çok
+    // update.check_interval'de bir gelir.
     void post_update(std::string text, std::string version, Clock::time_point now);
     void dismiss(std::uint64_t id);
     void dismiss_all(NoticeKind kind);  // TUI: sonraki tuş hatayı kapatır
+    void dismiss_update();              // güncelleme penceresi açıldı
     // Süresi dolanları düşürür; bir şey düştüyse true (yeniden çiz).
     bool expire(Clock::time_point now);
     // En erken düşecek bildirimin anı; yoksa boş.

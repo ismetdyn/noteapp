@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <doctest/doctest.h>
 #include <filesystem>
@@ -973,5 +974,43 @@ TEST_CASE("update install: a local install is refused as busy while another hold
                         fs::file_time_type::clock::now() - std::chrono::hours(2));
     cleanup_after_update(target);
     CHECK(fs::exists(local.share / ".noteapp-update-stale"));  // kilit tutulurken dokunulmaz
+}
+#endif
+
+#ifndef _WIN32
+// UPD4 review: flock kilidi bırakılırken dosya silinir, bekleyen yeniden açar. Aynı dizinde yarışan
+// alıcılar hiçbir anda ikisi birden tutmamalı (flock açık dosya tanımı başınadır: iş parçacıkları süreçler
+// gibi yarışır).
+TEST_CASE("update install: lockers racing on one directory never hold the install lock together") {
+    const TempDir dir;
+    constexpr int kThreads = 8;
+    constexpr int kRounds = 300;
+    std::atomic<int> holders{0};
+    std::atomic<int> overlaps{0};
+    std::atomic<int> acquired{0};
+    std::atomic<int> errors{0};
+    {
+        std::vector<std::jthread> threads;
+        for (int t = 0; t < kThreads; ++t)
+            threads.emplace_back([&] {
+                for (int round = 0; round < kRounds; ++round) {
+                    const auto lock = InstallLock::try_acquire(dir.path());
+                    if (!lock) {
+                        if (lock.error().message_key != "update.install_busy")
+                            ++errors;
+                        continue;
+                    }
+                    if (holders.fetch_add(1) != 0)
+                        ++overlaps;
+                    ++acquired;
+                    std::this_thread::yield();
+                    holders.fetch_sub(1);  // kilit bu turun sonunda bırakılır: sayaç ondan önce düşer
+                }
+            });
+    }
+    CHECK(overlaps.load() == 0);
+    CHECK(errors.load() == 0);
+    CHECK(acquired.load() > 0);
+    CHECK_FALSE(fs::exists(dir.path() / kInstallLockName));  // son bırakan siler
 }
 #endif

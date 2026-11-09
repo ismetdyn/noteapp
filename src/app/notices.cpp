@@ -46,8 +46,12 @@ void NoticeQueue::dismiss_all(NoticeKind kind) {
     std::erase_if(items_, [kind](const Notice& notice) { return notice.kind == kind; });
 }
 
+void NoticeQueue::dismiss_update() {
+    std::erase_if(items_, [](const Notice& notice) { return notice.update_version.has_value(); });
+}
+
 bool NoticeQueue::expires(const Notice& notice) const {
-    return notice.kind != NoticeKind::Error && lifetime_.count() > 0;
+    return notice.kind != NoticeKind::Error && !notice.update_version && lifetime_.count() > 0;
 }
 
 std::optional<NoticeQueue::Clock::time_point> NoticeQueue::due(const Notice& notice) const {

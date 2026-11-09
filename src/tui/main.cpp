@@ -2,6 +2,7 @@
 #include "app/import_files.hpp"
 #include "app/sync_status_worker.hpp"
 #include "app/ui_args.hpp"
+#include "app/update_controller.hpp"
 #include "app/update_worker.hpp"
 #include "core/config.hpp"
 #include "core/console.hpp"
@@ -304,6 +305,13 @@ namespace core = noteapp::core;
 namespace detect = noteapp::detect;
 namespace tui = noteapp::tui;
 
+// Güncelleme işçisinin ayarları (config.limits.update); sürüm derlenen sürümdür.
+app::UpdateSettings update_settings(const core::Config& config) {
+    app::UpdateSettings settings;
+    settings.limits = config.limits.update;
+    return settings;
+}
+
 // `notes import`'un açılışa bıraktığı: REVIEW'da gösterilecek ilk not ve durum satırı.
 struct Opening {
     core::NotePath note;
@@ -354,6 +362,7 @@ private:
     void start_connection_test(core::Config candidate);
     void handle_modal_key(Key key, const std::string& text);
     void request_sync_now();
+    void handle_update_key(Key key);
     void run_intent(tui::Intent intent, Key key, const std::string& text);
     std::unique_ptr<tui::EditorSession> make_editor(std::uint64_t id);
     void enter_editor();
@@ -393,6 +402,11 @@ private:
     // Durumlar işçide hesaplanır, tuş beklemez; sonuç UI iş parçacığına Post edilir. app_'ten sonra
     // bildirildiği için ondan önce yıkılır.
     app::SyncStatusWorker sync_status_;
+    // Güncelleme denetimi ve kurulumu işçide (app::UpdateController, GUI ile ortak akış); durum değişikliği
+    // UI iş parçacığına Post edilir. app_'ten sonra bildirildiği için ondan önce yıkılır (iptal + bekleme;
+    // kurulum değiştirme evresindeyse biter, run() bunu söyler). Pencere açıkken tüm tuşlar ona gider.
+    app::UpdateController update_;
+    std::optional<tui::UpdateDialogState> update_dialog_;
     // Ayarlardaki bağlantı testi: tek senkron işçide; sonuç UI iş parçacığına Post edilir. app_'ten sonra
     // bildirildiği için ondan önce katılır (senkron kendi zaman aşımıyla biter). Yalnız UI iş parçacığı
     // `connection_testing_`e dokunur.
@@ -450,6 +464,20 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
                   app_.Post(redraw_event());
           });
       }),
+      update_(update_settings(config_),
+              [this] {
+                  app::UpdateWorkerDeps deps = app::default_update_deps();
+                  // İşçi iş parçacığından: yalnız Post (check/install çağrılmaz; UpdateWorkerDeps).
+                  deps.on_change = [this] {
+                      // Kapanış görevi çizimi tetiklemez: görünür değişiklik varsa özel olay çizer.
+                      app_.Post([this] {
+                          if (update_.changed(status_.notices, std::chrono::steady_clock::now()) ||
+                              update_dialog_)
+                              app_.Post(redraw_event());
+                      });
+                  };
+                  return deps;
+              }()),
       word_tables_(kWordTableIdle,
                    tui::completion_limits_of(config_.limits.tui, config_.tuning.completion_min_prefix_bytes)),
       system_clipboard_(tui::SystemClipboard::write_to_terminal, tui::SystemClipboard::kToolTimeout,
@@ -808,10 +836,13 @@ ftxui::Element TuiSession::render() {
     const tui::Preview& preview = sync_preview();
     wake_by(preview_.deferred_until());
     wake_at_ = wake_at;
+    if (update_dialog_)
+        update_dialog_->show(update_.view());
     return tui::render(state_, preview, status_, window, dialog_ ? &*dialog_ : nullptr,
                        confirm_ ? &*confirm_ : nullptr, help_ ? &*help_ : nullptr,
                        settings_ ? &*settings_ : nullptr, new_row_ ? &*new_row_ : nullptr, &editor,
-                       spell_.get(), rename_ ? &*rename_ : nullptr, tabs);
+                       spell_.get(), rename_ ? &*rename_ : nullptr, tabs,
+                       update_dialog_ ? &*update_dialog_ : nullptr);
 }
 
 // Terminali editöre bırakır; dönünce FTXUI ekranı geri yükler.
@@ -924,6 +955,7 @@ void TuiSession::apply_settings(const core::Config& next) {
     config_.icons = next.icons;
     state_.set_icon_style(core::terminal_icon_style(config_.icons));
     config_.sync = next.sync;
+    config_.update = next.update;  // açılış denetimi sonraki açılışta okur; form yeniden açılınca görünür
     config_.limits.app.map_nodes = next.limits.app.map_nodes;  // app::adopt_live_limits: dosyadan gelir
     config_.limits.app.map_depth = next.limits.app.map_depth;
     state_.set_map_node_limit(config_.limits.app.map_nodes);
@@ -1041,9 +1073,30 @@ void TuiSession::handle_modal_key(const Key key, const std::string& text) {
         handle_new_row_key(*new_row_, key, text);
     else if (rename_)
         list_actions_.handle_rename_key(rename_, key, text);
+    else if (update_dialog_)
+        handle_update_key(key);
     else
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- any_open: kalan tek açık modal diyalogdur
         handle_dialog_key(*dialog_, key, text);
+}
+
+// Güncelleme penceresinin tuşu (handle_modal_key, pencere açıkken): içerik işçinin son durumundan; bağlantıyı
+// kopyalamak arayüzün işidir (pano).
+void TuiSession::handle_update_key(const Key key) {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) -- handle_modal_key yalnız açıkken çağırır
+    tui::UpdateDialogState& dialog = *update_dialog_;
+    dialog.show(update_.view());
+    const std::optional<app::UpdateAction> action = dialog.handle(key);
+    if (!action)
+        return;
+    if (*action == app::UpdateAction::CopyLink) {
+        const std::string& link = dialog.view().link;
+        status_.message = tui::copy_message(system_clipboard_.copy(link), link.size());
+        return;
+    }
+    update_.act(*action);
+    if (!update_.is_open())
+        update_dialog_.reset();
 }
 
 void TuiSession::request_sync_now() {
@@ -1062,7 +1115,7 @@ bool TuiSession::on_event(ftxui::Event event) {
     }
     // Fare olayı FTXUI'ye bırakılmaz: kendi seçim boyamasını başlatırdı. Modal açıkken yok sayılır.
     if (event.is_mouse()) {
-        if (!any_open(help_, confirm_, dialog_, settings_, new_row_, rename_))
+        if (!any_open(help_, confirm_, dialog_, settings_, new_row_, rename_, update_dialog_))
             list_actions_.on_mouse(to_mouse(event.mouse()), tabs_.active());
         settle_tabs();
         list_actions_.save_prefs_if_changed();
@@ -1090,7 +1143,7 @@ bool TuiSession::on_event(ftxui::Event event) {
     }
     if (!key || tui::passes_to_terminal(*key, state_.focus()))
         return false;
-    if (any_open(help_, confirm_, dialog_, settings_, new_row_, rename_)) {
+    if (any_open(help_, confirm_, dialog_, settings_, new_row_, rename_, update_dialog_)) {
         handle_modal_key(*key, text);
         settle_tabs();
         list_actions_.save_prefs_if_changed();
@@ -1200,6 +1253,10 @@ void TuiSession::run_intent(const tui::Intent intent, const Key key, const std::
     case tui::Intent::SyncNow:
         request_sync_now();
         break;
+    case tui::Intent::CheckUpdates:
+        update_.open(status_.notices);
+        update_dialog_.emplace();
+        break;
     default:
         list_actions_.run(intent, confirm_, rename_);
         break;
@@ -1263,6 +1320,10 @@ int TuiSession::run() {
     // öldürmeden döngüden çıkışa ve aşağıdaki kayda izin verir.
     tui::install_termination_handlers();
     app_.Post([this] { exit_if_terminated(app_); });
+    // Açılış güncelleme denetimi arayüz açıldıktan sonra, işçide: açılışı ve tuşları beklemez.
+    app_.Post([this] {
+        update_.check_on_startup(std::chrono::system_clock::now(), config_.update.check_interval);
+    });
     run_event_loop(
         app_, ftxui::CatchEvent(view_, [this](ftxui::Event event) { return on_event(std::move(event)); }),
         [this] { return wake_due(std::chrono::steady_clock::now()); });
@@ -1273,6 +1334,11 @@ int TuiSession::run() {
     // Son sekme durumu: çıkışta yazılan taslak artık not, sekmesi kalır.
     state_.set_saved_tabs(tabs_.saved());
     list_actions_.save_prefs_if_changed();
+
+    // Süren denetim ve indirme iptal edilir; değiştirme evresindeki kurulum iptali yok sayar, çıkış onu
+    // bekler (update_'in yıkıcısı): kullanıcı nedenini görsün.
+    if (update_.stop_for_exit())
+        std::cerr << core::tr("tui.update_exiting") << '\n';
 
     // Çıkış (Ctrl-C dahil, ikisi de app.Exit): bekleyen değişiklik için son bir senkron, en çok exit_timeout.
     // Terminal artık normal kipte; kullanıcı bekleyişin nedenini görsün.

@@ -29,6 +29,8 @@ erteledi.
 
 - Güvenlik GitHub hesabının (2FA, token kapsamı) ve release sürecinin güvenliğine bağlıdır.
 - Kurulum kullanıcı onayı ister. Kaynaktan derleme, sistem geneli ve yazılamayan kurulum kendini güncellemez.
+- TUI ve GUI'nin açılış denetimi varsayılan olarak açıktır (en çok 24 saatte bir): api.github.com'a IP adresi ve
+  `User-Agent: noteapp/<sürüm>` gider. `update.check_interval = 0` kapatır (UPD5).
 - İmza eklemek varlık sözleşmesini değiştirir (ör. `SHA256SUMS.sig` ve uygulamaya gömülü açık anahtar), bu ADR'nin
   yerine yenisi yazılır.
 

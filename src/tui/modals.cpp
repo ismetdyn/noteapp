@@ -4,6 +4,7 @@
 #include "tui/view.hpp"
 
 #include <algorithm>
+#include <utility>
 
 namespace noteapp::tui {
 
@@ -58,6 +59,42 @@ bool HelpState::handle(Key key, std::string_view text) {
         return true;
     default:
         return true;
+    }
+}
+
+void UpdateDialogState::show(app::UpdateView view) {
+    if (view.actions != view_.actions) {
+        const auto close = std::ranges::find(view.actions, app::UpdateAction::Close);
+        index_ = close != view.actions.end() ? static_cast<std::size_t>(close - view.actions.begin()) : 0;
+    }
+    view_ = std::move(view);
+}
+
+app::UpdateAction UpdateDialogState::selected() const {
+    return index_ < view_.actions.size() ? view_.actions[index_] : app::UpdateAction::Close;
+}
+
+std::optional<app::UpdateAction> UpdateDialogState::handle(Key key) {
+    const std::size_t count = view_.actions.size();
+    switch (key) {
+    case Key::Left:
+    case Key::Up:
+    case Key::ShiftTab:
+        if (count > 0)
+            index_ = (index_ + count - 1) % count;
+        return std::nullopt;
+    case Key::Right:
+    case Key::Down:
+    case Key::Tab:
+        if (count > 0)
+            index_ = (index_ + 1) % count;
+        return std::nullopt;
+    case Key::Enter:
+        return selected();
+    case Key::Escape:
+        return app::UpdateAction::Close;
+    default:
+        return std::nullopt;  // harf kısayolu yok: yanlışlıkla kurulumu önler
     }
 }
 

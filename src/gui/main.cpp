@@ -51,6 +51,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     (*view)->install_deciders();
+    // Pencere açıldıktan sonra, işçide: açılışı ve girdiyi beklemez (TUI ile aynı).
+    state.check_updates_on_startup();
     (*view)->run();
     return 0;
 }

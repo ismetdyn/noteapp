@@ -608,4 +608,84 @@ std::optional<SaveDetails> View::ask_save_details(const SaveDialogRequest& reque
     return result;
 }
 
+// Güncelleme penceresi (SPEC-gui "Güncelleme"): run_modal gibi iç döngü değildir, her karede ana döngüde
+// çizilir; işçinin ilerlemesi (post → tick) böylece görünür. İçerik app::UpdateController::view: sürüm ve
+// adres sunucudan gelir (printable). Esc ve (imleç başta Kapat'ta olduğundan) Enter kapatır: kurulum yalnız
+// Kur'a tıklayınca ya da klavyeyle ona gidip etkinleştirince başlar. Düğmeler değişince Kur İptal'in yerine
+// geçer (İptal → Kur Kapat): Kur update_arm_delay boyunca kapalıdır ve klavye imleci yeniden Kapat'a konur,
+// İptal'e yönelmiş tıklama ya da Enter kurulum başlatmaz.
+void View::draw_update_dialog() {
+    constexpr const char* kPopupId = "###update";
+    constexpr float kWrapEms = 30.0F;  // satır uzunluğu: uzun hata ve adres sarılır
+    const bool wanted = state_.update_open();
+    const bool shown = ImGui::IsPopupOpen(kPopupId);
+    if (!wanted && !shown) {
+        update_actions_.clear();  // yeniden açılış da bir değişikliktir
+        return;
+    }
+    if (wanted && !shown)
+        ImGui::OpenPopup(kPopupId);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5F, 0.5F));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(kModalPadPixels * ui_scale_, kModalPadPixels * ui_scale_));
+    const std::string title = core::tr("update.ui_title") + kPopupId;
+    const bool open = ImGui::BeginPopupModal(title.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::PopStyleVar();
+    if (!open)
+        return;
+    if (!wanted) {  // durum modeli kapattı (Kapat düğmesi bir önceki karede)
+        update_actions_.clear();
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    const app::UpdateView view = state_.update_view();
+    const auto now = std::chrono::steady_clock::now();
+    const bool actions_changed = view.actions != update_actions_;
+    if (actions_changed) {
+        update_actions_ = view.actions;
+        update_armed_at_ = now + update_arm_delay;
+    }
+    const bool install_locked = update_armed_at_ && now < *update_armed_at_;
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * kWrapEms);
+    for (const std::string& line : view.lines)
+        ImGui::TextUnformatted(printable(line).c_str());
+    if (!view.link.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::current().accent);
+        ImGui::TextUnformatted(printable(view.link).c_str());
+        ImGui::PopStyleColor();
+        remember_item_center("update_link");
+    }
+    ImGui::PopTextWrapPos();
+    remember_item_center("update_text");
+    ImGui::Spacing();
+    bool first = true;
+    for (const app::UpdateAction action : view.actions) {
+        if (!first)
+            ImGui::SameLine();
+        first = false;
+        const std::string name = std::string("update:") + app::update_action_label(action);
+        const bool close = action == app::UpdateAction::Close;
+        // Değişen düğmelerde imleç yeniden Kapat'a: kaybolan İptal'deki gezinme imleci Kur'a düşmesin.
+        if (close && actions_changed && !ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere();
+        ImGui::BeginDisabled(action == app::UpdateAction::Install && install_locked);
+        if (button(name, core::tr(app::update_action_label(action))))
+            queue([this, action] { state_.update_action(action); });
+        ImGui::EndDisabled();
+        // Enter gezinme imlecindeki düğmeyi etkinleştirir: imleç Kapat'ta başlar (TUI ile aynı varsayılan).
+        if (close && ImGui::IsWindowAppearing()) {
+            ImGui::SetItemDefaultFocus();
+            ImGui::SetNavCursorVisible(true);
+        }
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        queue([this] { state_.update_action(app::UpdateAction::Close); });
+    keep_window_in_viewport();
+    const ImVec2 pos = ImGui::GetWindowPos();
+    const ImVec2 size = ImGui::GetWindowSize();
+    remember_rect("update_dialog", pos, ImVec2(pos.x + size.x, pos.y + size.y));
+    ImGui::EndPopup();
+}
+
 }  // namespace noteapp::gui

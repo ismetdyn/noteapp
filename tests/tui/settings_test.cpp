@@ -115,9 +115,10 @@ TEST_CASE("rows follow the fixed human order with the right kinds") {
                            "sync.branch",
                            "sync.idle_seconds",
                            "sync.author_name",
-                           "sync.author_email"};
-    REQUIRE(s.rows().size() == 13);
-    for (std::size_t i = 0; i < 13; ++i)
+                           "sync.author_email",
+                           "update.check_interval"};
+    REQUIRE(s.rows().size() == 14);
+    for (std::size_t i = 0; i < 14; ++i)
         CHECK(s.rows()[i].key == order[i]);
     CHECK(s.rows()[0].kind == SettingsState::Kind::Choice);
     CHECK(s.rows()[3].kind == SettingsState::Kind::Choice);
@@ -312,6 +313,33 @@ TEST_CASE("invalid values show an inline error on the row and leave the config f
         CHECK_FALSE(row(s, bad.key).error.empty());
         CHECK(noteapp::test::slurp(core::config_file()) == before);
     }
+}
+
+// UPD5: açılıştaki güncelleme denetiminin aralığı; kural dosya yüklemesiyle aynı (0 = kapalı, 1 saatten
+// kısa red).
+TEST_CASE("update.check_interval: under an hour is refused with its reason, 0 turns the check off") {
+    const Home home;
+    const auto base = core::load_config().config;
+    SettingsState s(base);
+    CHECK(row(s, "update.check_interval").value == "24h");
+    CHECK(row(s, "update.check_interval").kind == SettingsState::Kind::Text);
+    focus_row(s, "update.check_interval");
+    clear_field(s);
+    type(s, "30min");
+    CHECK_FALSE(s.submit(base));
+    CHECK(row(s, "update.check_interval").error.find(core::tr("reason.must_be_update_interval")) !=
+          std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(core::config_file()));
+
+    clear_field(s);
+    type(s, "0");
+    const auto saved = s.submit(base);
+    REQUIRE(saved);
+    CHECK(saved->update.check_interval == core::Limit{0, "0"});
+    CHECK(core::load_config().config.update.check_interval == core::Limit{0, "0"});
+
+    const ftxui::Screen screen = render_settings(SettingsState(*saved), 100, 40);
+    CHECK(has(screen, core::tr("tui.settings_update_check_interval")));
 }
 
 TEST_CASE("an emptied default_type is rejected like on the command line") {

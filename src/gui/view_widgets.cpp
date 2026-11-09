@@ -548,6 +548,14 @@ void View::draw_notices(float status_height) {
         ImGui::TextUnformatted(text.c_str());
         ImGui::PopTextWrapPos();
         bool acted = false;
+        if (notice.update_version) {  // yeni sürüm: güncelleme penceresi (onay ya da release sayfası)
+            const char* label =
+                state_.update_installable() ? "notice.update_install" : "notice.update_details";
+            if (button("notice_update:" + std::to_string(notice.id), core::tr(label), ButtonKind::Ghost)) {
+                queue([this] { state_.open_update(); });
+                acted = true;
+            }
+        }
         if (notice.folder) {
             if (button("notice_open:" + std::to_string(notice.id), core::tr("notice.open_folder"), ButtonKind::Ghost)) {
                 queue([this, notice_id = notice.id] { state_.open_notice_folder(notice_id); });

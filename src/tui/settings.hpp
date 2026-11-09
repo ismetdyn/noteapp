@@ -50,7 +50,7 @@ public:
     bool testing() const { return form_.testing(); }
     const std::string& test_result() const { return form_.test_result(); }
 
-    // Satırlar config_entries()'ten gelir (13). Token satırı bunların DIŞINDADIR (token config değildir).
+    // Satırlar config_entries()'ten gelir (14). Token satırı bunların DIŞINDADIR (token config değildir).
     const std::vector<Row>& rows() const { return form_.fields(); }
     // Token satırı yalnız remote https iken var; odak sırası: satırlar, token, Kaydet düğmesi.
     bool token_visible() const { return form_.token_enabled(); }

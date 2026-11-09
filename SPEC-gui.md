@@ -113,6 +113,23 @@ Görünüm seçicideki **Harita** sol bölmede notları çizge olarak gösterir;
 - **Süre:** bilgi ve başarı `tuning.notice_ms` (varsayılan 4000; `"4s"` yazılabilir; `0` = kendiliğinden kapanmaz) sonra düşer; hata tıklanana dek kalır. Düşme anı olay döngüsünün uyanma anıdır (`GuiState::next_deadline`), yoklama yoktur: boşta kare üretilmez.
 - **Görünüm:** en yeni altta, sığmayan eskiler çizilmez (kuyruk sınırsız). Solda türün renginde şerit ve önek (`Tamam`, `Hata`, `Bilgi`; renk tek sinyal değil); aynı tür ve metin yeni kutu açmaz, süresi tazelenir, `(×n)` sayar. Kutuya tıklama kapatır. Odak çalınmaz. Durum çubuğu son iletiyi göstermeyi sürdürür (çöpte `Geri al` orada).
 
+## Güncelleme (UPD5)
+
+Akış TUI ile ortaktır (`app::UpdateController`; denetim ve kurulum `app::UpdateWorker`, SPEC-cli "Güncelleme").
+- **Açılış denetimi:** pencere açıldıktan sonra, `update.check_interval` (varsayılan `24h`, `0` = kapalı) dolduysa
+  işçide; açılışı ve girdiyi beklemez. Yeni sürüm bildirim olur, düğmesi `Kur…` (kendini güncelleyemeyen kurulumda
+  `Ayrıntılar…`); süresi dolmaz, tıklanınca ya da pencere açılınca kalkar. Güncel ve hata yalnız loga yazılır.
+- **Palet** "Güncellemeleri denetle" (`update`, kısayolu yok; Ayarlar açıkken de koşar): pencereyi açar, bulunmuş ya da
+  kurulmuş sürüm yoksa denetler.
+- **Pencere:** bekletmeyen modal (her karede çizilir, işçinin ilerlemesi görünür; arkadaki kısayollar kapalı). Sürüm,
+  kurulu sürüm ve release sayfası; `Kur` `Kapat` (kendini güncelleyemeyen kurulumda `Bağlantıyı kopyala`: panoya).
+  Klavye imleci `Kapat`ta başlar: `Enter` ve `Esc` kapatır, kurulum yalnız `Kur`la. İndirme ve kurulum sürerken
+  `İptal` `Kapat`; bitince "kuruldu" (Windows'ta ayrıca "yeniden başlatın"), hata yerelleştirilmiş nedeniyle. İşlem
+  sürerken kapatılan pencerenin sonucu bildirim olur.
+- **Kapanış:** süren denetim ve indirme iptal edilir. Değiştirme evresindeki kurulum iptali yok sayar: pencere açık
+  kalır, "Güncelleme kuruluyor; bitince noteapp kapanır" bildirimi çıkar, kurulum bitince kapanış kendiliğinden yeniden
+  istenir (kaydedilmemiş iş yine sorulur).
+
 ## Sekmeler
 
 Editörün üstünde sekme çubuğu (ImGui `BeginTabBar`, sürükleyerek sıralanır, sığmayınca kayar). Her sekme kendi tamponunu, kirli durumunu, imlecini,
@@ -206,7 +223,8 @@ seçimi ve editörü korur. Anlık (saniyenin altında) dış değişiklik algı
 
 ## Ayarlar sekmesi
 TUI ayar ekranıyla aynı alanlar (SPEC-core config). İki sütunlu form: etiket solda hizalı (sütun en çok alanın yarısı, uzun etiket sarılır),
-alan sağda ve pencereyle büyür. Gruplar: **Genel** (dil, not klasörü, varsayılan tip, varsayılan klasör, tipler, editör komutu) ve **Senkron** (aç, uzak adres,
+alan sağda ve pencereyle büyür. Gruplar: **Genel** (dil, not klasörü, varsayılan tip, varsayılan klasör, tipler, editör komutu, güncelleme aralığı
+`update.check_interval`: `0` kapalı, 1 saatten kısa değer alanın altında nedeniyle reddedilir) ve **Senkron** (aç, uzak adres,
 dal, boşta bekleme, yazar adı, yazar e-postası, token, bağlantı testi) ve sonda **Görünüm** (sıra no, arayüz yazı tipi, editör yazı tipi). Alan hatası alanın altında; editör, uzak adres ve bekleme alanında kısa ipucu.
 - **Görünüm (T82):** config değil, pencere tercihidir: onay kutusu hemen uygulanır ve `gui-state.toml`'a hemen yazılır; Kaydet/Geri al ve "Kaydedilmemiş değişiklikler" karşılaştırmasına girmez. Grup sonda: config alanları kaydırmadan görünür kalır.
 - **Dil:** seçenekler okunur metindir (Sistem dili, Türkçe, English); saklanan değer `auto`/`tr`/`en` kalır.
@@ -554,3 +572,6 @@ Arayüz yenilemesinin yerleşim fazı (`.engineering/design/ui-redesign.md` §3.
 ## Değişiklik 2026-11-08 (haritanın açılışta geri gelmesi, GUI)
 - **FIXED** Harita açılışta geliyordu ama etkin kayıtlı görünüm ve seçenekler gelmiyordu. Artık TUI ile ortak `[map]` tablosunda kalır (`view_mode = "map"` yerine `[map] shown`); görünüm açılışta arka planda salt-okunur yeniden çalışır (bkz. "Harita" → "Açılış").
 - **MODIFIED** Sorgu çubuğunu kapatmak sonucu, vurguyu ve etkin görünümü artık düşürmez; tuvalde `Esc` düşürür. Neden: inceleme L3, TUI ile tek kural (TUI'de `Q` satırı kapanır, sonuç `Esc`e dek kalır). Neden: kullanıcı hatası 2026-11-08 (TUI'de görülen, GUI eşitliği).
+
+## Değişiklik 2026-11-09 (UPD5 güncelleme, GUI)
+- **ADDED** Açılışta arka planda güncelleme denetimi, bildirimde `Kur…`, palet "Güncellemeleri denetle", bekletmeyen onay penceresi, Ayarlar → Genel'de güncelleme aralığı (bkz. "Güncelleme"). Neden: plan UPD5, TUI ile eşitlik.

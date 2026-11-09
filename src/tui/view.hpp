@@ -167,15 +167,20 @@ struct StatusLine {
 
 // Tüm ekran: üst çubuk, sol liste, sağ önizleme, toplamlar, alt çubuk. `window` terminal boyutu (testte ekran
 // boyutu). Modal doluysa ana yerleşimin üstüne ortalanmış çizilir; birden çoğu doluysa öncelik yardım > onay
-// > diyalog. `new_row` doluysa listenin ilk satırıdır; alt çubukta yalnız tuşları kalır.
+// > diyalog > ayarlar > güncelleme.
+// `new_row` doluysa listenin ilk satırıdır; alt çubukta yalnız tuşları kalır.
 ftxui::Element render(const TuiState& state, const Preview& preview, const StatusLine& status,
                       ftxui::Dimensions window, const SaveDialogState* dialog = nullptr,
                       const ConfirmState* confirm = nullptr, const HelpState* help = nullptr,
                       const SettingsState* settings = nullptr, const NewRowState* new_row = nullptr,
                       const EditorSession* editor = nullptr, SpellChecker* spell = nullptr,
-                      const RenameState* rename = nullptr, std::span<const TabLabel> tabs = {});
+                      const RenameState* rename = nullptr, std::span<const TabLabel> tabs = {},
+                      const UpdateDialogState* update = nullptr);
 // Dosya ikonunun terminal rengi (liste ve harita aynı rengi kullanır).
 ftxui::Color icon_color(core::IconColor color);
+// Güncelleme penceresinin metni terminal_safe'ten geçmiş hâliyle: sürüm, hata ayrıntısı ve adres sunucudan
+// gelir. Pencere bunu çizer; testler FTXUI'ye girmeden önceki metni denetler.
+app::UpdateView safe_update_view(app::UpdateView view);
 // Harita (`view.map`, SPEC-tui "Harita"): kapsam satırı ve braille tuvali, `columns` x `rows` hücre.
 ftxui::Element map_pane(const TuiState& state, int columns, int rows);
 // Sekme satırı (sağ panelin üst kenarı): ` a.md │ [b.md*] │ c.md `. Etkin sekme köşeli parantezde; sığmayan

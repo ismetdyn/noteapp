@@ -25,6 +25,7 @@ add_library(noteapp_app
     tabs.cpp
     trash_ops.cpp
     ui_prefs.cpp
+    update_controller.cpp
     update_install.cpp
     update_worker.cpp
     updater.cpp)

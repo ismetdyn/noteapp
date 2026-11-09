@@ -74,8 +74,13 @@ public:
     // Döngünün bir adımı: en çok timeout_ms bekler; yalnız olay/zamanlayıcı varsa kare üretir.
     void idle_step(int timeout_ms);
 
+    // Güncelleme penceresinin düğmeleri değişince (denetim bitti, iptal edildi) Kur bu süre kapalı kalır:
+    // İptal'in yerine geçen Kur'a, İptal'e yönelmiş tıklama ya da Enter düşmesin.
+    static constexpr std::chrono::milliseconds kUpdateArmDelay{500};
+
     // Test kancaları.
     std::function<void()> on_modal_frame;  // her diyalog karesinden önce: tuş enjekte eder
+    std::chrono::milliseconds update_arm_delay = kUpdateArmDelay;
     std::size_t frames() const { return frames_; }
     bool search_active() const { return search_active_; }
     bool editor_active() const { return editor_active_; }
@@ -134,6 +139,7 @@ private:
     void draw_root();
     void draw_notes_tab();
     void draw_notices(float status_height);  // sağ altta bildirimler (toast), durum çubuğunun üstünde
+    void draw_update_dialog();               // güncelleme penceresi (GuiState::update_open)
     void draw_left_pane();
     // Kayıtlı boyutu yalnız kullanıcı değiştirdiyse günceller; bu karede bölmenin olması gereken boyutu
     // döner.
@@ -373,6 +379,10 @@ private:
     bool editor_drawn_ = false;  // bu karede editör çizildi: alanları ve iletisi durum çubuğunda
     // Boşta bekleyen dil sunucusu değişikliğinin gönderileceği an (LanguageServers::Update::send_at).
     std::optional<std::chrono::steady_clock::time_point> lsp_send_at_;
+    // Güncelleme penceresinin son çizilen düğmeleri ve Kur'un yeniden açılacağı an (kUpdateArmDelay); an
+    // gelince tek kare çizilir (idle_step).
+    std::vector<app::UpdateAction> update_actions_;
+    std::optional<std::chrono::steady_clock::time_point> update_armed_at_;
     bool list_focused_ = false;
     bool refocus_editor_ = false;
     int scrolled_row_ = -1;

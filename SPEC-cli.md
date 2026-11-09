@@ -431,3 +431,6 @@ Etkileşimli seçici (fzf benzeri seçim TUI'nin işi), `mkdir/rmdir` komutları
 ## Değişiklik 2026-11-09 (UPD4 güncelleme komutu)
 - **ADDED** `note update [--check] [--yes]` ("Güncelleme"). `update` artık ayrılmış sözcüktür: `note update` not
   eklemez (önceden "update" metinli not kaydederdi; `note -a update` hâlâ ekler). Yeni çıkış kodu yok.
+
+## Değişiklik 2026-11-09 (UPD5)
+- **ADDED** `note config get/set/list` artık `update.check_interval`ı da kapsar (TUI ve GUI ayar ekranıyla aynı tablo): `0` açılış denetimini kapatır, 1 saatten kısa değer `must_be_update_interval` nedeniyle reddedilir.

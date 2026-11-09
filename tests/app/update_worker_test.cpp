@@ -5,15 +5,18 @@
 #include "support/test_support.hpp"
 #include "support/update_fixture.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <doctest/doctest.h>
 #include <filesystem>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
 #include <variant>
+#include <vector>
 
 using noteapp::app::InstallKind;
 using noteapp::app::InstallOutcome;
@@ -416,4 +419,104 @@ TEST_CASE("update worker: an install error after cancel is reported unless the i
         else
             CHECK(as<UpdateFailed>(worker.status()).error.message_key == key);  // yarım kurulum gizlenmez
     }
+}
+
+namespace {
+
+// Sırayla verilen sonuçları dönen kurulum; son sonuç tekrar eder. Her çağrıda `on_call` (iptal gibi) koşar.
+struct ScriptedInstaller {
+    std::vector<noteapp::app::InstallResult> results;
+    std::function<void()> on_call;
+    std::atomic<int> calls{0};
+
+    noteapp::app::UpdateInstaller installer() {
+        return [this](const InstallTarget&, const noteapp::app::ReleaseInfo&, std::string_view,
+                      const noteapp::core::UpdateLimits&, std::stop_token) {
+            const auto index = static_cast<std::size_t>(calls.fetch_add(1));
+            if (on_call)
+                on_call();
+            return results[std::min(index, results.size() - 1)];
+        };
+    }
+};
+
+noteapp::app::InstallResult busy_result() {
+    return std::unexpected(Error{Error::Code::Io, "update.install_busy", {{"path", "/fake"}}});
+}
+
+UpdateWorkerDeps scripted_deps(FakeGitHub& github, ScriptedInstaller& scripted) {
+    return UpdateWorkerDeps{.get = github.get(),
+                            .install = scripted.installer(),
+                            .target = installable_target(),
+                            .on_change = {}};
+}
+
+}  // namespace
+
+// UPD4 review R1: açılış temizliği kurulum kilidini kısa bir an tutar; o anda başlayan kurulum bir kez
+// beklenip yeniden denenir.
+TEST_CASE("update worker: an install that finds the lock briefly held retries once and succeeds") {
+    const TempHome home;
+    FakeGitHub github;
+    github.publish("1.3.0");
+    ScriptedInstaller scripted{.results = {busy_result(), InstallOutcome{}}, .on_call = {}};
+    UpdateWorker worker(update_settings("1.2.3"), scripted_deps(github, scripted));
+    REQUIRE(worker.check());
+    wait_idle(worker);
+    REQUIRE(worker.install());
+    wait_idle(worker);
+    CHECK(as<UpdateDone>(worker.status()).version == "1.3.0");
+    CHECK(scripted.calls.load() == 2);
+}
+
+TEST_CASE("update worker: an install lock held through the retry is reported as busy after one retry") {
+    const TempHome home;
+    FakeGitHub github;
+    github.publish("1.3.0");
+    ScriptedInstaller scripted{.results = {busy_result()}, .on_call = {}};
+    UpdateWorker worker(update_settings("1.2.3"), scripted_deps(github, scripted));
+    REQUIRE(worker.check());
+    wait_idle(worker);
+    REQUIRE(worker.install());
+    wait_idle(worker);
+    CHECK(as<UpdateFailed>(worker.status()).error.message_key == "update.install_busy");
+    CHECK(scripted.calls.load() == 2);
+}
+
+TEST_CASE("update worker: cancel while waiting to retry a busy install installs nothing") {
+    const TempHome home;
+    FakeGitHub github;
+    github.publish("1.3.0");
+    UpdateWorker* self = nullptr;
+    ScriptedInstaller scripted{.results = {busy_result(), InstallOutcome{}},
+                               .on_call = [&self] { self->cancel(); }};
+    UpdateWorker worker(update_settings("1.2.3"), scripted_deps(github, scripted));
+    self = &worker;
+    REQUIRE(worker.check());
+    wait_idle(worker);
+    REQUIRE(worker.install());
+    wait_idle(worker);
+    CHECK(as<UpdateAvailable>(worker.status()).version == "1.3.0");  // iptal: yeniden kurulabilir
+    CHECK(scripted.calls.load() == 1);
+}
+
+// UPD4 review R3: on_change arayüzün kodudur; atan geri çağrı işçi iş parçacığını (catch içinde) ya da
+// check()/install()'ı çağıranı düşürmemeli.
+TEST_CASE("update worker: a throwing change callback is logged, the operation still finishes") {
+    const TempHome home;
+    FakeGitHub github;
+    github.publish("1.3.0");
+    FakeInstaller installer;
+    UpdateWorkerDeps d = deps(github, installer);
+    d.on_change = [] { throw std::runtime_error("ui gone"); };
+    UpdateWorker worker(update_settings("1.2.3"), std::move(d));
+    bool started = false;
+    CHECK_NOTHROW(started = worker.check());
+    REQUIRE(started);
+    wait_idle(worker);
+    CHECK(as<UpdateAvailable>(worker.status()).version == "1.3.0");
+    CHECK_NOTHROW(started = worker.install());
+    REQUIRE(started);
+    wait_idle(worker);
+    CHECK(as<UpdateDone>(worker.status()).version == "1.3.0");
 }

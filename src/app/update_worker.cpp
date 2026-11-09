@@ -4,7 +4,11 @@
 #include "core/log.hpp"
 #include "net/http.hpp"
 
+#include <condition_variable>
 #include <exception>
+#include <mutex>
+#include <stop_token>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -23,6 +27,21 @@ constexpr AssetKind kPlatformAsset = AssetKind::AppImage;
 // install_update'in iptal hatası (update_install.cpp).
 constexpr std::string_view kInstallCancelledKey = "update.install_cancelled";
 constexpr std::string_view kInternalErrorKey = "update.internal_error";
+// InstallLock başkasında (update_install.cpp). Hiçbir şeye dokunulmadan döner.
+constexpr std::string_view kInstallBusyKey = "update.install_busy";
+// Açılış temizliği (cleanup_previous_update) kilidi yalnız eski dosyaları silerken tutar: o anda başlayan
+// kurulum bu kadar bekleyip bir kez daha dener (UPD4 review R1). Kapasite değil, bir yarışın payı; iptal
+// beklemeyi keser.
+constexpr std::chrono::seconds kInstallBusyRetryDelay{1};
+
+// `delay` kadar bekler; durdurma istenirse hemen döner. Durdurma istenmediyse true.
+bool wait_unless_stopped(const std::stop_token& stop, std::chrono::milliseconds delay) {
+    std::mutex mutex;
+    std::condition_variable_any wake;
+    std::unique_lock lock(mutex);
+    wake.wait_for(lock, stop, delay, [] { return false; });
+    return !stop.stop_requested();
+}
 
 bool is_running(const UpdateStatus& status) {
     return std::holds_alternative<UpdateChecking>(status) ||
@@ -148,8 +167,17 @@ void UpdateWorker::run_guarded(const std::function<void()>& body) {
 }
 
 void UpdateWorker::notify() const {
-    if (deps_.on_change)
+    if (!deps_.on_change)
+        return;
+    // Geri çağrı arayüzün kodudur: atarsa işlem yine biter. run_guarded'ın catch'inde de çağrılır, kaçan
+    // istisna orada std::terminate olurdu; check()/install()'ı çağırana da sızmaz. Durum yine okunabilir.
+    try {
         deps_.on_change();
+    } catch (const std::exception& error) {
+        core::log_error(std::string("event=update_on_change_exception detail=\"") + error.what() + "\"");
+    } catch (...) {
+        core::log_error("event=update_on_change_exception detail=\"unknown\"");
+    }
 }
 
 void UpdateWorker::run_check(const std::stop_token& stop, const UpdateStatus& before) {
@@ -196,12 +224,19 @@ void UpdateWorker::run_install(const std::stop_token& stop, const ReleaseInfo& r
         return;
     }
     set_status(UpdateInstalling{release.version});
-    const InstallResult outcome = deps_.install(deps_.target, release, *bytes, settings_.limits, stop);
+    InstallResult outcome = deps_.install(deps_.target, release, *bytes, settings_.limits, stop);
+    if (!outcome && outcome.error().message_key == kInstallBusyKey &&
+        wait_unless_stopped(stop, kInstallBusyRetryDelay)) {
+        core::log_info("event=update_install_retry reason=install_busy");
+        outcome = deps_.install(deps_.target, release, *bytes, settings_.limits, stop);
+    }
     if (!outcome) {
         // Değiştirme başladıktan sonra kurulum iptali yok sayar: o evrenin hatası
-        // (ör. update.rollback_failed) iptal istense de gösterilir. Yalnız kurulumun kendi iptal hatası
-        // iptaldir.
-        const bool cancelled = stop.stop_requested() && outcome.error().message_key == kInstallCancelledKey;
+        // (ör. update.rollback_failed) iptal istense de gösterilir. Yalnız kurulumun kendi iptal hatası ve
+        // hiç başlamamış (kilit başkasında) kurulum iptaldir.
+        const std::string_view key = outcome.error().message_key;
+        const bool cancelled =
+            stop.stop_requested() && (key == kInstallCancelledKey || key == kInstallBusyKey);
         stopped_or_failed(outcome.error(), cancelled);
         return;
     }

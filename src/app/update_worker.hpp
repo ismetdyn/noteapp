@@ -61,7 +61,7 @@ struct UpdateWorkerDeps {
     InstallTarget target;
     // Her durum değişikliğinden sonra işçi iş parçacığından (ya da check/install'ı çağırandan) çağrılır; veri
     // taşımaz, arayüz status()'u okur (TUI Post, GUI post). İçinden yalnız status()/busy() çağrılabilir:
-    // check()/install() bitmekte olan iş parçacığını beklerdi. Boş olabilir.
+    // check()/install() bitmekte olan iş parçacığını beklerdi. Boş olabilir. Atarsa loglanır, işlem sürer.
     std::function<void()> on_change;
 };
 
@@ -85,7 +85,8 @@ public:
     bool check();
     // Son denetimin bulduğu sürümü indirir, doğrular ve kurar (UpdateDownloading -> UpdateInstalling ->
     // UpdateDone). Meşgulse, kurulacak sürüm yoksa (son denetim başarısızsa da) ya da kurulum türü Unsupported
-    // ise false. Başarısız kurulumdan sonra yeniden denenebilir.
+    // ise false. Başarısız kurulumdan sonra yeniden denenebilir. Kurulum kilidi başkasındaysa
+    // ("update.install_busy"; açılış temizliği onu kısa bir an tutar) bir kez kısa bekleyip yeniden dener.
     bool install();
     // Çalışan işlemi iptal eder; boştayken etkisiz.
     void cancel();

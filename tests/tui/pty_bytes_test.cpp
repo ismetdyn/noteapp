@@ -2,6 +2,7 @@
 // sayılır; bir sonraki tuş önceki karenin bitişini (senkron güncelleme kapanışı) bekler, sonuç makine
 // hızından bağımsızdır.
 #include "core/note_views.hpp"
+#include "core/paths.hpp"
 #include "support/note_seed.hpp"
 #include "support/run_process.hpp"
 #include "support/test_support.hpp"
@@ -34,10 +35,26 @@ constexpr std::size_t kMaxBytesPerKey = 400;  // Yazi 167; FTXUI'nin tam karesi 
 constexpr std::string_view kFrameEnd = "\x1B[?2026l";
 constexpr int kReadTimeoutMs = 10000;  // yalnız asılmaya karşı; başarı bunu beklemez
 
+// Gerçek `notes` açılışta güncelleme denetler (ağ, SPEC-tui "Güncelleme"): testin NOTEAPP_HOME'unda denetim az
+// önce yapılmış sayılır, süreç ağa çıkmaz ve sonucu kare üretmez. Testin yazdığı durum dosyası korunur.
+void mark_update_checked() {
+    if (std::getenv("NOTEAPP_HOME") == nullptr)
+        return;  // kullanıcının gerçek durum dizinine yazılmaz
+    const std::filesystem::path file = noteapp::core::state_dir() / "update-state.toml";
+    if (std::filesystem::exists(file))
+        return;
+    std::filesystem::create_directories(file.parent_path());
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+    std::ofstream(file) << "last_check_unix = " << now << "\nlast_seen_version = \"\"\n";
+}
+
 class PtyApp {
 public:
     explicit PtyApp(const std::string& program, std::vector<std::string> args = {}, int columns = kColumns,
                     int rows = kRows) {
+        mark_update_checked();
         args.insert(args.begin(), program);
         std::vector<char*> argv;
         for (std::string& arg : args)

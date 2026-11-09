@@ -419,13 +419,30 @@ taşır (SPEC-gui "Dosya ikonları"); kaynak ve metinler `resources/fonts/LICENS
 
 SPEC-core config alanlarının formu: dil (döngü), notes_dir, editör, varsayılan tip (döngü), varsayılan klasör, tipler,
 dosya ikonları (döngü),
-senkron açık/kapalı, remote, dal, idle süresi, yazar adı/e-posta; remote https ise **token** alanı (maskeli;
+senkron açık/kapalı, remote, dal, idle süresi, yazar adı/e-posta, güncelleme denetimi (`update.check_interval`; `0`
+kapalı, 1 saatten kısa değer `must_be_update_interval` nedeniyle satır içinde reddedilir); remote https ise **token** alanı (maskeli;
 "kasada kayıtlı ✓" göstergesi, Kaydet/Sil). Kaydet → doğrula → `config.toml` atomik yazılır → uygulanır
 (dil anında; notes_dir değişirse liste yeniden yüklenir; senkron açıldıysa `enable` akışı, hata satır içinde).
 Vazgeç → değişiklikler atılır. AutoSync yalnız `sync_restart_needed` (etkin/remote/dal/idle/notes_dir) true ise yeniden
 kurulur; önce `stop(exit_timeout)` ile düzgün durdurulur (T36). Açılışta config yükleme uyarıları alt çubuk iletisinde
 görünür; `Enter` ile dış editör `NoteStore::edit_in_temp_file`'dan geçer (G4).
-  - Sapma (T23): `Kaydet` düğme satırında `Enter` ile kaydedilir, `Esc` çıkar; değişiklik (yazılmış token dahil) varsa GUI'nin Ayarlar'dan çıkış sorusu: `Kaydet` / `At` / `Vazgeç` (`app::CloseChoice`; oklar ve Tab döner, varsayılan ve soruda `Esc` "Vazgeç": formda kalınır, hiçbir şey yazılmaz). `Kaydet` Kaydet düğmesinin akışıdır: doğrulama hatası formda satır içi kalır, ekran kapanmaz. `At` formu kapatır; yazılmış token kasaya gitmez (NX-B). Ayarlar açıkken `Ctrl+C` (çıkış) değişiklik varsa hemen çıkmaz, aynı soruyu sorar (GUI pencere kapanışı gibi): `At` çıkar, `Kaydet` kaydedip çıkar (hata varsa formda kalınır), `Vazgeç` formda kalır; soru açıkken `Ctrl+C` soruyu açık tutar. Sapma (T28): token satırı 12 config satırının ardında (Kaydet düğmesinden önce) ve yalnız https remote iken görünür; `Enter` yazılan token'ı kasaya kaydeder, `Ctrl-D` siler, `Kaydet` yazılmış ama kaydedilmemiş token'ı da `enable`'dan önce kasaya yazar. `enable` akışı senkron açıkken herhangi bir senkron alanı ya da `notes_dir` değişince çalışır (GUI ile tek kural); her geçersiz satır hatasını aynı denemede gösterir; yalnız değişen anahtarlar diskteki `config.toml`'un üstüne yazılır (form açıkken `note config set` ile değişen ayar ezilmez); origin farklıysa "değiştirilsin mi?" onayı (varsayılan "Vazgeç"), hata formda satır içi. Kullanıcı `config.toml`'u bozuksa kaydedilmez (`note config set` ile aynı kural). Hata satırı kutu genişliğinde sarılır ve alan satırlarıyla yeri paylaşır (odaklı satır görünür kalır); sığmazsa baştan `…` ile kısalır: sondaki "hiçbir şey kaydedilmedi" ve sözdizimi hatasının satır/sütunu her zaman görünür.
+  - Sapma (T23): `Kaydet` düğme satırında `Enter` ile kaydedilir, `Esc` çıkar; değişiklik (yazılmış token dahil) varsa GUI'nin Ayarlar'dan çıkış sorusu: `Kaydet` / `At` / `Vazgeç` (`app::CloseChoice`; oklar ve Tab döner, varsayılan ve soruda `Esc` "Vazgeç": formda kalınır, hiçbir şey yazılmaz). `Kaydet` Kaydet düğmesinin akışıdır: doğrulama hatası formda satır içi kalır, ekran kapanmaz. `At` formu kapatır; yazılmış token kasaya gitmez (NX-B). Ayarlar açıkken `Ctrl+C` (çıkış) değişiklik varsa hemen çıkmaz, aynı soruyu sorar (GUI pencere kapanışı gibi): `At` çıkar, `Kaydet` kaydedip çıkar (hata varsa formda kalınır), `Vazgeç` formda kalır; soru açıkken `Ctrl+C` soruyu açık tutar. Sapma (T28): token satırı config satırlarının (sonuncusu `update.check_interval`) ardında (Kaydet düğmesinden önce) ve yalnız https remote iken görünür; `Enter` yazılan token'ı kasaya kaydeder, `Ctrl-D` siler, `Kaydet` yazılmış ama kaydedilmemiş token'ı da `enable`'dan önce kasaya yazar. `enable` akışı senkron açıkken herhangi bir senkron alanı ya da `notes_dir` değişince çalışır (GUI ile tek kural); her geçersiz satır hatasını aynı denemede gösterir; yalnız değişen anahtarlar diskteki `config.toml`'un üstüne yazılır (form açıkken `note config set` ile değişen ayar ezilmez); origin farklıysa "değiştirilsin mi?" onayı (varsayılan "Vazgeç"), hata formda satır içi. Kullanıcı `config.toml`'u bozuksa kaydedilmez (`note config set` ile aynı kural). Hata satırı kutu genişliğinde sarılır ve alan satırlarıyla yeri paylaşır (odaklı satır görünür kalır); sığmazsa baştan `…` ile kısalır: sondaki "hiçbir şey kaydedilmedi" ve sözdizimi hatasının satır/sütunu her zaman görünür.
+
+## Güncelleme (UPD5)
+
+Akış GUI ile ortaktır (`app::UpdateController`, `src/app/update_controller.*`; denetim ve kurulum `app::UpdateWorker`,
+SPEC-cli "Güncelleme"); burada yalnız tuşlar ve çizim var.
+- **Açılış denetimi:** arayüz açıldıktan sonra, `update.check_interval` (varsayılan `24h`, `0` = kapalı, 1 saatten kısa
+  red) dolduysa işçide; açılışı ve tuşları beklemez. Yeni sürüm bildirim olur (`Bilgi noteapp X çıktı …  (: update)`);
+  güncel ve hata yalnız loga yazılır. Bildirimin süresi dolmaz: güncelleme penceresi açılınca kalkar.
+- **Palet `update`** ("Güncellemeleri denetle", harf kısayolu yok): güncelleme penceresini açar; bulunmuş ya da
+  kurulmuş sürüm yoksa denetler. Pencere sürümü, kurulu sürümü ve release sayfasını gösterir; düğmeler `Kur` `Kapat`
+  (kendini güncelleyemeyen kurulumda `Kur` yerine `Bağlantıyı kopyala`). Seçim `Kapat`ta başlar ve durum değişince oraya
+  döner: `Enter` ancak `←`/`→`/`Tab` ile `Kur`a gidilince kurar; `Esc` kapatır; harf kısayolu yok. İndirme ve kurulum
+  sürerken `İptal` `Kapat`; ilerleme (`indiriliyor…`, `kuruluyor…`) pencerede. Bitince "kuruldu" (Windows'ta ayrıca
+  "yeniden başlatın"), hata yerelleştirilmiş nedeniyle. Pencere işlem sürerken kapatılabilir: sonuç bildirim olur.
+- **Çıkış:** süren denetim ve indirme iptal edilir, beklenmez. Değiştirme evresindeki kurulum iptali yok sayar; çıkış onu
+  bekler ve terminale "Güncellemenin kurulması bekleniyor..." yazar.
 
 ## Yenileme ve senkron
 - Liste: harici editör dönüşünde, kayıtta, senkron çekme sonrası ve `rescan_seconds` (defaults.toml, 5 sn) aralıkla
@@ -756,3 +773,6 @@ TUI'de yalnız GUI'de olan özellikler (plan-parity T1, T2; karar 9 ve 10). Eşi
 
 ## Değişiklik 2026-11-08 (haritanın açılışta geri gelmesi, TUI)
 - **FIXED** Haritada `K` ile görünüm kaydedilip çıkılınca sonraki açılış listeyle başlıyordu: harita kipi, kapsamı ve etkin görünüm hiç yazılmıyordu (görünüm depoda vardı). Artık `tui-state.toml` `[map]`da kalır, açılış görünümü arka planda salt-okunur yeniden çalıştırır, ilk kare onu beklemez; geçici hata adı silmez (bkz. "Harita" → "Açılış"). Kural GUI ile ortak (`app::MapSession`). Neden: kullanıcı hatası 2026-11-08.
+
+## Değişiklik 2026-11-09 (UPD5 güncelleme, TUI)
+- **ADDED** Açılışta arka planda güncelleme denetimi, palet `update`, onaylı kurulum penceresi, ayarlarda `update.check_interval` (bkz. "Güncelleme"). Neden: plan UPD5, GUI ile eşitlik.

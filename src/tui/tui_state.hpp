@@ -82,6 +82,7 @@ enum class Intent {
     UndirectRelation,  // `u` ilişkili satırda: yönsüz yapılır
     LinkMissing,       // bağlantı panelinde gidilecek notu olmayan satır: nedeni söylenir
     ToggleIcons,       // palet: `icons` ayarını çevirir, config.toml'a yazar
+    CheckUpdates,      // palet `update`: güncelleme penceresi (app::UpdateController; main yürütür)
     ExportPdf,         // REVIEW `P`: altta çıktı yolu girdisi
     FollowLink,        // REVIEW'da seçili [[bağlantı]]: depo çözer, hedef not açılır
     // Sekmeler (SPEC-tui "Sekmeler"): yürütme main'de, sekmeler EditorTabs'tadır.

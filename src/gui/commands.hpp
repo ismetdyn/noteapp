@@ -181,6 +181,7 @@ inline constexpr GuiCommand kGuiCommands[] = {
     {"pane.zoom", ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiKey_Z, CommandScope::Global,
      [](GuiState& s) { s.toggle_zoom(); }},
     {"icons.toggle", 0, CommandScope::Widget, [](GuiState& s) { s.toggle_icons(); }},
+    {"update", 0, CommandScope::Widget, [](GuiState& s) { s.open_update(); }},
     {"help", ImGuiKey_F1, CommandScope::Global, [](GuiState& s) { s.show_help(); }},
     {"quit", ImGuiMod_Ctrl | ImGuiKey_Q, CommandScope::Global, [](GuiState& s) { s.request_quit(); }},
 };
@@ -197,9 +198,10 @@ consteval const GuiCommand& gui_command(std::string_view id) {
     throw "unknown GUI command id";
 }
 
-// Ayarlar açıkken de yerinde koşan komutlar: kendi geçişi, görünmeyen iş (senkron, yardım, ikon ayarı) ve kendi
-// sorusunu soran çıkış.
-inline constexpr std::string_view kSettingsCommands[] = {"settings", "sync.now", "help", "quit", "icons.toggle"};
+// Ayarlar açıkken de yerinde koşan komutlar: kendi geçişi, görünmeyen iş (senkron, yardım, ikon ayarı,
+// güncelleme penceresi) ve kendi sorusunu soran çıkış.
+inline constexpr std::string_view kSettingsCommands[] = {"settings", "sync.now",     "help",
+                                                         "quit",     "icons.toggle", "update"};
 
 // Kısayolun, düğmenin ve paletin tek yolu. Notları değiştiren komut önce Ayarlar'dan çıkar: kaydedilmemiş formda
 // Kaydet / At / Vazgeç sorulur, Vazgeç'te komut koşmaz (yeni not Ayarlar'ın arkasında açılmaz).

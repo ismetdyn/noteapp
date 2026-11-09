@@ -1339,9 +1339,37 @@ ftxui::Element palette_box(const TuiState& state, int window_height) {
            size(WIDTH, EQUAL, kPaletteWidth) | clear_under;
 }
 
-// Birden çoğu açıksa öncelik: yardım > onay > diyalog > ayarlar.
+// Güncelleme penceresi (app::UpdateController::view): satırlar, release sayfası, düğmeler; metin
+// safe_update_view'dan. Adres boşluksuzdur, paragraph onu bölemez: kutu genişliğinde parçalanır.
+ftxui::Element update_box(const UpdateDialogState& update) {
+    using namespace ftxui;
+    const app::UpdateView view = safe_update_view(update.view());
+    Elements body;
+    for (const std::string& line : view.lines)
+        body.push_back(paragraph(line));
+    if (!view.link.empty()) {
+        constexpr auto kLinkCells = static_cast<std::size_t>(kDialogWidth - 2);  // kenarlık
+        for (std::size_t start = 0; start < view.link.size(); start += kLinkCells)
+            body.push_back(text(view.link.substr(start, kLinkCells)) | underlined);
+    }
+    body.push_back(text(""));
+    Elements buttons;
+    for (const app::UpdateAction action : view.actions) {
+        if (!buttons.empty())
+            buttons.push_back(text("   "));
+        buttons.push_back(
+            discard_choice(core::tr(app::update_action_label(action)), action == update.selected()));
+    }
+    body.push_back(hbox(std::move(buttons)) | center);
+    body.push_back(text(core::tr("tui.update_hints")) | dim);
+    return window(text(" " + core::tr("update.ui_title") + " ") | bold, vbox(std::move(body))) |
+           size(WIDTH, EQUAL, kDialogWidth) | clear_under;
+}
+
+// Birden çoğu açıksa öncelik: yardım > onay > diyalog > ayarlar > güncelleme.
 ftxui::Element open_modal(const TuiState& state, const HelpState* help, const ConfirmState* confirm,
-                          const SaveDialogState* dialog, const SettingsState* settings, int window_height) {
+                          const SaveDialogState* dialog, const SettingsState* settings,
+                          const UpdateDialogState* update, int window_height) {
     if (help)
         return help_box(*help, window_height);
     if (confirm)
@@ -1350,6 +1378,8 @@ ftxui::Element open_modal(const TuiState& state, const HelpState* help, const Co
         return save_dialog_box(*dialog);
     if (settings)
         return settings_box(*settings, window_height);
+    if (update)
+        return update_box(*update);
     if (state.palette_open())
         return palette_box(state, window_height);
     return state.summary().empty() ? nullptr : summary_box(state.summary(), window_height);
@@ -2008,6 +2038,13 @@ EditorViewport editor_viewport(ftxui::Dimensions window, const PaneLayout& layou
 
 // En yeni bildirim: tür öneki (renk tek sinyal değil), metin, yineleme sayısı, bekleyen diğerleri. Sığmazsa
 // sonu kısalır. Bildirim yoksa nullptr.
+app::UpdateView safe_update_view(app::UpdateView view) {
+    for (std::string& line : view.lines)
+        line = terminal_safe(line);
+    view.link = terminal_safe(view.link);
+    return view;
+}
+
 ftxui::Element notice_line(const app::NoticeQueue& queue, int width) {
     using namespace ftxui;
     const auto& items = queue.items();
@@ -2020,6 +2057,8 @@ ftxui::Element notice_line(const app::NoticeQueue& queue, int width) {
     std::string line = " " + core::tr(prefix_key) + "  " + terminal_safe(notice.text);
     if (notice.repeats > 1)
         line += "  (×" + std::to_string(notice.repeats) + ")";
+    if (notice.update_version)
+        line += "  " + core::tr("tui.notice_update_hint");  // GUI'nin Kur düğmesi: palet `update`
     if (items.size() > 1)
         line += "  " + core::tr("notice.more", {{"count", std::to_string(items.size() - 1)}});
     line += " ";
@@ -2033,7 +2072,7 @@ ftxui::Element render(const TuiState& state, const Preview& preview, const Statu
                       ftxui::Dimensions window, const SaveDialogState* dialog, const ConfirmState* confirm,
                       const HelpState* help, const SettingsState* settings, const NewRowState* new_row,
                       const EditorSession* editor, SpellChecker* spell, const RenameState* rename,
-                      std::span<const TabLabel> tabs) {
+                      std::span<const TabLabel> tabs, const UpdateDialogState* update) {
     using namespace ftxui;
     if (window.dimx < kMinWidth || window.dimy < kMinHeight)
         return text(core::tr("tui.too_small")) | center | flex;
@@ -2043,7 +2082,7 @@ ftxui::Element render(const TuiState& state, const Preview& preview, const Statu
     const EditorSession* editing = active_editor(state, editor);
     const bool editor_open = editing && editing->is_open();
     const int panel_height = window.dimy - TuiState::kChromeLines - (input_error ? 1 : 0);
-    Element modal = open_modal(state, help, confirm, dialog, settings, window.dimy);
+    Element modal = open_modal(state, help, confirm, dialog, settings, update, window.dimy);
     const bool modal_open = modal != nullptr;
     Elements lines = {
         editing && state.new_note_view() ? new_note_header(*editing) : top_bar(state, status, window.dimx),

@@ -37,7 +37,8 @@ noteapp_add_test(gui
     tabs_test.cpp
     theme_test.cpp
     toolbar_test.cpp
-    trash_test.cpp)
+    trash_test.cpp
+    update_test.cpp)
 target_link_libraries(gui_tests PRIVATE noteapp_detect)
 # Ayarlar testleri gerçek `note` ikilisiyle arka plan senkronunu uçtan uca koşar; dış editör testleri
 # editör yerine fake_editor, dil sunucusu testleri gerçek sunucu yerine fake_lsp_server (tests/tui) çalıştırır;

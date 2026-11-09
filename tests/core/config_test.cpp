@@ -960,6 +960,30 @@ TEST_CASE("update.check_interval defaults to 24h, accepts 0 as off and rejects i
     CHECK(has_warning_about(parse_config("[update]\nnope = 1\n"), "update.nope", "config.unknown_key"));
 }
 
+// UPD5: TUI ve GUI ayar ekranları (app::SettingsForm) bu tablodan; doğrulama dosya yüklemesiyle aynı kural.
+TEST_CASE("update.check_interval is a settings key: listed last and set with the loader's rule") {
+    Config config = parse_config("").config;
+    const auto entries = config_entries(config);
+    REQUIRE_FALSE(entries.empty());
+    CHECK(entries.back() == std::pair<std::string, std::string>{"update.check_interval", "24h"});
+
+    REQUIRE(set_config_value(config, "update.check_interval", "12h").has_value());
+    CHECK(config.update.check_interval == Limit{12U * 60U * 60U * 1000U, "12h"});
+    REQUIRE(set_config_value(config, "update.check_interval", "0").has_value());
+    CHECK(config.update.check_interval == Limit{0, "0"});
+
+    for (const char* value : {"30min", "1", "abc", "-1"}) {
+        CAPTURE(value);
+        const auto rejected = set_config_value(config, "update.check_interval", value);
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error().message_key == "config.invalid_value");
+        CHECK(config.update.check_interval == Limit{0, "0"});  // reddedilen değer uygulanmaz
+    }
+    const auto short_interval = set_config_value(config, "update.check_interval", "59min");
+    REQUIRE_FALSE(short_interval.has_value());
+    CHECK(arg_of(short_interval.error(), "reason") == "must_be_update_interval");
+}
+
 TEST_CASE("save_config keeps a changed update.check_interval and omits the default") {
     const TempDir tmp(kTurkishUncreated);
     const ScopedEnv env("NOTEAPP_HOME", tmp.path().u8string());

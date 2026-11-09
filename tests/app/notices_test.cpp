@@ -112,3 +112,30 @@ TEST_CASE("notices: an update notice carries the version to install; other notic
     CHECK(queue.items().back().repeats == 2);
     CHECK(queue.items().back().update_version == "1.3.0");
 }
+
+TEST_CASE("notices: an update notice stays until dismissed; other info notices still expire") {
+    NoticeQueue queue(kLife);
+    const Clock::time_point start{};
+    queue.post_update("noteapp 1.3.0 hazır", "1.3.0", start);
+    queue.post(NoticeKind::Info, "senkron bitti", start);
+    CHECK(queue.next_deadline() == start + kLife);  // yalnız sıradan bilgi düşer
+
+    CHECK(queue.expire(start + kLife));
+    REQUIRE(queue.items().size() == 1);
+    CHECK(queue.items().front().update_version == "1.3.0");
+    CHECK_FALSE(queue.next_deadline().has_value());
+    CHECK_FALSE(queue.expire(start + std::chrono::hours(48)));
+    CHECK(queue.items().size() == 1);
+}
+
+TEST_CASE("notices: acting on the update removes only the update notice") {
+    NoticeQueue queue(kLife);
+    const Clock::time_point start{};
+    queue.post(NoticeKind::Error, "senkron başarısız", start);
+    queue.post_update("noteapp 1.3.0 hazır", "1.3.0", start);
+    queue.post(NoticeKind::Info, "senkron bitti", start);
+    queue.dismiss_update();
+    REQUIRE(queue.items().size() == 2);
+    for (const auto& notice : queue.items())
+        CHECK_FALSE(notice.update_version.has_value());
+}

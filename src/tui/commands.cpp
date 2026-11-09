@@ -152,6 +152,7 @@ std::span<const Command> TuiState::commands() {
         // Uygulama. F1 ve F9 her odakta app_intent'tedir; `?` ve `,` yalnız şu görünümlerde.
         {"sync.now", "^S", kInBrowse, emit<Intent::SyncNow>, Sync, Key::CtrlS},
         {"icons.toggle", "", kEverywhere, emit<Intent::ToggleIcons>},
+        {"update", "", kEverywhere, emit<Intent::CheckUpdates>},
         {"settings", "F9", kInBrowse, emit<Intent::ShowSettings>, Nothing, Key::F9, ","},
         {"settings", "F9", kInTrash, emit<Intent::ShowSettings>, Nothing, Key::F9},
         {"help", "F1", kInListing, emit<Intent::ShowHelp>, Nothing, Key::F1, "?"},

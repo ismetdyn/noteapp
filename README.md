@@ -58,6 +58,15 @@ Testler `pdftotext` ister (`poppler-utils`); testsiz derleme için `-DNOTEAPP_BU
 
 > Windows paketleri gerçek Windows'ta henüz sınanmadı (yalnız Wine'da).
 
+### Güncelleme
+
+`note update` son release'i denetler; yeni sürümü indirir, release'in `SHA256SUMS`'uyla doğrular ve onayınızdan
+sonra yerinde kurar (`--check` yalnız denetler, `--yes` sormaz). `notes` ve `notes-gui` açılışta en çok günde bir
+kez arka planda denetler; yeni sürüm bildirim olarak gelir, kurulum yine onaylıdır (TUI: `:` → `update`, GUI:
+bildirimdeki **Kur…** ya da komut paletinde "Güncellemeleri denetle"). Açılış denetimini kapatmak için:
+`note config set update.check_interval 0` (ya da Ayarlar'daki güncelleme denetimi satırında `0`). Kaynaktan derlenmiş, sistem
+geneli ya da salt okunur kurulum kendini güncelleyemez: release sayfası gösterilir.
+
 ## Hızlı başlangıç
 
 ### CLI: `note`

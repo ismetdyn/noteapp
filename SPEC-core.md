@@ -134,6 +134,9 @@ idle_seconds = 30
 author_name = ""         # boş: git global config → OS kullanıcı adı
 author_email = ""
 
+[update]                 # TUI ve GUI ayar ekranında da; SPEC-tui / SPEC-gui "Güncelleme"
+check_interval = "24h"   # açılış denetiminin en kısa aralığı; 0 = kapalı, 0 < x < 1h reddedilir
+
 [lsp]                    # yalnız TUI; davranış ve varsayılan sunucular SPEC-tui "Dil sunucusu (LSP)"
 enabled = true
 [lsp.servers]            # LSP languageId → kabuksuz argv ya da argv listesi; kullanıcının girdileri tek tek üstüne biner

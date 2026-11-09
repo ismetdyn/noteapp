@@ -370,7 +370,7 @@ int View::idle_timeout_ms() const {
         timeout = static_cast<int>(std::clamp<decltype(ms)>(ms, 0, timeout));
     };
     const auto now = std::chrono::steady_clock::now();
-    for (const auto& deadline : {state_.next_deadline(), lsp_send_at_, tooltip_at_})
+    for (const auto& deadline : {state_.next_deadline(), lsp_send_at_, tooltip_at_, update_armed_at_})
         if (deadline)
             clamp_to(*deadline - now);
     clamp_to(day_ends_at_ - std::chrono::system_clock::now());
@@ -444,6 +444,10 @@ void View::idle_step(int timeout_ms) {
         frames_left_ = kFramesAfterEvent;
     if (tooltip_due(now))
         frames_left_ = kFramesAfterEvent;  // ipucu penceresi ilk karede ölçülür, sonrakinde görünür
+    if (update_armed_at_ && now >= *update_armed_at_) {  // Kur yeniden açıldı: görünsün
+        update_armed_at_.reset();
+        frames_left_ = kFramesAfterEvent;
+    }
     // Gün dönünce "bugün" saatleri (HH:MM) tarihe döner: bir kez çizilir. Duvar saatiyle: uyku sonrası da.
     if (const auto wall = std::chrono::system_clock::now(); wall >= day_ends_at_) {
         day_ends_at_ = core::next_local_midnight(wall);
@@ -474,7 +478,8 @@ void View::run() {
 
 void View::handle_shortcuts() {
     escape_pressed_ = false;
-    if (modal_depth_ > 0)
+    // Güncelleme penceresi bekletmeyen bir modaldır (işçinin ilerlemesi çizilir): tuşlar arkaya geçmez.
+    if (modal_depth_ > 0 || state_.update_open())
         return;
     // Arama kutusunda Ctrl+P geçmiştir, Ctrl+N geçmişte gezerken öyle (TUI girdi satırı): draw_search_row
     // alır.
@@ -536,6 +541,7 @@ void View::draw_root() {
     draw_status_bar();
     ImGui::End();
     draw_notices(status_height);
+    draw_update_dialog();
 }
 
 void View::draw_notes_tab() {

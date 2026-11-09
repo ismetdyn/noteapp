@@ -11,6 +11,7 @@ add_library(noteapp_gui
     gui_state_sync.cpp
     gui_state_tabs.cpp
     gui_state_trash.cpp
+    gui_state_update.cpp
     icon_font.cpp
     markdown_preview.cpp
     note_editor.cpp

@@ -20,6 +20,7 @@ noteapp_add_test(app
     trash_ops_test.cpp
     ui_args_test.cpp
     ui_prefs_test.cpp
+    update_controller_test.cpp
     update_install_test.cpp
     update_worker_test.cpp
     updater_test.cpp)

@@ -48,7 +48,8 @@ struct LspConfig {
     bool operator==(const LspConfig&) const = default;
 };
 
-// [update]: açılışta sürüm denetimi (TUI, GUI). Ayar ekranında görünmez; dosyadan değişir ([tuning] gibi).
+// [update]: açılışta sürüm denetimi (TUI, GUI). Ayar ekranında ve `note config set update.check_interval`la
+// değişir; varsayılandan farklı değilse dosyaya yazılmaz.
 struct UpdateConfig {
     // GitHub'ın kimliksiz API sınırı saatte 60 istektir: 0 dışında 1 saatten kısa aralık reddedilir.
     static constexpr std::uint64_t kMinCheckIntervalMs = 60ULL * 60ULL * 1000ULL;

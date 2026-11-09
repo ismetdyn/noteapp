@@ -123,6 +123,7 @@ inline constexpr CommandSpec kCommandRegistry[] = {
     // Uygulama
     {"sync.now", "command.sync_now", kAnywhere, CommandNeeds::Sync},
     {"icons.toggle", "command.icons_toggle", kAnywhere},
+    {"update", "command.update", kAnywhere},  // güncelleme penceresi (app::UpdateController)
     {"settings", "command.settings", kAnywhere},
     {"help", "command.help", kAnywhere},
     {"quit", "command.quit", kAnywhere},

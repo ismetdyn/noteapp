@@ -1,8 +1,10 @@
 #pragma once
 
+#include "app/update_controller.hpp"
 #include "tui/tui_state.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -51,6 +53,24 @@ public:
 private:
     std::size_t line_count_;
     std::size_t scroll_ = 0;
+};
+
+// Güncelleme penceresi (palet `update`, SPEC-tui "Güncelleme"): içerik app::UpdateController::view'dan
+// gelir, burada yalnız seçili düğme ve tuş eşlemesi var. Seçim Kapat'ta başlar ve içerik değişince (durum
+// geçişi) oraya döner: kurulum yalnız Kur'a açıkça gidip Enter'la başlar (ConfirmState gibi). FTXUI'ye bağlı
+// değildir.
+class UpdateDialogState {
+public:
+    // Her çizimden ve tuştan önce güncel içerik verilir.
+    void show(app::UpdateView view);
+    const app::UpdateView& view() const { return view_; }
+    app::UpdateAction selected() const;
+    // ←/→ Tab ↑/↓ düğmeler arasında gezer, Enter seçileni, Esc Kapat'ı döner; başka tuş nullopt.
+    std::optional<app::UpdateAction> handle(Key key);
+
+private:
+    app::UpdateView view_;
+    std::size_t index_ = 0;  // view_.actions içinde
 };
 
 // Katalogdaki yardım metni, satır satır (tek anahtar: tui.help_body).

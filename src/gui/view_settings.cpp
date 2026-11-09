@@ -14,7 +14,7 @@ namespace {
 constexpr float kMinInlineFieldEms = 8.0F;    // daha darsa yanındaki düğmeler alt satıra iner
 constexpr float kMaxLabelColumnShare = 0.5F;  // etiket sütunu alanı yok etmesin; uzun etiket sarılır
 constexpr const char* kGeneralKeys[] = {"language", "notes_dir", "default_type", "default_folder",
-                                        "types",    "icons",     "editor"};
+                                        "types",    "icons",     "editor",       "update.check_interval"};
 constexpr const char* kSyncKeys[] = {"sync.enabled",      "sync.remote",      "sync.branch",
                                      "sync.idle_seconds", "sync.author_name", "sync.author_email"};
 constexpr const char* kLanguages[] = {"auto", "tr", "en"};
@@ -148,7 +148,8 @@ void View::draw_setting_field(const std::string& key) {
             queue([this] { state_.settings().browse_notes_dir(); });
     }
     ImGui::EndDisabled();
-    if (key == "editor" || key == "icons" || key == "sync.remote" || key == "sync.idle_seconds") {
+    if (key == "editor" || key == "icons" || key == "sync.remote" || key == "sync.idle_seconds" ||
+        key == "update.check_interval") {
         draw_hint(setting_hint(key));
         remember_item_center("setting_hint:" + key);
     }

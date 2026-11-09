@@ -275,6 +275,14 @@ bool GuiState::request_close() {
     }
     // Ayarlar önce: kayıtta notes_dir değişirse açık notu kendisi kaydeder (host flush), not sorusu boşa
     // çıkar.
+    // Güncelleme sorulardan önce: süren denetim ve indirme iptal edilir. Değiştirme evresindeki kurulum
+    // iptali yok sayar: pencere o bitene dek açık kalır, kullanıcı nedenini görür; bitince kapanış yeniden
+    // istenir (update_changed) ve kaydedilmemiş iş yalnız o zaman, bir kez sorulur.
+    if (update_ && update_->stop_for_exit()) {
+        quit_after_update_ = true;
+        notify(app::NoticeKind::Info, core::tr("gui.update_exit_wait"));
+        return false;
+    }
     if (!confirm_close_settings() || !confirm_close() ||
         !confirm_close_drafts())  // vazgeçildi ya da kayıt başarısız: pencere ve tampon yerinde kalır
         return false;

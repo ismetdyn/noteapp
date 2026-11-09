@@ -170,6 +170,8 @@ EOF
     local remote=https://127.0.0.1:9/none.git status=0
     wine note.exe config set notes_dir "Z:$work/notes"
     wine note.exe config set sync.remote "$remote"
+    # notes.exe ve notes-gui.exe açılışta güncelleme denetler: kapı ağa çıkmasın, yüklenen DLL yalnız akıştan gelsin.
+    wine note.exe config set update.check_interval 0
 
     # note.exe: kapalı porta bağlanmak WinHTTPyi yükler. Kod 4: bağlantı hatası, yani akış ağa kadar gitti.
     WINEDEBUG=+loaddll,+pid wine note.exe sync init "$remote" >/dev/null 2>"$work/note.log" || status=$?
@@ -187,12 +189,12 @@ EOF
     # kanıtlamaz. Kendi sürecinde WinHTTPye giden tek yol Ayarlar kaydıdır (SettingsState::submit -> SyncService::enable).
     # Tuşlar WriteConsoleInput ile gider: Wine konsolu bir terminalden gelen kaçış dizisini uChar=0 olan tuşa çevirir, FTXUI
     # ise yalnız uChar okur; bu yüzden ok ve F tuşu yok, `,` ve Tab. Wine pencere sürücüsü olmadan konsolu yalnız pty üzerinde
-    # açar. Satır sayıları: src/core/config.cpp settings() + token + Kaydet; sıra değişirse kapı kırmızı olur.
+    # açar. Satır sayıları: src/core/config.cpp settings() (14) + token + bağlantı testi; sıra değişirse kapı kırmızı olur.
     cat >"$work/tui-driver.c" <<"EOF"
 #include <windows.h>
 #include <stdio.h>
 int main(void) {
-    static const char keys[] = ",\t\t\t\t\t\t\t \t\t\t\t\t\t\t\r"; /* Ayarlar, sync.enabled, boşluk, Kaydet, Enter */
+    static const char keys[] = ",\t\t\t\t\t\t\t \t\t\t\t\t\t\t\t\r"; /* Ayarlar, sync.enabled, boşluk, bağlantı testi, Enter */
     INPUT_RECORD records[sizeof keys - 1] = {0};
     for (size_t i = 0; i < sizeof keys - 1; ++i) {
         records[i].EventType = KEY_EVENT;

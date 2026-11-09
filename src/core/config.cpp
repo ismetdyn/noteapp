@@ -723,8 +723,8 @@ std::string join(const std::vector<std::string>& items) {
     return out;
 }
 
-const std::array<Setting, 13>& settings() {
-    static const std::array<Setting, 13> table = {{
+const std::array<Setting, 14>& settings() {
+    static const std::array<Setting, 14> table = {{
         {"language", ValueKind::String, [](const Config& c) { return c.language; }},
         {"notes_dir", ValueKind::String, [](const Config& c) { return to_utf8(c.notes_dir); }},
         {"editor", ValueKind::String, [](const Config& c) { return c.editor; }},
@@ -740,6 +740,9 @@ const std::array<Setting, 13>& settings() {
          [](const Config& c) { return std::to_string(c.sync.idle_seconds); }},
         {"sync.author_name", ValueKind::String, [](const Config& c) { return c.sync.author_name; }},
         {"sync.author_email", ValueKind::String, [](const Config& c) { return c.sync.author_email; }},
+        // Sınır yazımı ("24h", "0"): rakamlar tam sayı, birimli metin dizge olur (apply_update doğrular).
+        {"update.check_interval", ValueKind::Integer,
+         [](const Config& c) { return c.update.check_interval.text; }},
     }};
     return table;
 }
@@ -1026,7 +1029,7 @@ std::expected<void, Error> save_config(const Config& config) {
     const std::optional<toml::table> disk_table = table_on_disk(disk_text);
     out << lsp_section_on_disk(disk_table);
 
-    // [update] ve [tuning] ayar ekranında yoktur: yalnız varsayılandan farklıysa yazılır (elle verilen değer
+    // [update] ve [tuning] yalnız varsayılandan farklıysa yazılır (elle ya da ayar ekranından verilen değer
     // kayıtta kaybolmaz, sonraki sürümün varsayılanı geçerli olur).
     const Config defaults = parse_config("").config;
     if (config.update != defaults.update)
