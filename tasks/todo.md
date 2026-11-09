@@ -588,7 +588,7 @@ Kararlar: kütüphane MuPDF (AGPL-3.0; GPL-3.0-or-later ile birleşir, paket lis
 
 ## V14 — Biçimli PDF, seçim, tam ekran (kullanıcı onayı 2026-11-09)
 Kaynak: kullanıcı v0.1.3 sonrası ("tui'de pdf düz metin, format bozuk"; "fullscreen kısayol/buton"; "gui'de metin seçimi yok"; "pdf'te text selection"). Denetim: Explore raporu (pane.zoom düzenleyicide yok, GUI önizleme seçimsiz, PDF stext düzleştiriliyor).
-- [ ] A+B Biçimli PDF + PDF seçimi: işçi sayfayı yapı ile döner (blok/satır/span, stil, karakter konumu; ebeveynde sınır denetimi); TUI markdown gibi biçimli; TUI seçim kopyalanır (yanlış "UTF-8" iletisi düzelir); GUI sayfa üstünde karakter konumlu seçim + Ctrl+C.
-- [ ] C GUI önizlemede seçim: md/json/csv/txt fareyle seçim + Ctrl+C (TUI eşitliği).
-- [ ] D Tam ekran: pane.zoom her yerde (düzenleyici dahil); F11 (TUI ek kısayol, GUI gerçek pencere tam ekranı); GUI araç çubuğu düğmesi; iki arayüzde yakınlaştırma göstergesi.
+- [x] A+B Biçimli PDF + PDF seçimi: işçi sayfayı yapı ile döner (blok/satır/span, stil, karakter konumu; ebeveynde sınır denetimi); TUI markdown gibi biçimli; TUI seçim kopyalanır (yanlış "UTF-8" iletisi düzelir); GUI sayfa üstünde karakter konumlu seçim + Ctrl+C.
+- [x] C GUI önizlemede seçim: md/json/csv/txt fareyle seçim + Ctrl+C (TUI eşitliği).
+- [x] D Tam ekran: pane.zoom her yerde (düzenleyici dahil); F11 (TUI ek kısayol, GUI gerçek pencere tam ekranı); GUI araç çubuğu düğmesi; iki arayüzde yakınlaştırma göstergesi.
 - [ ] V14 doğrulama: tam Linux + Wine + AppImage bir kez → v0.1.4.
