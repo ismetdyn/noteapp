@@ -593,3 +593,18 @@ Kaynak: kullanıcı v0.1.3 sonrası ("tui'de pdf düz metin, format bozuk"; "ful
 - [x] D Tam ekran: pane.zoom her yerde (düzenleyici dahil); F11 (TUI ek kısayol, GUI gerçek pencere tam ekranı); GUI araç çubuğu düğmesi; iki arayüzde yakınlaştırma göstergesi.
 - [x] V14 doğrulama: tam Linux + Wine + AppImage bir kez → v0.1.4.
   Kanıt (2026-11-10): Linux 20/20, Wine 17/17 + DLL kapıları, AppImage `note 0.1.4`, PDF import+show ve yapılı yanıt (başlık 28 pt / gövde 11 pt ayrı blok) duman testi, `sha256sum -c` 3/3, host `note update --check`.
+
+## TPI — TUI'de PDF sayfa görüntüsü (kullanıcı seçimi 2026-11-10: "Sixel + ▀ yedek")
+Spec: SPEC-tui.md "PDF sayfa görüntüsü (TPI)". Sıralı tek yazar (aynı dosyalar), klasik dispatch.
+- [ ] TPI-A Sayfa görünümü + `▀` blok çizimi: `R` PDF'te metin/sayfa, `PdfPreview::request_render` ile görünen sayfalar, blok satırlar satır modelinde, `[tui] pdf_image` anahtarı (`auto` şimdilik `blocks`), seçim/`c` reddi + bildirim, i18n en/tr, spec.
+  Scope: src/tui/**, src/app/pdf_preview.*, src/core/config.*, resources/defaults.toml, resources/i18n/**, tests/tui/**, SPEC-tui.md, SPEC-core.md
+  Acceptance: render_test'te PDF sayfası `▀` hücreleri + doğru RGB renklerle çizilir; `R` geçişi; genişlik değişince yeniden istek; seçim reddi. Verify: `ctest -R "^tui$"` exit 0, RED gösterilir.
+- [ ] TPI-B Sixel: DA1 tespiti (`App::TerminalCapabilities`), hücre piksel boyu (`TIOCGWINSZ`, `CSI 16 t`), sixel kodlayıcı (palet nicemleme, kırpma), `FrameDiff`'te kare sonu basım + yeniden basım kuralı. Depends: TPI-A
+  Scope: src/tui/**, tests/tui/**, SPEC-tui.md
+  Acceptance: kodlayıcı birim testi (bilinen küçük görüntü → beklenen DCS baytları); frame_diff testi (değişmeyen karede basım yok, alan hücresi yazılınca yeniden basım); tui_pty'de `pdf_image=sixel` ile çıktıda `ESC P … q` görünür. Verify: `ctest -R "^tui"` exit 0 (Linux), Wine `tui` ctest exit 0.
+- [ ] TPI-R cpp-reviewer her görevden sonra; son doğrulama: Linux tam ctest + Wine bir kez.
+
+## Backlog — GUI kopyala-bırakınca (6b76837) review Low bulguları
+- [ ] `preview_selecting_` yalnız `draw_preview` içinde sıfırlanıyor (`src/gui/view_editor.cpp:681`); önizleme bırakmadan önce çizilmezse (çift tık → `begin_edit`) sonraki karede gecikmeli kopya olabilir. Bugün somut yol yok. Düzeltme: `begin_edit`/seçim temizliğinde sıfırla.
+- [ ] Ctrl+C ile bırakma aynı karede: `copy_preview_selection()` iki kez kuyruğa giriyor (`view_editor.cpp:652,689`); zararsız, aynı yazım.
+- Bilinçli: Ctrl+C ve sağ tık "Kopyala" da birincil seçimi ayarlıyor.

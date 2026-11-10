@@ -332,6 +332,33 @@ tetikler (`app_.Post`). Aynı baytlarla yeniden okunan not (yeniden tarama) otur
 kapanır (işçi durur). Kapanışta oturum `app_`'ten önce durur. Geliştirme ağacında `note` yanında değilse neden
 `error.process_not_found` (SPEC-core "PDF yardımcı süreci").
 
+### PDF sayfa görüntüsü (TPI)
+
+PDF notunda `R` (`view.toggle`) metin ile sayfa görüntüsü arasında geçer; etiket `REVIEW · metin` / `REVIEW · sayfa`.
+Bayrak oturum boyunca bütün PDF'lerde geçerlidir, varsayılan metin; md/csv/json'un görünüm/ham bayrağından ayrıdır.
+Yeni komut yoktur, GUI etkilenmez.
+
+- **Kaynak:** sayfa pikselleri GUI ile aynı yoldan gelir (`app::PdfPreview::request_render`/`render`, işçi `Render`
+  mesajı, `limits.pdf.render_pixels`, LRU `cache_pages`). Ölçek, sayfa panel genişliğini dolduracak şekilde hesaplanır.
+  Yalnız görünen sayfalar ve bir sonraki istenir. Genişlik ya da hücre boyu değişince yeniden istenir.
+- **Düzen:** sayfalar alt alta, aralarında bugünkü `--- page N/M ---` ayırıcısı. Her sayfa, yüksekliği kadar satır
+  kaplar; kaydırma bugünkü satır modeliyle aynıdır (`j/k`, `PgUp/PgDn`, `g/G`, tekerlek). Yüklenmeyen sayfa
+  `Sayfa N yükleniyor…`, çizilemeyen sayfa nedenini gösterir (metin görünümüyle aynı iletiler).
+- **Çizim yöntemi, `[tui] pdf_image`** (`auto` | `sixel` | `blocks`, varsayılan `auto`):
+  - `sixel`: sayfa sixel olarak çizilir; piksel boyu = sütun × hücre genişliği. Hücre piksel boyu terminalden okunur
+    (`TIOCGWINSZ` `ws_xpixel/ws_ypixel`, yoksa `CSI 16 t` yanıtı); ikisi de yoksa `blocks`a düşülür.
+  - `blocks`: her hücre `▀` ile iki dikey piksel (üst renk ön plan, alt renk arka plan), RGB renk; FTXUI terminalin
+    renk derinliğine indirger. Her terminalde çalışır.
+  - `auto`: terminal DA1 yanıtında sixel (öznitelik 4) bildirirse `sixel`, değilse `blocks`. DA1'i FTXUI zaten
+    soruyor (`App::TerminalCapabilities()`); yeni sorgu yalnız hücre boyu için.
+- **Sixel ekranla uyumu:** görüntünün altındaki hücreler FTXUI ekranında boş kalır, sixel kare yazımının sonunda
+  hücre konumuna basılır (`FrameDiff`). Görüntü kırpılarak yalnız görünen satırlar basılır. Görüntü alanına düşen bir
+  hücre o karede yazıldıysa (diyalog açıldı/kapandı, kaydırma, yeniden boyama) görüntü yeniden basılır; değişmeyen
+  karede basılmaz. Diyalog ve menüler görüntünün üstünde görünür.
+- **Seçim:** sayfa görünümünde fare seçimi ve `c` yoktur (metin değil); bildirim metin görünümüne (`R`) yönlendirir.
+  Arama (`/`) metin görünümünde çalışır.
+- **Windows:** aynı kural; Windows Terminal 1.22+ DA1'de sixel bildirir. Wine'da yalnız birim testleri koşar.
+
 ## Bağlantı bölümü
 
 Seçili notun grafı REVIEW'un altındadır (`src/tui/link_panel.*`, saf model). Veri `NoteStore::links`ten gelir (SPEC-graph "Bağlantılar"), önizlemeyle aynı ertelenmiş yüklemede okunur: gezinmede tuş başına depo okuması yoktur, `kCoalesceMs` içinde son seçim tek okuma yapar. Liste ya da not değişince önizlemeyle birlikte tazelenir. Yeniden tarama grafın `data_version`ını da karşılaştırır (`tui::StoreScan`): listeyi değiştirmeyen, yalnız ilişki ya da bağlantı getiren senkron da bölümü tazeler.
@@ -809,3 +836,6 @@ TUI'de yalnız GUI'de olan özellikler (plan-parity T1, T2; karar 9 ve 10). Eşi
 ## Değişiklik 2026-11-09 (V14 biçimli PDF, TUI)
 - **MODIFIED** PDF önizlemesi düz satırlar yerine markdown görünüşünde biçimli metin (başlık, kalın/italik, sarılan paragraflar); genişlik değişince yeniden sarılır (bkz. "PDF önizleme"). Neden: plan V14.
 - **FIXED** PDF önizlemesinde fare seçimi kopyalanmıyor, yanıltıcı "geçerli UTF-8 değil" iletisi çıkıyordu: gösterilen metin kopyalanır. Neden: plan V14.
+
+## Değişiklik 2026-11-10 (TPI PDF sayfa görüntüsü, TUI)
+- **ADDED** PDF notunda `R` metin ile sayfa görüntüsü arasında geçer; sixel destekleyen terminalde sixel, değilse `▀` yarım blok (bkz. "PDF sayfa görüntüsü"). `[tui] pdf_image` (`auto`/`sixel`/`blocks`). Neden: kullanıcı isteği "tui'de pdfler için gui'deki gibi bir görünüm", seçenek "Sixel + ▀ yedek".
