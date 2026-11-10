@@ -19,22 +19,22 @@ reposu üzerinden cihazlar arasında (Windows ↔ Linux) senkron kalır. Üç ar
 
 ### Hazır paket (GitHub Releases)
 
-- **Linux:** `noteapp-0.1.3-x86_64.AppImage`. Çalıştırmak için glibc ≥ 2.38 ve FUSE gerekir (Fedora: `sudo dnf install fuse3`).
+- **Linux:** `noteapp-0.1.4-x86_64.AppImage`. Çalıştırmak için glibc ≥ 2.38 ve FUSE gerekir (Fedora: `sudo dnf install fuse3`).
   ```bash
-  chmod +x noteapp-0.1.3-x86_64.AppImage
-  ./noteapp-0.1.3-x86_64.AppImage              # argümansız: notes-gui
-  ./noteapp-0.1.3-x86_64.AppImage note ls      # ilk argüman: note | notes | gui
+  chmod +x noteapp-0.1.4-x86_64.AppImage
+  ./noteapp-0.1.4-x86_64.AppImage              # argümansız: notes-gui
+  ./noteapp-0.1.4-x86_64.AppImage note ls      # ilk argüman: note | notes | gui
   ```
   Dosya adı komutu da belirler: `note`, `notes`, `notes-gui` adlı symlink'ler üçünü ayrı komut yapar
   (`packaging/linux/AppRun`). Günlük kullanım için yerel kurulum daha hızlıdır (aşağıda).
-- **Windows 11:** `noteapp-0.1.3-windows-x86_64.zip` içinde `note.exe`, `notes.exe`, `notes-gui.exe` ve `licenses/`.
+- **Windows 11:** `noteapp-0.1.4-windows-x86_64.zip` içinde `note.exe`, `notes.exe`, `notes-gui.exe` ve `licenses/`.
   Açıp çalıştır; üç exe'yi aynı klasörde tut (`notes` ve `notes-gui` `note`'u kendi yanında arar). İmzasızdır,
   SmartScreen uyarısı verebilir.
 
 ### Yerel kurulum (bash/zsh)
 
 ```bash
-bash scripts/install-local.sh noteapp-0.1.3-x86_64.AppImage   # ~/.local/bin/{note,notes,notes-gui} + tamamlama
+bash scripts/install-local.sh noteapp-0.1.4-x86_64.AppImage   # ~/.local/bin/{note,notes,notes-gui} + tamamlama
 ```
 GUI'li pakette uygulama menüsü girdisi (`~/.local/share/applications/noteapp.desktop`) ve ikonu da kurulur.
 Betik dotfile'lara yazmaz; eksik olan satırı sonunda kendisi gösterir. `~/.local/bin` PATH'te değilse

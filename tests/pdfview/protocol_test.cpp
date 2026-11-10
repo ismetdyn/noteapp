@@ -1,10 +1,12 @@
 // PDF1b: işçi tel protokolü (pdfview/protocol.hpp): gidiş-dönüş ve bozuk çerçevenin reddi.
 #include "pdfview/protocol.hpp"
 
+#include <array>
 #include <bit>
 #include <doctest/doctest.h>
 #include <limits>
 #include <string>
+#include <utility>
 
 namespace proto = noteapp::pdfview::protocol;
 
@@ -132,18 +134,19 @@ std::string structured_payload(const pv::PageText& page) {
     return payload_of(proto::encode_structured_result(page));
 }
 
-// Yükün `at` baytındaki f32'yi değiştirir.
-std::string with_f32(std::string payload, std::size_t at, float value) {
-    const auto bits = std::bit_cast<std::uint32_t>(value);
-    for (std::size_t i = 0; i < 4; ++i)
-        payload[at + i] = static_cast<char>((bits >> (8 * i)) & 0xFFU);
+// Yükün `at` baytındaki u32'yi (küçük-sonlu) değiştirir. replace ile: indeksle bayt yazımı mingw GCC -O3'te
+// -Wstringop-overflow yanlış alarmı veriyordu (yerel std::string nesnesinin boyutunu hedef sanıyor).
+std::string with_u32(std::string payload, std::size_t at, std::uint32_t value) {
+    std::array<char, 4> bytes{};
+    for (std::size_t i = 0; i < bytes.size(); ++i)
+        bytes[i] = static_cast<char>((value >> (8 * i)) & 0xFFU);
+    payload.replace(at, bytes.size(), bytes.data(), bytes.size());
     return payload;
 }
 
-std::string with_u32(std::string payload, std::size_t at, std::uint32_t value) {
-    for (std::size_t i = 0; i < 4; ++i)
-        payload[at + i] = static_cast<char>((value >> (8 * i)) & 0xFFU);
-    return payload;
+// Yükün `at` baytındaki f32'yi değiştirir.
+std::string with_f32(std::string payload, std::size_t at, float value) {
+    return with_u32(std::move(payload), at, std::bit_cast<std::uint32_t>(value));
 }
 
 }  // namespace
