@@ -630,6 +630,9 @@ void View::draw_preview(float reserved_height) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::current().canvas);  // zemin Begin'de çizilir
     ImGui::BeginChild(child.c_str(), size, theme::kPaneChildFlags, ImGuiWindowFlags_HorizontalScrollbar);
     ImGui::PopStyleColor();
+    // Önceki karede çizilmediyse (editör, Ayarlar, başka sekme) bırakma burada görülmedi: eski basış kopyalamaz.
+    if (ImGui::IsWindowAppearing())
+        preview_selecting_ = false;
     // İncelemeye dönüş (Esc, düğme) ve sekme geçişi odağı önizlemeye verir: `E`/Enter hemen çalışsın.
     if (pending_focus_ == FocusRequest::Preview || pending_focus_ == FocusRequest::Editor) {
         ImGui::SetWindowFocus();
@@ -646,11 +649,14 @@ void View::draw_preview(float reserved_height) {
         preview_->selection_source = shown;
         selection.clear();
     }
+    bool copied = false;  // Ctrl+C ve bırakma aynı karede: bir kopya
     if (ImGui::IsWindowFocused()) {
         // Seçim varken Ctrl+C onu (görüntülenen metin; PDF'te sayfanın metin katmanı) kopyalar; yoksa notun özgün
         // baytlarını (TUI `c`).
-        if (preview_has_selection() && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_C))
+        if (preview_has_selection() && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_C)) {
             copy_preview_selection();
+            copied = true;
+        }
         else
             run_scope_commands(CommandScope::Preview);
     }
@@ -685,7 +691,7 @@ void View::draw_preview(float reserved_height) {
     // bırakmayan tık kopyalamaz. Editörde yok (TUI editörü de kopyalamaz; düzenlerken panoyu ezmesin).
     if (preview_selecting_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         preview_selecting_ = false;
-        if (preview_has_selection())
+        if (preview_has_selection() && !copied)
             copy_preview_selection();
     }
     // Sağ tık menüsü seçimi kopyalar (bütün önizlemeler, PDF dahil).

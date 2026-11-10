@@ -160,3 +160,53 @@ TEST_CASE("gui preview select: a link click opens it, a drag from the link selec
     REQUIRE(scene.state->current_path().has_value());
     CHECK(scene.state->current_path()->string() == "b.md");
 }
+
+TEST_CASE("gui preview select: Ctrl+C in the frame the drag is released copies once") {
+    Scene scene("a.md", "alfa **beta**\n\ngama `delta`\n");
+    const ImVec2 from = locate(*scene.view, "beta");
+    const ImVec2 to = locate(*scene.view, "delta", true);
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigInputTrickleEventQueue = false;  // tuş ve bırakma aynı karede işlensin
+    io.AddMousePosEvent(from.x, from.y);
+    scene.view->draw_frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    scene.view->draw_frame();
+    io.AddMousePosEvent(to.x, to.y);
+    scene.view->draw_frame();
+    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    io.AddKeyEvent(ImGuiKey_C, true);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    scene.view->draw_frame();
+    io.AddKeyEvent(ImGuiKey_C, false);
+    io.AddKeyEvent(ImGuiMod_Ctrl, false);
+    settle(*scene.view);
+    io.ConfigInputTrickleEventQueue = true;
+    CHECK(scene.copied == std::vector<std::string>{"beta\ngama delta"});
+}
+
+// Önizlemede başlayan tık bırakılmadan editöre geçilirse (çift tık, kısayol) dönüşte kopyalamaz: bırakma
+// önizlemede olmadı.
+TEST_CASE("gui preview select: a press released while the editor is shown does not copy on return") {
+    Scene scene("a.md", "alfa beta gama\n");
+    drag(*scene.view, locate(*scene.view, "alfa"), locate(*scene.view, "beta", true));
+    REQUIRE(scene.copied == std::vector<std::string>{"alfa beta"});
+    ImGuiIO& io = ImGui::GetIO();
+    const ImVec2 at = locate(*scene.view, "gama", true);
+    io.AddKeyEvent(ImGuiMod_Shift, true);  // Shift+tık seçimi basınca genişletir
+    io.AddMousePosEvent(at.x, at.y);
+    scene.view->draw_frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    scene.view->draw_frame();
+    REQUIRE_FALSE(scene.view->preview_selection().empty());
+    scene.state->begin_edit();
+    scene.view->draw_frame();
+    REQUIRE_FALSE(scene.state->showing_preview());
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    scene.view->draw_frame();
+    io.AddKeyEvent(ImGuiMod_Shift, false);
+    scene.view->draw_frame();
+    scene.state->end_edit();
+    settle(*scene.view);
+    REQUIRE(scene.state->showing_preview());
+    CHECK(scene.copied == std::vector<std::string>{"alfa beta"});
+}

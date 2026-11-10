@@ -50,6 +50,8 @@ UiArgs parse_ui_args(std::span<const std::string> args, bool allow_import) {
     const std::string& first = args.front();
     if (first == "--help" || first == "-h")
         return {.kind = UiArgs::Kind::Help};
+    if (first == "--version")
+        return {.kind = UiArgs::Kind::Version};
     if (first == "import" && allow_import)
         return parse_import(args.subspan(1));
     if (first.size() > 1 && first[0] == '-')

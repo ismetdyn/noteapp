@@ -81,6 +81,7 @@ struct Preview {
     struct PageImage {
         std::shared_ptr<const pdfview::RenderedPage> pixels;
         std::string message;
+        float scale = 0.0F;  // pixels'in ölçeği: sayfanın genişliği sonradan okununca yeni ölçekle yeniden istenir
     };
     std::vector<PageImage> page_images;
     // Sayfa sixel çiziliyorsa terminal hücresinin piksel boyu (PreviewCache::set_sixel_cell), yoksa `▀` blok.

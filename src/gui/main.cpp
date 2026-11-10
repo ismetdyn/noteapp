@@ -6,11 +6,13 @@
 #include "core/error.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
+#include "core/version.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/view.hpp"
 
 #include <SDL3/SDL_main.h>
 #include <cstdio>
+#include <string>
 
 namespace {
 
@@ -33,6 +35,10 @@ int main(int argc, char* argv[]) {
     const auto args = noteapp::app::parse_ui_args(noteapp::core::utf8_arguments(argc, argv), false);
     if (args.kind == noteapp::app::UiArgs::Kind::Help) {
         std::fputs(noteapp::core::tr("gui.usage").c_str(), stdout);
+        return 0;
+    }
+    if (args.kind == noteapp::app::UiArgs::Kind::Version) {
+        std::fputs(("notes-gui " + std::string(noteapp::core::version()) + "\n").c_str(), stdout);
         return 0;
     }
     if (args.kind == noteapp::app::UiArgs::Kind::Invalid) {

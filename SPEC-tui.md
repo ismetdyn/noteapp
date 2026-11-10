@@ -339,7 +339,7 @@ Bayrak oturum boyunca bütün PDF'lerde geçerlidir, varsayılan metin; md/csv/j
 Yeni komut yoktur, GUI etkilenmez.
 
 - **Kaynak:** sayfa pikselleri GUI ile aynı yoldan gelir (`app::PdfPreview::request_render`/`render`, işçi `Render`
-  mesajı, `limits.pdf.render_pixels`, LRU `cache_pages`). Ölçek, sayfa panel genişliğini dolduracak şekilde hesaplanır.
+  mesajı, `limits.pdf.render_pixels`, LRU `cache_pages`). Ölçek, sayfa panel genişliğini dolduracak şekilde sayfanın kendi genişliğinden hesaplanır (metni henüz okunmamış sayfada ilk sayfanınkinden; okununca yeniden istenir).
   Yalnız görünen sayfalar ve bir sonraki istenir. Genişlik ya da hücre boyu değişince yeniden istenir.
 - **Düzen:** sayfalar alt alta, aralarında bugünkü `--- page N/M ---` ayırıcısı. Her sayfa ilk sayfanın yüksekliği kadar satır
   kaplar; kaydırma bugünkü satır modeliyle aynıdır (`j/k`, `PgUp/PgDn`, `g/G`, tekerlek). Yüklenmeyen sayfa
@@ -731,7 +731,7 @@ TUI'de yalnız GUI'de olan özellikler (plan-parity T1, T2; karar 9 ve 10). Eşi
 ## Değişiklik 2026-11-04 (dosya içe alma)
 
 - **ADDED** Palet `import` (Listede): altta dosya sistemi yolu girdisi (göreli yol çalışma dizinine göre; not tamamlaması yok), hedef `n` ile aynı klasör (`app::new_note_folder`). `Enter` `app::import_paths`'ten geçer (`note import` kuralı, SPEC-cli "Dosya içe alma"): özet alt satırda, ilk not REVIEW'da; hiçbir şey alınamazsa neden girdide kalır, `Esc` kapatır.
-- **ADDED** Komut satırı: `notes import YOL... [--folder K] [--name AD] [--overwrite]` TUI açılmadan önce raporu terminale yazar (CLI'nin satırları), sonra TUI'yi ilk notla REVIEW'da açar; hiçbir şey alınamazsa TUI açılmaz, çıkış 1; kullanım hatası 2. `notes --help` kısa kullanım. Argümansız açılış değişmedi.
+- **ADDED** Komut satırı: `notes import YOL... [--folder K] [--name AD] [--overwrite]` TUI açılmadan önce raporu terminale yazar (CLI'nin satırları), sonra TUI'yi ilk notla REVIEW'da açar; hiçbir şey alınamazsa TUI açılmaz, çıkış 1; kullanım hatası 2. `notes --help` kısa kullanım; `notes --version` sürümü `note --version` gibi yazar (`notes SÜRÜM`), çıkış 0. Argümansız açılış değişmedi.
 
 ## Değişiklik 2026-11-05 (MAP-R)
 

@@ -14,6 +14,7 @@ struct UiArgs {
     enum class Kind {
         Run,      // argüman yok: arayüz açılır
         Help,     // --help, -h: kısa kullanım, çıkış 0
+        Version,  // --version: `note --version` gibi sürüm satırı, çıkış 0
         Import,   // `notes import YOL... [--folder K] [--name AD] [--overwrite]`
         Invalid,  // kullanım hatası (çıkış 2); `error_key` boşsa yalnız kullanım yazılır
     };

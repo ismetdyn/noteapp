@@ -23,6 +23,8 @@ TEST_CASE("no arguments opens the interface as before; --help and -h ask for usa
     CHECK(parse({}, false).kind == Kind::Run);
     CHECK(parse({"--help"}).kind == Kind::Help);
     CHECK(parse({"-h"}, false).kind == Kind::Help);
+    CHECK(parse({"--version"}).kind == Kind::Version);
+    CHECK(parse({"--version"}, false).kind == Kind::Version);
 }
 
 TEST_CASE("notes import takes paths and the folder, name and overwrite options in any order") {

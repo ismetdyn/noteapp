@@ -3,6 +3,7 @@
 // hızından bağımsızdır.
 #include "core/note_views.hpp"
 #include "core/paths.hpp"
+#include "core/version.hpp"
 #include "support/note_seed.hpp"
 #include "support/run_process.hpp"
 #include "support/text_pdf.hpp"
@@ -268,6 +269,16 @@ TEST_CASE("notes --help prints the short usage and exits 0; an unknown argument 
     const auto bad = run_notes({"--bogus"});
     CHECK(bad.exit_code == 2);
     CHECK(bad.err.find("--bogus") != std::string::npos);
+    CHECK(help.out.find("notes --version") != std::string::npos);
+}
+
+TEST_CASE("notes --version prints the version like note --version and exits 0") {
+    noteapp::test::TempDir home;
+    noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
+    english_config(home.path());
+    const auto version = run_notes({"--version"});
+    CHECK(version.exit_code == 0);
+    CHECK(version.out == "notes " + std::string(noteapp::core::version()) + "\n");
 }
 
 TEST_CASE("notes import prints the summary, then opens the TUI on the imported note") {

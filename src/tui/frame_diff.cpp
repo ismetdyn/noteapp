@@ -218,6 +218,8 @@ void FrameDiff::write_images(const ftxui::Screen& screen, std::span<const SixelI
             write_image(screen, image, output);
     }
     images_.assign(images.begin(), images.end());
+    std::erase_if(encoded_,
+                  [&](const Encoded& encoded) { return std::ranges::find(images, encoded.image) == images.end(); });
 }
 
 // Altı el değmemiş ardışık satırlar tek sixel: üstüne çizilmiş satır atlanır, diyalog görüntünün önünde kalır.
@@ -242,8 +244,16 @@ void FrameDiff::write_image(const ftxui::Screen& screen, const SixelImage& image
             ++end;
         start_frame(output);
         move_to(image.x, y, output);
-        output += encode_sixel(*image.pixels, (image.first_row + y - image.y) * image.cell.height,
-                               (end - y) * image.cell.height, columns * image.cell.width);
+        auto encoded = std::ranges::find_if(encoded_, [&](const Encoded& known) {
+            return known.image == image && known.top == y && known.end == end && known.columns == columns;
+        });
+        if (encoded == encoded_.end())
+            encoded = encoded_.insert(
+                encoded_.end(),
+                {.image = image, .top = y, .end = end, .columns = columns,
+                 .sixel = encode_sixel(*image.pixels, (image.first_row + y - image.y) * image.cell.height,
+                                       (end - y) * image.cell.height, columns * image.cell.width)});
+        output += encoded->sixel;
         // İmleç görüntünün altında, terminale göre değişir: sonraki hareket mutlak.
         row_ = -1;
         column_ = -1;

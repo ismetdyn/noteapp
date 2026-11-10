@@ -42,6 +42,16 @@ private:
 
     std::vector<ftxui::Cell> shown_;  // terminalde görünenler
     std::vector<SixelImage> images_;  // terminalde basılı görüntüler
+    // Basılan sixel dizileri (görüntü ve kırpımı: [top, end) ekran satırı, sütun): alanın üstünden bildirim kalkınca
+    // aynı parça yeniden kodlanmaz. Bu karede olmayan görüntününkiler atılır.
+    struct Encoded {
+        SixelImage image;
+        int top = 0;
+        int end = 0;
+        int columns = 0;
+        std::string sixel;
+    };
+    std::vector<Encoded> encoded_;
     std::vector<char> written_;       // bu karede yazılan (ya da yazılması zorlanan) hücreler
     int width_ = 0;
     int height_ = 0;

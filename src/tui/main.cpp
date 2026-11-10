@@ -17,6 +17,7 @@
 #include "core/paths.hpp"
 #include "core/process.hpp"
 #include "core/text.hpp"
+#include "core/version.hpp"
 #include "detect/detect.hpp"
 #include "edit/clipboard.hpp"
 #include "edit/completion.hpp"
@@ -1450,6 +1451,9 @@ int main(int argc, char** argv) {
         break;
     case app::UiArgs::Kind::Help:
         std::cout << core::tr("tui.usage");
+        return 0;
+    case app::UiArgs::Kind::Version:
+        std::cout << "notes " << core::version() << '\n';
         return 0;
     case app::UiArgs::Kind::Invalid:
         if (!args.error_key.empty())

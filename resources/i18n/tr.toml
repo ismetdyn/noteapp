@@ -145,6 +145,7 @@ Kullanım:
   notes import YOL... [--folder KLASÖR] [--name AD] [--overwrite]
                                                              Dosyaları ya da klasörleri not olarak alır, ilkini açar
   notes --help                                               Bu yardımı gösterir
+  notes --version                                            Sürümü gösterir
 
 İçe alma 'note import' kuralıyla çalışır ('note help import'). Çıkış kodları: 0 tamam, 1 hiçbir şey alınmadı, 2 kullanım hatası.
 """
@@ -612,6 +613,7 @@ usage = """
 Kullanım:
   notes-gui           Not penceresini açar
   notes-gui --help    Bu yardımı gösterir
+  notes-gui --version Sürümü gösterir
 
 Dosya içe almak için araç çubuğundaki Dosya içe al… / Klasör içe al…, komut paleti ya da pencereye sürükleyip bırakma.
 """

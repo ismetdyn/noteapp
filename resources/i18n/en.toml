@@ -145,6 +145,7 @@ Usage:
   notes import PATH... [--folder FOLDER] [--name NAME] [--overwrite]
                                                              Import files or folders as notes, then open the first one
   notes --help                                               Show this help
+  notes --version                                            Show the version
 
 The import follows 'note import' (see 'note help import'). Exit codes: 0 ok, 1 nothing imported, 2 usage error.
 """
@@ -610,6 +611,7 @@ usage = """
 Usage:
   notes-gui           Open the notes window
   notes-gui --help    Show this help
+  notes-gui --version Show the version
 
 To import files, use Import files… / Import folder… in the toolbar, the command palette, or drag them onto the window.
 """

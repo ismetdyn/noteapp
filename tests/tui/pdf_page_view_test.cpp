@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <doctest/doctest.h>
+#include <format>
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/color.hpp>
 #include <ftxui/screen/screen.hpp>
@@ -40,6 +41,22 @@ constexpr float kPageHeight = 100.0F;
 std::string half_black_pdf() {
     pdftest::PdfBuilder builder;
     return test::text_pdf_detail::finish(builder, {{"<< >>", "0 0 0 rg 0 50 200 50 re f"}});
+}
+
+// Boş beyaz sayfalar, her biri kendi boyunda (punto).
+std::string sized_pdf(const std::vector<std::pair<int, int>>& sizes) {
+    pdftest::PdfBuilder builder;
+    const int catalog = builder.reserve();
+    const int tree = builder.reserve();
+    const int content = test::text_pdf_detail::add_stream(builder, "", "q Q");
+    std::string kids;
+    for (const auto& [width, height] : sizes)
+        kids += std::format("{} 0 R ", builder.add(std::format(
+                                           "<< /Type /Page /Parent {} 0 R /MediaBox [0 0 {} {}] /Contents {} 0 R >>",
+                                           tree, width, height, content)));
+    builder.set(catalog, std::format("<< /Type /Catalog /Pages {} 0 R >>", tree));
+    builder.set(tree, std::format("<< /Type /Pages /Kids [{}] /Count {} >>", kids, sizes.size()));
+    return builder.build(catalog);
 }
 
 ftxui::Screen render_screen(const tui::TuiState& state, const tui::Preview& preview, int width = kWidth) {
@@ -207,6 +224,25 @@ TEST_CASE("PDF page view re-renders the page at the new pane width") {
     CHECK(std::abs(resized.page_images[0].pixels->width - wider) <= 1);
     CHECK(resized.page_rows.size() ==
           static_cast<std::size_t>(tui::page_block_rows(kPageWidth, kPageHeight, wider)) + 2);
+}
+
+// Satır yuvası ilk sayfanın boyundadır (kaydırma kaymaz); ölçek sayfanın kendi genişliğinden: küçük ilk sayfa
+// sonraki büyük sayfayı panelin katlarca genişliğinde istetmez.
+TEST_CASE("PDF page view renders every page to the pane width from that page's own size") {
+    PdfFixture f(sized_pdf({{50, 25}, {200, 100}}));
+    pump(f.cache, f.state, *f.store,
+         [](const tui::Preview& shown) { return shown.text.find("--- page 2/2 ---") != std::string::npos; });
+    REQUIRE(f.state.handle(Key::Char, "R") == Intent::None);
+    const auto both_drawn = [](const tui::Preview& shown) {
+        return shown.pdf == tui::Preview::Pdf::Pages && shown.page_images.size() == 2 &&
+               shown.page_images[0].pixels && shown.page_images[1].pixels;
+    };
+    const tui::Preview& shown = pump(f.cache, f.state, *f.store, both_drawn);
+    REQUIRE(both_drawn(shown));
+    const int columns = pane_columns(f.state);
+    CHECK(std::abs(shown.page_images[0].pixels->width - columns) <= 1);
+    CHECK(std::abs(shown.page_images[1].pixels->width - columns) <= 1);
+    CHECK(shown.page_rows.size() == 2 * (static_cast<std::size_t>(tui::page_block_rows(50.0F, 25.0F, columns)) + 2));
 }
 
 TEST_CASE("sixel page view: cell-pixel wide render, untouched cells, the image place recorded") {

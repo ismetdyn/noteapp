@@ -500,7 +500,7 @@ Editörde dil sunucusu; TUI ile aynı `tui::LanguageServers` (plan-parity G5c).
 ## Değişiklik 2026-11-04 (dosya içe alma)
 
 - **ADDED** `import`: araç çubuğunda `İçe al` menüsü (`Dosya içe al…`, `Klasör içe al…`; SDL yerel diyalogları, çoklu seçim), palette `import` (dosya diyaloğu) ve pencereye sürükle-bırak (`SDL_EVENT_DROP_FILE`, dosya ve klasör). Hepsi `GuiState::import_files` → `app::import_paths` (`note import` kuralı); hedef `target_folder()` (`app::new_note_folder`), özet durum çubuğunda, ilk not sekme kuralıyla açılır. Diyalog geri çağrısı başka iş parçacığından gelir: yollar paylaşılan kutuya yazılır, kare dışında içe alınır. Diyalog açılamazsa (portal/zenity yok) neden durum çubuğunda.
-- **ADDED** `notes-gui --help` pencere açmadan kısa kullanım; tanınmayan argüman çıkış 2. Argümansız açılış değişmedi.
+- **ADDED** `notes-gui --help` pencere açmadan kısa kullanım; `notes-gui --version` sürümü `note --version` gibi yazar (`notes-gui SÜRÜM`), çıkış 0; tanınmayan argüman çıkış 2. Argümansız açılış değişmedi.
 
 ## Değişiklik 2026-11-05 (MAP-R)
 

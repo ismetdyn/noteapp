@@ -1,9 +1,11 @@
 #include "tui/frame_diff.hpp"
 #include "tui/sixel.hpp"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cstddef>
+#include <cstdint>
 #include <doctest/doctest.h>
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/screen/string.hpp>
@@ -551,6 +553,29 @@ TEST_CASE("a cell written over the image redraws it without the rows the overlay
     diff.write(screen, false, output, images);
     CHECK(count_of(output, "\x1BP") == 1);
     CHECK(output.find("\x1B[2;3H" + sixel_rows(images[0], 0, 3)) != std::string::npos);
+}
+
+// Yeniden basım (bildirim alanın üstünden kalktı) aynı görüntünün aynı kırpımını yeniden kodlamaz. Görüntü
+// üretimde değişmez (shared_ptr<const>); burada pikseller yalnız eski kodlamanın kullanıldığını görmek için değişir.
+TEST_CASE("a redrawn sixel image reuses its encoding while it stays in place") {
+    auto screen = blank_screen(10, 8);
+    auto page = std::make_shared<noteapp::pdfview::RenderedPage>(*black_image(2, 1, 3).pixels);
+    const std::vector images{noteapp::tui::SixelImage{
+        .pixels = page, .cell = kTinyCell, .x = 2, .y = 1, .columns = 4, .rows = 3, .first_row = 0}};
+    const std::string black = sixel_rows(images[0], 0, 3);
+    noteapp::tui::FrameDiff diff;
+    std::string output;
+    diff.write(screen, true, output, images);
+    REQUIRE(output.find(black) != std::string::npos);
+
+    screen.CellAt(3, 2).character = "x";
+    diff.write(screen, false, output, images);
+    std::ranges::fill(page->rgba, std::uint8_t{255});
+    REQUIRE(sixel_rows(images[0], 0, 3) != black);
+    output.clear();
+    screen.CellAt(3, 2) = ftxui::Cell{};
+    diff.write(screen, false, output, images);
+    CHECK(output.find("\x1B[2;3H" + black) != std::string::npos);
 }
 
 TEST_CASE("a moved image is drawn at its new place and the cells it left are rewritten") {

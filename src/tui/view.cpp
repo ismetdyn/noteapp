@@ -2144,8 +2144,9 @@ void PreviewCache::layout_pdf(int width) {
     ++generation_;  // satırlar değişti: seçim ve eşleşmeler eski yerleşime ait
 }
 
-// Bütün sayfalar ilk okunan sayfanın boyundadır (GUI gibi tek yuva): kaydırma sayfalar çizildikçe kaymaz.
-// ponytail: farklı boyuttaki sayfa aynı ölçekle çizilir, yuvadan taşan kısmı kesilir; gerekirse sayfa başı boy.
+// Bütün sayfaların yuvası ilk okunan sayfanın boyundadır (GUI gibi tek yuva): kaydırma sayfalar çizildikçe kaymaz.
+// Ölçek sayfa başınadır (update_pages): her sayfa panel genişliğinde çizilir.
+// ponytail: yuvadan uzun sayfanın altı kesilir; gerekirse sayfa başı satır sayısı.
 std::pair<float, float> PreviewCache::pdf_page_points() const {
     constexpr std::pair<float, float> kA4Points{595.0F, 842.0F};  // ilk sayfa okunana dek tahmin
     for (const PdfPageView& page : pdf_pages_)
@@ -2225,9 +2226,8 @@ void PreviewCache::update_pages(const TuiState& state, int columns, int rows) {
     if (last < 0)
         return;
     last = std::min(last + 1, layout.count - 1);
-    const float scale =
-        static_cast<float>(columns * sixel_cell_.value_or(kBlockCell).width) / layout.points.first;
-    const PagesWanted wanted{.first = first, .last = last, .scale = scale};
+    const auto pane_pixels = static_cast<float>(columns * sixel_cell_.value_or(kBlockCell).width);
+    const PagesWanted wanted{.first = first, .last = last, .scale = pane_pixels / layout.points.first};
     const bool moved = wanted != pages_wanted_;
     if (moved)
         pdf_->drop_pending();  // yürüyen istek biter
@@ -2237,15 +2237,21 @@ void PreviewCache::update_pages(const TuiState& state, int columns, int rows) {
             image.pixels.reset();
             continue;
         }
-        if (image.pixels)
+        // Sayfanın kendi genişliği (metni okunduysa; pdf_pages_ sayfa sırasıyla dolar), yoksa ilk sayfanınki.
+        const auto at = static_cast<std::size_t>(page);
+        const float width =
+            at < pdf_pages_.size() && pdf_pages_[at].width > 0.0F ? pdf_pages_[at].width : layout.points.first;
+        const float scale = pane_pixels / width;
+        if (image.pixels && image.scale == scale)
             continue;
         if (auto result = pdf_->render(page, scale); !result) {
-            image.pixels.reset();
+            // Yeni ölçek gelene dek eski ölçeğin pikselleri (varsa) kalır.
             image.message = core::tr("app.pdf_page_loading", {{"page", std::to_string(page + 1)}});
             pdf_->request_render(page, scale);
         }
         else if (*result) {
             image.pixels = **result;
+            image.scale = scale;
             image.message.clear();
         }
         else {
