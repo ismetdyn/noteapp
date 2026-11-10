@@ -596,15 +596,25 @@ Kaynak: kullanıcı v0.1.3 sonrası ("tui'de pdf düz metin, format bozuk"; "ful
 
 ## TPI — TUI'de PDF sayfa görüntüsü (kullanıcı seçimi 2026-11-10: "Sixel + ▀ yedek")
 Spec: SPEC-tui.md "PDF sayfa görüntüsü (TPI)". Sıralı tek yazar (aynı dosyalar), klasik dispatch.
-- [ ] TPI-A Sayfa görünümü + `▀` blok çizimi: `R` PDF'te metin/sayfa, `PdfPreview::request_render` ile görünen sayfalar, blok satırlar satır modelinde, `[tui] pdf_image` anahtarı (`auto` şimdilik `blocks`), seçim/`c` reddi + bildirim, i18n en/tr, spec.
+- [x] TPI-A Sayfa görünümü + `▀` blok çizimi: `R` PDF'te metin/sayfa, `PdfPreview::request_render` ile görünen sayfalar, blok satırlar satır modelinde, `[tui] pdf_image` anahtarı (`auto` şimdilik `blocks`), seçim/`c` reddi + bildirim, i18n en/tr, spec.
   Scope: src/tui/**, src/app/pdf_preview.*, src/core/config.*, resources/defaults.toml, resources/i18n/**, tests/tui/**, SPEC-tui.md, SPEC-core.md
   Acceptance: render_test'te PDF sayfası `▀` hücreleri + doğru RGB renklerle çizilir; `R` geçişi; genişlik değişince yeniden istek; seçim reddi. Verify: `ctest -R "^tui$"` exit 0, RED gösterilir.
-- [ ] TPI-B Sixel: DA1 tespiti (`App::TerminalCapabilities`), hücre piksel boyu (`TIOCGWINSZ`, `CSI 16 t`), sixel kodlayıcı (palet nicemleme, kırpma), `FrameDiff`'te kare sonu basım + yeniden basım kuralı. Depends: TPI-A
+  Kanıt (2026-11-10): ccd8ab1 + review düzeltmesi 804a16a (feat/tui-pdf-image); `ctest -j2 -R "^(tui|core)$"` → exit 0; RED `pdf_page_view_test.cpp:269` (cache_pages=1 sonsuz render) → GREEN 6/6.
+- [x] TPI-B Sixel: DA1 tespiti (`App::TerminalCapabilities`), hücre piksel boyu (`TIOCGWINSZ`, `CSI 16 t`), sixel kodlayıcı (palet nicemleme, kırpma), `FrameDiff`'te kare sonu basım + yeniden basım kuralı. Depends: TPI-A
   Scope: src/tui/**, tests/tui/**, SPEC-tui.md
   Acceptance: kodlayıcı birim testi (bilinen küçük görüntü → beklenen DCS baytları); frame_diff testi (değişmeyen karede basım yok, alan hücresi yazılınca yeniden basım); tui_pty'de `pdf_image=sixel` ile çıktıda `ESC P … q` görünür. Verify: `ctest -R "^tui"` exit 0 (Linux), Wine `tui` ctest exit 0.
-- [ ] TPI-R cpp-reviewer her görevden sonra; son doğrulama: Linux tam ctest + Wine bir kez.
+- [x] TPI-R cpp-reviewer her görevden sonra; son doğrulama: Linux tam ctest + Wine bir kez.
+  Kanıt (2026-11-10): TPI-B 1d52f95 review engelleyici yok; main 7933f99: Linux Debug `ctest -j2` → exit 0, 20/20; `scripts/build-windows.sh --test` → exit 0, Wine 17/17 + DLL kapıları.
 
 ## Backlog — GUI kopyala-bırakınca (6b76837) review Low bulguları
 - [ ] `preview_selecting_` yalnız `draw_preview` içinde sıfırlanıyor (`src/gui/view_editor.cpp:681`); önizleme bırakmadan önce çizilmezse (çift tık → `begin_edit`) sonraki karede gecikmeli kopya olabilir. Bugün somut yol yok. Düzeltme: `begin_edit`/seçim temizliğinde sıfırla.
 - [ ] Ctrl+C ile bırakma aynı karede: `copy_preview_selection()` iki kez kuyruğa giriyor (`view_editor.cpp:652,689`); zararsız, aynı yazım.
 - Bilinçli: Ctrl+C ve sağ tık "Kopyala" da birincil seçimi ayarlıyor.
+
+## Backlog — TPI-A (ccd8ab1) review Low bulguları
+- [ ] Ölçek ilk sayfadan (`src/tui/view.cpp:2186`): çok küçük ilk sayfa sonraki sayfaları dev boyutta ister (`render_pixels` ile sınırlı, hata olarak görünür).
+- [ ] Sayfa düzeni genişlik/boyut değişiminde baştan kuruluyor (`view.cpp:2121`), O(sayfa × satır); 10000 sayfada yeniden boyutlandırma pahalı.
+
+## Backlog — TPI-B (1d52f95) review Low bulguları
+- [ ] Sixel her yeniden basımda yeniden kodlanıyor (`src/tui/frame_diff.cpp:245`), önbellek yok; alana düşen bildirim süresince tam sayfa (yüzlerce KB) yeniden gönderilir. Ölçülürse görüntü+kırpma anahtarlı önbellek.
+- [ ] Hücre boyu tamsayı bölmeyle (`src/tui/main.cpp:822-828`); sayfa kenarında birkaç piksel boşluk (görsel).
