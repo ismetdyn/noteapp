@@ -5,6 +5,7 @@
 #include "core/paths.hpp"
 #include "support/note_seed.hpp"
 #include "support/run_process.hpp"
+#include "support/text_pdf.hpp"
 #include "support/test_support.hpp"
 
 #include <algorithm>
@@ -52,8 +53,9 @@ void mark_update_checked() {
 
 class PtyApp {
 public:
+    // `cell`: hücrenin piksel boyu (ws_xpixel/ws_ypixel); 0 = terminal bildirmez.
     explicit PtyApp(const std::string& program, std::vector<std::string> args = {}, int columns = kColumns,
-                    int rows = kRows) {
+                    int rows = kRows, std::pair<int, int> cell = {}) {
         mark_update_checked();
         args.insert(args.begin(), program);
         std::vector<char*> argv;
@@ -63,6 +65,8 @@ public:
         winsize size{};
         size.ws_row = static_cast<unsigned short>(rows);
         size.ws_col = static_cast<unsigned short>(columns);
+        size.ws_xpixel = static_cast<unsigned short>(columns * cell.first);
+        size.ws_ypixel = static_cast<unsigned short>(rows * cell.second);
         pid_ = forkpty(&fd_, nullptr, nullptr, &size);
         REQUIRE(pid_ >= 0);
         if (pid_ == 0) {
@@ -1092,4 +1096,36 @@ TEST_CASE("the map and the view saved with K come back when the TUI is opened ag
           std::string::npos);  // haritanın kapsam satırı: "Q query  O table  K save view"
     again.send("\x03");
     again.read_until_exit();
+}
+
+// TPI-B: `pdf_image = "sixel"` ve piksel boyu bildiren terminalde PDF sayfası sixel DCS olarak basılır (sahte
+// terminalin DA1'i sixel bildirmez: zorlanan kip yalnız hücre boyuna bakar).
+TEST_CASE("with pdf_image = sixel the PDF page view writes the page as a sixel DCS") {
+    noteapp::test::TempDir home;
+    const noteapp::test::ScopedEnv env("NOTEAPP_HOME", noteapp::test::utf8(home.path()));
+    std::filesystem::create_directories(home.path() / "config");
+    std::ofstream(home.path() / "config" / "config.toml")
+        << "language = \"en\"\n[tui]\npdf_image = \"sixel\"\n";
+    {
+        noteapp::core::NoteStore store(home.path() / "data");
+        REQUIRE(noteapp::test::seed_note(store, "doc.pdf", noteapp::test::text_pdf({"page text"})));
+    }
+    constexpr std::pair<int, int> kCell{10, 20};
+    const PtyApp app(NOTEAPP_NOTES_EXE, {}, kColumns, kRows, kCell);
+    std::string seen;
+    app.read_frame();
+    wait_quiet(app, kQuiet, kSettleLimit);
+    app.send("\x1B[C");  // → REVIEW
+    wait_quiet(app, kQuiet, kSettleLimit);
+    app.send("R");
+    REQUIRE(wait_word(app, "\x1BP0;1;0q", seen));
+    const std::size_t start = seen.find("\x1BP0;1;0q");
+    const auto until = std::chrono::steady_clock::now() + kSettleLimit;
+    while (seen.find("\x1B\\", start) == std::string::npos && std::chrono::steady_clock::now() < until)
+        app.read_for(std::chrono::milliseconds(50), &seen);
+    const std::size_t end = seen.find("\x1B\\", start);
+    REQUIRE(end != std::string::npos);
+    CHECK(seen.substr(start, end - start).find("\"1;1;") != std::string::npos);  // raster öznitelikleri
+    app.send("\x03");
+    app.read_until_exit();
 }

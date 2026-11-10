@@ -297,10 +297,12 @@ PaneMode review_mode() {
     return {ftxui::Color::Green, core::tr("tui.frame_review")};
 }
 
-// Biçimli görünümü olan notta etiket hangisinin gösterildiğini söyler (`R`).
+// Biçimli görünümü olan notta ve PDF'te etiket hangisinin gösterildiğini söyler (`R`).
 PaneMode review_mode(const Preview& preview) {
     PaneMode mode = review_mode();
-    if (preview.view_kind != ViewKind::None)
+    if (preview.pdf != Preview::Pdf::No)
+        mode.label += " · " + core::tr(preview.pdf == Preview::Pdf::Pages ? "tui.review_page" : "tui.review_text");
+    else if (preview.view_kind != ViewKind::None)
         mode.label += " · " + core::tr(preview.rendered ? "tui.review_rendered" : "tui.review_raw");
     return mode;
 }
@@ -748,6 +750,95 @@ ftxui::Element rendered_pane(const TuiState& state, const Preview& preview, int 
     return vbox(std::move(lines));
 }
 
+// PDF sayfa görünümünün görüntü satırı: hücre başına `▀`, üst piksel ön plan, alt piksel arka plan rengi (FTXUI
+// terminalin renk derinliğine indirger). Sayfanın altına düşen hücre boş kalır. Hücreler doğrudan ekrana yazılır:
+// satır başına tek düğüm, hücre başına öğe kurulmaz.
+class BlockRow : public ftxui::Node {
+public:
+    explicit BlockRow(std::vector<BlockCell> cells) : cells_(std::move(cells)) {}
+
+    void ComputeRequirement() override {
+        requirement_.min_x = static_cast<int>(cells_.size());
+        requirement_.min_y = 1;
+    }
+    void Render(ftxui::Screen& screen) override {
+        constexpr std::string_view kUpperHalfBlock = "▀";  // U+2580: FrameDiff genişliğini kesin sayar
+        const auto rgb = [](const Rgb& value) { return ftxui::Color::RGB(value.red, value.green, value.blue); };
+        for (std::size_t i = 0; i < cells_.size() && box_.x_min + static_cast<int>(i) <= box_.x_max; ++i) {
+            const BlockCell& source = cells_[i];
+            if (!source.top)
+                continue;
+            ftxui::Cell& cell = screen.CellAt(box_.x_min + static_cast<int>(i), box_.y_min);
+            cell.character = std::string(kUpperHalfBlock);
+            cell.foreground_color = rgb(*source.top);
+            if (source.bottom)
+                cell.background_color = rgb(*source.bottom);
+        }
+    }
+
+private:
+    std::vector<BlockCell> cells_;
+};
+
+// Sixel çiziminin görüntü satırı: hücrelere dokunmaz (FrameDiff el değmemiş hücreye basar), ekrandaki yerini
+// `Preview::sixels`e yazar. Aynı sayfanın ardışık satırları tek görüntüde birleşir.
+class SixelRow : public ftxui::Node {
+public:
+    SixelRow(std::vector<SixelImage>* out, SixelImage image) : out_(out), image_(std::move(image)) {}
+
+    void ComputeRequirement() override {
+        requirement_.min_x = image_.columns;
+        requirement_.min_y = 1;
+    }
+    void Render(ftxui::Screen& /*screen*/) override {
+        if (box_.x_max < box_.x_min || box_.y_max < box_.y_min)
+            return;  // kırpıldı, ekranda değil
+        image_.x = box_.x_min;
+        image_.y = box_.y_min;
+        image_.columns = std::min(image_.columns, box_.x_max - box_.x_min + 1);
+        if (!out_->empty()) {
+            SixelImage& last = out_->back();
+            if (last.pixels == image_.pixels && last.cell == image_.cell && last.x == image_.x &&
+                last.columns == image_.columns && last.y + last.rows == image_.y &&
+                last.first_row + last.rows == image_.first_row) {
+                ++last.rows;
+                return;
+            }
+        }
+        out_->push_back(image_);
+    }
+
+private:
+    std::vector<SixelImage>* out_;
+    SixelImage image_;
+};
+
+// PDF sayfa görünümü: ayırıcı ve boş satırlar soluk metin; görüntü satırı çizilmiş sayfadan kesilir, sayfa henüz
+// yoksa ilk satırında nedeni (yükleniyor ya da hata). Seçim ve arama vurgusu yoktur.
+ftxui::Element page_pane(const TuiState& state, const Preview& preview, int height, int columns) {
+    using namespace ftxui;
+    const auto wanted = static_cast<std::size_t>(std::max(height, 1));
+    Elements lines;
+    for (std::size_t i = state.preview_scroll(); i < preview.lines.size() && lines.size() < wanted; ++i) {
+        const Preview::PageRow at = preview.page_rows[i];
+        if (at.page < 0) {
+            lines.push_back(text(preview.lines[i]) | dim);
+            continue;
+        }
+        const Preview::PageImage& image = preview.page_images[static_cast<std::size_t>(at.page)];
+        if (image.pixels && preview.sixel)
+            lines.push_back(std::make_shared<SixelRow>(
+                &preview.sixels,
+                SixelImage{.pixels = image.pixels, .cell = *preview.sixel, .columns = columns, .rows = 1,
+                           .first_row = at.row}));
+        else if (image.pixels)
+            lines.push_back(std::make_shared<BlockRow>(page_block_row(*image.pixels, at.row, columns)));
+        else
+            lines.push_back(at.row == 0 ? text(image.message) | dim : text(""));
+    }
+    return vbox(std::move(lines));
+}
+
 // Görüntü satırlarını sona ekler; kaynak satırları `first_line` kadar kayar (parçanın notta başladığı satır).
 // Seçim kopyası `selected_text` ile ham metindeki yoldan geçer.
 void append_rendered(Preview& out, RenderedView view, std::size_t first_line) {
@@ -847,6 +938,8 @@ ftxui::Element preview_pane(const TuiState& state, const Preview& preview, int h
     case Preview::Kind::Text:
         break;
     }
+    if (preview.pdf == Preview::Pdf::Pages)
+        return page_pane(state, preview, height, columns);
     if (preview.rendered)
         return rendered_pane(state, preview, height);
     const Row* row = state.selected_row();
@@ -1840,9 +1933,17 @@ bool PreviewCache::update_rendered(bool wanted, int width, std::chrono::steady_c
 
 const Preview& PreviewCache::publish(TuiState& state, std::chrono::steady_clock::time_point now) {
     state.set_links(links_, links_generation_, path_);
-    const int width = editor_viewport({state.window_width(), state.window_height()}, state.layout()).columns;
+    const EditorViewport viewport = editor_viewport({state.window_width(), state.window_height()}, state.layout());
+    const int width = viewport.columns;
+    state.set_preview_pdf(pdf_ != nullptr);
     if (pdf_ && width != pdf_width_)
         layout_pdf(width);
+    const bool pages = pdf_ && state.pdf_page_view();
+    if (pages != pages_active_)
+        ++generation_;  // görünüm değişti: seçim ve eşleşmeler öbürünün satırlarına ait
+    pages_active_ = pages;
+    if (pages)
+        update_pages(state, width, viewport.rows);
     const bool wanted = state.review_rendered() && preview_.kind == Preview::Kind::Text &&
                         preview_.view_kind != ViewKind::None;
     if (update_rendered(wanted, width, now)) {
@@ -1960,9 +2061,12 @@ void PreviewCache::start_pdf(std::string bytes) {
     pdf_loaded_lines_ = 0;
     pdf_pages_.clear();
     pdf_version_ = std::numeric_limits<std::uint64_t>::max();  // ilk refresh_pdf durumu okusun
+    pages_layout_.reset();  // sayfa görünümü yeni belgeye kurulur
+    pages_wanted_.reset();
     // Gösterilen metin biçimli görünümdür (markdown'ınki gibi): seçim onu kopyalar, özgün baytları değil.
     preview_.kind = Preview::Kind::Text;
     preview_.rendered = true;
+    preview_.pdf = Preview::Pdf::Text;
     pdf_status_ = core::tr("app.pdf_loading");
     show_pdf_status();
     refresh_pdf();
@@ -1993,9 +2097,12 @@ void PreviewCache::refresh_pdf() {
         auto text = pdf_->take_text(pdf_next_page_);
         if (!text)
             break;  // sayfalar sırayla eklenir
-        PdfPageView page{.page = pdf_next_page_, .blocks = {}, .error = {}};
-        if (*text)
+        PdfPageView page{.page = pdf_next_page_, .blocks = {}, .error = {}, .width = 0.0F, .height = 0.0F};
+        if (*text) {
             page.blocks = app::pdf_page_blocks(**text);
+            page.width = (*text)->width;
+            page.height = (*text)->height;
+        }
         else
             page.error = core::format_error(text->error());
         ++pdf_next_page_;
@@ -2035,6 +2142,122 @@ void PreviewCache::layout_pdf(int width) {
     pdf_loaded_lines_ = preview_.lines.size();
     show_pdf_status();
     ++generation_;  // satırlar değişti: seçim ve eşleşmeler eski yerleşime ait
+}
+
+// Bütün sayfalar ilk okunan sayfanın boyundadır (GUI gibi tek yuva): kaydırma sayfalar çizildikçe kaymaz.
+// ponytail: farklı boyuttaki sayfa aynı ölçekle çizilir, yuvadan taşan kısmı kesilir; gerekirse sayfa başı boy.
+std::pair<float, float> PreviewCache::pdf_page_points() const {
+    constexpr std::pair<float, float> kA4Points{595.0F, 842.0F};  // ilk sayfa okunana dek tahmin
+    for (const PdfPageView& page : pdf_pages_)
+        if (page.width > 0.0F && page.height > 0.0F)
+            return {page.width, page.height};
+    return kA4Points;
+}
+
+// Metin görünümünün düzeni: her sayfa için ayırıcı, sayfanın hücre satırları, boş satır. Açılmadıysa tek durum
+// satırı.
+void PreviewCache::layout_pages(int columns) {
+    pages_ = {};
+    pages_.kind = Preview::Kind::Text;
+    pages_.pdf = Preview::Pdf::Pages;
+    const auto add = [this](std::string line, Preview::PageRow at) {
+        pages_.line_starts.push_back(pages_.text.size());
+        pages_.text += line;
+        pages_.text += '\n';
+        pages_.lines.push_back(std::move(line));
+        pages_.styled.emplace_back();
+        pages_.source_lines.push_back(pages_.source_lines.size());
+        pages_.page_rows.push_back(at);
+    };
+    switch (pdf_->state()) {
+    case app::PdfPreview::State::Opening:
+        add(core::tr("app.pdf_loading"), {});
+        return;
+    case app::PdfPreview::State::Failed:
+        add(display_safe(core::format_error(pdf_->open_error().value())), {});
+        return;
+    case app::PdfPreview::State::Ready:
+        break;
+    }
+    const int count = pdf_->page_count();
+    const auto [width, height] = pdf_page_points();
+    const int rows = page_block_rows(width, height, columns, sixel_cell_.value_or(kBlockCell));
+    pages_.sixel = sixel_cell_;
+    pages_.page_images.resize(static_cast<std::size_t>(count));
+    for (int page = 0; page < count; ++page) {
+        add(app::pdf_page_separator(page, count), {});
+        for (int row = 0; row < rows; ++row)
+            add({}, {.page = page, .row = row});
+        add({}, {});
+    }
+}
+
+// Yalnız görünen sayfalar ve bir sonraki istenir; ölçek sayfayı `columns` x hücre genişliği piksele sığdırır (blok:
+// hücre başına bir piksel, sixel: terminal hücresinin piksel genişliği). Görünen aralık ya da ölçek değişince
+// bekleyen istekler düşer (GUI gibi): hızlı kaydırma kuyruğu geçilmiş sayfalarla doldurmaz. Bu, metin görünümünün
+// bekleyen okumalarını da düşürür; onlar hemen yeniden istenir. Çizilmiş sayfalar PdfPreview'un LRU'sundadır (limits.pdf.cache_pages); istenen aralıktaki
+// sayfanın pikselleri burada tutulur ve yeniden sorulmaz: görünen sayfalar önbellek sınırına sayılmaz. Yoksa
+// cache_pages istenen sayfalardan azken her gelen çizim öbürünü düşürür, düşen yeniden istenir: işçi hiç durmaz.
+// Yerleşim (genişlik, sayfa boyu) değişince pages_ yeniden kurulur, eski ölçeğin pikselleri kalmaz.
+void PreviewCache::update_pages(const TuiState& state, int columns, int rows) {
+    const app::PdfPreview::State status = pdf_->state();
+    const PagesLayout layout{.state = status,
+                             .count = status == app::PdfPreview::State::Ready ? pdf_->page_count() : 0,
+                             .columns = columns,
+                             .points = pdf_page_points(),
+                             .cell = sixel_cell_};
+    if (layout != pages_layout_) {
+        layout_pages(columns);
+        pages_layout_ = layout;
+        ++generation_;  // satırlar değişti
+    }
+    if (layout.count == 0)
+        return;
+    int first = layout.count;
+    int last = -1;
+    const std::size_t top = std::min(state.preview_scroll(), pages_.page_rows.size());
+    const std::size_t bottom = std::min(top + static_cast<std::size_t>(std::max(rows, 1)), pages_.page_rows.size());
+    for (std::size_t i = top; i < bottom; ++i)
+        if (const int page = pages_.page_rows[i].page; page >= 0) {
+            first = std::min(first, page);
+            last = std::max(last, page);
+        }
+    if (last < 0)
+        return;
+    last = std::min(last + 1, layout.count - 1);
+    const float scale =
+        static_cast<float>(columns * sixel_cell_.value_or(kBlockCell).width) / layout.points.first;
+    const PagesWanted wanted{.first = first, .last = last, .scale = scale};
+    const bool moved = wanted != pages_wanted_;
+    if (moved)
+        pdf_->drop_pending();  // yürüyen istek biter
+    for (int page = 0; page < layout.count; ++page) {
+        Preview::PageImage& image = pages_.page_images[static_cast<std::size_t>(page)];
+        if (page < first || page > last) {
+            image.pixels.reset();
+            continue;
+        }
+        if (image.pixels)
+            continue;
+        if (auto result = pdf_->render(page, scale); !result) {
+            image.pixels.reset();
+            image.message = core::tr("app.pdf_page_loading", {{"page", std::to_string(page + 1)}});
+            pdf_->request_render(page, scale);
+        }
+        else if (*result) {
+            image.pixels = **result;
+            image.message.clear();
+        }
+        else {
+            image.pixels.reset();
+            image.message = display_safe(core::format_error(result->error()));
+        }
+    }
+    if (moved) {
+        pages_wanted_ = wanted;
+        pdf_version_ = std::numeric_limits<std::uint64_t>::max();
+        refresh_pdf();
+    }
 }
 
 // append_rendered gibi: her satır '\n' ile biter, seçim metni görüntülenen satırlardır.

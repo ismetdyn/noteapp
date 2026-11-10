@@ -23,10 +23,12 @@ noteapp_add_test(tui
     map_relations_test.cpp
     markdown_view_test.cpp
     paste_parser_test.cpp
+    pdf_page_view_test.cpp
     save_dialog_test.cpp
     modals_test.cpp
     settings_test.cpp
     settings_sync_test.cpp
+    sixel_test.cpp
     sync_indicator_test.cpp
     tabs_test.cpp
     tags_test.cpp
@@ -61,7 +63,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_include_directories(tui_pty_tests PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/tests)
     target_compile_definitions(tui_pty_tests PRIVATE NOTEAPP_NOTES_EXE="$<TARGET_FILE:notes>")
     noteapp_target_defaults(tui_pty_tests)
-    add_dependencies(tui_pty_tests notes)
+    add_dependencies(tui_pty_tests notes note)
+    # `notes` PDF işçisini yanındaki `note`ta arar (core::note_executable_beside_self); kurulumda yan yanadırlar,
+    # derleme ağacında bağlantı onları buluşturur (PDF sayfa görünümü testi).
+    add_custom_command(TARGET tui_pty_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:note> $<TARGET_FILE_DIR:notes>/note)
     add_test(NAME tui_pty COMMAND tui_pty_tests)
 endif()
 

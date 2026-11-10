@@ -1,7 +1,11 @@
 #pragma once
 
+#include "tui/sixel.hpp"
+
 #include <ftxui/screen/cell.hpp>
 #include <ftxui/screen/screen.hpp>
+#include <cstddef>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -13,7 +17,12 @@ namespace noteapp::tui {
 class FrameDiff {
 public:
     // `repaint` ya da invalidate() sonrası ekran silinir ve baştan çizilir; boyut değişince de öyle.
-    void write(const ftxui::Screen& screen, bool repaint, std::string& output);
+    // `images` hücre farkından sonra sixel basılır (SPEC-tui "Sixel ekranla uyumu"): görüntü yeni, yeri ya da
+    // kırpımı değişti ya da alanına bu karede hücre yazıldıysa. Altındaki hücreler el değmemiş (Cell{}) olmalı;
+    // üstüne bir şey çizilmiş satırı (diyalog, bildirim) basılmaz, son iki ekran satırına inmez. Bu karede
+    // olmayan görüntünün hücreleri yeniden yazılır: terminalde pikselleri kalmaz.
+    void write(const ftxui::Screen& screen, bool repaint, std::string& output,
+               std::span<const SixelImage> images = {});
     // Ctrl+L: terminal içeriğine güvenme, sonraki karede baştan çiz.
     void invalidate() { invalid_ = true; }
 
@@ -24,8 +33,16 @@ private:
     void start_frame(std::string& output);
     void move_to(int x, int y, std::string& output);
     void write_cursor(const ftxui::Screen& screen, std::string& output);
+    void write_images(const ftxui::Screen& screen, std::span<const SixelImage> images, std::string& output);
+    void write_image(const ftxui::Screen& screen, const SixelImage& image, std::string& output);
+    char& written(int x, int y) {
+        const auto row = static_cast<std::size_t>(y) * static_cast<std::size_t>(width_);
+        return written_[row + static_cast<std::size_t>(x)];
+    }
 
     std::vector<ftxui::Cell> shown_;  // terminalde görünenler
+    std::vector<SixelImage> images_;  // terminalde basılı görüntüler
+    std::vector<char> written_;       // bu karede yazılan (ya da yazılması zorlanan) hücreler
     int width_ = 0;
     int height_ = 0;
     bool invalid_ = true;

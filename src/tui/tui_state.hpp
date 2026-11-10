@@ -85,6 +85,7 @@ enum class Intent {
     CheckUpdates,      // palet `update`: güncelleme penceresi (app::UpdateController; main yürütür)
     ExportPdf,         // REVIEW `P`: altta çıktı yolu girdisi
     FollowLink,        // REVIEW'da seçili [[bağlantı]]: depo çözer, hedef not açılır
+    PdfPageNoText,     // PDF sayfa görünümünde seçim, kopya ya da arama: bildirim metin görünümüne (`R`) yönlendirir
     // Sekmeler (SPEC-tui "Sekmeler"): yürütme main'de, sekmeler EditorTabs'tadır.
     TabNew,             // Ctrl+T: yeni sekmede boş taslak
     TabClose,           // Ctrl+W (editör): etkin sekme kaydedilmemiş akışıyla kapanır
@@ -423,6 +424,10 @@ public:
     }
     // REVIEW'un görünümü (`R`, oturum boyunca): biçimli mi, ham mı.
     bool review_rendered() const { return review_rendered_; }
+    // PDF notunda `R` metin ile sayfa görüntüsü arasında geçer (oturum boyunca bütün PDF'lerde, varsayılan
+    // metin); md/csv/json'un bayrağından ayrıdır. Gösterilenin PDF olduğunu PreviewCache bildirir.
+    void set_preview_pdf(bool pdf) { preview_pdf_ = pdf; }
+    bool pdf_page_view() const { return preview_pdf_ && pdf_pages_; }
     // Gösterilen görünümün görüntü satırı -> kaynak satırı eşlemesi (ham metinde nullptr: ikisi aynıdır).
     // Üretim değiştiyse kaydırma aynı kaynak bloğunda kalacak şekilde çevrilir; önbellekten kopyalanır, ömrü
     // ona bağlanmaz.
@@ -654,7 +659,7 @@ private:
     void scroll_preview_bottom();
     void scroll_half_page(int direction);
     void go_root();
-    void begin_preview_find();
+    Intent begin_preview_find();  // sayfa görünümünde aranacak metin yok: Intent::PdfPageNoText
     void find_step(bool forward);
 
     static std::string row_key(const Row& row);
@@ -780,6 +785,8 @@ private:
     std::size_t links_generation_ = 0;
     std::optional<core::NotePath> links_note_;
     bool review_rendered_ = true;
+    bool preview_pdf_ = false;
+    bool pdf_pages_ = false;
     std::vector<std::size_t> view_source_lines_;  // boş: ham metin
     std::size_t view_generation_ = 0;
     std::optional<std::size_t> pending_source_line_;

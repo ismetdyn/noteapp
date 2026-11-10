@@ -59,6 +59,13 @@ struct UpdateConfig {
     bool operator==(const UpdateConfig&) const = default;
 };
 
+// [tui]: yalnız TUI'nin ayarı; ayar ekranında görünmez, varsayılandan farklıysa dosyaya yazılır.
+struct TuiConfig {
+    std::string pdf_image;  // auto | sixel | blocks: PDF sayfa görünümünün çizimi (SPEC-tui "PDF sayfa görüntüsü")
+
+    bool operator==(const TuiConfig&) const = default;
+};
+
 // defaults.toml `graph_batch_ops`ın yapılandırmasız NoteStore'daki (test, geçiş) karşılığı. Üst değeri sabit
 // değildir; çerçeve sınırı da onu kırpmaz (L4b: işlem kayıtlara bölünür).
 inline constexpr std::size_t kDefaultGraphBatchOps = 30000;
@@ -99,6 +106,7 @@ struct Config {
     SyncConfig sync{};
     LspConfig lsp{};
     UpdateConfig update{};
+    TuiConfig tui{};
     Tuning tuning{};
     Limits limits{};  // [limits.<modül>]; 0 = sınırsız (SPEC-core "Sınırlar")
 

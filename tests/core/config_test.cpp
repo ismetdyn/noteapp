@@ -930,6 +930,28 @@ TEST_CASE("limits.tui and limits.lsp keep today's defaults, accept 0 as unlimite
     CHECK(listed("limits.lsp.shutdown_timeout"));
 }
 
+TEST_CASE("tui.pdf_image defaults to auto, accepts sixel and blocks and rejects anything else") {
+    const LoadedConfig defaults = parse_config("");
+    CHECK(defaults.warnings.empty());
+    CHECK(defaults.config.tui.pdf_image == "auto");
+    for (const char* mode : {"auto", "sixel", "blocks"}) {
+        CAPTURE(mode);
+        const LoadedConfig chosen = parse_config(std::string("[tui]\npdf_image = \"") + mode + "\"\n");
+        CHECK(chosen.warnings.empty());
+        CHECK(chosen.config.tui.pdf_image == mode);
+    }
+    for (const char* text : {"[tui]\npdf_image = \"kitty\"\n", "[tui]\npdf_image = \"\"\n", "[tui]\npdf_image = 1\n"}) {
+        CAPTURE(text);
+        const LoadedConfig rejected = parse_config(text);
+        CHECK(rejected.config.tui.pdf_image == "auto");
+        CHECK(has_warning_about(rejected, "tui.pdf_image", "config.invalid_value"));
+    }
+    const LoadedConfig unknown = parse_config("[tui]\npdf_image = \"kitty\"\n");
+    REQUIRE(unknown.warnings.size() == 1);
+    CHECK(arg_of(unknown.warnings[0], "reason") == "must_be_pdf_image");
+    CHECK(has_warning_about(parse_config("[tui]\nnope = 1\n"), "tui.nope", "config.unknown_key"));
+}
+
 TEST_CASE("update.check_interval defaults to 24h, accepts 0 as off and rejects intervals under an hour") {
     const LoadedConfig defaults = parse_config("");
     CHECK(defaults.warnings.empty());

@@ -114,7 +114,7 @@ std::span<const Command> TuiState::commands() {
         {"view.save", "", kInList, emit<Intent::SaveView>},  // haritada `K`
         {"view.remove", "", kInList, emit<Intent::RemoveView>},
         {"search.mode", "Tab", kInList, act<&TuiState::toggle_content_mode>, Nothing, Key::Tab},
-        {"find", "/", kInReview, act<&TuiState::begin_preview_find>},
+        {"find", "/", kInReview, ask<&TuiState::begin_preview_find>},
         {"find.next", "n", kInReview, act<&TuiState::find_step, true>},
         {"find.previous", "N", kInReview, act<&TuiState::find_step, false>},
         {"go.root", "gh", kInListing, act<&TuiState::go_root>},

@@ -287,7 +287,13 @@ void ListActions::run_intent(Intent intent, std::optional<ConfirmState>& confirm
         follow_wiki_link();
         break;
     case Intent::CopyNote:
-        copy_selected();
+        if (host_.state.pdf_page_view())
+            host_.status.message = core::tr("tui.pdf_page_no_text");
+        else
+            copy_selected();
+        break;
+    case Intent::PdfPageNoText:
+        host_.status.message = core::tr("tui.pdf_page_no_text");
         break;
     case Intent::TrashSelected:
         begin_trash(confirm);
@@ -377,6 +383,9 @@ void ListActions::on_mouse(const MouseInput& input, EditorSession& editor) {
         break;
     case MouseResult::MapEdit:
         apply_map_edit(nullptr);
+        break;
+    case MouseResult::PdfPageNoText:
+        host_.status.message = core::tr("tui.pdf_page_no_text");
         break;
     case MouseResult::None:
         break;

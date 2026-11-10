@@ -36,6 +36,7 @@
 #include "tui/mouse.hpp"
 #include "tui/save_dialog.hpp"
 #include "tui/settings.hpp"
+#include "tui/sixel.hpp"
 #include "tui/sync_indicator.hpp"
 #include "tui/termination.hpp"
 #include "tui/tui_state.hpp"
@@ -73,6 +74,7 @@
 
 #ifndef _WIN32
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 #endif
 
@@ -89,6 +91,22 @@ constexpr auto kWordTableIdle = std::chrono::seconds(1);
 const ftxui::Event& redraw_event() {
     static const ftxui::Event event = ftxui::Event::Special("\x1B[noteapp-redraw");
     return event;
+}
+
+// Terminal hücresinin piksel boyu (sixel PDF sayfası): TIOCGWINSZ'nin ws_xpixel/ws_ypixel'i, terminal sıfır
+// bildiriyorsa nullopt. `CSI 16 t` sorulmaz: FTXUI ayrıştırıcısı yanıtı tuş olayı yapar. Windows konsolu piksel boyu
+// vermez: nullopt, sayfa `▀` blokla çizilir (SPEC-tui "PDF sayfa görüntüsü").
+std::optional<noteapp::tui::CellPixels> terminal_cell_pixels() {
+#ifndef _WIN32
+    winsize size{};
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0 && size.ws_col > 0 && size.ws_row > 0) {
+        const noteapp::tui::CellPixels cell{.width = size.ws_xpixel / size.ws_col,
+                                            .height = size.ws_ypixel / size.ws_row};
+        if (cell.width > 0 && cell.height > 0)
+            return cell;
+    }
+#endif
+    return std::nullopt;
 }
 
 // Yamalı FTXUI'nin, limits.tui.paste_bytes'ı aşan yapıştırma yerine gönderdiği olay (baytlar tutulmadı).
@@ -401,6 +419,9 @@ private:
     // `view:` görünümü depoda çalıştırır; sonucu deponun görüntüsü değişene dek saklanır (core::view_notes).
     ftxui::App app_ = ftxui::App::Fullscreen();
     tui::FrameDiff frame_diff_;
+    // Hücre piksel boyu bu pencere boyutunda soruldu (terminal_cell_pixels); boyut değişince yeniden sorulur.
+    ftxui::Dimensions cell_window_{.dimx = -1, .dimy = -1};
+    std::optional<tui::CellPixels> cell_pixels_;
     std::optional<std::chrono::steady_clock::time_point> wake_at_;  // render yazar, wake_due tüketir
     // Tanı: NOTEAPP_TUI_DRAW_LOG bir dosya yoluysa her çizim bir satır (terminale yazılan bayt) ekler. Boşta
     // çizim olmadığını tui_pty testleri bununla sayar; değişken yoksa dosya açılmaz.
@@ -549,7 +570,7 @@ TuiSession::TuiSession(const core::LoadedConfig& loaded, const std::optional<Ope
         std::min<std::uint64_t>(config_.limits.tui.paste_bytes.value, std::numeric_limits<std::size_t>::max())));
     app_.SetFrameWriter([this](const ftxui::Screen& screen, bool repaint, std::string& output) {
         const std::size_t before = output.size();
-        frame_diff_.write(screen, repaint, output);
+        frame_diff_.write(screen, repaint, output, preview_.shown().sixels);
         // flush: test sayarken satır yarım kalmasın.
         if (draw_log_.is_open())
             draw_log_ << (output.size() - before) << '\n' << std::flush;
@@ -797,6 +818,14 @@ std::unique_ptr<tui::SpellChecker> TuiSession::make_spell_checker() {
 ftxui::Element TuiSession::render() {
     const ftxui::Dimensions window = ftxui::Terminal::Size();
     state_.set_window(window.dimx, window.dimy);
+    // PDF sayfa görünümünün çizimi: DA1'i FTXUI açılışta alır (geç gelirse sonraki çizimde geçerli); hücre boyu
+    // yalnız pencere boyutu değişince sorulur (yazı tipi büyütme sütun sayısını da değiştirir).
+    if (window.dimx != cell_window_.dimx || window.dimy != cell_window_.dimy) {
+        cell_window_ = window;
+        cell_pixels_ = terminal_cell_pixels();
+    }
+    preview_.set_sixel_cell(
+        tui::sixel_cell(config_.tui.pdf_image, app_.TerminalCapabilities(), cell_pixels_));
     const tui::EditorViewport viewport = tui::editor_viewport(window, state_.layout());
     tui::EditorSession& editor = tabs_.active();
     editor.layout(viewport.columns, viewport.rows);  // boyut değişince de imleç görünür kalsın
@@ -842,6 +871,7 @@ ftxui::Element TuiSession::render() {
         editor.show_notice(std::exchange(lsp_status_, {}));
     const std::vector<tui::TabLabel> tabs = tabs_.labels();
     const tui::Preview& preview = sync_preview();
+    preview.sixels.clear();  // bu karenin görüntülerini çizim yazar, kare yazıcısı basar
     wake_by(preview_.deferred_until());
     wake_at_ = wake_at;
     if (update_dialog_)

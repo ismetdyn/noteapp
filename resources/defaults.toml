@@ -52,6 +52,10 @@ json = ["vscode-json-language-server", "--stdio"]        # $schema yalnız file:
 [update]
 check_interval = "24h"        # açılışta GitHub'a en çok bu aralıkla sorulur; 0 = açılışta denetim yok; 0 ile 1h arası reddedilir (GitHub kimliksiz 60 istek/saat)
 
+# TUI. Ayar ekranında görünmez.
+[tui]
+pdf_image = "auto"            # PDF sayfa görünümünün (`R`) çizimi: auto | sixel | blocks; auto terminal sixel bildirirse sixel
+
 # Kullanıcı arayüzünde görünmeyen, davranışı ayarlayan değerler.
 [tuning]
 slug_max_length = 60          # not adı slug'ının en çok karakteri

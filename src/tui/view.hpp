@@ -11,6 +11,7 @@
 #include "tui/modals.hpp"
 #include "tui/save_dialog.hpp"
 #include "tui/settings.hpp"
+#include "tui/sixel.hpp"
 #include "tui/sync_indicator.hpp"
 #include "tui/tui_state.hpp"
 
@@ -26,6 +27,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace noteapp::tui {
@@ -62,6 +64,30 @@ struct Preview {
     std::vector<std::size_t> source_lines;
     std::vector<std::string> wiki_targets;  // biçimli markdown: RenderedView::wiki_targets, parçalar ardışık
     std::string note;  // biçimli görünüm istendi, olmadı: toplamlar satırında soluk neden
+
+    // PDF notu ve görünümü (`R`, TuiState::pdf_page_view). Sayfa görünümünde `lines` ayırıcı ve durum satırlarıdır,
+    // görüntü satırında boştur: seçim, kopya ve arama yoktur.
+    enum class Pdf { No, Text, Pages };
+    Pdf pdf = Pdf::No;
+    // Sayfa görünümü, `lines` ile paralel: görüntü satırında sayfa (0 tabanlı) ve sayfanın hücre satırı; ayırıcı,
+    // boş ve durum satırında page < 0. Çizici (blok; TPI-B'de sixel) sayfanın piksellerini bu satırlardan keser.
+    struct PageRow {
+        int page = -1;
+        int row = 0;
+    };
+    std::vector<PageRow> page_rows;
+    // Sayfa başına (dizin sayfa): pikseller yalnız görünen ve sonraki sayfada dolu; boşsa sayfanın ilk satırında
+    // `message` (yükleniyor ya da metin görünümüyle aynı hata, display_safe).
+    struct PageImage {
+        std::shared_ptr<const pdfview::RenderedPage> pixels;
+        std::string message;
+    };
+    std::vector<PageImage> page_images;
+    // Sayfa sixel çiziliyorsa terminal hücresinin piksel boyu (PreviewCache::set_sixel_cell), yoksa `▀` blok.
+    std::optional<CellPixels> sixel;
+    // Sixel: çizim (ftxui::Render) görünen görüntü satırlarının ekrandaki yerini buraya yazar, kare yazıcısı
+    // (FrameDiff) okur. Her çizimden önce boşaltılır (main); kare çiziminin çıktısıdır, önizleme verisi değil.
+    mutable std::vector<SixelImage> sixels;
 };
 
 // Son okunan notu tutar: her yeniden çizimde diske gidilmez. Not değişince (yeniden tarama, editör dönüşü)
@@ -91,8 +117,12 @@ public:
     // kez üretilir, görüntü satırı -> kaynak satırı eşlemesi modele buradan bildirilir.
     const Preview& throttled(TuiState& state, const core::NoteStore& store,
                              std::chrono::steady_clock::time_point now);
-    // Şu an gösterilen: biçimli görünüm ya da ham metin. Seçim kopyası bunu okur.
-    const Preview& shown() const { return rendered_active_ ? rendered_ : preview_; }
+    // Şu an gösterilen: PDF sayfa görünümü, biçimli görünüm ya da ham metin. Seçim kopyası bunu okur.
+    const Preview& shown() const {
+        if (pages_active_)
+            return pages_;
+        return rendered_active_ ? rendered_ : preview_;
+    }
     bool deferred() const { return deferred_until_.has_value(); }
     // Ertelemenin bittiği an: çağıran o ana dek çizim istemez, o an bir kez yeniden çizer.
     std::optional<std::chrono::steady_clock::time_point> deferred_until() const { return deferred_until_; }
@@ -159,6 +189,9 @@ public:
     // yeniden sarılır. Kurulmazsa PDF ikili not gibi görünür. `on_change` işçi iş parçacığından gelir: yalnız
     // yeniden çizim ister.
     void set_pdf(core::PdfLimits limits, std::filesystem::path worker, std::function<void()> on_change);
+    // Sayfa görünümünün çizimi (main her çizimde tui::sixel_cell ile çözer): hücre boyu sixel, nullopt `▀` blok.
+    // Değişince yerleşim yeniden kurulur, sayfalar yeni ölçekle istenir.
+    void set_sixel_cell(std::optional<CellPixels> cell) { sixel_cell_ = cell; }
     // Oturumu kapatır (işçiyi durdurur, bekler): on_change'in hedefi yıkılmadan önce çağrılır.
     void close_pdf() { pdf_.reset(); }
     const app::PdfPreview* pdf() const { return pdf_.get(); }  // test
@@ -174,6 +207,11 @@ private:
     // Eklenmiş sayfaları ve durum satırını `width`'e yeniden sarar (publish, genişlik değişince).
     void layout_pdf(int width);
     void append_pdf_view(RenderedView view);
+    // Sayfa görünümü (publish, TuiState::pdf_page_view): yerleşim durum, sayfa sayısı, genişlik ya da sayfa boyu
+    // değişince yeniden kurulur; görünen sayfalar ve bir sonraki `columns` piksel genişliğe çizilmek üzere istenir.
+    void update_pages(const TuiState& state, int columns, int rows);
+    void layout_pages(int columns);
+    std::pair<float, float> pdf_page_points() const;  // ilk okunan sayfanın boyu (punto), yoksa A4
     void cut_pdf_status();  // durum satırını atar: sayfa metni pdf_loaded_* uzunluğuna döner
     void show_pdf_status();  // pdf_status_'u (boş değilse) sona ekler
 
@@ -191,10 +229,33 @@ private:
         int page = 0;
         std::vector<pdf::Block> blocks;
         std::string error;
+        float width = 0.0F;  // punto; sayfa görünümünün ölçeği ve satır sayısı (hatalı sayfada 0)
+        float height = 0.0F;
     };
     std::vector<PdfPageView> pdf_pages_;
     std::string pdf_status_;  // son satır: yükleniyor, kesildi ya da açılış hatası; boş = yok
     int pdf_width_ = kPdfDefaultWidth;
+
+    // Sayfa görünümü: yerleşimin girdileri ve son istenen sayfa aralığı (değişince bekleyen istekler düşer).
+    struct PagesLayout {
+        app::PdfPreview::State state = app::PdfPreview::State::Opening;
+        int count = 0;
+        int columns = 0;
+        std::pair<float, float> points;
+        std::optional<CellPixels> cell;
+        bool operator==(const PagesLayout&) const = default;
+    };
+    struct PagesWanted {
+        int first = 0;
+        int last = 0;
+        float scale = 0.0F;
+        bool operator==(const PagesWanted&) const = default;
+    };
+    Preview pages_;
+    bool pages_active_ = false;
+    std::optional<PagesLayout> pages_layout_;
+    std::optional<PagesWanted> pages_wanted_;
+    std::optional<CellPixels> sixel_cell_;
 };
 
 struct StatusLine {

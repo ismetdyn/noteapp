@@ -26,6 +26,7 @@ namespace {
 
 constexpr std::array<std::string_view, 3> kLanguages = {"auto", "tr", "en"};
 constexpr std::array<std::string_view, 3> kIconModes = {"auto", "nerd", "off"};
+constexpr std::array<std::string_view, 3> kPdfImageModes = {"auto", "sixel", "blocks"};
 
 bool is_valid_type(std::string_view type) {
     return !type.empty() && type.find('.') == std::string_view::npos;
@@ -396,6 +397,16 @@ void apply_update(Section& s, UpdateConfig& update) {
     s.warn_unknown();
 }
 
+void apply_tui(Section& s, TuiConfig& tui) {
+    if (auto v = s.string("pdf_image")) {
+        if (std::find(kPdfImageModes.begin(), kPdfImageModes.end(), *v) == kPdfImageModes.end())
+            s.invalid("pdf_image", "must_be_pdf_image");
+        else
+            tui.pdf_image = std::move(*v);
+    }
+    s.warn_unknown();
+}
+
 // Açık/kapalı ayarlar (apply_tuning'in sayısal ayarlarından ayrı).
 void apply_tuning_flags(Section& s, Tuning& tuning) {
     if (auto v = s.boolean("search_relations"))
@@ -670,6 +681,8 @@ void apply(const toml::table& root, Config& config, std::vector<Error>& warnings
         apply_lsp(*lsp, config.lsp);
     if (auto update = top.subsection("update"))
         apply_update(*update, config.update);
+    if (auto tui = top.subsection("tui"))
+        apply_tui(*tui, config.tui);
     if (auto tuning = top.subsection("tuning"))
         apply_tuning(*tuning, config.tuning);
     if (auto limits = top.subsection("limits"))
@@ -1035,6 +1048,8 @@ std::expected<void, Error> save_config(const Config& config) {
     const Config defaults = parse_config("").config;
     if (config.update != defaults.update)
         out << "\n[update]\ncheck_interval = " << limit_toml(config.update.check_interval.text) << "\n";
+    if (config.tui != defaults.tui)
+        out << "\n[tui]\npdf_image = " << quote(config.tui.pdf_image) << "\n";
     std::string tuning;
     for (const TuningKey& entry : tuning_keys()) {
         if (const std::string value = entry.text(config.tuning); value != entry.text(defaults.tuning))

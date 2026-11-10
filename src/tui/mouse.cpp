@@ -232,24 +232,28 @@ MouseResult continue_selection(const MouseInput& input, TuiState& state, const P
                                                                          : MouseResult::None;
 }
 
-void click_right(const MouseInput& input, TuiState& state, EditorSession& editor,
-                 const PaneGeometry& geometry) {
+MouseResult click_right(const MouseInput& input, TuiState& state, EditorSession& editor,
+                        const PaneGeometry& geometry) {
     if (state.focus() == Focus::Editor) {
         // İç boşluğa tıklama satır başıdır (numara sütunu gibi), yok sayılmaz.
         editor.click_at(std::max(input.x - geometry.right_x - kPaneContentX, 0), input.y - kFirstPaneRow);
-        return;
+        return MouseResult::None;
     }
     if (state.trash_view())
-        return;  // çöpteki not salt okunur gösterilir; tuşlar çöp listesinde kalır
+        return MouseResult::None;  // çöpteki not salt okunur gösterilir; tuşlar çöp listesinde kalır
     if (over_links(state, input.y)) {
         // İlk satır ayırıcıdır, tıklama bir şey yapmaz.
         if (const int row = input.y - links_first_row(state) - 1; row >= 0)
             state.click_link(static_cast<std::size_t>(row));
-        return;
+        return MouseResult::None;
     }
     state.focus_preview();
-    if (state.focus() == Focus::Preview)
-        begin_selection(input, state, geometry);
+    if (state.focus() != Focus::Preview)
+        return MouseResult::None;
+    if (state.pdf_page_view())
+        return MouseResult::PdfPageNoText;
+    begin_selection(input, state, geometry);
+    return MouseResult::None;
 }
 
 MouseResult handle_left_press(const MouseInput& input, TuiState& state, EditorSession& editor,
@@ -265,8 +269,7 @@ MouseResult handle_left_press(const MouseInput& input, TuiState& state, EditorSe
         return MouseResult::None;
     if (!over_right(input.x, geometry))
         return click_list(input, state, editor);
-    click_right(input, state, editor, geometry);
-    return MouseResult::None;
+    return click_right(input, state, editor, geometry);
 }
 
 }  // namespace

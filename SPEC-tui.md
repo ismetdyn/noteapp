@@ -341,23 +341,32 @@ Yeni komut yoktur, GUI etkilenmez.
 - **Kaynak:** sayfa pikselleri GUI ile aynı yoldan gelir (`app::PdfPreview::request_render`/`render`, işçi `Render`
   mesajı, `limits.pdf.render_pixels`, LRU `cache_pages`). Ölçek, sayfa panel genişliğini dolduracak şekilde hesaplanır.
   Yalnız görünen sayfalar ve bir sonraki istenir. Genişlik ya da hücre boyu değişince yeniden istenir.
-- **Düzen:** sayfalar alt alta, aralarında bugünkü `--- page N/M ---` ayırıcısı. Her sayfa, yüksekliği kadar satır
+- **Düzen:** sayfalar alt alta, aralarında bugünkü `--- page N/M ---` ayırıcısı. Her sayfa ilk sayfanın yüksekliği kadar satır
   kaplar; kaydırma bugünkü satır modeliyle aynıdır (`j/k`, `PgUp/PgDn`, `g/G`, tekerlek). Yüklenmeyen sayfa
   `Sayfa N yükleniyor…`, çizilemeyen sayfa nedenini gösterir (metin görünümüyle aynı iletiler).
 - **Çizim yöntemi, `[tui] pdf_image`** (`auto` | `sixel` | `blocks`, varsayılan `auto`):
   - `sixel`: sayfa sixel olarak çizilir; piksel boyu = sütun × hücre genişliği. Hücre piksel boyu terminalden okunur
-    (`TIOCGWINSZ` `ws_xpixel/ws_ypixel`, yoksa `CSI 16 t` yanıtı); ikisi de yoksa `blocks`a düşülür.
+    (`TIOCGWINSZ` `ws_xpixel/ws_ypixel` ÷ sütun/satır, pencere boyutu değişince yeniden); terminal sıfır bildirirse
+    `blocks`a düşülür. `CSI 16 t` sorulmaz: FTXUI'nin ayrıştırıcısı yanıtı tuş olayı yapar. Kodlayıcı
+    (`tui/sixel.*`): `ESC P 0;1;0 q`, `"1;1;G;Y` raster, sabit palet (6×6×6 küp + 24 gri, yalnız kullanılanlar
+    tanımlanır), `!n` tekrar.
   - `blocks`: her hücre `▀` ile iki dikey piksel (üst renk ön plan, alt renk arka plan), RGB renk; FTXUI terminalin
     renk derinliğine indirger. Her terminalde çalışır.
-  - `auto`: terminal DA1 yanıtında sixel (öznitelik 4) bildirirse `sixel`, değilse `blocks`. DA1'i FTXUI zaten
-    soruyor (`App::TerminalCapabilities()`); yeni sorgu yalnız hücre boyu için.
+  - `auto`: terminal DA1 yanıtında sixel (öznitelik 4; ilk değer sınıftır, sayılmaz) bildirir ve hücre boyu bilinirse
+    `sixel`, değilse `blocks`. DA1'i FTXUI zaten soruyor (`App::TerminalCapabilities()`); her çizimde çözülür, geç
+    gelen yanıt sonraki çizimde geçerlidir.
 - **Sixel ekranla uyumu:** görüntünün altındaki hücreler FTXUI ekranında boş kalır, sixel kare yazımının sonunda
   hücre konumuna basılır (`FrameDiff`). Görüntü kırpılarak yalnız görünen satırlar basılır. Görüntü alanına düşen bir
   hücre o karede yazıldıysa (diyalog açıldı/kapandı, kaydırma, yeniden boyama) görüntü yeniden basılır; değişmeyen
-  karede basılmaz. Diyalog ve menüler görüntünün üstünde görünür.
+  karede basılmaz. Diyalog ve menüler görüntünün üstünde görünür: görüntü sütunlarında bir hücresine herhangi bir öğe
+  dokunmuş satır (diyalog, bildirim; `clear_under` boşluğu da) basılmaz, o satırda görüntünün eski pikselleri kalır.
+  Görüntü ekranın son iki satırına inmez (sixel bitince imleç görüntünün altına iner; 6 piksellik bant bir satır
+  daha tutabilir, terminal kaydırmasın). Kalkan ya da yer değiştiren görüntünün hücreleri yeniden yazılır, terminalde
+  pikseli kalmaz. Sixel'den sonra imleç mutlak konumla yerleştirilir.
 - **Seçim:** sayfa görünümünde fare seçimi ve `c` yoktur (metin değil); bildirim metin görünümüne (`R`) yönlendirir.
   Arama (`/`) metin görünümünde çalışır.
-- **Windows:** aynı kural; Windows Terminal 1.22+ DA1'de sixel bildirir. Wine'da yalnız birim testleri koşar.
+- **Windows:** konsol hücre piksel boyu vermez: `auto` ve `sixel` `blocks` çizer (Windows Terminal 1.22+ DA1'de sixel
+  bildirse de). Wine'da yalnız birim testleri koşar.
 
 ## Bağlantı bölümü
 

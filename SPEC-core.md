@@ -137,6 +137,9 @@ author_email = ""
 [update]                 # TUI ve GUI ayar ekranında da; SPEC-tui / SPEC-gui "Güncelleme"
 check_interval = "24h"   # açılış denetiminin en kısa aralığı; 0 = kapalı, 0 < x < 1h reddedilir
 
+[tui]
+pdf_image = "auto"       # auto | sixel | blocks; PDF sayfa görünümünün çizimi, SPEC-tui "PDF sayfa görüntüsü (TPI)"
+
 [lsp]                    # yalnız TUI; davranış ve varsayılan sunucular SPEC-tui "Dil sunucusu (LSP)"
 enabled = true
 [lsp.servers]            # LSP languageId → kabuksuz argv ya da argv listesi; kullanıcının girdileri tek tek üstüne biner

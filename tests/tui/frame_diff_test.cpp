@@ -1,4 +1,5 @@
 #include "tui/frame_diff.hpp"
+#include "tui/sixel.hpp"
 
 #include <array>
 #include <charconv>
@@ -6,6 +7,7 @@
 #include <doctest/doctest.h>
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/screen/string.hpp>
+#include <memory>
 #include <random>
 #include <string>
 #include <string_view>
@@ -465,4 +467,116 @@ TEST_CASE("replacing a wide glyph with narrow ones redraws its right half") {
     terminal.feed("\x1B[1;2H漢");
     terminal.feed(output);
     CHECK(terminal.dump() == full_frame(screen));
+}
+
+namespace {
+
+// 4x3 hücrelik siyah sayfa, hücre 1x2 piksel: sixel baytları küçük kalır.
+constexpr noteapp::tui::CellPixels kTinyCell{.width = 1, .height = 2};
+
+noteapp::tui::SixelImage black_image(int x, int y, int rows) {
+    auto page = std::make_shared<noteapp::pdfview::RenderedPage>();
+    page->width = 4;
+    page->height = 6;
+    page->rgba.assign(static_cast<std::size_t>(4 * 6 * 4), 0);
+    for (std::size_t i = 3; i < page->rgba.size(); i += 4)
+        page->rgba[i] = 255;
+    return {.pixels = std::move(page), .cell = kTinyCell, .x = x, .y = y, .columns = 4, .rows = rows,
+            .first_row = 0};
+}
+
+// Görüntünün `first`. hücre satırından `rows` satırın sixel'i.
+std::string sixel_rows(const noteapp::tui::SixelImage& image, int first, int rows) {
+    return noteapp::tui::encode_sixel(*image.pixels, first * kTinyCell.height, rows * kTinyCell.height,
+                                      image.columns * kTinyCell.width);
+}
+
+std::size_t count_of(std::string_view text, std::string_view needle) {
+    std::size_t count = 0;
+    for (std::size_t at = text.find(needle); at != std::string_view::npos; at = text.find(needle, at + 1))
+        ++count;
+    return count;
+}
+
+}  // namespace
+
+TEST_CASE("a sixel image is drawn at its cell after the cells, once; an unchanged frame writes nothing") {
+    auto screen = blank_screen(10, 8);
+    const std::vector images{black_image(2, 1, 3)};
+    noteapp::tui::FrameDiff diff;
+    std::string output;
+    diff.write(screen, true, output, images);
+    CHECK(output.find("\x1B[2;3H" + sixel_rows(images[0], 0, 3)) != std::string::npos);
+    CHECK(count_of(output, "\x1BP") == 1);
+    output.clear();
+    diff.write(screen, false, output, images);
+    CHECK(output.empty());
+}
+
+TEST_CASE("after a sixel image the cursor is placed with an absolute move") {
+    auto screen = blank_screen(10, 8);
+    screen.SetCursor({.x = 5, .y = 7, .shape = ftxui::Screen::Cursor::Bar});
+    const std::vector images{black_image(2, 1, 3)};
+    noteapp::tui::FrameDiff diff;
+    std::string output;
+    diff.write(screen, true, output, images);
+    const std::string sixel = sixel_rows(images[0], 0, 3);
+    const std::size_t end = output.find(sixel);
+    REQUIRE(end != std::string::npos);
+    CHECK(output.substr(end + sixel.size()).starts_with("\x1B[8;6H"));
+}
+
+TEST_CASE("a cell written over the image redraws it without the rows the overlay covers") {
+    auto screen = blank_screen(10, 8);
+    const std::vector images{black_image(2, 1, 3)};
+    noteapp::tui::FrameDiff diff;
+    std::string output;
+    diff.write(screen, true, output, images);
+
+    output.clear();
+    screen.CellAt(3, 2).character = "x";  // diyalog görüntünün ikinci satırında
+    diff.write(screen, false, output, images);
+    CHECK(output.find('x') != std::string::npos);
+    CHECK(count_of(output, "\x1BP") == 2);  // üst ve alt satır ayrı, ortadaki diyalogun
+    CHECK(output.find("\x1B[2;3H" + sixel_rows(images[0], 0, 1)) != std::string::npos);
+    CHECK(output.find("\x1B[4;3H" + sixel_rows(images[0], 2, 1)) != std::string::npos);
+    CHECK(output.find('x') < output.find("\x1BP"));  // hücreler önce: görüntü onların üstüne değil yanına
+
+    output.clear();
+    diff.write(screen, false, output, images);  // diyalog yerinde: basılmaz
+    CHECK(output.empty());
+
+    output.clear();
+    screen.CellAt(3, 2) = ftxui::Cell{};  // diyalog kapandı
+    diff.write(screen, false, output, images);
+    CHECK(count_of(output, "\x1BP") == 1);
+    CHECK(output.find("\x1B[2;3H" + sixel_rows(images[0], 0, 3)) != std::string::npos);
+}
+
+TEST_CASE("a moved image is drawn at its new place and the cells it left are rewritten") {
+    auto screen = blank_screen(10, 8);
+    noteapp::tui::FrameDiff diff;
+    std::string output;
+    diff.write(screen, true, output, std::vector{black_image(2, 1, 3)});
+
+    output.clear();
+    const std::vector moved{black_image(2, 2, 3)};
+    diff.write(screen, false, output, moved);
+    CHECK(output.find("\x1B[2;3H    ") != std::string::npos);  // eski alanın pikselleri boşlukla silinir
+    CHECK(output.find("\x1B[3;3H" + sixel_rows(moved[0], 0, 3)) != std::string::npos);
+
+    output.clear();
+    diff.write(screen, false, output);  // görüntü kalktı (metin görünümü)
+    CHECK(output.find("\x1BP") == std::string::npos);
+    CHECK(output.find("\x1B[3;3H    \x1B[4;3H    \x1B[5;3H    ") != std::string::npos);
+}
+
+TEST_CASE("a sixel image stays off the last two rows so the terminal never scrolls") {
+    auto screen = blank_screen(10, 8);
+    const std::vector images{black_image(2, 5, 3)};
+    noteapp::tui::FrameDiff diff;
+    std::string output;
+    diff.write(screen, true, output, images);
+    CHECK(count_of(output, "\x1BP") == 1);
+    CHECK(output.find("\x1B[6;3H" + sixel_rows(images[0], 0, 1)) != std::string::npos);
 }

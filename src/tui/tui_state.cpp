@@ -1948,7 +1948,10 @@ void TuiState::toggle_links() {
 }
 
 void TuiState::toggle_review_view() {
-    review_rendered_ = !review_rendered_;
+    if (preview_pdf_)
+        pdf_pages_ = !pdf_pages_;
+    else
+        review_rendered_ = !review_rendered_;
     wiki_link_.reset();  // görünüm değişti: satır ve bayt eski metne ait
 }
 
@@ -1964,9 +1967,12 @@ void TuiState::scroll_half_page(int direction) {
     scroll_preview(direction * (static_cast<int>(page_rows()) / 2));
 }
 
-void TuiState::begin_preview_find() {
+Intent TuiState::begin_preview_find() {
+    if (pdf_page_view())
+        return Intent::PdfPageNoText;
     preview_find_.clear();
     focus_ = Focus::PreviewFind;
+    return Intent::None;
 }
 
 void TuiState::find_step(bool forward) {
