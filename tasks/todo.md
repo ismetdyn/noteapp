@@ -581,7 +581,7 @@ Kararlar: kütüphane MuPDF (AGPL-3.0; GPL-3.0-or-later ile birleşir, paket lis
   Karar (kullanıcı 2026-11-09): PDF ayrıştırma ayrı, öldürülebilir süreçte (yardımcı süreç); süre/iptal = süreci öldür, MuPDF bellek hatası uygulamayı çökertmez. AppImage boyut artışı (~+7,5 MB) kabul. Tasarım: cpp-architect → PDF1b.
 - [x] PDF1b yardımcı süreç yalıtımı (Depends: PDF1, mimari tasarım).
   Kanıt: merge 81e4bd7; Linux 20/20 (pdfview 40 test), pdfview 20× yük altında, ASan/UBSan (F2 öncesi), Wine 17/17 (F2'de); kill sınırlı fixture'lar (fan-out, ObjStm /N, link lookup) kill kapalıyken 120 sn timeout; 5 ebeveyn denetimi mutasyonla düşüyor; cpp + security review. ADR 0002.
-- [ ] PDF-SBX yardımcı süreç sandbox'ı (ADR 0002): Linux seccomp/Landlock, Windows kısıtlı token + job sınırları, env allowlist, devralınan fd kapatma (`core/log.cpp:99`, `tui/main.cpp:391` CLOEXEC'siz ofstream). PDF2/PDF3 senkronla gelen PDF'i otomatik açmadan önce.
+- [x] PDF-SBX → KI-3 yardımcı süreç sandbox'ı (ADR 0002): Linux seccomp/Landlock, Windows kısıtlı token + job sınırları, env allowlist, devralınan fd kapatma (`core/log.cpp:99`, `tui/main.cpp:391` CLOEXEC'siz ofstream). PDF2/PDF3 senkronla gelen PDF'i otomatik açmadan önce.
 - [ ] PDF2 CLI + arama: `note show` PDF metni; içerik dizini PDF metnini indeksler (sınırlı).
 - [x] PDF3 GUI + TUI önizleme: GUI sayfa görüntüleri (ImGui doku, tembel çizim, önbellek sınırı), TUI metin görünümü; belgeler.
 - [x] PDF4 security-reviewer (güvenilmeyen PDF ayrıştırma) + bağımsız review.
@@ -629,13 +629,14 @@ Spec: SPEC-tui.md "PDF sayfa görüntüsü (TPI)". Sıralı tek yazar (aynı dos
   Scope: src/gui/view_editor.cpp, src/tui/**, src/app/pdf_preview.*, tests/tui/**, tests/gui/**, SPEC-tui.md, SPEC-gui.md
   Acceptance: her bulgu için düşen-sonra-geçen test (görsel 2 piksel bulgusu hariç); `notes --version` → `notes 0.1.5`. Verify: `ctest -R "^(tui|gui)$"` exit 0.
   Kanıt: 0973146+ff9aea8 → main 238cac0; `ctest -j2 -R "^(tui|tui_pty|gui|app)$"` exit 0 (RED 8 yeni test); 4 ve 6 atlandı (4: 10000 sayfada 193–266 ms, basit değil); review engelleyici yok.
-- [ ] KI-3 PDF-SBX (ADR 0002): plan `tasks/plan-sbx.md` (kullanıcı 5 kararı kabul etti 2026-11-10).
+- [x] KI-3 PDF-SBX (ADR 0002, 0003): plan `tasks/plan-sbx.md` (kullanıcı 5 kararı kabul etti 2026-11-10).
   - [x] SBX-T1 Linux seccomp + ortak sözleşme (plan-sbx T1).
     Kanıt: 2b1e171 + review düzeltmesi 5493e6a; RED 15 negatif probe `1 == 159`, core sınırı, mmap_shared/growsdown/early_thread; `ctest -j2 -R "^(pdfview|pdfview_link_check|core|app|tui|cli|gui)$"` exit 0 7/7; strace Fedora glibc 2.44 + Ubuntu 2.39/2.43 SIGSYS 0; security-reviewer engelleyici yok; Wine pdfview+app 2/2. ASan koşulmadı (T3'te not).
   - [x] SBX-T2 Windows Low IL + job (plan-sbx T2). Depends: SBX-T1
     Kanıt: dba6282 + review düzeltmesi f13a7f5; RED Wine ortam ~55 değişken, admin_sid `attributes 15`; Wine `ctest -R '^(pdfview|pdfview_win11|core|app)$'` exit 0 (pdfview_win11 Disabled), Linux `pdfview|core` exit 0; security-reviewer engelleyici yok. Win11 elle: scratchpad `win11-pdf-sandbox-check.zip` (kullanıcı).
     Açık: ebeveyn UI limitsiz atanamayan bir job içindeyse işçi başlamaz (fail-closed, `step=job`); Win11 denemesi gösterirse `CREATE_BREAKAWAY_FROM_JOB` yedeği.
-  - [ ] SBX-T3 ADR 0003 + belgeler + security-reviewer. Depends: SBX-T1, SBX-T2
+  - [x] SBX-T3 ADR 0003 + belgeler + security-reviewer. Depends: SBX-T1, SBX-T2
+    Kanıt: `.engineering/adr/0003-pdf-worker-sandbox.md` (yeni), `.engineering/adr/0002-pdf-worker-boundary.md` (durum), `SPEC-core.md`, `README.md`, `tasks/todo.md`; belge işi, komut koşulmadı; security-reviewer çağrısı lidde.
 - [x] KI-4 Temizlik: eski worktree'ler ve build volume'leri (kullanıcı onayıyla).
   Kanıt (2026-11-10): 18 worktree kaldırıldı (dallar duruyor), 27 volume silindi; `df /` 206G → 129G kullanılan.
 

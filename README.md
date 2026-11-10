@@ -138,6 +138,9 @@ Ayrıntı: [SPEC-gui.md](SPEC-gui.md).
   `%LOCALAPPDATA%\noteapp\`). `NOTEAPP_HOME` ayarlıysa config/state/data onun altına gider (izole deneme ortamı).
   Sınırlar `limits.*` anahtarlarıyla ayarlanır, `0` sınırsız demektir.
 
+- **PDF güvenliği:** PDF'i ayrı bir yardımcı süreç ayrıştırır; Linux'ta kum havuzunda (seccomp), Windows'ta kısıtlı
+  token ve iş nesnesiyle çalışır. Windows'ta okuma ve ağ açık kalır: [ADR 0003](.engineering/adr/0003-pdf-worker-sandbox.md).
+
 ## Belgeler
 
 [SPEC.md](SPEC.md) (harita, teknoloji, sözleşmeler) · [core](SPEC-core.md) · [graph](SPEC-graph.md) ·

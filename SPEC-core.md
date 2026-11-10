@@ -278,7 +278,7 @@ config'tedir.
   yürüyen biter; çizilmiş sayfalar `cache_pages` ile LRU, metinler düşmez (sayfa sayısı x `text_bytes`); hatalı sayfa
   (süre dolması dahil) hatırlanır. Her sonuçta `on_change` (veri taşımaz, UpdateWorker gibi); yıkıcı yürüyen çağrıyı
   keser (işçi ~50 ms'de öldürülür) ve bekler. Senkronla gelen PDF otomatik açılmaz: önizleme yalnız kullanıcının
-  gösterdiği nottadır, arama dizini PDF-SBX'i bekler.
+  gösterdiği nottadır; arama dizinine PDF metni henüz girmez.
 - **PDF yardımcı süreci (PDF1b, kullanıcı kararı 2026-11-09):** MuPDF'in güvenilmez girdide kesilemeyen döngüleri var
   (xref onarımı, bağlantı hedefinin yavaş sayfa araması, Form XObject çoğalması); döngü döngü yamalamak yerine
   ayrıştırma ayrı süreçtedir. `pdfview::PdfDocument` (MuPDF'siz `noteapp_pdfview`) belge başına bir uzun ömürlü
@@ -298,7 +298,8 @@ config'tedir.
   bağlamaz (ctest `pdfview_link_check`). İşçinin yolu API'de açık parametredir; ön yüzler
   `core::note_executable_beside_self()` verir. Geliştirme ağacında `notes`/`notes-gui` `note`'u kendi dizininde
   bulamazsa PDF açılamaz (`error.process_not_found`); otomatik senkronla aynı durum, kurulu pakette yoktur.
-  **Kum havuzu (PDF-SBX T1, Linux x86_64):** `core::ChildProcess::start_confined` işçiyi boş ortamla başlatır (ebeveynde
+  **Kum havuzu (PDF-SBX, karar ve kalan riskler: `.engineering/adr/0003-pdf-worker-sandbox.md`).**
+  **Linux x86_64:** `core::ChildProcess::start_confined` işçiyi boş ortamla başlatır (ebeveynde
   kurulur; hiçbir değişken geçmez) ve ilk bayt yazılmadan `RLIMIT_CORE = 0` (hep; SIGSYS'le ölen işçi PDF'li
   belleğini dökmesin) ile `RLIMIT_DATA = worker_memory` koyar (yumuşak = sert; 0 sınırsız; biri konamazsa çocuk
   öldürülür, başlatma başarısız). İşçi (`pdfview/engine/sandbox.hpp`) tek bayt okumadan 3
@@ -312,7 +313,7 @@ config'tedir.
   Kurulamazsa işçi 6 ile çıkar, PDF açılmaz (fail-closed, kullanıcı kararı 2026-11-10); başka Linux mimarisinde de 6.
   ASan derlemesinde bellek sınırı konmaz (gölge bellek `RLIMIT_DATA`'ya sayılır) ve işçi `_exit` ile çıkar (LSan
   taraması filtreye takılmasın).
-  **Kum havuzu (PDF-SBX T2, Windows):** `start_confined` işçiyi `CreateProcessAsUserW` ile kendi belirtecimizin
+  **Windows:** `start_confined` işçiyi `CreateProcessAsUserW` ile kendi belirtecimizin
   `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE)` kopyasıyla (BUILTIN\Administrators yalnız deny-only: yönetici olarak
   çalışan ebeveynin işçisi yöneticinin okuyabildiği dosyaları okuyamaz), düşük bütünlükte (S-1-16-4096), konsolsuz
   (`DETACHED_PROCESS`), askıda ve yalnız stdin/stdout/NUL tutamaçlarını devrederek başlatır; azaltımlar

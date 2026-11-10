@@ -1,6 +1,6 @@
 # ADR 0002 — PDF işçisinin sınırı: askıya ve çöküşe karşı, yetkiye karşı değil
 
-- Durum: kabul edildi (2026-11-09)
+- Durum: yerini [ADR 0003](0003-pdf-worker-sandbox.md) aldı (kabul edilmişti: 2026-11-09)
 - Kapsam: `src/pdfview/pdf_document.cpp` (istemci), `src/pdfview/engine/worker.cpp` (`note __pdf-worker`),
   `src/core/child_process.cpp` (başlatma); tasarım SPEC-core.md "PDF yardımcı süreci"
 
