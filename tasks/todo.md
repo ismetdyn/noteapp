@@ -583,8 +583,9 @@ Kararlar: kütüphane MuPDF (AGPL-3.0; GPL-3.0-or-later ile birleşir, paket lis
   Kanıt: merge 81e4bd7; Linux 20/20 (pdfview 40 test), pdfview 20× yük altında, ASan/UBSan (F2 öncesi), Wine 17/17 (F2'de); kill sınırlı fixture'lar (fan-out, ObjStm /N, link lookup) kill kapalıyken 120 sn timeout; 5 ebeveyn denetimi mutasyonla düşüyor; cpp + security review. ADR 0002.
 - [ ] PDF-SBX yardımcı süreç sandbox'ı (ADR 0002): Linux seccomp/Landlock, Windows kısıtlı token + job sınırları, env allowlist, devralınan fd kapatma (`core/log.cpp:99`, `tui/main.cpp:391` CLOEXEC'siz ofstream). PDF2/PDF3 senkronla gelen PDF'i otomatik açmadan önce.
 - [ ] PDF2 CLI + arama: `note show` PDF metni; içerik dizini PDF metnini indeksler (sınırlı).
-- [ ] PDF3 GUI + TUI önizleme: GUI sayfa görüntüleri (ImGui doku, tembel çizim, önbellek sınırı), TUI metin görünümü; belgeler.
-- [ ] PDF4 security-reviewer (güvenilmeyen PDF ayrıştırma) + bağımsız review.
+- [x] PDF3 GUI + TUI önizleme: GUI sayfa görüntüleri (ImGui doku, tembel çizim, önbellek sınırı), TUI metin görünümü; belgeler.
+- [x] PDF4 security-reviewer (güvenilmeyen PDF ayrıştırma) + bağımsız review.
+  Kanıt: PDF3 0901acb (önizleme CLI/TUI/GUI), PDF4 200b25b ("harden structured PDF text after the security review").
 
 ## V14 — Biçimli PDF, seçim, tam ekran (kullanıcı onayı 2026-11-09)
 Kaynak: kullanıcı v0.1.3 sonrası ("tui'de pdf düz metin, format bozuk"; "fullscreen kısayol/buton"; "gui'de metin seçimi yok"; "pdf'te text selection"). Denetim: Explore raporu (pane.zoom düzenleyicide yok, GUI önizleme seçimsiz, PDF stext düzleştiriliyor).
@@ -618,3 +619,17 @@ Spec: SPEC-tui.md "PDF sayfa görüntüsü (TPI)". Sıralı tek yazar (aynı dos
 ## Backlog — TPI-B (1d52f95) review Low bulguları
 - [ ] Sixel her yeniden basımda yeniden kodlanıyor (`src/tui/frame_diff.cpp:245`), önbellek yok; alana düşen bildirim süresince tam sayfa (yüzlerce KB) yeniden gönderilir. Ölçülürse görüntü+kırpma anahtarlı önbellek.
 - [ ] Hücre boyu tamsayı bölmeyle (`src/tui/main.cpp:822-828`); sayfa kenarında birkaç piksel boşluk (görsel).
+
+## KI — Kalan işler (kullanıcı 2026-11-10: "kalan işleri hallet")
+- [ ] KI-1 GUI paket hataları: (a) terminalden `notes-gui` → `libgvfscommon.so: undefined symbol: g_variant_builder_init_static` / `Failed to load module .../gio/modules/libgvfsdbus.so` (AppImage'daki glib, host gio modüllerini yüklüyor); (b) GNOME dock'ta ikon yerine çark (Wayland app_id ↔ `noteapp.desktop` eşleşmesi).
+  Scope: packaging/**, docker/appimage.Containerfile, scripts/build-appimage.sh, scripts/install-local.sh, src/gui/** (yalnız app_id/metadata), SPEC-gui.md
+  Acceptance: AppImage'dan `notes-gui` stderr'de gio/gvfs hatası yok; pencerenin Wayland app_id'si ve X11 WM_CLASS'ı `noteapp`; masaüstü dosyasında `StartupWMClass=noteapp`. Verify: AppImage derlemesi exit 0 + app_id testi/kanıtı.
+- [ ] KI-2 Küçük bulgular: Backlog GUI kopyala-bırakınca (2) + TPI-A (2) + TPI-B (2) + `notes --version` (ve `notes-gui --version`, `note --version` ile aynı biçim).
+  Scope: src/gui/view_editor.cpp, src/tui/**, src/app/pdf_preview.*, tests/tui/**, tests/gui/**, SPEC-tui.md, SPEC-gui.md
+  Acceptance: her bulgu için düşen-sonra-geçen test (görsel 2 piksel bulgusu hariç); `notes --version` → `notes 0.1.5`. Verify: `ctest -R "^(tui|gui)$"` exit 0.
+- [ ] KI-3 PDF-SBX (ADR 0002): plan `tasks/plan-sbx.md` (kullanıcı 5 kararı kabul etti 2026-11-10).
+  - [ ] SBX-T1 Linux seccomp + ortak sözleşme (plan-sbx T1).
+  - [ ] SBX-T2 Windows Low IL + job (plan-sbx T2). Depends: SBX-T1
+  - [ ] SBX-T3 ADR 0003 + belgeler + security-reviewer. Depends: SBX-T1, SBX-T2
+- [x] KI-4 Temizlik: eski worktree'ler ve build volume'leri (kullanıcı onayıyla).
+  Kanıt (2026-11-10): 18 worktree kaldırıldı (dallar duruyor), 27 volume silindi; `df /` 206G → 129G kullanılan.
