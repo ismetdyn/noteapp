@@ -643,3 +643,8 @@ Spec: SPEC-tui.md "PDF sayfa görüntüsü (TPI)". Sıralı tek yazar (aynı dos
 ## Backlog — KI-1 review Low bulguları
 - [ ] İç içe başlatma (`packaging/linux/AppRun:68-77`): ortamı geri almamış bir süreçten (SDL'in `xdg-open`'ı) yeni notes-gui açılırsa kullanıcının asıl `GIO_MODULE_DIR` değeri kaybolur; çocuklar gvfs/dconf'suz. Ucuz koruma: işaret zaten varsa üzerine yazma.
 - [ ] `SDL_OpenURL` (`src/gui/view_dialogs.cpp:112`) `xdg-open`'ı boş GIO modül diziniyle başlatır (bilinçli, AppRun'da yazılı).
+
+## Backlog — SBX son güvenlik kontrolü (2026-11-11)
+- [ ] Win11 probe `cred_read`: düşük bütünlüklü işçi `CredReadW` ile senkron token'ını okuyabiliyor mu (`src/sync/auth.cpp:92`); okuyabiliyorsa ADR 0003 + SPEC-core'a "okuyabilir" yaz ve AppContainer önceliğini yükselt.
+- [ ] Windows işçisinde WER dökümü: `WerAddExcludedApplication` / `SetErrorMode` ile çökme dökümünü kapat (Linux `RLIMIT_CORE 0` karşılığı).
+- [ ] İç içe iş nesnesi: Win11 denemesi PDF'in açılmadığını gösterirse `CREATE_BREAKAWAY_FROM_JOB` yedeği.

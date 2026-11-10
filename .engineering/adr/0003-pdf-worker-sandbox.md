@@ -73,7 +73,12 @@ Bütün kısıtlar ebeveynin ilk bayt yazmasından önce kurulur. Biri kurulamaz
   ölçmeyi gerektirir.
 - **Sanitizer derlemeleri ölçülmedi.** ASan/LSan'da bellek sınırı konmaz (gölge bellek `RLIMIT_DATA`'ya sayılır) ve
   işçi `_exit` ile çıkar; o derlemelerde filtre doğrulanmadı.
-- Hâlâ geçerli: MuPDF güncel tutulmalı; Windows ve Linux dışı mimaride (x86_64 olmayan Linux) PDF açılmaz.
+- **Doğrulanmadı (Windows): senkron token'ı.** Token Windows Kimlik Bilgisi Yöneticisi'nde (`src/sync/auth.cpp:92`);
+  düşük bütünlüklü işçinin `CredReadW` ile okuyup okuyamadığı Win11'de ölçülmedi. Okuyabiliyorsa işçi token'a ulaşır.
+- **Doğrulanmadı (Windows): çökme dökümü.** Linux'taki `RLIMIT_CORE 0` karşılığı yok (WER dışlaması yok); LocalDumps ya
+  da WER yüklemesi açıksa çöken işçinin dökümü PDF baytlarını taşıyabilir.
+- Hâlâ geçerli: MuPDF güncel tutulmalı; Linux x86_64 ve Windows dışında (diğer POSIX'ler, x86_64 olmayan Linux) PDF
+  açılmaz.
 
 ## Yeniden değerlendirme koşulu
 

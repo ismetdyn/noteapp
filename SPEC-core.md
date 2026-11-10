@@ -325,6 +325,8 @@ config'tedir.
   bir iş nesnesinin içinde başlatıldıysa atama başarısız olur, PDF açılmaz (`step=job`). win32k kapatma yok: `note.exe` user32/gdi32'yi doğrudan içe aktarmasa da shell32 ve ole32
   üzerinden yükler (ayrı işçi exe'si backlog'da). Düşük bütünlük yalnız **yazmayı** keser: işçi kullanıcının
   dosyalarını okuyabilir ve ağa çıkabilir (AppContainer geniş dağıtımdan önce, kullanıcı kararı 2026-11-10).
+  Win11'de ölçülmedi: işçinin Kimlik Bilgisi Yöneticisi'ndeki senkron token'ını `CredReadW` ile okuyup okuyamadığı ve
+  çökme dökümünün (WER) PDF baytlarını taşıyıp taşımadığı (ADR 0003 "Kalan riskler").
   Wine bu denetimlerden ortamın süzülmesini ve Administrators'ın deny-only olmasını sınar; iş nesnesinin süreç ve
   bellek sınırını, bütünlük düzeyini, yazma reddini ve `PROHIBIT_DYNAMIC_CODE`'u uygulamaz. Onlar doctest
   `manual-win11` takımında, ctest `pdfview_win11` (etiket `manual-win11`; çapraz derlemede Disabled) olarak gerçek
