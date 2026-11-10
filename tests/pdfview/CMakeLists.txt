@@ -4,7 +4,8 @@ noteapp_add_test(pdfview
     page_text_test.cpp
     pdf_document_test.cpp
     pdf_engine_test.cpp
-    protocol_test.cpp)
+    protocol_test.cpp
+    sandbox_test.cpp)
 # Fixture PDF'leri testte üretilir (depoda ikili dosya yok, fixtures.hpp). Motor testleri MuPDF'i süreç içinde
 # (noteapp_pdfengine), istemci testleri gerçek `note __pdf-worker`'ı ve bozuk davranan sahte işçiyi alt süreçte
 # çalıştırır. Flate için MuPDF'in Z_PREFIX'li zlib'i; FZ_ERROR_* sabitleri için MuPDF başlıkları.
@@ -17,6 +18,15 @@ noteapp_target_defaults(fake_pdf_worker)
 add_dependencies(pdfview_tests note fake_pdf_worker)
 target_compile_definitions(pdfview_tests PRIVATE NOTEAPP_NOTE_EXE="$<TARGET_FILE:note>"
                                                  NOTEAPP_FAKE_PDF_WORKER="$<TARGET_FILE:fake_pdf_worker>")
+
+# PDF-SBX kum havuzu probu: işçinin enter_sandbox()'ından sonra tek bir sistem çağrısı dener (sandbox_test.cpp).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(pdf_sandbox_probe ${PROJECT_SOURCE_DIR}/tests/support/pdf_sandbox_probe.cpp)
+    target_link_libraries(pdf_sandbox_probe PRIVATE noteapp_pdfengine)
+    noteapp_target_defaults(pdf_sandbox_probe)
+    add_dependencies(pdfview_tests pdf_sandbox_probe)
+    target_compile_definitions(pdfview_tests PRIVATE NOTEAPP_PDF_SANDBOX_PROBE="$<TARGET_FILE:pdf_sandbox_probe>")
+endif()
 
 # Bağlama sınırı: MuPDF yalnız `note`'ta (PDF işçisi); TUI (`notes`) ve GUI (`notes-gui`) onu bağlamaz. Pozitif
 # denetimler: `note`'ta MuPDF'in bağlam kurucusu var (yoksa sembol adı değişmiş), her ikilide `main` var (dosya yok,

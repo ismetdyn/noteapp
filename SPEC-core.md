@@ -267,7 +267,8 @@ config'tedir.
 - **PDF okuma (PDF1):** `[limits.pdf]` güvenilmez PDF'in (senkronla gelir) sınırlarıdır, okuyan `pdfview::PdfDocument`:
   `pages` (10.000; fazlası olan belge açılmaz), `render_pixels` (16.777.216; sayfa başına çizilen piksel, aşan
   yakınlaştırma çizilmez), `text_bytes` (1 MiB; sayfa başına çıkarılan metin), `context_memory` (512 MiB; belge
-  başına MuPDF bellek bütçesi), `duration` (10 sn; açılış ve sayfa başına metin çıkarma/çizim süresi, dolunca iş kesilir). Aşım
+  başına MuPDF bellek bütçesi), `worker_memory` (1 GiB; PDF-SBX, işçi sürecinin OS bellek sınırı, Linux'ta
+  `RLIMIT_DATA`; `context_memory`den büyük olmalı, aşılınca sayfa açılmaz), `duration` (10 sn; açılış ve sayfa başına metin çıkarma/çizim süresi, dolunca iş kesilir). Aşım
   kesilmiş sonuç değil `LimitExceeded` hatasıdır; 0 sınırsız, riski defaults.toml'da. `cache_pages` (32; PDF3)
   önizlemenin bellekte tuttuğu çizilmiş sayfa sayısıdır (`app::PdfPreview`, GUI dokuları; görünen sayfalar sayılmaz).
 - **PDF önizleme (PDF3, `app/pdf_preview.*`):** üç arayüzün ortak katmanı. `app::is_pdf_type` (uzantı `pdf`, büyük/küçük
@@ -296,12 +297,23 @@ config'tedir.
   KILL_ON_JOB_CLOSE iş nesnesi. MuPDF'i yalnız `note` bağlar (`noteapp_pdfengine`); `notes` ve `notes-gui`
   bağlamaz (ctest `pdfview_link_check`). İşçinin yolu API'de açık parametredir; ön yüzler
   `core::note_executable_beside_self()` verir. Geliştirme ağacında `notes`/`notes-gui` `note`'u kendi dizininde
-  bulamazsa PDF açılamaz (`error.process_not_found`); otomatik senkronla aynı durum, kurulu pakette yoktur. OS
-  bellek sınırı (rlimit, iş nesnesi) ertelendi: bellek `context_memory` bütçesiyle sınırlıdır. **Yetki sınırı
-  değildir** (ADR 0002): işçi kum havuzunda değildir, kullanıcının hesabıyla ve ebeveynin ortamıyla (senkron token'ı
-  ve AppImage değişkenleri düşer) çalışır. Ayrı süreç askıda kalmayı ve çöküşü sınırlar; MuPDF'te kod çalıştıran bir
-  PDF `~/.ssh`'i, kimlik bilgilerini, `/proc/<ebeveyn>/environ`'u okuyabilir ve not deposunu değiştirebilir. OS kum
-  havuzu, ortam allowlist'i ve devralınan fd'lerin kapatılması ertelenmiş işlerdir.
+  bulamazsa PDF açılamaz (`error.process_not_found`); otomatik senkronla aynı durum, kurulu pakette yoktur.
+  **Kum havuzu (PDF-SBX T1, Linux x86_64):** `core::ChildProcess::start_confined` işçiyi boş ortamla başlatır (ebeveynde
+  kurulur; hiçbir değişken geçmez) ve ilk bayt yazılmadan `RLIMIT_CORE = 0` (hep; SIGSYS'le ölen işçi PDF'li
+  belleğini dökmesin) ile `RLIMIT_DATA = worker_memory` koyar (yumuşak = sert; 0 sınırsız; biri konamazsa çocuk
+  öldürülür, başlatma başarısız). İşçi (`pdfview/engine/sandbox.hpp`) tek bayt okumadan 3
+  ve üstü fd'leri kapatır, stdin/stdout'a sabit tampon verir (glibc yol alan `newfstatat` çağırmasın), NO_NEW_PRIVS
+  ve seccomp-bpf izin listesini TSYNC ile (her iş parçacığına) kurar. Mimari x86_64 değilse, x32 ise ya da çağrı
+  listede yoksa süreç SIGSYS'le ölür
+  (ebeveyn `exit_code=159` loglar, kullanıcı `pdf_invalid` görür). Liste strace ile ölçüldü, gerekçeleri
+  `sandbox.cpp`'de; dosya, ağ, süreç oluşturma, sinyal gönderme ve ptrace çağrısı içermez; `mmap`/`mprotect` yalnız
+  PROT_EXEC'siz, `mmap` ayrıca MAP_SHARED ve MAP_GROWSDOWN'suz (o eşlemeler `RLIMIT_DATA`'ya sayılmaz),
+  `clone` yalnız CLONE_THREAD ile (öksüz denetimi iş parçacığı), `clone3` ENOSYS döner (glibc `clone`a düşer).
+  Kurulamazsa işçi 6 ile çıkar, PDF açılmaz (fail-closed, kullanıcı kararı 2026-11-10); başka Linux mimarisinde de 6.
+  ASan derlemesinde bellek sınırı konmaz (gölge bellek `RLIMIT_DATA`'ya sayılır) ve işçi `_exit` ile çıkar (LSan
+  taraması filtreye takılmasın). Windows'ta bu adımda yalnız ortam süzülür (senkron token'ı ve AppImage değişkenleri
+  düşer); orada işçi henüz **yetki sınırı değildir** (ADR 0002): MuPDF'te kod çalıştıran bir PDF kullanıcının
+  dosyalarını okuyabilir ve ağa çıkabilir (PDF-SBX T2: düşük bütünlük + iş nesnesi).
 - **Yapılı sayfa metni (V14):** `PdfDocument::page_structure` sayfanın metnini bloklar → satırlar → aynı biçimli
   parçalar olarak verir (`pdfview/structured_text.hpp`): parça `{metin, biçim (kalın/italik/eş aralıklı), punto}` ve
   her kod noktası için yatay kutu `{x0, x1}`; satır dikey kutu `{top, bottom}` ve tireyle bölünmüş sözcük işareti

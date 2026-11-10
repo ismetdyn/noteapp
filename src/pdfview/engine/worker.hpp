@@ -6,7 +6,8 @@
 namespace noteapp::pdfview {
 
 // Çıkış kodu: 0 stdin EOF (temiz), 2 stdin terminal (elle başlatılmış), 3 bozuk istek, 4 bellek yetmedi, 5 stdout'a
-// yazılamadı (ebeveyn gitti).
+// yazılamadı (ebeveyn gitti), 6 kum havuzu kurulamadı (sandbox.hpp; tek bayt okunmadan). İzin listesi dışındaki
+// sistem çağrısı süreci SIGSYS ile öldürür (ebeveyn 159 görür).
 int run_pdf_worker();
 
 }  // namespace noteapp::pdfview

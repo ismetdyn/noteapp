@@ -8,6 +8,6 @@ noteapp_target_defaults(noteapp_pdfview)
 
 # noteapp_pdfengine: MuPDF motoru ve işçi döngüsü; yalnız `note` (işçiyi barındırır) ve motor testleri bağlar. MuPDF
 # başlıkları yalnız .cpp'dedir.
-add_library(noteapp_pdfengine engine/memory_budget.cpp engine/pdf_engine.cpp engine/worker.cpp)
+add_library(noteapp_pdfengine engine/memory_budget.cpp engine/pdf_engine.cpp engine/sandbox.cpp engine/worker.cpp)
 target_link_libraries(noteapp_pdfengine PUBLIC noteapp_pdfview PRIVATE noteapp_mupdf)
 noteapp_target_defaults(noteapp_pdfengine)

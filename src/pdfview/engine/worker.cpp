@@ -1,6 +1,7 @@
 #include "pdfview/engine/worker.hpp"
 
 #include "pdfview/engine/pdf_engine.hpp"
+#include "pdfview/engine/sandbox.hpp"
 #include "pdfview/protocol.hpp"
 
 #include <charconv>
@@ -27,7 +28,7 @@ namespace {
 
 namespace proto = protocol;
 
-enum Exit : int { kClean = 0, kTerminal = 2, kBadRequest = 3, kNoMemory = 4, kWriteFailed = 5 };
+enum Exit : int { kClean = 0, kTerminal = 2, kBadRequest = 3, kNoMemory = 4, kWriteFailed = 5, kSandbox = 6 };
 
 bool stdin_is_terminal() {
 #ifdef _WIN32
@@ -137,6 +138,7 @@ int serve() {
                                          .render_pixels = limit_of(fields->render_pixels),
                                          .text_bytes = limit_of(fields->text_bytes),
                                          .context_memory = limit_of(fields->context_memory),
+                                         .worker_memory = core::Limit{},  // ebeveynin rlimit'i
                                          .duration = core::Limit{},
                                          .cache_pages = core::Limit{}};  // önizlemenin, motorun değil
             engine.reset();
@@ -207,11 +209,21 @@ int serve() {
 int run_pdf_worker() {
     if (stdin_is_terminal())
         return kTerminal;
+    // Fail-closed (kullanıcı kararı 2026-11-10): kum havuzu kurulamazsa PDF'in tek baytı okunmaz.
+    if (!enter_sandbox())
+        return kSandbox;
+    int code = kClean;
     try {
-        return serve();
+        code = serve();
     } catch (const std::bad_alloc&) {
-        return kNoMemory;
+        code = kNoMemory;
     }
+#if defined(__SANITIZE_ADDRESS__)
+    // LSan'ın çıkıştaki taraması iş parçacığı olmayan clone ve ptrace ister: filtre süreci SIGSYS'le öldürürdü.
+    std::fflush(stdout);
+    _exit(code);
+#endif
+    return code;
 }
 
 }  // namespace noteapp::pdfview

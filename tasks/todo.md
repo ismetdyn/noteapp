@@ -630,7 +630,8 @@ Spec: SPEC-tui.md "PDF sayfa görüntüsü (TPI)". Sıralı tek yazar (aynı dos
   Acceptance: her bulgu için düşen-sonra-geçen test (görsel 2 piksel bulgusu hariç); `notes --version` → `notes 0.1.5`. Verify: `ctest -R "^(tui|gui)$"` exit 0.
   Kanıt: 0973146+ff9aea8 → main 238cac0; `ctest -j2 -R "^(tui|tui_pty|gui|app)$"` exit 0 (RED 8 yeni test); 4 ve 6 atlandı (4: 10000 sayfada 193–266 ms, basit değil); review engelleyici yok.
 - [ ] KI-3 PDF-SBX (ADR 0002): plan `tasks/plan-sbx.md` (kullanıcı 5 kararı kabul etti 2026-11-10).
-  - [ ] SBX-T1 Linux seccomp + ortak sözleşme (plan-sbx T1).
+  - [x] SBX-T1 Linux seccomp + ortak sözleşme (plan-sbx T1).
+    Kanıt: 2b1e171 + review düzeltmesi 5493e6a; RED 15 negatif probe `1 == 159`, core sınırı, mmap_shared/growsdown/early_thread; `ctest -j2 -R "^(pdfview|pdfview_link_check|core|app|tui|cli|gui)$"` exit 0 7/7; strace Fedora glibc 2.44 + Ubuntu 2.39/2.43 SIGSYS 0; security-reviewer engelleyici yok; Wine pdfview+app 2/2. ASan koşulmadı (T3'te not).
   - [ ] SBX-T2 Windows Low IL + job (plan-sbx T2). Depends: SBX-T1
   - [ ] SBX-T3 ADR 0003 + belgeler + security-reviewer. Depends: SBX-T1, SBX-T2
 - [x] KI-4 Temizlik: eski worktree'ler ve build volume'leri (kullanıcı onayıyla).

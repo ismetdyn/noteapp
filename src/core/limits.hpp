@@ -198,6 +198,7 @@ struct PdfLimits {
     Limit render_pixels;   // çizilen bir sayfanın en çok pikseli (genişlik x yükseklik)
     Limit text_bytes;      // bir sayfadan çıkarılan en çok metin (UTF-8 bayt)
     Limit context_memory;  // belge başına MuPDF'in ayırabileceği en çok bellek
+    Limit worker_memory;   // işçi sürecinin OS bellek sınırı (Linux RLIMIT_DATA); context_memory'den büyük olmalı
     Limit duration;        // bir sayfanın metin çıkarma ya da çizim süresi; dolunca iş kesilir
     Limit cache_pages;     // önizlemenin bellekte tuttuğu en çok çizilmiş sayfa (app::PdfPreview, GUI dokuları)
 

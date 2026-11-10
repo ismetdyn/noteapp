@@ -370,7 +370,9 @@ struct PdfDocument::Impl {
         // Çerçeve başlatmadan önce kurulur: ayırma hatası açılmamış bir işçiyi açık saydırmasın.
         const std::string head = proto::encode_open_head(fields, bytes.size());
         const std::string program = utf8(worker);
-        child = core::ChildProcess::start({program, std::string(kWorkerCommand)}, true);
+        // Boş ortam ve OS bellek sınırı (PDF-SBX); seccomp'u işçi kendisi kurar (engine/sandbox.hpp).
+        child =
+            core::ChildProcess::start_confined({program, std::string(kWorkerCommand)}, limits.worker_memory.value);
         if (!child) {
             std::error_code ignored;
             if (!std::filesystem::exists(worker, ignored))

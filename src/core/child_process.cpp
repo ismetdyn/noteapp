@@ -18,6 +18,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <spawn.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -173,6 +174,11 @@ std::optional<ChildProcess> ChildProcess::start(const std::vector<std::string>& 
     child.stdin_pipe_ = input->parent.release();
     child.stdout_pipe_ = output ? output->parent.release() : nullptr;
     return child;
+}
+
+std::optional<ChildProcess> ChildProcess::start_confined(const std::vector<std::string>& argv,
+                                                         [[maybe_unused]] std::uint64_t memory_bytes) {
+    return start(argv, true);
 }
 
 bool ChildProcess::write_all(std::string_view data, Clock::time_point deadline, const std::stop_token& stop) {
@@ -353,6 +359,43 @@ private:
 std::optional<ChildProcess> ChildProcess::start(const std::vector<std::string>& argv, bool capture_stdout,
                                                 const std::vector<std::string>& extra_env,
                                                 const std::filesystem::path& working_directory) {
+    return start_with_env(argv, capture_stdout, child_environment(extra_env), working_directory);
+}
+
+std::optional<ChildProcess> ChildProcess::start_confined(const std::vector<std::string>& argv,
+                                                         std::uint64_t memory_bytes) {
+    // Ortam ebeveynde boş kurulur: token, AppImage değişkenleri ve host_environment_restores'un geri verdikleri de
+    // dahil hiçbir şey geçmez.
+    std::optional<ChildProcess> child = start_with_env(argv, true, {}, {});
+#if defined(__SANITIZE_ADDRESS__)
+    // GEÇİCİ: ASan'ın gölge belleği (TiB'larca yazılabilir eşleme) RLIMIT_DATA'ya sayılır; sınırla çocuk ilk ayırmada
+    // ölürdü.
+    // BEDEL: sanitizer derlemesinde PDF işçisinin OS bellek sınırı yok (yalnız context_memory bütçesi).
+    // NE ZAMAN KALDIRILIR: sanitizer derlemesi RLIMIT_DATA'yı saymayan bir sınıra (cgroup) geçince; sahip PDF-SBX.
+    memory_bytes = 0;
+#endif
+    if (!child)
+        return child;
+#ifdef __linux__
+    // İlk bayt bu çağrılardan sonra yazılır: çocuk güvenilmez girdiyi sınırlar konmadan okuyamaz. Sert sınır da aynı
+    // değerdir; çocuk kendi sınırını yükseltemez. Çekirdek dökümü hep kapalı: filtreye takılıp SIGSYS'le ölen çocuk
+    // saldırganın doldurduğu belleği (PDF baytları dahil) ebeveynin çalışma dizinine dökmesin.
+    const auto pid = static_cast<pid_t>(child->pid_);
+    const rlimit no_core{0, 0};
+    const auto bytes = static_cast<rlim_t>(memory_bytes);
+    const rlimit data{bytes, bytes};
+    if (prlimit(pid, RLIMIT_CORE, &no_core, nullptr) == 0 &&
+        (memory_bytes == 0 || prlimit(pid, RLIMIT_DATA, &data, nullptr) == 0))
+        return child;
+#endif
+    // Sınır konamadı (başka POSIX'te başka sürecinki hiç konamaz): sınırsız çalıştırmak yerine başlatma reddedilir.
+    child->kill();
+    return std::nullopt;
+}
+
+std::optional<ChildProcess> ChildProcess::start_with_env(const std::vector<std::string>& argv, bool capture_stdout,
+                                                         const std::vector<std::string>& env,
+                                                         const std::filesystem::path& working_directory) {
     if (argv.empty())
         return std::nullopt;
     auto program = core::find_program(argv.front());
@@ -372,7 +415,6 @@ std::optional<ChildProcess> ChildProcess::start(const std::vector<std::string>& 
             return std::nullopt;
     }
     // Ayrılan bellek init/destroy çiftinin dışında: bad_alloc eylem ve öznitelik nesnesini sızdırmasın.
-    const std::vector<std::string> env = child_environment(extra_env);
     std::vector<char*> args = c_strings(argv);
     std::vector<char*> envp = c_strings(env);
     posix_spawn_file_actions_t actions;

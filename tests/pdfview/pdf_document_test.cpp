@@ -2,16 +2,21 @@
 // işçiyi öldürerek sınırlanır; MuPDF'in kesilemeyen döngüleri (onarım, bağlantı hedefi araması, Form XObject
 // çoğalması) burada sınanır.
 #include "core/child_process.hpp"
+#include "core/config.hpp"
 #include "core/i18n.hpp"
 #include "core/limits.hpp"
 #include "core/paths.hpp"
+#include "core/unique_handle.hpp"
 #include "pdfview/engine/pdf_engine.hpp"
 #include "pdfview/fixtures.hpp"
 #include "pdfview/pdf_document.hpp"
 #include "pdfview/protocol.hpp"
+#include "support/fake_pdf_worker.hpp"
 #include "support/test_support.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <doctest/doctest.h>
 #include <expected>
 #include <filesystem>
@@ -23,6 +28,10 @@
 #include <vector>
 
 #ifndef _WIN32
+#include <fcntl.h>
+#include <set>
+#include <sstream>
+#include <sys/resource.h>
 #include <unistd.h>
 #endif
 
@@ -81,9 +90,14 @@ void check_too_slow(const core::Error& error) {
 using Clock = std::chrono::steady_clock;
 
 #ifndef _WIN32
-// Bu sürecin toplanmamış (zombi) çocukları.
-int zombie_children() {
-    int zombies = 0;
+struct ChildStat {
+    std::string pid;
+    char state = '?';
+};
+
+// Bu sürecin çocukları (/proc/<pid>/stat'ta ebeveyni bu süreç olanlar).
+std::vector<ChildStat> own_children() {
+    std::vector<ChildStat> children;
     const std::string own = std::to_string(getpid());
     for (const auto& entry : fs::directory_iterator("/proc")) {
         std::ifstream stat(entry.path() / "stat");
@@ -94,13 +108,32 @@ int zombie_children() {
         const std::size_t close = line.rfind(')');
         if (close == std::string::npos || close + 4 > line.size())
             continue;
-        const char state = line[close + 2];
         const std::string rest = line.substr(close + 4);
-        const std::string ppid = rest.substr(0, rest.find(' '));
-        if (ppid == own && state == 'Z')
-            ++zombies;
+        if (rest.substr(0, rest.find(' ')) == own)
+            children.push_back({entry.path().filename().string(), line[close + 2]});
     }
-    return zombies;
+    return children;
+}
+
+// Bu sürecin toplanmamış (zombi) çocukları.
+int zombie_children() {
+    return static_cast<int>(std::ranges::count(own_children(), 'Z', &ChildStat::state));
+}
+
+// /proc/<pid>/status satırı "Ad:\tdeğer"; alan yoksa boş (stoi düşer: denetim sessizce geçmez).
+std::string status_field(std::string_view status, std::string_view name) {
+    const std::string key = "\n" + std::string(name) + ":\t";
+    const std::size_t start = status.find(key);
+    if (start == std::string_view::npos)
+        return {};
+    const std::size_t value = start + key.size();
+    return std::string(status.substr(value, status.find('\n', value) - value));
+}
+
+std::string read_file(const fs::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    REQUIRE(in.is_open());  // okunamayan dosya boş sayılıp yanlış yeşil vermesin
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 #endif
 
@@ -301,10 +334,10 @@ TEST_CASE("a duration that never fires does not delay a normal page") {
 }
 
 TEST_CASE("a misbehaving worker gives a clean error, is reaped and never reaches the log raw") {
-    test::ScopedEnv mode("NOTEAPP_FAKE_PDF_WORKER_MODE");
+    const test::FakePdfWorker fake(kFakeWorker);
     const auto open_fake = [&](std::string_view name, const core::PdfLimits& limits = unlimited()) {
-        mode.set(std::string(name));
-        return PdfDocument::open(ascii_pdf(1), limits, kFakeWorker);
+        fake.set_mode(name);
+        return PdfDocument::open(ascii_pdf(1), limits, fake.path());
     };
     for (const std::string_view name : {"exit-mid", "crash", "oversize", "wrong-kind", "escape-detail"}) {
         CAPTURE(name);
@@ -445,7 +478,7 @@ TEST_CASE("a misbehaving worker gives a clean error, is reaped and never reaches
         const auto crashed = opened->page_text(0);
         REQUIRE_FALSE(crashed);
         CHECK(crashed.error().message_key == "error.pdf_page_invalid");
-        mode.set("die-after-3");
+        fake.set_mode("die-after-3");
         const auto changed = opened->page_text(0);
         REQUIRE_FALSE(changed);
         CHECK(changed.error().code == core::Error::Code::InvalidDocument);
@@ -477,3 +510,109 @@ TEST_CASE("the worker rejects a request whose payload ends right after its heade
     // 3 = kBadRequest; düzeltmeden önce ikinci Text'e de cevap verip stdin EOF'unda 0 ile çıkıyordu.
     CHECK(worker->wait_until(deadline) == 3);
 }
+
+#ifdef __linux__
+namespace {
+
+// Bu sürecin tek canlı PDF işçisinin /proc dizini.
+fs::path worker_proc() {
+    std::vector<std::string> workers;
+    for (const ChildStat& child : own_children()) {
+        std::ifstream cmdline(fs::path("/proc") / child.pid / "cmdline", std::ios::binary);
+        const std::string args{std::istreambuf_iterator<char>(cmdline), std::istreambuf_iterator<char>()};
+        if (args.find("__pdf-worker") != std::string::npos)
+            workers.push_back(child.pid);
+    }
+    REQUIRE(workers.size() == 1);
+    return fs::path("/proc") / workers.front();
+}
+
+// /proc/<pid>/limits satırının değerleri ("Max core file size  <yumuşak>  <sert>  bytes" → yumuşak, sert, birim).
+std::vector<std::string> limit_row(const fs::path& proc, std::string_view name) {
+    std::istringstream lines(read_file(proc / "limits"));
+    std::vector<std::string> row;
+    for (std::string line; std::getline(lines, line);) {
+        if (!line.starts_with(name))
+            continue;
+        std::istringstream words(line.substr(name.size()));
+        for (std::string word; words >> word;)
+            row.push_back(word);
+    }
+    return row;
+}
+
+// Konteyner ve host'ta yumuşak çekirdek sınırı çoğunlukla zaten 0: işçinin 0'ı ebeveynden miras kalmasın diye test
+// süreci kendi sınırını sertine çıkarır (yıkıcıda geri alır).
+class RaisedCoreLimit {
+public:
+    RaisedCoreLimit() {
+        REQUIRE(getrlimit(RLIMIT_CORE, &previous_) == 0);
+        const rlimit raised{previous_.rlim_max, previous_.rlim_max};
+        REQUIRE(setrlimit(RLIMIT_CORE, &raised) == 0);
+        REQUIRE(raised.rlim_cur > 0);  // sert sınır 0 ise denetim anlamsız olurdu
+    }
+    ~RaisedCoreLimit() { setrlimit(RLIMIT_CORE, &previous_); }
+    RaisedCoreLimit(const RaisedCoreLimit&) = delete;
+    RaisedCoreLimit& operator=(const RaisedCoreLimit&) = delete;
+
+private:
+    rlimit previous_{};
+};
+
+const std::vector<std::string> kNoCore{"0", "0", "bytes"};
+
+}  // namespace
+
+// PDF-SBX: işçi tek bayt okumadan kum havuzundadır. Devralınabilir fd ve ortamdaki işaret, ebeveynden işçiye bir şey
+// sızmadığını gösterir; okunamayan /proc dosyası boş sayılmaz (read_file).
+TEST_CASE("the worker runs under seccomp with no new privileges, only stdio, no environment and the memory limit") {
+    const test::ScopedEnv canary("NOTEAPP_SBX_CANARY", std::string("leaked"));
+    const int inheritable = ::open("/dev/null", O_RDONLY);  // CLOEXEC'siz: posix_spawn çocuğa geçirir
+    REQUIRE(inheritable >= 3);
+    const core::UniqueFd close_inheritable(inheritable);
+    REQUIRE(fs::exists(fs::path("/proc/self/fd") / std::to_string(inheritable)));
+    REQUIRE(std::getenv("NOTEAPP_SBX_CANARY") != nullptr);  // ChildProcess::start bunu çocuğa geçirirdi
+    const RaisedCoreLimit raised_core;
+
+    core::PdfLimits limits = unlimited();
+    limits.worker_memory = core::parse_config("").config.limits.pdf.worker_memory;
+    REQUIRE(limits.worker_memory.value > 0);
+    PdfDocument document = open_ok(ascii_pdf(1), limits);
+    const fs::path proc = worker_proc();
+
+    // Konteyner (podman) kendi filtresini zaten kurar: kip 2'den başka işçinin kendi filtresi de sayılır.
+    const std::string status = read_file(proc / "status");
+    const std::string own_status = read_file("/proc/self/status");
+    CHECK(status_field(status, "Seccomp") == "2");  // filtre kipi
+    CHECK(status_field(status, "NoNewPrivs") == "1");
+    CHECK(std::stoi(status_field(status, "Seccomp_filters")) ==
+          std::stoi(status_field(own_status, "Seccomp_filters")) + 1);
+
+    std::set<std::string> fds;
+    for (const auto& entry : fs::directory_iterator(proc / "fd"))
+        fds.insert(entry.path().filename().string());
+    CHECK(fds == std::set<std::string>{"0", "1", "2"});
+
+    CHECK(read_file(proc / "environ").empty());
+
+    // SIGSYS'le ölen işçi PDF'li (saldırganın doldurduğu) belleğini ebeveynin dizinine dökmez.
+    CHECK(limit_row(proc, "Max core file size") == kNoCore);
+    // İki değer de config'teki sınır. ASan derlemesinde sınır konmaz (start_confined'daki GEÇİCİ blok).
+#if !defined(__SANITIZE_ADDRESS__)
+    const std::string value = std::to_string(limits.worker_memory.value);
+    CHECK(limit_row(proc, "Max data size") == std::vector<std::string>{value, value, "bytes"});
+#endif
+
+    const auto text = document.page_text(0);  // kum havuzunda iş sürüyor
+    REQUIRE(text);
+    CHECK(contains(*text, "Page 1"));
+}
+
+TEST_CASE("the worker never dumps core, also without a memory limit") {
+    const RaisedCoreLimit raised_core;
+    const PdfDocument document = open_ok(ascii_pdf(1), unlimited());  // worker_memory = 0
+    const fs::path proc = worker_proc();
+    CHECK(limit_row(proc, "Max core file size") == kNoCore);
+    CHECK(limit_row(proc, "Max data size") == std::vector<std::string>{"unlimited", "unlimited", "bytes"});
+}
+#endif

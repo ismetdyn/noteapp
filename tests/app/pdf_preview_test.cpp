@@ -4,12 +4,14 @@
 #include "app/pdf_text.hpp"
 
 #include "core/i18n.hpp"
+#include "support/fake_pdf_worker.hpp"
 #include "support/test_support.hpp"
 #include "support/text_pdf.hpp"
 
 #include <chrono>
 #include <condition_variable>
 #include <doctest/doctest.h>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -66,7 +68,7 @@ std::string plain(const PdfPreview::Text& text) {
     return layer.text(0, layer.size());
 }
 
-PdfPreviewOptions options(Changes& changes, const char* worker = NOTEAPP_NOTE_EXE) {
+PdfPreviewOptions options(Changes& changes, const std::filesystem::path& worker = NOTEAPP_NOTE_EXE) {
     PdfPreviewOptions result;
     result.worker = worker;
     result.on_change = changes.callback();
@@ -95,10 +97,10 @@ TEST_CASE("pdf preview opens in the background, serves text requests in order an
 
 TEST_CASE("pdf preview drops queued requests and closes promptly while the worker is busy") {
     // Sahte işçi açılışa hiç cevap vermez: istekler kuyrukta kalır.
-    noteapp::test::ScopedEnv mode("NOTEAPP_FAKE_PDF_WORKER_MODE");
-    mode.set("sleep");
+    const noteapp::test::FakePdfWorker fake(NOTEAPP_FAKE_PDF_WORKER);
+    fake.set_mode("sleep");
     Changes changes;
-    auto preview = std::make_unique<PdfPreview>(noteapp::test::text_pdf({"x"}), options(changes, NOTEAPP_FAKE_PDF_WORKER));
+    auto preview = std::make_unique<PdfPreview>(noteapp::test::text_pdf({"x"}), options(changes, fake.path()));
     preview->request_text(0);
     preview->request_render(0, 1.0F);
     preview->request_render(0, 1.0F);

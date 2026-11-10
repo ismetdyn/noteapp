@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <stop_token>
@@ -27,6 +28,13 @@ public:
     static std::optional<ChildProcess> start(const std::vector<std::string>& argv, bool capture_stdout,
                                              const std::vector<std::string>& extra_env = {},
                                              const std::filesystem::path& working_directory = {});
+    // Güvenilmez girdiyi işleyen PDF işçisi için (PDF-SBX): stdout yakalanır, çalışma dizini değişmez. POSIX'te ortam
+    // boştur (ebeveynde kurulur; host_environment_restores dahil hiçbir değişken geçmez); başlatmanın hemen ardından,
+    // ilk bayt yazılmadan RLIMIT_CORE = 0 ve `memory_bytes` sıfır değilse RLIMIT_DATA = `memory_bytes` (yumuşak =
+    // sert) konur; konamazsa çocuk öldürülür ve nullopt. Linux dışı POSIX'te başlatma hep reddedilir. Windows'ta şimdilik `start` gibi süzülmüş ortam, bellek sınırı yok
+    // (PDF-SBX T2: düşük bütünlük + iş nesnesi).
+    static std::optional<ChildProcess> start_confined(const std::vector<std::string>& argv,
+                                                      std::uint64_t memory_bytes);
 
     ChildProcess(ChildProcess&& other) noexcept;
     ChildProcess& operator=(ChildProcess&& other) noexcept;
@@ -46,6 +54,11 @@ public:
 
 private:
     ChildProcess() = default;
+#ifndef _WIN32
+    static std::optional<ChildProcess> start_with_env(const std::vector<std::string>& argv, bool capture_stdout,
+                                                      const std::vector<std::string>& env,
+                                                      const std::filesystem::path& working_directory);
+#endif
     void close_fds();
     void take(ChildProcess& other) noexcept;  // `other`ın tutamaçlarını alır, onu boşaltır
 

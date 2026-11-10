@@ -1,5 +1,6 @@
 // Testlerde bozuk davranan PDF işçisi (`note __pdf-worker` yerine): istemcinin her işçi hatasını temiz bir hataya
-// çevirdiğini, öldürüp topladığını ve loga kaçış dizisi sızdırmadığını sınar. Kip NOTEAPP_FAKE_PDF_WORKER_MODE'dan:
+// çevirdiğini, öldürüp topladığını ve loga kaçış dizisi sızdırmadığını sınar. İşçi boş ortamla başlar (PDF-SBX): kip,
+// ikilinin (argv[0]) yanındaki `mode` dosyasındadır (support/fake_pdf_worker.hpp yazar); dosya yoksa varsayılan kip:
 //   exit-mid      Open'dan sonra yarım başlık yazıp 0 ile çıkar
 //   crash         Open'dan sonra abort (POSIX: SIGABRT)
 //   oversize      Opened başlığında uzunluk 2^40
@@ -29,6 +30,8 @@
 #include <bit>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <optional>
 #include <string>
@@ -130,13 +133,16 @@ std::string structured_reply(std::string_view mode) {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
 #ifdef _WIN32
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
 #endif
-    const char* raw_mode = std::getenv("NOTEAPP_FAKE_PDF_WORKER_MODE");
-    const std::string_view mode = raw_mode != nullptr ? raw_mode : "";
+    std::string mode;
+    if (argc > 0) {
+        std::ifstream file(std::filesystem::path{argv[0]}.parent_path() / "mode", std::ios::binary);
+        std::getline(file, mode);
+    }
     proto::Header header;
     std::string payload;
     if (!read_request(header, payload) || header.kind != proto::Kind::Open)
