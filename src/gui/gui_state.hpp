@@ -128,6 +128,9 @@ struct Deciders {
         [](const RelationRequest&) { return std::nullopt; };
     // Sistem panosuna metin (TUI `c`); false = yazılamadı. Üretimde SDL panosu.
     std::function<bool(const std::string& text)> copy_text = [](const std::string&) { return false; };
+    // Birincil seçim (X11/Wayland orta tık yapıştırması; önizleme seçimi kopyalanınca). Desteklemeyen
+    // platformda etkisiz, sonucu önemsiz. Üretimde SDL_SetPrimarySelectionText.
+    std::function<void(const std::string& text)> primary_selection = [](const std::string&) {};
     // Sistem panosundaki metin (editörde Ctrl+V); nullopt = pano boş ya da okunamadı: iç pano yapıştırılır.
     std::function<std::optional<std::string>()> paste_text = [] { return std::nullopt; };
     // Arayüzü tutan iş (AutoSync durdurma, enable): üretimde bekleme imleciyle.

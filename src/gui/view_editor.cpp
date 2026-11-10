@@ -675,9 +675,18 @@ void View::draw_preview(float reserved_height) {
     if (!state_.showing_pdf()) {
         // Seçim iç alanda başlar (kaydırma çubuğu dışı); bağlantı düğmesine basılmışken de (bağlantıdan sürükleme
         // seçer). PDF'in seçimi sayfanın metin katmanındadır (view_pdf.cpp).
-        word_selected =
-            selection.update(ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
-                             ImGui::GetCurrentWindow()->InnerClipRect.Contains(ImGui::GetIO().MousePos));
+        const bool can_start = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                               ImGui::GetCurrentWindow()->InnerClipRect.Contains(ImGui::GetIO().MousePos);
+        if (can_start && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            preview_selecting_ = true;
+        word_selected = selection.update(can_start);
+    }
+    // TUI gibi: fareyle seçim (sürükleme, çift tık, Shift+tık) bırakılınca bir kez kopyalanır; seçim
+    // bırakmayan tık kopyalamaz. Editörde yok (TUI editörü de kopyalamaz; düzenlerken panoyu ezmesin).
+    if (preview_selecting_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        preview_selecting_ = false;
+        if (preview_has_selection())
+            copy_preview_selection();
     }
     // Sağ tık menüsü seçimi kopyalar (bütün önizlemeler, PDF dahil).
     if (ImGui::BeginPopupContextWindow("##preview_menu")) {
@@ -700,7 +709,10 @@ bool View::preview_has_selection() const {
 void View::copy_preview_selection() {
     std::string text = state_.showing_pdf() ? pdf_selected_text() : preview_->selection.selected_text();
     if (!text.empty())
-        queue([this, text = std::move(text)] { state_.copy_to_clipboard(text); });
+        queue([this, text = std::move(text)] {
+            state_.deciders.primary_selection(text);
+            state_.copy_to_clipboard(text);
+        });
 }
 
 const PreviewSelection& View::preview_selection() const {

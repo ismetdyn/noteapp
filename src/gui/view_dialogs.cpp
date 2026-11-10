@@ -172,6 +172,11 @@ void View::install_deciders() {
         work();
     };
     state_.deciders.copy_text = [](const std::string& text) { return SDL_SetClipboardText(text.c_str()); };
+    // Birincil seçim yalnız X11/Wayland'de dışarı görünür; yazılamazsa pano kopyası yeterlidir (ileti
+    // panonundur).
+    state_.deciders.primary_selection = [](const std::string& text) {
+        SDL_SetPrimarySelectionText(text.c_str());
+    };
     state_.deciders.paste_text = []() -> std::optional<std::string> {
         if (!SDL_HasClipboardText())
             return std::nullopt;

@@ -67,7 +67,7 @@ TEST_CASE("gui pdf preview: a PDF note shows its pages as textures and a page in
     CHECK(state->pdf_preview() == nullptr);
 }
 
-TEST_CASE("gui pdf preview: dragging over a page selects its text and Ctrl+C copies the selection") {
+TEST_CASE("gui pdf preview: dragging over a page selects its text and copies it on release, Ctrl+C again") {
     WindowFixture fixture;
     // İkili yorum satırı aynı uzunlukta ASCII olur (xref kaymaz): not geçerli UTF-8'dir, notu kopyalayan komut
     // çalışsaydı panoya PDF'in kendisini yazardı.
@@ -103,6 +103,9 @@ TEST_CASE("gui pdf preview: dragging over a page selects its text and Ctrl+C cop
         view->draw_frame();
         return view->item_rects().contains("pdf_selection");
     }));
+    // Bırakınca bir kez, TUI gibi kopya iletisiyle.
+    REQUIRE(copied == std::vector<std::string>{"One"});
+    CHECK(state->status() == core::tr("gui.copied", {{"size", core::human_size(3)}}));
     io.AddKeyEvent(ImGuiMod_Ctrl, true);
     io.AddKeyEvent(ImGuiKey_C, true);
     view->draw_frame();
@@ -110,8 +113,7 @@ TEST_CASE("gui pdf preview: dragging over a page selects its text and Ctrl+C cop
     io.AddKeyEvent(ImGuiMod_Ctrl, false);
     view->draw_frame();
     // Yalnız seçim kopyalanır: notu kopyalayan önizleme komutu aynı basışta çalışmaz (panoya tek yazma).
-    CHECK(copied == std::vector<std::string>{"One"});
-    CHECK(state->status() == core::tr("gui.copied", {{"size", core::human_size(3)}}));
+    CHECK(copied == std::vector<std::string>{"One", "One"});
 }
 
 TEST_CASE("gui pdf preview: a damaged PDF shows the localized reason in place of the pages") {

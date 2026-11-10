@@ -241,6 +241,7 @@ void View::draw_pdf_text_layer(app::PdfPreview& pdf, int page, ImVec2 top, ImVec
         preview_link_hovered_ = true;  // çift tık sözcük seçer, düzenlemeye geçmez
     }
     if (ImGui::IsItemActivated()) {
+        preview_selecting_ = true;  // bırakılınca draw_preview kopyalar
         text.page = page;
         if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             std::tie(text.anchor, text.caret) = layer.word_at(mouse.x, mouse.y);
@@ -268,7 +269,8 @@ void View::draw_pdf_text_layer(app::PdfPreview& pdf, int page, ImVec2 top, ImVec
     remember_rect("pdf_selection", frame.to_screen(0.0F, 0.0F), frame.to_screen(layer.width(), layer.height()));
 }
 
-// Kopyalama (Ctrl+C, sağ tık) bütün önizlemelerle ortak kuraldır: draw_preview seçim varsa bunu çağırır.
+// Kopyalama (bırakınca, Ctrl+C, sağ tık) bütün önizlemelerle ortak kuraldır: draw_preview seçim varsa bunu
+// çağırır.
 std::string View::pdf_selected_text() const {
     const PdfSelection& selection = preview_->pdf_text;
     const auto found = selection.pages.find(selection.page);

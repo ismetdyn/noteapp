@@ -11,6 +11,7 @@
 #include <doctest/doctest.h>
 #include <imgui.h>
 #include <string>
+#include <vector>
 
 using gui_test::make_view;
 using gui_test::press;
@@ -195,6 +196,30 @@ TEST_CASE_FIXTURE(WindowFixture, "editor: a click places the cursor and a drag s
     mouse_button(*view, false);
     type_text(*view, "Z");
     CHECK(state->buffer() == "Z");
+}
+
+// TUI editörü gibi: seçim panoya kendiliğinden yazılmaz (düzenlerken panoyu ezmesin; önizleme bırakınca
+// kopyalar).
+TEST_CASE_FIXTURE(WindowFixture, "editor: a drag selects without copying to the clipboard") {
+    add_note("mouse.md", "first line\nsecond line\nthird");
+    auto state = make_state();
+    std::vector<std::string> copied;
+    state->deciders.copy_text = [&copied](const std::string& text) {
+        copied.push_back(text);
+        return true;
+    };
+    auto view = make_view(*state);
+    focus_editor(*state, *view);
+    const View::ItemRect line1 = view->item_rects().at("editor_line:1");
+    const View::ItemRect line3 = view->item_rects().at("editor_line:3");
+
+    mouse_to(*view, line1.max_x + 1.0F, center_y(line1));
+    mouse_button(*view, true);
+    mouse_to(*view, view->item_rects().at("editor").max_x - 16.0F, center_y(line3));
+    mouse_button(*view, false);
+    settle(*view);
+    REQUIRE(state->editor_selection().has_value());
+    CHECK(copied.empty());
 }
 
 TEST_CASE_FIXTURE(WindowFixture, "editor: autosave writes the typed text to its own note, never to the next one") {

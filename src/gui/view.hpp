@@ -396,6 +396,7 @@ private:
     bool search_popup_hovered_ = false;  // fare tamamlama listesinde: kutu odağı bıraksa da liste kalır
     bool picker_shown_ = false;  // seçici açılır pencereyi geçen karede çizdi: kapanışı kullanıcı yaptı mı
     bool editor_active_ = false;
+    bool preview_selecting_ = false;  // sol tık önizlemede seçim başlattı: bırakılınca seçim kopyalanır
     bool preview_link_hovered_ = false;  // bu karede önizlemede bir bağlantının üstünde: çift tık düzenlemez
     bool editor_drawn_ = false;  // bu karede editör çizildi: alanları ve iletisi durum çubuğunda
     // Boşta bekleyen dil sunucusu değişikliğinin gönderileceği an (LanguageServers::Update::send_at).
