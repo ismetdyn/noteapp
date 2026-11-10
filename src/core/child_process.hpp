@@ -11,6 +11,10 @@
 
 namespace noteapp::core {
 
+#ifdef _WIN32
+struct SpawnConfinement;  // process_win.hpp
+#endif
+
 // Pano araçları, hunspell, dil sunucuları ve PDF işçisi için stdin/stdout borulu, kabuksuz çocuk süreç. Kendi süreç grubundadır
 // (Windows: kapanınca öldüren iş nesnesi); yıkıcı bitmemişse ağacı öldürür ve toplar: askıda çocuk bırakılmaz.
 // Ortamdan AppImage değişkenleri (SSL_CERT_*, LD_*) ve senkron token'ı düşer, `extra_env` ("AD=değer") üstüne
@@ -31,8 +35,10 @@ public:
     // Güvenilmez girdiyi işleyen PDF işçisi için (PDF-SBX): stdout yakalanır, çalışma dizini değişmez. POSIX'te ortam
     // boştur (ebeveynde kurulur; host_environment_restores dahil hiçbir değişken geçmez); başlatmanın hemen ardından,
     // ilk bayt yazılmadan RLIMIT_CORE = 0 ve `memory_bytes` sıfır değilse RLIMIT_DATA = `memory_bytes` (yumuşak =
-    // sert) konur; konamazsa çocuk öldürülür ve nullopt. Linux dışı POSIX'te başlatma hep reddedilir. Windows'ta şimdilik `start` gibi süzülmüş ortam, bellek sınırı yok
-    // (PDF-SBX T2: düşük bütünlük + iş nesnesi).
+    // sert) konur; konamazsa çocuk öldürülür ve nullopt. Linux dışı POSIX'te başlatma hep reddedilir. Windows'ta
+    // core::SpawnConfinement (process_win.hpp): düşük bütünlüklü kısıtlı belirteç, azaltımlar, yalnız SystemRoot'lu
+    // ortam, konsolsuz (DETACHED_PROCESS); tek süreçli, `memory_bytes` sınırlı (0 sınırsız), UI sınırlı iş nesnesi.
+    // Biri kurulamazsa nullopt.
     static std::optional<ChildProcess> start_confined(const std::vector<std::string>& argv,
                                                       std::uint64_t memory_bytes);
 
@@ -58,6 +64,12 @@ private:
     static std::optional<ChildProcess> start_with_env(const std::vector<std::string>& argv, bool capture_stdout,
                                                       const std::vector<std::string>& env,
                                                       const std::filesystem::path& working_directory);
+#else
+    // `confinement` varsa `extra_env` yok sayılır.
+    static std::optional<ChildProcess> start_windows(const std::vector<std::string>& argv, bool capture_stdout,
+                                                     const std::vector<std::string>& extra_env,
+                                                     const std::filesystem::path& working_directory,
+                                                     const SpawnConfinement* confinement);
 #endif
     void close_fds();
     void take(ChildProcess& other) noexcept;  // `other`ın tutamaçlarını alır, onu boşaltır

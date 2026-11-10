@@ -632,7 +632,9 @@ Spec: SPEC-tui.md "PDF sayfa görüntüsü (TPI)". Sıralı tek yazar (aynı dos
 - [ ] KI-3 PDF-SBX (ADR 0002): plan `tasks/plan-sbx.md` (kullanıcı 5 kararı kabul etti 2026-11-10).
   - [x] SBX-T1 Linux seccomp + ortak sözleşme (plan-sbx T1).
     Kanıt: 2b1e171 + review düzeltmesi 5493e6a; RED 15 negatif probe `1 == 159`, core sınırı, mmap_shared/growsdown/early_thread; `ctest -j2 -R "^(pdfview|pdfview_link_check|core|app|tui|cli|gui)$"` exit 0 7/7; strace Fedora glibc 2.44 + Ubuntu 2.39/2.43 SIGSYS 0; security-reviewer engelleyici yok; Wine pdfview+app 2/2. ASan koşulmadı (T3'te not).
-  - [ ] SBX-T2 Windows Low IL + job (plan-sbx T2). Depends: SBX-T1
+  - [x] SBX-T2 Windows Low IL + job (plan-sbx T2). Depends: SBX-T1
+    Kanıt: dba6282 + review düzeltmesi f13a7f5; RED Wine ortam ~55 değişken, admin_sid `attributes 15`; Wine `ctest -R '^(pdfview|pdfview_win11|core|app)$'` exit 0 (pdfview_win11 Disabled), Linux `pdfview|core` exit 0; security-reviewer engelleyici yok. Win11 elle: scratchpad `win11-pdf-sandbox-check.zip` (kullanıcı).
+    Açık: ebeveyn UI limitsiz atanamayan bir job içindeyse işçi başlamaz (fail-closed, `step=job`); Win11 denemesi gösterirse `CREATE_BREAKAWAY_FROM_JOB` yedeği.
   - [ ] SBX-T3 ADR 0003 + belgeler + security-reviewer. Depends: SBX-T1, SBX-T2
 - [x] KI-4 Temizlik: eski worktree'ler ve build volume'leri (kullanıcı onayıyla).
   Kanıt (2026-11-10): 18 worktree kaldırıldı (dallar duruyor), 27 volume silindi; `df /` 206G → 129G kullanılan.

@@ -8,6 +8,7 @@
 #include "core/process.hpp"
 #include "core/unique_handle.hpp"
 
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <string>
@@ -19,6 +20,17 @@ struct SpawnedProcess {
     UniqueHandle process;
     UniqueHandle job;  // KILL_ON_JOB_CLOSE iş nesnesi; çocuk atanamadıysa boş (uyarı loglanır)
     unsigned long pid = 0;
+};
+
+// Güvenilmez girdiyi işleyen çocuğun sınırları (PDF-SBX, core::ChildProcess::start_confined). spawn_confined çocuğu
+// kendi belirtecimizin en büyük ayrıcalıkları atılmış, düşük bütünlüklü (S-1-16-4096) kopyasıyla ve süreç oluşturma
+// azaltımlarıyla (PROHIBIT_DYNAMIC_CODE, IMAGE_LOAD_NO_REMOTE, IMAGE_LOAD_NO_LOW_LABEL, EXTENSION_POINT_DISABLE) başlatır.
+// Ortamı yalnız SystemRoot ve NoDefaultCurrentDirectoryInExePath=1'dir (ebeveynin ortamı ve host_environment_restores
+// geçmez). İş nesnesi tek süreçle (torun yok), `memory_bytes` sıfır değilse o kadar
+// ayrılmış bellekle ve bütün UI sınırlarıyla kurulur. Biri kurulamazsa askıdaki çocuk öldürülür, başlatma başarısız
+// olur (fail-closed).
+struct SpawnConfinement {
+    std::uint64_t memory_bytes = 0;  // 0: sınırsız
 };
 
 // Devredilebilir boş aygıt (NUL) tutamacı; hatada boş.
@@ -35,6 +47,12 @@ std::expected<SpawnedProcess, Error> spawn_with_stdio(const std::vector<std::str
                                                       HANDLE stdout_handle, HANDLE stderr_handle,
                                                       DWORD creation_flags,
                                                       const std::filesystem::path& working_directory = {});
+
+// spawn_with_stdio gibi, ama SpawnConfinement sınırlarıyla, konsolsuz (DETACHED_PROCESS) ve çalışma dizini
+// değiştirmeden. Sınırlardan biri kurulamazsa çocuk öldürülür, hata döner ve neden loglanır.
+std::expected<SpawnedProcess, Error> spawn_confined(const std::vector<std::string>& argv, HANDLE stdin_handle,
+                                                    HANDLE stdout_handle, HANDLE stderr_handle,
+                                                    const SpawnConfinement& confinement);
 
 }  // namespace noteapp::core
 

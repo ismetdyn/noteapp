@@ -1,27 +1,31 @@
 // PDF işçisinin kum havuzu probu (PDF-SBX, tests/pdfview/sandbox_test.cpp). Test bunu core::ChildProcess::start_confined
 // ile başlatır; prob pdfview::enter_sandbox()'tan sonra argv[1]'deki tek denemeyi yapar (işçinin yolu: önce kum havuzu,
 // sonra iş). Çıkış kodu:
-//   0  olumlu prob işini bitirdi ya da beklenen ret geldi (clone3 → ENOSYS, alloc_over başarısız)
-//   1  yasak çağrı döndü: denetim yok (filtre varken süreç SIGSYS'le ölür, ebeveyn 128 + 31 = 159 görür)
+//   0  olumlu prob işini bitirdi ya da beklenen ret geldi (clone3 → ENOSYS, alloc_over başarısız, Windows'ta erişim
+//      reddi)
+//   1  yasak çağrı döndü: denetim yok (Linux'ta filtre varken süreç SIGSYS'le ölür, ebeveyn 128 + 31 = 159 görür)
 //   2  bilinmeyen prob ya da hazırlık hatası
 //   6  enter_sandbox() false (işçinin kSandbox'ı)
-// Olumsuz problar zararsızdır: filtre yokken de dosya oluşturmaz, ebeveyni durdurmaz, başka program çalıştırmaz.
+// Olumsuz problar zararsızdır: denetim yokken de dosya bırakmaz, ebeveyni durdurmaz, yabancı program çalıştırmaz
+// (Windows'ta spawn_child yalnız kendini askıda başlatmayı dener; başlarsa çalışmadan öldürülür).
 #include "pdfview/engine/sandbox.hpp"
 
 #include <array>
-#include <atomic>
-#include <cerrno>
-#include <chrono>
-#include <csignal>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <string_view>
+
+#ifdef __linux__
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <csignal>
 #include <fcntl.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
-#include <map>
-#include <string_view>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
@@ -32,6 +36,13 @@
 #include <sys/uio.h>
 #include <thread>
 #include <unistd.h>
+#elif defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <cwchar>
+#include <string>
+#include <vector>
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -42,6 +53,8 @@ constexpr std::size_t kPage = 4096;
 // sandbox_test.cpp'deki kProbeMemory (128 MiB) ile eşleşir: 64 MiB sığar, 256 MiB sığmaz.
 constexpr std::size_t kFitting = std::size_t{64} << 20U;
 constexpr std::size_t kOver = std::size_t{256} << 20U;
+
+#ifdef __linux__
 
 int open_read() {
     (void)open("/etc/passwd", O_RDONLY | O_CLOEXEC);
@@ -174,6 +187,8 @@ int clone3_enosys() {
     return result == -1 && errno == ENOSYS ? 0 : kControlMissing;
 }
 
+#endif
+
 int pipe_io() {
     std::array<char, 256> buffer{};
     std::size_t total = 0;
@@ -184,6 +199,8 @@ int pipe_io() {
     }
     return total > 0 && std::fflush(stdout) == 0 ? 0 : kSetupFailed;
 }
+
+#ifdef __linux__
 
 // İşçinin watch_parent'ı gibi: ayrılmış iş parçacığı uyur, getppid sorar ve hiç bitmez. join (futex) ve iş parçacığı
 // sonu (exit, std::thread durumunun serbest bırakılması) işçide yoktur, burada da yok. Süreç exit_group'la biter.
@@ -199,6 +216,8 @@ int run_thread() {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     return seen > 0 ? 0 : kSetupFailed;
 }
+
+#endif
 
 // Dokunulmuş ayırma: sayfalar gerçekten bağlanır.
 bool touched_alloc(std::size_t size) {
@@ -219,6 +238,143 @@ int alloc_over() {
     return touched_alloc(kOver) ? kControlMissing : 0;
 }
 
+#ifdef _WIN32
+
+std::string utf8(std::wstring_view wide) {
+    const int size = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0,
+                                         nullptr, nullptr);
+    std::string out(static_cast<std::size_t>(size), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), out.data(), size, nullptr,
+                        nullptr);
+    return out;
+}
+
+// Ortam bloğunun her girdisi bir satır ("AD=değer", UTF-8); test adları karşılaştırır.
+int env_dump() {
+    wchar_t* block = GetEnvironmentStringsW();
+    if (block == nullptr)
+        return kSetupFailed;
+    std::string out;
+    for (const wchar_t* entry = block; *entry != L'\0'; entry += std::wcslen(entry) + 1)
+        out += utf8(entry) + "\n";
+    FreeEnvironmentStringsW(block);
+    return std::fwrite(out.data(), 1, out.size(), stdout) == out.size() && std::fflush(stdout) == 0
+               ? 0
+               : kSetupFailed;
+}
+
+bool write_line(const std::string& line) {
+    return std::fwrite(line.data(), 1, line.size(), stdout) == line.size() && std::fputs("\n", stdout) >= 0 &&
+           std::fflush(stdout) == 0;
+}
+
+// Kendini askıda başlatmayı dener; başlarsa tek komut çalıştırmadan öldürülür. Yalnız iş nesnesinin süreç sınırı
+// (ERROR_NOT_ENOUGH_QUOTA: sınır aşımında işin sonlandırma kodu, JOBOBJECT_BASIC_LIMIT_INFORMATION) beklenen rettir;
+// başka bir hata kodu yazılır ve hazırlık hatası sayılır: denetimi başka bir şey sanmayalım.
+int spawn_child() {
+    std::wstring self(MAX_PATH, L'\0');
+    const DWORD length = GetModuleFileNameW(nullptr, self.data(), static_cast<DWORD>(self.size()));
+    if (length == 0 || length >= self.size())
+        return kSetupFailed;
+    self.resize(length);
+    std::wstring command_line = L"\"" + self + L"\" spawned";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION info{};
+    if (!CreateProcessW(self.c_str(), command_line.data(), nullptr, nullptr, FALSE, CREATE_SUSPENDED, nullptr,
+                        nullptr, &startup, &info)) {
+        const DWORD error = GetLastError();
+        if (error == ERROR_NOT_ENOUGH_QUOTA)
+            return 0;
+        write_line("spawn_child: CreateProcessW error " + std::to_string(error));
+        return kSetupFailed;
+    }
+    TerminateProcess(info.hProcess, 1);
+    CloseHandle(info.hThread);
+    CloseHandle(info.hProcess);
+    return kControlMissing;
+}
+
+// Yönetici olarak (UAC kapalı ya da "Yönetici olarak çalıştır") başlayan ebeveynin belirtecinde BUILTIN\Administrators
+// etkindir; kısıtlı belirteçte yalnız reddetmek için (deny-only) kalmalı. Grup yoksa (yönetici olmayan kullanıcı) prob
+// ayırt edemez: bunu yazar ve 0 döner.
+int admin_sid() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return kSetupFailed;
+    DWORD size = 0;
+    GetTokenInformation(token, TokenGroups, nullptr, 0, &size);
+    std::vector<unsigned char> buffer(size);
+    const bool read = size > 0 && GetTokenInformation(token, TokenGroups, buffer.data(), size, &size);
+    CloseHandle(token);
+    alignas(DWORD) std::array<BYTE, SECURITY_MAX_SID_SIZE> admins{};
+    DWORD admins_size = static_cast<DWORD>(admins.size());
+    if (!read || !CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, admins.data(), &admins_size))
+        return kSetupFailed;
+    const auto* groups = reinterpret_cast<const TOKEN_GROUPS*>(buffer.data());
+    const SID_AND_ATTRIBUTES* group = groups->Groups;
+    for (DWORD i = 0; i < groups->GroupCount; ++i) {
+        if (!EqualSid(group[i].Sid, admins.data()))
+            continue;
+        const DWORD attributes = group[i].Attributes;
+        if (!write_line("administrators: attributes " + std::to_string(attributes)))
+            return kSetupFailed;
+        const bool deny_only = (attributes & SE_GROUP_USE_FOR_DENY_ONLY) != 0 && (attributes & SE_GROUP_ENABLED) == 0;
+        return deny_only ? 0 : kControlMissing;
+    }
+    return write_line("administrators: absent") ? 0 : kSetupFailed;
+}
+
+// Kendi belirtecinin bütünlük düzeyi düşük (S-1-16-4096) ya da daha azsa 0.
+int integrity() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return kSetupFailed;
+    DWORD size = 0;
+    GetTokenInformation(token, TokenIntegrityLevel, nullptr, 0, &size);
+    std::vector<unsigned char> buffer(size);
+    const bool read = size > 0 && GetTokenInformation(token, TokenIntegrityLevel, buffer.data(), size, &size);
+    CloseHandle(token);
+    if (!read)
+        return kSetupFailed;
+    const PSID sid = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(buffer.data())->Label.Sid;
+    const DWORD rid = *GetSidSubAuthority(sid, *GetSidSubAuthorityCount(sid) - 1U);
+    return rid <= SECURITY_MANDATORY_LOW_RID ? 0 : kControlMissing;
+}
+
+// stdin'deki UTF-8 dizine (testin %LOCALAPPDATA%'sı) dosya açmayı dener; açılırsa kapanınca silinir. Düşük bütünlükteki
+// süreç orta etiketli kullanıcı dizinine yazamaz: ERROR_ACCESS_DENIED.
+int write_localappdata() {
+    std::string dir;
+    std::array<char, 256> chunk{};
+    while (const std::size_t got = std::fread(chunk.data(), 1, chunk.size(), stdin))
+        dir.append(chunk.data(), got);
+    if (dir.empty())
+        return kSetupFailed;
+    const int size = MultiByteToWideChar(CP_UTF8, 0, dir.data(), static_cast<int>(dir.size()), nullptr, 0);
+    std::wstring path(static_cast<std::size_t>(size), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, dir.data(), static_cast<int>(dir.size()), path.data(), size);
+    path += L"\\noteapp-sbx-probe-" + std::to_wstring(GetCurrentProcessId()) + L".tmp";
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW,
+                              FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (file != INVALID_HANDLE_VALUE) {
+        CloseHandle(file);
+        return kControlMissing;
+    }
+    return GetLastError() == ERROR_ACCESS_DENIED ? 0 : kSetupFailed;
+}
+
+// PROHIBIT_DYNAMIC_CODE (ACG): yürütülebilir sayfa ayrılamaz.
+int dynamic_code() {
+    void* page = VirtualAlloc(nullptr, kPage, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (page == nullptr)
+        return 0;
+    VirtualFree(page, 0, MEM_RELEASE);
+    return kControlMissing;
+}
+
+#else
+
 // enter_sandbox()'tan önce: seccomp() EPERM dönsün diye kendi filtresini kurar (NO_NEW_PRIVS ister).
 bool refuse_seccomp() {
     std::array<sock_filter, 4> program{{
@@ -235,7 +391,36 @@ int refused() {
     return kControlMissing;  // enter_sandbox() buraya gelmeden false dönmeliydi
 }
 
+#endif
+
 }  // namespace
+
+#ifdef _WIN32
+
+// Sınırlar ebeveynin başlatmasındadır (core::ChildProcess::start_confined); enter_sandbox() işçideki gibi çağrılır.
+int main(int argc, char** argv) {
+    const std::map<std::string_view, int (*)()> probes{
+        {"env_dump", env_dump},
+        {"spawn_child", spawn_child},
+        {"admin_sid", admin_sid},
+        {"integrity", integrity},
+        {"write_localappdata", write_localappdata},
+        {"dynamic_code", dynamic_code},
+        {"pipe_io", pipe_io},
+        {"alloc_64MiB", alloc_fitting},
+        {"alloc_over", alloc_over},
+    };
+    if (argc != 2)
+        return kSetupFailed;
+    const auto probe = probes.find(argv[1]);
+    if (probe == probes.end())
+        return kSetupFailed;
+    if (!noteapp::pdfview::enter_sandbox())
+        return kSandboxRefused;
+    return probe->second();
+}
+
+#else
 
 int main(int argc, char** argv) {
     const std::map<std::string_view, int (*)()> probes{
@@ -281,3 +466,4 @@ int main(int argc, char** argv) {
         return kSandboxRefused;
     return probe->second();
 }
+#endif

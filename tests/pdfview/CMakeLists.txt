@@ -19,13 +19,26 @@ add_dependencies(pdfview_tests note fake_pdf_worker)
 target_compile_definitions(pdfview_tests PRIVATE NOTEAPP_NOTE_EXE="$<TARGET_FILE:note>"
                                                  NOTEAPP_FAKE_PDF_WORKER="$<TARGET_FILE:fake_pdf_worker>")
 
-# PDF-SBX kum havuzu probu: işçinin enter_sandbox()'ından sonra tek bir sistem çağrısı dener (sandbox_test.cpp).
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+# PDF-SBX kum havuzu probu: işçinin enter_sandbox()'ından sonra tek bir yasak ya da izinli işi dener (sandbox_test.cpp).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR WIN32)
     add_executable(pdf_sandbox_probe ${PROJECT_SOURCE_DIR}/tests/support/pdf_sandbox_probe.cpp)
     target_link_libraries(pdf_sandbox_probe PRIVATE noteapp_pdfengine)
     noteapp_target_defaults(pdf_sandbox_probe)
     add_dependencies(pdfview_tests pdf_sandbox_probe)
     target_compile_definitions(pdfview_tests PRIVATE NOTEAPP_PDF_SANDBOX_PROBE="$<TARGET_FILE:pdf_sandbox_probe>")
+endif()
+
+# Wine'ın uygulamadığı Windows denetimleri (iş nesnesinin süreç ve bellek sınırı, düşük bütünlük, PROHIBIT_DYNAMIC_CODE,
+# tam ortam kümesi): doctest'te "manual-win11" takımı,
+# varsayılan `pdfview` koşusunda atlanır. Gerçek Windows'ta bu girdi onları koşar; çapraz derlemede (Wine) koşmaz,
+# ctest özetinde "Disabled" görünür. Elle doğrulama komutu: SPEC-core.md "PDF yardımcı süreci".
+if(WIN32)
+    add_test(NAME pdfview_win11 COMMAND pdfview_tests --test-suite=manual-win11 --no-skip)
+    set_tests_properties(pdfview_win11 PROPERTIES LABELS manual-win11
+                                                  ENVIRONMENT "NOTEAPP_HOME=${CMAKE_BINARY_DIR}/test-home")
+    if(CMAKE_CROSSCOMPILING)
+        set_tests_properties(pdfview_win11 PROPERTIES DISABLED TRUE)
+    endif()
 endif()
 
 # Bağlama sınırı: MuPDF yalnız `note`'ta (PDF işçisi); TUI (`notes`) ve GUI (`notes-gui`) onu bağlamaz. Pozitif

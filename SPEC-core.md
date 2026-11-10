@@ -311,9 +311,29 @@ config'tedir.
   `clone` yalnız CLONE_THREAD ile (öksüz denetimi iş parçacığı), `clone3` ENOSYS döner (glibc `clone`a düşer).
   Kurulamazsa işçi 6 ile çıkar, PDF açılmaz (fail-closed, kullanıcı kararı 2026-11-10); başka Linux mimarisinde de 6.
   ASan derlemesinde bellek sınırı konmaz (gölge bellek `RLIMIT_DATA`'ya sayılır) ve işçi `_exit` ile çıkar (LSan
-  taraması filtreye takılmasın). Windows'ta bu adımda yalnız ortam süzülür (senkron token'ı ve AppImage değişkenleri
-  düşer); orada işçi henüz **yetki sınırı değildir** (ADR 0002): MuPDF'te kod çalıştıran bir PDF kullanıcının
-  dosyalarını okuyabilir ve ağa çıkabilir (PDF-SBX T2: düşük bütünlük + iş nesnesi).
+  taraması filtreye takılmasın).
+  **Kum havuzu (PDF-SBX T2, Windows):** `start_confined` işçiyi `CreateProcessAsUserW` ile kendi belirtecimizin
+  `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE)` kopyasıyla (BUILTIN\Administrators yalnız deny-only: yönetici olarak
+  çalışan ebeveynin işçisi yöneticinin okuyabildiği dosyaları okuyamaz), düşük bütünlükte (S-1-16-4096), konsolsuz
+  (`DETACHED_PROCESS`), askıda ve yalnız stdin/stdout/NUL tutamaçlarını devrederek başlatır; azaltımlar
+  `PROHIBIT_DYNAMIC_CODE`, `IMAGE_LOAD_NO_REMOTE`, `IMAGE_LOAD_NO_LOW_LABEL`, `EXTENSION_POINT_DISABLE`. Ortam yalnız
+  `SystemRoot` ve `NoDefaultCurrentDirectoryInExePath=1`. Sürdürmeden önce iş nesnesine atanır: KILL_ON_JOB_CLOSE,
+  tek etkin süreç (torun yok), `worker_memory` kadar ayrılmış bellek (0 sınırsız), bütün `JOB_OBJECT_UILIMIT_*`.
+  Adımlardan biri (sürdürme dahil) başarısızsa askıdaki çocuk öldürülür, başlatma başarısız olur (fail-closed; logda
+  `event=sandboxed_spawn_failed step=<adım> error=<Windows hata kodu>`). UI sınırlı iş iç içe olamaz: uygulama zaten
+  bir iş nesnesinin içinde başlatıldıysa atama başarısız olur, PDF açılmaz (`step=job`). win32k kapatma yok: `note.exe` user32/gdi32'yi doğrudan içe aktarmasa da shell32 ve ole32
+  üzerinden yükler (ayrı işçi exe'si backlog'da). Düşük bütünlük yalnız **yazmayı** keser: işçi kullanıcının
+  dosyalarını okuyabilir ve ağa çıkabilir (AppContainer geniş dağıtımdan önce, kullanıcı kararı 2026-11-10).
+  Wine bu denetimlerden ortamın süzülmesini ve Administrators'ın deny-only olmasını sınar; iş nesnesinin süreç ve
+  bellek sınırını, bütünlük düzeyini, yazma reddini ve `PROHIBIT_DYNAMIC_CODE`'u uygulamaz. Onlar doctest
+  `manual-win11` takımında, ctest `pdfview_win11` (etiket `manual-win11`; çapraz derlemede Disabled) olarak gerçek
+  Windows 11'de elle koşulur, derleme ortamı gerekmez: `scripts/build-windows.sh --test` derleme biriminde
+  `test/tests/pdfview/{pdfview_tests,pdf_sandbox_probe,fake_pdf_worker}.exe` ve `test/src/cli/note.exe` üretir (yalnız
+  Windows sistem DLL'lerini içe aktarırlar); dördü aynı klasöre kopyalanır (testler derlemenin gömdüğü yol yoksa
+  yardımcıları kendi yanlarında arar, `tests/pdfview/built_executable.hpp`). O klasörde cmd'de:
+  `set NOTEAPP_HOME=%TEMP%\noteapp-sbx`, sonra `pdfview_tests.exe` (gerçek işçi bütün sınırlar altında PDF açar; son
+  satır `Status: SUCCESS!`) ve `pdfview_tests.exe --test-suite=manual-win11 --no-skip` (kısıtların kendisi;
+  `6 passed | 0 failed`). İkisi bir kez de yönetici cmd'sinde koşulur (Administrators deny-only sınaması).
 - **Yapılı sayfa metni (V14):** `PdfDocument::page_structure` sayfanın metnini bloklar → satırlar → aynı biçimli
   parçalar olarak verir (`pdfview/structured_text.hpp`): parça `{metin, biçim (kalın/italik/eş aralıklı), punto}` ve
   her kod noktası için yatay kutu `{x0, x1}`; satır dikey kutu `{top, bottom}` ve tireyle bölünmüş sözcük işareti

@@ -147,6 +147,20 @@ void close_if_open(void*& handle) {
 std::optional<ChildProcess> ChildProcess::start(const std::vector<std::string>& argv, bool capture_stdout,
                                                 const std::vector<std::string>& extra_env,
                                                 const std::filesystem::path& working_directory) {
+    return start_windows(argv, capture_stdout, extra_env, working_directory, nullptr);
+}
+
+std::optional<ChildProcess> ChildProcess::start_confined(const std::vector<std::string>& argv,
+                                                         std::uint64_t memory_bytes) {
+    // Ortam, konsol ve sınırlar core::spawn_confined'da (process_win.hpp).
+    const core::SpawnConfinement confinement{memory_bytes};
+    return start_windows(argv, true, {}, {}, &confinement);
+}
+
+std::optional<ChildProcess> ChildProcess::start_windows(const std::vector<std::string>& argv, bool capture_stdout,
+                                                        const std::vector<std::string>& extra_env,
+                                                        const std::filesystem::path& working_directory,
+                                                        const SpawnConfinement* confinement) {
     if (argv.empty())
         return std::nullopt;
     std::optional<PipeEnds> input = open_pipe(true);
@@ -162,9 +176,11 @@ std::optional<ChildProcess> ChildProcess::start(const std::vector<std::string>& 
     const core::UniqueHandle null_device = core::open_null_device();
     if (!null_device)
         return std::nullopt;
-    auto spawned = core::spawn_with_stdio(argv, child_env_overrides(extra_env), input->child.get(),
-                                          output ? output->child.get() : null_device.get(), null_device.get(),
-                                          CREATE_NO_WINDOW, working_directory);
+    HANDLE child_stdout = output ? output->child.get() : null_device.get();
+    auto spawned = confinement != nullptr
+                       ? core::spawn_confined(argv, input->child.get(), child_stdout, null_device.get(), *confinement)
+                       : core::spawn_with_stdio(argv, child_env_overrides(extra_env), input->child.get(),
+                                                child_stdout, null_device.get(), CREATE_NO_WINDOW, working_directory);
     if (!spawned)
         return std::nullopt;
     // Çocuğun uçları burada kapanır: yalnız çocukta kalmalı, yoksa çocuk çıkınca okuyan EOF görmez.
@@ -174,11 +190,6 @@ std::optional<ChildProcess> ChildProcess::start(const std::vector<std::string>& 
     child.stdin_pipe_ = input->parent.release();
     child.stdout_pipe_ = output ? output->parent.release() : nullptr;
     return child;
-}
-
-std::optional<ChildProcess> ChildProcess::start_confined(const std::vector<std::string>& argv,
-                                                         [[maybe_unused]] std::uint64_t memory_bytes) {
-    return start(argv, true);
 }
 
 bool ChildProcess::write_all(std::string_view data, Clock::time_point deadline, const std::stop_token& stop) {

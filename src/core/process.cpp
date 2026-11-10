@@ -7,8 +7,10 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <cwchar>
+#include <limits>
 #include <string>
 
 #ifdef _WIN32
@@ -117,16 +119,22 @@ bool is_batch_file(const fs::path& p) {
 
 // Mevcut ortam + NoDefaultCurrentDirectoryInExePath=1 + geçersiz kılmalar (nullopt: silinir); değişken adları
 // Windows'ta büyük/küçük harfe duyarsızdır. CreateProcess ve cmd.exe (ör. .cmd editörün içinden) yalın adı önce
-// çalışma dizininde arar: find_program'ın göreli PATH kuralı her çocukta da geçsin.
-std::wstring build_environment_block(const EnvOverrides& overrides) {
+// çalışma dizininde arar: find_program'ın göreli PATH kuralı her çocukta da geçsin. `confined` ise mevcut ortam yerine
+// yalnız SystemRoot (sistem DLL'leri ona dayanır) taşınır: token, kullanıcı yolları ve AppImage değişkenleri geçmez.
+std::wstring build_environment_block(const EnvOverrides& overrides, bool confined) {
     std::vector<std::wstring> entries;
-    wchar_t* block = GetEnvironmentStringsW();
-    for (const wchar_t* p = block; block != nullptr && *p != L'\0'; p += std::wcslen(p) + 1)
-        entries.emplace_back(p);
-    if (block != nullptr)
-        FreeEnvironmentStringsW(block);
-
-    EnvOverrides all = host_environment_restores();
+    EnvOverrides all;
+    if (confined) {
+        if (std::optional<std::string> root = get_env_utf8("SystemRoot"))
+            all.emplace_back("SystemRoot", std::move(root));
+    } else {
+        wchar_t* block = GetEnvironmentStringsW();
+        for (const wchar_t* p = block; block != nullptr && *p != L'\0'; p += std::wcslen(p) + 1)
+            entries.emplace_back(p);
+        if (block != nullptr)
+            FreeEnvironmentStringsW(block);
+        all = host_environment_restores();
+    }
     all.emplace_back("NoDefaultCurrentDirectoryInExePath", "1");
     all.insert(all.end(), overrides.begin(), overrides.end());
     for (const auto& [key, value] : all) {
@@ -205,16 +213,236 @@ std::expected<Command, Error> prepare_command(const std::vector<std::string>& ar
 }
 
 // Yalnız çocuğun ağacını toplayan, adsız iş nesnesi; son tutamaç kapanırsa (ör. uygulama çökerse)
-// üyeleri öldürür. Başarısızlıkta boş.
-UniqueHandle create_kill_on_close_job() {
+// üyeleri öldürür. `confinement` varsa SpawnConfinement'ın iş sınırları da konur. Başarısızlıkta boş.
+UniqueHandle create_kill_on_close_job(const SpawnConfinement* confinement) {
     UniqueHandle job(CreateJobObjectW(nullptr, nullptr));
     if (!job)
         return nullptr;
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (confinement != nullptr) {
+        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+        limits.BasicLimitInformation.ActiveProcessLimit = 1;
+        if (confinement->memory_bytes != 0) {
+            limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
+            limits.JobMemoryLimit = static_cast<SIZE_T>(
+                std::min<std::uint64_t>(confinement->memory_bytes, std::numeric_limits<SIZE_T>::max()));
+        }
+    }
     if (!SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
         return nullptr;
+    if (confinement != nullptr) {
+        JOBOBJECT_BASIC_UI_RESTRICTIONS ui{};
+        ui.UIRestrictionsClass = JOB_OBJECT_UILIMIT_HANDLES | JOB_OBJECT_UILIMIT_READCLIPBOARD |
+                                 JOB_OBJECT_UILIMIT_WRITECLIPBOARD | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS |
+                                 JOB_OBJECT_UILIMIT_DISPLAYSETTINGS | JOB_OBJECT_UILIMIT_GLOBALATOMS |
+                                 JOB_OBJECT_UILIMIT_DESKTOP | JOB_OBJECT_UILIMIT_EXITWINDOWS;
+        if (!SetInformationJobObject(job.get(), JobObjectBasicUIRestrictions, &ui, sizeof(ui)))
+            return nullptr;
+    }
     return job;
+}
+
+// Kısıtlı başlatmada başarısız adım ve o andaki GetLastError.
+struct SpawnFailure {
+    const char* step;
+    DWORD error;
+};
+
+SpawnFailure last_failure(const char* step) {
+    return {step, GetLastError()};
+}
+
+// Hizalı SID tamponu: SID'in alt yetkileri DWORD'dür.
+struct SidBuffer {
+    alignas(DWORD) std::array<BYTE, SECURITY_MAX_SID_SIZE> bytes{};
+    PSID get() { return bytes.data(); }
+};
+
+bool make_well_known_sid(WELL_KNOWN_SID_TYPE type, SidBuffer& sid) {
+    DWORD size = static_cast<DWORD>(sid.bytes.size());
+    return CreateWellKnownSid(type, nullptr, sid.get(), &size) != 0;
+}
+
+// SpawnConfinement belirteci: kendi birincil belirtecimizin DISABLE_MAX_PRIVILEGE'li kopyası, bütünlüğü düşük. Çağıranın
+// kendi belirtecinin kısıtlı sürümü olduğundan CreateProcessAsUserW SE_ASSIGNPRIMARYTOKEN istemez (CreateRestrictedToken
+// belgesi); bütünlüğü düşürmek ayrıcalık istemez. Yeni tutamaç eskisinin erişim haklarını taşır: DUPLICATE
+// (CreateRestrictedToken), ADJUST_DEFAULT (TokenIntegrityLevel), QUERY + ASSIGN_PRIMARY (CreateProcessAsUserW). Devralınan
+// boru tutamaçları açıkken erişim denetiminden geçmiştir: düşük bütünlüklü çocuk onları yine okur ve yazar.
+// Yönetici olarak çalışan ebeveynin (UAC kapalı ya da "Yönetici olarak çalıştır") BUILTIN\Administrators grubu etkin
+// kalsaydı işçi, yöneticinin okuyabildiği her kullanıcının dosyasını okurdu: grup yalnız reddetmek için (deny-only) kalır.
+// Belirteçte yoksa CreateRestrictedToken onu yok sayar.
+std::expected<UniqueHandle, SpawnFailure> create_low_integrity_token() {
+    HANDLE raw = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(),
+                          TOKEN_DUPLICATE | TOKEN_ADJUST_DEFAULT | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY, &raw))
+        return std::unexpected(last_failure("open_token"));
+    const UniqueHandle own(raw);
+    SidBuffer administrators;
+    if (!make_well_known_sid(WinBuiltinAdministratorsSid, administrators))
+        return std::unexpected(last_failure("admin_sid"));
+    SID_AND_ATTRIBUTES deny_only{administrators.get(), 0};  // Attributes yok sayılır
+    if (!CreateRestrictedToken(own.get(), DISABLE_MAX_PRIVILEGE, 1, &deny_only, 0, nullptr, 0, nullptr, &raw))
+        return std::unexpected(last_failure("restricted_token"));
+    UniqueHandle restricted(raw);
+    SidBuffer low_label;
+    if (!make_well_known_sid(WinLowLabelSid, low_label))
+        return std::unexpected(last_failure("low_label_sid"));
+    TOKEN_MANDATORY_LABEL label{};
+    label.Label.Sid = low_label.get();
+    label.Label.Attributes = SE_GROUP_INTEGRITY;
+    if (!SetTokenInformation(restricted.get(), TokenIntegrityLevel, &label,
+                             static_cast<DWORD>(sizeof(label)) + GetLengthSid(low_label.get())))
+        return std::unexpected(last_failure("low_integrity"));
+    return restricted;
+}
+
+// Yalnız SpawnConfinement'lı çocukta; MuPDF ve işçi JIT ya da çalışma zamanı kod üretmez.
+constexpr DWORD64 kConfinedMitigations = PROCESS_CREATION_MITIGATION_POLICY_PROHIBIT_DYNAMIC_CODE_ALWAYS_ON |
+                                         PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_REMOTE_ALWAYS_ON |
+                                         PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_LOW_LABEL_ALWAYS_ON |
+                                         PROCESS_CREATION_MITIGATION_POLICY_EXTENSION_POINT_DISABLE_ALWAYS_ON;
+
+// PROC_THREAD_ATTRIBUTE_LIST'in sahibi. Eklenen değerlerin belleği CreateProcess*'e kadar yaşamalıdır.
+class AttributeList {
+public:
+    explicit AttributeList(DWORD count) {
+        SIZE_T size = 0;
+        InitializeProcThreadAttributeList(nullptr, count, 0, &size);
+        buffer_.resize(size);
+        initialized_ = size > 0 && InitializeProcThreadAttributeList(get(), count, 0, &size);
+    }
+    ~AttributeList() {
+        if (initialized_)
+            DeleteProcThreadAttributeList(get());
+    }
+    AttributeList(const AttributeList&) = delete;
+    AttributeList& operator=(const AttributeList&) = delete;
+
+    bool add(DWORD_PTR attribute, void* value, SIZE_T size) {
+        return initialized_ && UpdateProcThreadAttribute(get(), 0, attribute, value, size, nullptr, nullptr);
+    }
+    LPPROC_THREAD_ATTRIBUTE_LIST get() { return reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(buffer_.data()); }
+
+private:
+    std::vector<char> buffer_;
+    bool initialized_ = false;
+};
+
+// HANDLE_LIST aynı tutamacı iki kez kabul etmez.
+std::vector<HANDLE> distinct_handles(const std::array<HANDLE, 3>& handles) {
+    std::vector<HANDLE> distinct;
+    for (HANDLE handle : handles)
+        if (std::ranges::find(distinct, handle) == distinct.end())
+            distinct.push_back(handle);
+    return distinct;
+}
+
+// Askıdaki çocuğu işe atar. Çağıran zaten bir işin içindeyse iç içe iş Windows 8+'ta çalışır; UI sınırlı iş iç içe
+// olamaz (Nested Jobs belgesi), kısıtlı çocukta bu da hatadır. Kısıtsız çocukta atama olmazsa uyarı loglanır ve doğrudan
+// çocuğa düşülür (boş iş).
+std::expected<UniqueHandle, SpawnFailure> attach_job(HANDLE process, const SpawnConfinement* confinement) {
+    UniqueHandle job = create_kill_on_close_job(confinement);
+    if (job && AssignProcessToJobObject(job.get(), process))
+        return job;
+    const SpawnFailure failure = last_failure("job");
+    if (confinement != nullptr)
+        return std::unexpected(failure);
+    log_warn("process: job object unavailable (error " + std::to_string(failure.error) +
+             "); terminate will only kill the direct child");
+    return UniqueHandle{};
+}
+
+struct SpawnRequest {
+    const std::vector<std::string>& argv;
+    const EnvOverrides& env_overrides;
+    std::array<HANDLE, 3> stdio;  // stdin, stdout, stderr
+    DWORD creation_flags;
+    const fs::path& working_directory;
+    const SpawnConfinement* confinement;  // null: kısıtsız
+};
+
+// Askıda başlatır; `token` yalnız kısıtlı başlatmada dolu. Yalnız standart tutamaçlar devredilir
+// (PROC_THREAD_ATTRIBUTE_HANDLE_LIST): bInheritHandles=TRUE tek başına ebeveynin devredilebilir her tutamacını (ör.
+// stdout'un yönlendirildiği dosya) çocuğa verir.
+std::expected<PROCESS_INFORMATION, SpawnFailure> create_suspended(const SpawnRequest& request, const Command& command,
+                                                                  HANDLE token) {
+    const bool confined = request.confinement != nullptr;
+    // Çalışma dizini değişince göreli program yolu başka yeri gösterirdi.
+    std::error_code absolute_error;
+    const std::wstring application = request.working_directory.empty()
+                                         ? command.application
+                                         : fs::absolute(command.application, absolute_error).wstring();
+    std::wstring command_line = command.command_line;
+    std::wstring environment = build_environment_block(request.env_overrides, confined);
+    std::vector<HANDLE> inherited = distinct_handles(request.stdio);
+    DWORD64 mitigations = kConfinedMitigations;
+    AttributeList attributes(confined ? 2 : 1);
+    if (!attributes.add(PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited.data(), inherited.size() * sizeof(HANDLE)) ||
+        (confined && !attributes.add(PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, &mitigations, sizeof(mitigations))))
+        return std::unexpected(last_failure("attributes"));
+    STARTUPINFOEXW startup{};
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = request.stdio[0];
+    startup.StartupInfo.hStdOutput = request.stdio[1];
+    startup.StartupInfo.hStdError = request.stdio[2];
+    startup.lpAttributeList = attributes.get();
+    PROCESS_INFORMATION info{};
+    const DWORD flags =
+        request.creation_flags | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED;
+    const wchar_t* directory = request.working_directory.empty() ? nullptr : request.working_directory.c_str();
+    const BOOL created =
+        confined ? CreateProcessAsUserW(token, application.c_str(), command_line.data(), nullptr, nullptr, TRUE, flags,
+                                        environment.data(), directory, &startup.StartupInfo, &info)
+                 : CreateProcessW(application.c_str(), command_line.data(), nullptr, nullptr, TRUE, flags,
+                                  environment.data(), directory, &startup.StartupInfo, &info);
+    if (!created)
+        return std::unexpected(last_failure("create_process"));
+    return info;
+}
+
+// spawn_with_stdio ve spawn_confined'ın ortak yolu: askıda başlatır, işe atar, sonra sürdürür.
+std::expected<SpawnedProcess, Error> spawn_resumed_in_job(const SpawnRequest& request) {
+    const std::string& program_name = request.argv.front();
+    const auto command = prepare_command(request.argv);
+    if (!command)
+        return std::unexpected(command.error());
+    const bool confined = request.confinement != nullptr;
+    // Kısıtlı başlatmanın her adımı fail-closed ve loglanır (sır yok: adım ve Windows hata kodu); kısıtsız başlatmanın
+    // hata nedeni eskisi gibi yalnız koddur.
+    const auto fail = [&](const SpawnFailure& failure) {
+        const std::string error = std::to_string(failure.error);
+        if (!confined)
+            return std::unexpected(spawn_failed(program_name, error));
+        log_warn(std::string("event=sandboxed_spawn_failed step=") + failure.step + " error=" + error);
+        return std::unexpected(spawn_failed(program_name, std::string(failure.step) + " " + error));
+    };
+    UniqueHandle token;
+    if (confined) {
+        auto low = create_low_integrity_token();
+        if (!low)
+            return fail(low.error());
+        token = std::move(*low);
+    }
+    auto created = create_suspended(request, *command, token.get());
+    if (!created)
+        return fail(created.error());
+    // Çocuk askıda başlar: işe atanmadan tek komut çalışmasın ki torunlar da işe katılsın. Atanamaz ya da sürdürülemezse
+    // tek komut çalıştırmadan ölür.
+    UniqueHandle process(created->hProcess);
+    const UniqueHandle thread(created->hThread);
+    auto job = attach_job(process.get(), request.confinement);
+    if (!job) {
+        TerminateProcess(process.get(), 1);
+        return fail(job.error());
+    }
+    if (ResumeThread(thread.get()) == static_cast<DWORD>(-1)) {
+        const SpawnFailure failure = last_failure("resume");
+        TerminateProcess(process.get(), 1);
+        return fail(failure);
+    }
+    return SpawnedProcess{std::move(process), std::move(*job), created->dwProcessId};
 }
 
 #else
@@ -300,63 +528,18 @@ std::expected<SpawnedProcess, Error> spawn_with_stdio(const std::vector<std::str
                                                       HANDLE stdout_handle, HANDLE stderr_handle,
                                                       DWORD creation_flags,
                                                       const fs::path& working_directory) {
-    const std::string& program_name = argv.front();
-    const auto command = prepare_command(argv);
-    if (!command)
-        return std::unexpected(command.error());
-    // Çalışma dizini değişince göreli program yolu başka yeri gösterirdi.
-    std::error_code absolute_error;
-    const std::wstring application = working_directory.empty()
-                                         ? command->application
-                                         : fs::absolute(command->application, absolute_error).wstring();
-    std::wstring command_line = command->command_line;
-    std::wstring environment = build_environment_block(env_overrides);
+    return spawn_resumed_in_job(
+        {argv, env_overrides, {stdin_handle, stdout_handle, stderr_handle}, creation_flags, working_directory, nullptr});
+}
 
-    // Yalnız standart tutamaçlar devredilir (PROC_THREAD_ATTRIBUTE_HANDLE_LIST): bInheritHandles=TRUE tek başına
-    // ebeveynin devredilebilir her tutamacını (ör. stdout'un yönlendirildiği dosya) çocuğa verir. Liste aynı
-    // tutamacı iki kez kabul etmez.
-    std::vector<HANDLE> inherited;  // liste CreateProcessW'e kadar bu belleği okur
-    for (HANDLE handle : {stdin_handle, stdout_handle, stderr_handle})
-        if (std::ranges::find(inherited, handle) == inherited.end())
-            inherited.push_back(handle);
-    SIZE_T list_size = 0;
-    InitializeProcThreadAttributeList(nullptr, 1, 0, &list_size);
-    std::vector<char> list_buffer(list_size);
-    auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(list_buffer.data());
-    BOOL ok = InitializeProcThreadAttributeList(attributes, 1, 0, &list_size);
-    if (ok)
-        ok = UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited.data(),
-                                       inherited.size() * sizeof(HANDLE), nullptr, nullptr);
-    STARTUPINFOEXW startup{};
-    startup.StartupInfo.cb = sizeof(startup);
-    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    startup.StartupInfo.hStdInput = stdin_handle;
-    startup.StartupInfo.hStdOutput = stdout_handle;
-    startup.StartupInfo.hStdError = stderr_handle;
-    startup.lpAttributeList = attributes;
-    PROCESS_INFORMATION info{};
-    if (ok)
-        ok = CreateProcessW(
-            application.c_str(), command_line.data(), nullptr, nullptr, TRUE,
-            creation_flags | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
-            environment.data(), working_directory.empty() ? nullptr : working_directory.c_str(), &startup.StartupInfo, &info);
-    const DWORD spawn_error = GetLastError();
-    if (list_size > 0)
-        DeleteProcThreadAttributeList(attributes);
-    if (!ok)
-        return std::unexpected(spawn_failed(program_name, std::to_string(spawn_error)));
-    // Çocuk askıda başlar: işe atanmadan tek komut çalışmasın ki torunlar da işe katılsın. Çağıran zaten
-    // bir işin içindeyse (CI/IDE) iç içe iş Windows 8+'ta çalışır; olmazsa doğrudan çocuğa düşülür.
-    UniqueHandle process(info.hProcess);
-    const UniqueHandle thread(info.hThread);
-    UniqueHandle job = create_kill_on_close_job();
-    if (!job || !AssignProcessToJobObject(job.get(), process.get())) {
-        log_warn("process: job object unavailable (error " + std::to_string(GetLastError()) +
-                 "); terminate will only kill the direct child");
-        job.reset();
-    }
-    ResumeThread(thread.get());
-    return SpawnedProcess{std::move(process), std::move(job), info.dwProcessId};
+std::expected<SpawnedProcess, Error> spawn_confined(const std::vector<std::string>& argv, HANDLE stdin_handle,
+                                                    HANDLE stdout_handle, HANDLE stderr_handle,
+                                                    const SpawnConfinement& confinement) {
+    const EnvOverrides no_overrides;
+    const fs::path same_directory;
+    // Konsol yok: DETACHED_PROCESS'li çocuğa conhost açılmaz, tek süreç sınırına takılacak yardımcı süreç de olmaz.
+    return spawn_resumed_in_job({argv, no_overrides, {stdin_handle, stdout_handle, stderr_handle}, DETACHED_PROCESS,
+                                 same_directory, &confinement});
 }
 
 #endif
@@ -507,7 +690,7 @@ std::expected<int, Error> run_and_wait(const std::vector<std::string>& argv,
     std::wstring application = command->application;
     std::wstring command_line = command->command_line;
 
-    std::wstring environment = build_environment_block(env_overrides);
+    std::wstring environment = build_environment_block(env_overrides, false);
 
     UniqueHandle null_device;
     if (discard_output) {

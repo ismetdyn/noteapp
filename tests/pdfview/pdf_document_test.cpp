@@ -7,6 +7,7 @@
 #include "core/limits.hpp"
 #include "core/paths.hpp"
 #include "core/unique_handle.hpp"
+#include "pdfview/built_executable.hpp"
 #include "pdfview/engine/pdf_engine.hpp"
 #include "pdfview/fixtures.hpp"
 #include "pdfview/pdf_document.hpp"
@@ -43,8 +44,8 @@ namespace fs = std::filesystem;
 
 namespace {
 
-const fs::path kNote = NOTEAPP_NOTE_EXE;
-const fs::path kFakeWorker = NOTEAPP_FAKE_PDF_WORKER;
+const fs::path kNote = test::built_executable(NOTEAPP_NOTE_EXE);
+const fs::path kFakeWorker = test::built_executable(NOTEAPP_FAKE_PDF_WORKER);
 // Öldürmeyle kesilen işin dönüş sınırı (süre + 1 sn; Wine ve sanitizer altında da).
 constexpr auto kKillSlack = std::chrono::seconds(1);
 // Süre her çağrıda işçinin (yeniden) başlatılmasını ve Open'ı da kapsar: yüklü makinede de bunlara
