@@ -241,6 +241,30 @@ TEST_CASE("env overrides can remove a variable from the child's environment") {
     CHECK(env.find("NOTEAPP_TEST_ABSENT") == std::string::npos);
 }
 
+// AppRun notes-gui'de GIO_MODULE_DIR'i paketin boş dizinine çevirir; GTK'lı çocuk (editör) host modülleriyle
+// (dconf, gvfs) açılmalı.
+TEST_CASE("the child gets the host GIO_MODULE_DIR back, or none when the host had none") {
+    TempDir dir;
+    const auto dump = dir.path() / "env.txt";
+    const ScopedEnv bundled("GIO_MODULE_DIR", "/package/.no-gio-modules");
+    ScopedEnv saved("NOTEAPP_HOST_GIO_MODULE_DIR", "/host/gio/modules");
+    ScopedEnv was_unset("NOTEAPP_HOST_GIO_MODULE_DIR_UNSET");
+    was_unset.unset();
+
+    REQUIRE(run_and_wait({kFakeEditor}, {{"FAKE_EDITOR_ENV_OUT", utf8(dump)}}).value() == 0);
+    std::string env = slurp(dump);
+    CHECK(("\n" + env).find("\nGIO_MODULE_DIR=/host/gio/modules\n") != std::string::npos);
+    CHECK(env.find("no-gio-modules") == std::string::npos);
+    CHECK(env.find("NOTEAPP_HOST_GIO") == std::string::npos);
+
+    saved.unset();
+    was_unset.set("1");
+    REQUIRE(run_and_wait({kFakeEditor}, {{"FAKE_EDITOR_ENV_OUT", utf8(dump)}}).value() == 0);
+    env = slurp(dump);
+    CHECK(env.find("FAKE_EDITOR_ENV_OUT=") != std::string::npos);
+    CHECK(env.find("GIO_MODULE_DIR") == std::string::npos);
+}
+
 TEST_CASE("without_secrets drops the sync token variables and keeps the given overrides") {
     TempDir dir;
     const auto dump = dir.path() / "env.txt";

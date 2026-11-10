@@ -173,6 +173,20 @@ TEST_CASE("child process: the sync token and AppImage variables do not reach the
     CHECK(env.find("appimage-must-not-leak") == std::string::npos);
 }
 
+TEST_CASE("child process: the host GIO_MODULE_DIR saved by AppRun replaces the bundled one") {
+    const TempDir dir;
+    const fs::path env_file = dir.path() / "env.txt";
+    const ScopedEnv bundled("GIO_MODULE_DIR", "/package/.no-gio-modules");
+    const ScopedEnv saved("NOTEAPP_HOST_GIO_MODULE_DIR", "/host/gio/modules");
+    auto child = ChildProcess::start({kHelper}, false, {"FAKE_EDITOR_ENV_OUT=" + utf8(env_file)});
+    REQUIRE(child.has_value());
+    REQUIRE(child->wait_until(Clock::now() + 10s) == std::optional<int>(0));
+    const std::string env = slurp(env_file);
+    CHECK(("\n" + env).find("\nGIO_MODULE_DIR=/host/gio/modules\n") != std::string::npos);
+    CHECK(env.find("no-gio-modules") == std::string::npos);
+    CHECK(env.find("NOTEAPP_HOST_GIO") == std::string::npos);
+}
+
 TEST_CASE("child process: a missing program or an empty command does not start") {
     CHECK_FALSE(ChildProcess::start({"noteapp-no-such-program-t59d"}, true).has_value());
     CHECK_FALSE(ChildProcess::start({}, true).has_value());

@@ -621,15 +621,21 @@ Spec: SPEC-tui.md "PDF sayfa görüntüsü (TPI)". Sıralı tek yazar (aynı dos
 - [ ] Hücre boyu tamsayı bölmeyle (`src/tui/main.cpp:822-828`); sayfa kenarında birkaç piksel boşluk (görsel).
 
 ## KI — Kalan işler (kullanıcı 2026-11-10: "kalan işleri hallet")
-- [ ] KI-1 GUI paket hataları: (a) terminalden `notes-gui` → `libgvfscommon.so: undefined symbol: g_variant_builder_init_static` / `Failed to load module .../gio/modules/libgvfsdbus.so` (AppImage'daki glib, host gio modüllerini yüklüyor); (b) GNOME dock'ta ikon yerine çark (Wayland app_id ↔ `noteapp.desktop` eşleşmesi).
+- [x] KI-1 GUI paket hataları: (a) terminalden `notes-gui` → `libgvfscommon.so: undefined symbol: g_variant_builder_init_static` / `Failed to load module .../gio/modules/libgvfsdbus.so` (AppImage'daki glib, host gio modüllerini yüklüyor); (b) GNOME dock'ta ikon yerine çark (Wayland app_id ↔ `noteapp.desktop` eşleşmesi).
   Scope: packaging/**, docker/appimage.Containerfile, scripts/build-appimage.sh, scripts/install-local.sh, src/gui/** (yalnız app_id/metadata), SPEC-gui.md
   Acceptance: AppImage'dan `notes-gui` stderr'de gio/gvfs hatası yok; pencerenin Wayland app_id'si ve X11 WM_CLASS'ı `noteapp`; masaüstü dosyasında `StartupWMClass=noteapp`. Verify: AppImage derlemesi exit 0 + app_id testi/kanıtı.
-- [ ] KI-2 Küçük bulgular: Backlog GUI kopyala-bırakınca (2) + TPI-A (2) + TPI-B (2) + `notes --version` (ve `notes-gui --version`, `note --version` ile aynı biçim).
+  Kanıt: a09c71d+f9d4216 → main; Ubuntu 26.04 konteynerinde RED (gvfs hatası, app_id `notes-gui`) → GREEN (hata yok, app_id/WM_CLASS `noteapp`); `ctest -R "^(core|gui|install_local)$"` exit 0; review engelleyici yok.
+- [x] KI-2 Küçük bulgular: Backlog GUI kopyala-bırakınca (2) + TPI-A (2) + TPI-B (2) + `notes --version` (ve `notes-gui --version`, `note --version` ile aynı biçim).
   Scope: src/gui/view_editor.cpp, src/tui/**, src/app/pdf_preview.*, tests/tui/**, tests/gui/**, SPEC-tui.md, SPEC-gui.md
   Acceptance: her bulgu için düşen-sonra-geçen test (görsel 2 piksel bulgusu hariç); `notes --version` → `notes 0.1.5`. Verify: `ctest -R "^(tui|gui)$"` exit 0.
+  Kanıt: 0973146+ff9aea8 → main 238cac0; `ctest -j2 -R "^(tui|tui_pty|gui|app)$"` exit 0 (RED 8 yeni test); 4 ve 6 atlandı (4: 10000 sayfada 193–266 ms, basit değil); review engelleyici yok.
 - [ ] KI-3 PDF-SBX (ADR 0002): plan `tasks/plan-sbx.md` (kullanıcı 5 kararı kabul etti 2026-11-10).
   - [ ] SBX-T1 Linux seccomp + ortak sözleşme (plan-sbx T1).
   - [ ] SBX-T2 Windows Low IL + job (plan-sbx T2). Depends: SBX-T1
   - [ ] SBX-T3 ADR 0003 + belgeler + security-reviewer. Depends: SBX-T1, SBX-T2
 - [x] KI-4 Temizlik: eski worktree'ler ve build volume'leri (kullanıcı onayıyla).
   Kanıt (2026-11-10): 18 worktree kaldırıldı (dallar duruyor), 27 volume silindi; `df /` 206G → 129G kullanılan.
+
+## Backlog — KI-1 review Low bulguları
+- [ ] İç içe başlatma (`packaging/linux/AppRun:68-77`): ortamı geri almamış bir süreçten (SDL'in `xdg-open`'ı) yeni notes-gui açılırsa kullanıcının asıl `GIO_MODULE_DIR` değeri kaybolur; çocuklar gvfs/dconf'suz. Ucuz koruma: işaret zaten varsa üzerine yazma.
+- [ ] `SDL_OpenURL` (`src/gui/view_dialogs.cpp:112`) `xdg-open`'ı boş GIO modül diziniyle başlatır (bilinçli, AppRun'da yazılı).

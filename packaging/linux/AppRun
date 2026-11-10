@@ -57,4 +57,23 @@ if [ -e /.flatpak-info ]; then
     exit 1
 fi
 
+# Wayland'de SDL host'un libdecor GTK eklentisini yükler; host GTK süreçteki paketli glib'i (libsecret'in bağımlılığı,
+# Ubuntu 24.04'ün 2.80'i) kullanır ve o glib GIO modüllerini derlendiği host yolundan açar. Daha yeni glib için derlenmiş
+# gvfs modülü yüklenemez: "libgvfscommon.so: undefined symbol: g_variant_builder_init_static". Pakette olmayan dizin:
+# hiç modül yüklenmez (libsecret yalnız GIO'nun içindeki GDBus'ı kullanır). GIO_USE_VFS=local yetmez: glib 2.80
+# giomodule.c ada göre seçerken de uzantı noktasının bütün modüllerini yükler.
+# Kullanıcının değeri saklanır (boş = tanımsız): uygulamanın başlattığı çocuklar (editör, pano, dil sunucusu) onu geri
+# alır, GTK'lı editör dconf ve gvfs'le açılır (core::host_environment_restores). SDL'in kendi başlattığı xdg-open ve
+# zenity yedeği ise bu ortamı devralır.
+if [ "$target" = notes-gui ]; then
+    if [ -n "${GIO_MODULE_DIR:-}" ]; then
+        export NOTEAPP_HOST_GIO_MODULE_DIR="$GIO_MODULE_DIR"
+        unset NOTEAPP_HOST_GIO_MODULE_DIR_UNSET
+    else
+        export NOTEAPP_HOST_GIO_MODULE_DIR_UNSET=1
+        unset NOTEAPP_HOST_GIO_MODULE_DIR
+    fi
+    export GIO_MODULE_DIR="$here/.no-gio-modules"
+fi
+
 exec "$here/usr/bin/$target" "$@"

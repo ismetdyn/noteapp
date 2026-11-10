@@ -70,8 +70,16 @@ inline constexpr float kMinFieldEms = 4.0F;
 using WindowPtr = std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)>;
 using RendererPtr = std::unique_ptr<SDL_Renderer, decltype(&SDL_DestroyRenderer)>;
 
+// Wayland app_id ve X11 WM_CLASS sınıfı (SDL_GetAppID). GNOME pencereyi bu adla noteapp.desktop'a eşler; dock
+// ikonu oradan gelir. Verilmezse SDL çalıştırılabilirin adını ("notes-gui") kullanır, eşleşme olmaz ve dock
+// genel ikon gösterir. SDL ters alan adı önerir; bağlayıcı olan masaüstü dosyasının adıdır
+// (packaging/linux/noteapp.desktop, StartupWMClass).
+inline constexpr const char* kAppId = "noteapp";
+
 struct SdlSession {
-    bool ok = SDL_Init(SDL_INIT_VIDEO);
+    // Kimlik pencereden önce, SDL_Init'ten önce verilir. Geçerli özellik adıyla düşmez.
+    bool ok = SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_IDENTIFIER_STRING, kAppId) &&
+              SDL_Init(SDL_INIT_VIDEO);
     ~SdlSession() { SDL_Quit(); }
 };
 

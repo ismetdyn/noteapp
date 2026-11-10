@@ -21,6 +21,12 @@ using EnvOverrides = std::vector<std::pair<std::string, std::optional<std::strin
 // listesiyle: pano, hunspell, LSP) verilir: token yalnız senkronun ve kendi `note` sürecimizin işidir.
 EnvOverrides without_secrets(EnvOverrides overrides = {});
 
+// AppImage'ın AppRun'ı notes-gui için GIO_MODULE_DIR'i paketin boş dizinine çevirir; kullanıcının değerini
+// NOTEAPP_HOST_GIO_MODULE_DIR'de, tanımsızsa NOTEAPP_HOST_GIO_MODULE_DIR_UNSET=1 ile saklar. Dönen geçersiz
+// kılmalar çocuğa host'un değerini geri verir (GTK'lı editör dconf ve gvfs modülleriyle açılsın) ve işaretleri
+// siler; işaret yoksa boştur. Her çocuk ortamına önce bu uygulanır (run_and_wait, spawn_detached, ChildProcess).
+EnvOverrides host_environment_restores();
+
 // Boş değer "tanımsız" sayılır. Windows'ta geniş API ile okunup UTF-8'e çevrilir.
 std::optional<std::string> get_env_utf8(std::string_view name);
 

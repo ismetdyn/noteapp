@@ -325,6 +325,13 @@ dal, boşta bekleme, yazar adı, yazar e-postası, token, bağlantı testi) ve s
   Eski `gui-state.ini` okunmaz: pencere boyutu ve son not bir kez sıfırlanır, not verisi etkilenmez.
 - Metinler core i18n katalogundan (`tr()`); tek i18n kaynağı.
 - `info` diyaloğu başlığı sabit "noteapp".
+- **Masaüstü eşleşmesi (Linux):** pencerenin Wayland app_id'si ve X11 `WM_CLASS` sınıfı `noteapp`tır (`SDL_Init`'ten önce
+  `SDL_PROP_APP_METADATA_IDENTIFIER_STRING`, `src/gui/view_internal.hpp` `kAppId`); `noteapp.desktop` aynı adı taşır ve
+  `StartupWMClass=noteapp` der: GNOME dock'u menü girdisinin ikonunu gösterir. AppImage'ın `AppRun`'ı `notes-gui` için
+  `GIO_MODULE_DIR`'i pakette olmayan bir dizine çevirir: Wayland'de süreçteki host GTK'sı (libdecor eklentisi) paketli
+  glib'le host'un daha yeni glib için derlenmiş GIO modüllerini (gvfs) yükleyemez, terminale hata basardı. Kullanıcının
+  değeri `NOTEAPP_HOST_GIO_MODULE_DIR`'de (tanımsızsa `NOTEAPP_HOST_GIO_MODULE_DIR_UNSET=1`) saklanır; uygulamanın başlattığı
+  her çocuk (editör, pano, dil sunucusu) onu geri alır (`core::host_environment_restores`).
 
 ## Kabul kriterleri (`SDL_VIDEO_DRIVER=dummy` + yazılımsal çizim, `SDL_RENDER_DRIVER=software`; Xvfb gerekmez)
 
@@ -616,3 +623,7 @@ Arayüz yenilemesinin yerleşim fazı (`.engineering/design/ui-redesign.md` §3.
 
 ## Değişiklik 2026-11-10 (önizleme seçimi bırakınca kopyalanır, GUI)
 - **MODIFIED** md, csv, json, ham metin ve PDF önizlemesinde fareyle seçim (sürükleme, çift tık, `Shift`+tık) bırakılınca boş olmayan seçim bir kez panoya yazılır (`gui.copied`) ve birincil seçime konur (`SDL_SetPrimarySelectionText`; X11/Wayland'de orta tık). Eskiden yalnız `Ctrl+C` / sağ tık kopyalıyordu; ikisi aynen kalır. Editörde kendiliğinden kopya yok. Neden: kullanıcı isteği, TUI ile eşitlik.
+
+## Değişiklik 2026-11-10 (KI-1 masaüstü eşleşmesi, GUI)
+- **FIXED** GNOME dock genel çark gösteriyordu: app_id ve `WM_CLASS` `notes-gui` idi, artık `noteapp` (+ `StartupWMClass=noteapp`).
+  AppImage'dan başlatılan `notes-gui` terminale `libgvfscommon.so: undefined symbol` / `Failed to load module` basmaz (bkz. "Diğer").

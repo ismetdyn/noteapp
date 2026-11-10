@@ -126,7 +126,8 @@ std::wstring build_environment_block(const EnvOverrides& overrides) {
     if (block != nullptr)
         FreeEnvironmentStringsW(block);
 
-    EnvOverrides all{{"NoDefaultCurrentDirectoryInExePath", "1"}};
+    EnvOverrides all = host_environment_restores();
+    all.emplace_back("NoDefaultCurrentDirectoryInExePath", "1");
     all.insert(all.end(), overrides.begin(), overrides.end());
     for (const auto& [key, value] : all) {
         const std::wstring wide_key = to_wide(key);
@@ -228,12 +229,14 @@ std::vector<char*> c_strings(const std::vector<std::string>& strings) {
     return out;
 }
 
-// Mevcut ortam + geçersiz kılmalar (nullopt: silinir).
+// Mevcut ortam + host'a dönüşler + geçersiz kılmalar (nullopt: silinir).
 std::vector<std::string> build_environment(const EnvOverrides& overrides) {
     std::vector<std::string> entries;
     for (char** e = environ; e != nullptr && *e != nullptr; ++e)
         entries.emplace_back(*e);
-    for (const auto& [key, value] : overrides) {
+    EnvOverrides all = host_environment_restores();
+    all.insert(all.end(), overrides.begin(), overrides.end());
+    for (const auto& [key, value] : all) {
         const std::string prefix = key + "=";
         std::erase_if(entries, [&](const std::string& entry) { return entry.starts_with(prefix); });
         if (value)
@@ -362,6 +365,17 @@ EnvOverrides without_secrets(EnvOverrides overrides) {
     for (const char* name : {"NOTEAPP_GIT_TOKEN", "NOTEAPP_GIT_TOKEN_HOST"})
         overrides.emplace_back(name, std::nullopt);
     return overrides;
+}
+
+// İşaretler packaging/linux/AppRun'la sözleşmedir. Boş değer tanımsız sayılır (get_env_utf8).
+EnvOverrides host_environment_restores() {
+    constexpr std::string_view kSaved = "NOTEAPP_HOST_GIO_MODULE_DIR";
+    constexpr std::string_view kWasUnset = "NOTEAPP_HOST_GIO_MODULE_DIR_UNSET";
+    std::optional<std::string> saved = get_env_utf8(kSaved);
+    if (!saved && !get_env_utf8(kWasUnset))
+        return {};
+    return {{"GIO_MODULE_DIR", std::move(saved)}, {std::string(kSaved), std::nullopt},
+            {std::string(kWasUnset), std::nullopt}};
 }
 
 std::optional<std::string> get_env_utf8(std::string_view name) {

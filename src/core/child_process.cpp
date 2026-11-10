@@ -59,7 +59,7 @@ int remaining_ms(ChildProcess::Clock::time_point deadline) {
 namespace {
 
 core::EnvOverrides child_env_overrides(const std::vector<std::string>& extra) {
-    core::EnvOverrides overrides;
+    core::EnvOverrides overrides = core::host_environment_restores();
     for (const std::string_view prefix : kDroppedEnv)
         overrides.emplace_back(std::string(prefix.substr(0, prefix.size() - 1)), std::nullopt);
     for (const std::string& assignment : extra) {
@@ -267,6 +267,12 @@ std::vector<std::string> child_environment(const std::vector<std::string>& extra
             std::ranges::any_of(kDroppedEnv, [&](const char* prefix) { return text.starts_with(prefix); });
         if (!dropped)
             entries.emplace_back(text);
+    }
+    for (const auto& [key, value] : core::host_environment_restores()) {
+        const std::string prefix = key + "=";
+        std::erase_if(entries, [&](const std::string& entry) { return entry.starts_with(prefix); });
+        if (value)
+            entries.push_back(prefix + *value);
     }
     for (const std::string& assignment : extra) {
         const std::string prefix = assignment.substr(0, assignment.find('=') + 1);

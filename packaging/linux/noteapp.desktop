@@ -8,6 +8,7 @@ Comment=Fast, plain-file notes with optional GitHub sync
 Comment[tr]=Hızlı, düz dosyalı notlar; isteğe bağlı GitHub senkronu
 Exec=notes-gui
 Icon=noteapp
+StartupWMClass=noteapp
 Terminal=false
 Categories=Office;Utility;
 Keywords=note;notes;markdown;not;notlar;
