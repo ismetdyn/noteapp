@@ -591,5 +591,5 @@ Kaynak: kullanıcı v0.1.3 sonrası ("tui'de pdf düz metin, format bozuk"; "ful
 - [x] A+B Biçimli PDF + PDF seçimi: işçi sayfayı yapı ile döner (blok/satır/span, stil, karakter konumu; ebeveynde sınır denetimi); TUI markdown gibi biçimli; TUI seçim kopyalanır (yanlış "UTF-8" iletisi düzelir); GUI sayfa üstünde karakter konumlu seçim + Ctrl+C.
 - [x] C GUI önizlemede seçim: md/json/csv/txt fareyle seçim + Ctrl+C (TUI eşitliği).
 - [x] D Tam ekran: pane.zoom her yerde (düzenleyici dahil); F11 (TUI ek kısayol, GUI gerçek pencere tam ekranı); GUI araç çubuğu düğmesi; iki arayüzde yakınlaştırma göstergesi.
-- [ ] V14 doğrulama: tam Linux + Wine + AppImage bir kez → v0.1.4.
-  Durum (2026-11-09 17:45, kullanıcı ara verdi): main dc3a1cf push EDİLMEDİ (origin 5 geride). Dal `release/v0.1.4` (worktree agent-afe0cabd74b779445): 20b0f51 sürüm 0.1.4 + bc2869d Windows release derleme düzeltmesi. Kapılar yarıda: Linux ctest, Wine, AppImage, make-release, host update-check yeniden koşulacak (volume'ler noteapp-rel-*).
+- [x] V14 doğrulama: tam Linux + Wine + AppImage bir kez → v0.1.4.
+  Kanıt (2026-11-10): Linux 20/20, Wine 17/17 + DLL kapıları, AppImage `note 0.1.4`, PDF import+show ve yapılı yanıt (başlık 28 pt / gövde 11 pt ayrı blok) duman testi, `sha256sum -c` 3/3, host `note update --check`.
